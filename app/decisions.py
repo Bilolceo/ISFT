@@ -1,0 +1,646 @@
+"""Majlis qarori → topshiriqlar → bo'lim navbati → ijro → rektor nazorati.
+
+Oqim:
+  1) Kotib majlis materialini beradi (demo transkript yoki qo'lda matn; ovozdan matn — lokal STT o'rnatilmaguncha o'chiq).
+  2) JARVIS bayonnoma qoralamasi va topshiriqlar QORALAMASINI tuzadi. Bo'lim, mas'ul xodim, muddat va bog'liqlik
+     faqat matnda AYTILGAN bo'lsa to'ldiriladi — har bir maydon kod bilan manba gapdan qayta tekshiriladi.
+     Aytilmagan maydon bo'sh qoladi ("aytilmagan"), o'ylab topilmaydi.
+  3) Kotib tahrirlaydi va tasdiqlaydi → topshiriqlar bo'limlar navbatiga tushadi. Tasdiqlash idempotent:
+     qoralama → tasdiqlangan o'tishi bitta atomar UPDATE bilan, qayta bosish yangi topshiriq yaratmaydi.
+  4) Bo'lim rahbari xodimga biriktiradi; ijrochi holat va natijani kiritadi; bog'langan topshiriqlar bitta chatda yozishadi.
+     Bog'liq topshiriq oldingisi bajarilmaguncha yakunlanmaydi (server tekshiradi).
+  5) Rektor panelida qaror va har bir topshiriqning mas'uli, holati, natijasi — aynan `tasks` jadvalidan.
+
+Saqlash: mavjud SQLite bazasi (`meetings`, `tasks` jadvallari kengaytirilgan + `task_msgs`, `task_log`).
+Tashqi servisga hech narsa yuborilmaydi: AI — lokal Ollama, qolgani kod.
+"""
+import datetime as dt, json, re
+from fastapi import APIRouter, Request, HTTPException
+from pydantic import BaseModel, Field
+from . import db, rbac
+from .rbac import Ctx, AccessDenied, TASKS
+
+router = APIRouter()
+_con = None
+_ctx = None
+
+# ---------------------------------------------------------------------------------------------
+# Bo'limlar (topshiriq navbatlari). key: (nomi, rahbar roli, matndagi atamalar — regex, katta-kichik harf muhim)
+# ---------------------------------------------------------------------------------------------
+UNITS = {
+    # nomlar — ISFT rasmiy tashkiliy tuzilmasidan (2024); majlisdagi og'zaki atamalar ("IT", "registrator") ham taniladi
+    "it":           ("Axborot texnologiyalari bo'limi", "it_head", [r"\bIT\b", r"(?i)axborot texnologiyalari bo'lim"]),
+    "registrator":  ("Akademik faoliyat va registrator departamenti", "talabalar", [r"(?i)\bregistrator", r"(?i)akademik faoliyat"]),
+    "xojalik":      ("Xo'jalik va texnik bo'lim", "xojalik", [r"(?i)xo'jalik"]),
+    "buxgalteriya": ("Buxgalteriya bo'limi", "buxgalteriya", [r"(?i)buxgalteriya"]),
+    "qabul":        ("Qabul komissiyasi", "qabul", [r"(?i)qabul (?:bo'lim|komissiya)"]),
+    "xalqaro":      ("Xalqaro hamkorlik bo'limi", "xalqaro", [r"(?i)xalqaro (?:aloqalar|hamkorlik) bo'lim"]),
+    "kadrlar":      ("Kadrlar bo'limi", "kadrlar", [r"(?i)kadrlar bo'lim"]),
+    "magistratura": ("Magistratura bo'limi", "magistratura", [r"(?i)magistratura bo'lim"]),
+}
+UNIT_OF_ROLE = {"it_staff": "it", **{v[1]: k for k, v in UNITS.items()}}
+LEADERS = ("rektor", "kengash")            # qarorlarni to'liq ko'radi (o'qish)
+SECRETARY = "kotib"
+
+# Demo uchun yangi akkauntlar (sun'iy ism-shariflar). PIN — 1234, boshqa demo akkauntlar kabi.
+DEMO_USERS = [
+    ("Rektorat kotibi: Hamidova Malika Shavkat qizi", "kotib"),
+    ("Axborot texnologiyalari bo'limi boshlig'i: Sobirov Akmal Rustam o'g'li", "it_head"),
+    ("Axborot texnologiyalari bo'limi muhandisi: Nazarov Sardor Ilhom o'g'li", "it_staff"),
+    # Registrator — mavjud "Akademik faoliyat va registrator departamenti" akkaunti (talabalar roli)
+]
+
+def _now(): return dt.datetime.now().replace(microsecond=0)
+def _iso(t): return t.isoformat(timespec="seconds")
+
+def _add_cols(con, table, cols):
+    have = {r[1] for r in con.execute(f"PRAGMA table_info({table})").fetchall()}
+    for name, typ in cols:
+        if name not in have:
+            con.execute(f"ALTER TABLE {table} ADD COLUMN {name} {typ}")
+
+def init(con):
+    _add_cols(con, "meetings", [("status", "TEXT"), ("minutes", "TEXT"), ("source", "TEXT"), ("created_by", "INT"),
+                                ("created_at", "TEXT"), ("confirmed_at", "TEXT"), ("confirmed_by", "INT"), ("incident_id", "INT"),
+                                ("extract_note", "TEXT")])
+    _add_cols(con, "tasks", [("unit", "TEXT"), ("assignee_user", "INT"), ("due_at", "TEXT"), ("due_text", "TEXT"),
+                             ("depends_on", "INT"), ("dep_text", "TEXT"), ("evidence", "TEXT"), ("pos", "INT"),
+                             ("result", "TEXT"), ("result_at", "TEXT"), ("result_by", "INT"), ("updated_at", "TEXT")])
+    con.executescript("""
+    CREATE TABLE IF NOT EXISTS task_msgs(id INTEGER PRIMARY KEY, task_id INT, ts TEXT, user_id INT, user_name TEXT, role TEXT, text TEXT);
+    CREATE TABLE IF NOT EXISTS task_log(id INTEGER PRIMARY KEY, task_id INT, ts TEXT, user_id INT, user_name TEXT, action TEXT, detail TEXT);
+    CREATE INDEX IF NOT EXISTS ix_task_msgs ON task_msgs(task_id);
+    CREATE INDEX IF NOT EXISTS ix_task_log ON task_log(task_id);
+    """)
+    have = {r[0] for r in con.execute("SELECT role FROM users").fetchall()}
+    if have:   # bo'sh baza (seed boshlanishi) emas
+        for name, role in DEMO_USERS:
+            if role not in have:
+                con.execute("INSERT INTO users(full_name,role,pin) VALUES(?,?,?)", (name, role, "1234"))
+    con.commit()
+
+def bind(con, ctx_fn):
+    global _con, _ctx
+    _con, _ctx = con, ctx_fn
+
+# ---------------------------------------------------------------------------------------------
+# Ruxsatlar
+# ---------------------------------------------------------------------------------------------
+def unit_of(c: Ctx): return UNIT_OF_ROLE.get(c.role.key)
+def is_head(c: Ctx, unit): return bool(unit) and UNITS.get(unit, ("", ""))[1] == c.role.key
+
+def _linked_ids(t) -> set:
+    """Topshiriq va unga bog'langan (oldingi/keyingi) topshiriqlar."""
+    ids = {t["id"]}
+    if t.get("depends_on"): ids.add(t["depends_on"])
+    for r in _con.execute("SELECT id FROM tasks WHERE depends_on=?", (t["id"],)).fetchall(): ids.add(r[0])
+    return ids
+
+def can_view(c: Ctx, t) -> bool:
+    if t["status"] == "qoralama": return c.role.key == SECRETARY
+    if c.role.key in LEADERS or c.role.key == SECRETARY: return True
+    u = unit_of(c)
+    if t.get("assignee_user") == c.user["id"]: return True
+    if u and t.get("unit") == u: return True
+    # bog'langan topshiriq (masalan, Registrator IT natijasini ko'radi)
+    if u:
+        for i in _linked_ids(t):
+            o = db.one(_con, "SELECT unit FROM tasks WHERE id=?", (i,))
+            if o and o["unit"] == u: return True
+    return t.get("assignee_role") == c.role.key
+
+def can_act(c: Ctx, t) -> bool:
+    """Holat/natija kiritish: bo'lim rahbari yoki biriktirilgan xodim."""
+    if t["status"] == "qoralama" or not t.get("unit"): return False
+    return is_head(c, t["unit"]) or t.get("assignee_user") == c.user["id"]
+
+def can_chat(c: Ctx, t) -> bool:
+    if t["status"] == "qoralama": return False
+    if c.role.key == SECRETARY: return True
+    u = unit_of(c)
+    if not u: return False
+    return any((db.one(_con, "SELECT unit FROM tasks WHERE id=?", (i,)) or {}).get("unit") == u for i in _linked_ids(t))
+
+def _log(t_id, c: Ctx, action, detail=""):
+    _con.execute("INSERT INTO task_log(task_id,ts,user_id,user_name,action,detail) VALUES(?,?,?,?,?,?)",
+                 (t_id, _iso(_now()), c.user["id"], c.user["full_name"], action, detail[:500]))
+
+def _guard(c: Ctx, action, detail=""):
+    rbac.require(_con, c, TASKS, action, detail)
+
+# ---------------------------------------------------------------------------------------------
+# Demo transkript (sun'iy). Ovozdan olinmagan — UI'da shunday belgilanadi.
+# ---------------------------------------------------------------------------------------------
+UZ_M = ["yanvar", "fevral", "mart", "aprel", "may", "iyun", "iyul", "avgust", "sentabr", "oktabr", "noyabr", "dekabr"]
+
+def demo_transcript(today: dt.date) -> str:
+    d = f"{today.day}-{UZ_M[today.month - 1]} {today.year}-yil"
+    return f"""Rektorat tezkor yig'ilishi, {d}, soat 10:30.
+Qatnashdilar: rektor, o'quv ishlari bo'yicha prorektor, raqamlashtirish va moliya masalalari bo'yicha prorektor, Axborot texnologiyalari bo'limi boshlig'i, Akademik faoliyat va registrator departamenti rahbari, rektorat kotibi.
+Kun tartibi: talabalarning LMS platformasiga kira olmayotgani.
+O'quv ishlari bo'yicha prorektor: kecha kechqurundan beri talabalar LMS'ga kira olmayapti, Xizmat markaziga shu mavzuda bir nechta murojaat tushgan. Ertaga oraliq nazorat topshiriqlari LMS orqali yuklanishi kerak.
+Axborot texnologiyalari bo'limi boshlig'i: muammo kirish (autentifikatsiya) qismida bo'lishi mumkin, aniq sababni tekshiruvdan keyin aytamiz.
+Rektor: talabalar noaniqlikda qolmasin. Qaror: LMS'ga kirish muammosini IT bo'limi bugun soat 15:00 gacha tekshirsin. Registrator esa IT'dan natija kelgach, talabalarga xabar tayyorlasin.
+Rektor: yig'ilish yopildi."""
+
+# ---------------------------------------------------------------------------------------------
+# Ajratish: qaror gaplari → topshiriq qoralamalari. Har bir maydon manba gapdan KOD bilan olinadi.
+# ---------------------------------------------------------------------------------------------
+def _n(t): return re.sub(r"[ʻʼ‘’`´]", "'", t or "")
+
+SENT_SPLIT = re.compile(r"(?<!\s[A-Z]\.)(?<=[.!?])\s+")   # "Karimov A. bilan" — bosh harfdan keyin bo'linmaydi
+# buyruq mayli: "tekshirsin", "tayyorlasin"; inkor ("qolmasin") — istak, topshiriq emas
+IMPERATIVE = re.compile(r"\w+(?<!ma)(?:sin|sinlar|silar)\b[.!]?\s*$|\w+(?<!ma)(?:sin|sinlar)\b[,.]", re.I)
+SPEAKER = re.compile(r"^\s*([A-ZÀ-ÿ][A-Za-zÀ-ÿ' .\-]{1,60}?):\s*")   # raqamsiz: "soat 9:30" so'zlovchi emas
+DECISION_LEAD = re.compile(r"^(?:qaror\s*[:—–-]\s*|qaror qilindi\s*[:—–-]?\s*)", re.I)
+DEP_CUE = re.compile(r"(?P<cue>[\w']+(?:dan|tan)\s+(?:natija(?:si)?\s+)?(?:kelgach|keyin|so'ng|olingach)|natija(?:si)?\s+kelgach|[\w']+\s+(?:bajarilgach|tugagach|yakunlangach))", re.I)
+PERSON = re.compile(r"\b([A-Z][a-z']+(?:ov|ova|ev|eva|iy|aya|yev|yeva))\s+([A-Z]\.|[A-Z][a-z']+)")
+HOUR = r"soat\s*(?P<h>\d{1,2})[:.](?P<m>\d{2})"
+
+def _parse_due(s: str, today: dt.date):
+    """Muddat faqat gapda aniq aytilgan bo'lsa. (due_at ISO, due_text — gapdagi aynan ifoda)."""
+    t = _n(s)
+    m = re.search(rf"(?P<day>bugun|ertaga|indinga)?\s*(?:{HOUR})\s*(?:gacha|ga)?", t, re.I)
+    if m and m.group("h"):
+        add = {"ertaga": 1, "indinga": 2}.get((m.group("day") or "").lower(), 0)
+        d = today + dt.timedelta(days=add)
+        h, mi = int(m["h"]), int(m["m"])
+        if 0 <= h <= 23 and 0 <= mi <= 59:
+            return f"{d.isoformat()}T{h:02d}:{mi:02d}", m.group(0).strip()
+    m = re.search(r"(?P<day>bugun|ertaga|indinga)(?:\s+(?:kun\s+)?oxirigacha|\s*gacha)?", t, re.I)
+    if m and re.search(r"gacha|oxirigacha", m.group(0), re.I):
+        d = today + dt.timedelta(days={"bugun": 0, "ertaga": 1, "indinga": 2}[m["day"].lower()])
+        return d.isoformat(), m.group(0).strip()
+    m = re.search(r"\b(?P<d>\d{1,2})\.(?P<mo>\d{1,2})(?:\.(?P<y>\d{4}))?\b(?:\s*gacha)?", t)
+    if m:
+        try:
+            d = dt.date(int(m["y"] or today.year), int(m["mo"]), int(m["d"]))
+            if not m["y"] and d < today - dt.timedelta(days=60): d = d.replace(year=d.year + 1)
+            return d.isoformat(), m.group(0).strip()
+        except ValueError:
+            pass
+    m = re.search(r"\b(?P<d>\d{1,2})-(?P<mon>" + "|".join(UZ_M) + r")(?:gacha)?", t, re.I)
+    if m:
+        mon = UZ_M.index(m["mon"].lower()) + 1
+        try:
+            d = dt.date(today.year, mon, int(m["d"]))
+            if d < today - dt.timedelta(days=60): d = d.replace(year=d.year + 1)
+            return d.isoformat(), m.group(0).strip()
+        except ValueError:
+            pass
+    m = re.search(r"\b(?P<n>bir|ikki|uch|\d+)\s+(?P<u>hafta|kun)\s+ichida", t, re.I)
+    if m:
+        n = {"bir": 1, "ikki": 2, "uch": 3}.get(m["n"].lower()) or int(m["n"])
+        return (today + dt.timedelta(days=n * (7 if m["u"].lower() == "hafta" else 1))).isoformat(), m.group(0).strip()
+    return None, None
+
+def _units_in(s: str):
+    """Gapda tilga olingan bo'limlar, paydo bo'lish tartibida."""
+    hits = []
+    for k, (_, _, pats) in UNITS.items():
+        for p in pats:
+            m = re.search(p, _n(s))
+            if m: hits.append((m.start(), k)); break
+    return [k for _, k in sorted(hits)]
+
+def _clean(sent: str) -> str:
+    s = SPEAKER.sub("", sent.strip(), count=1)
+    s = re.sub(r"^.*?\bqaror\s*[:—–-]\s*", "", s, flags=re.I) if re.search(r"\bqaror\s*[:—–-]", s, re.I) else s
+    return s.strip()
+
+def _candidates(transcript: str):
+    """Topshiriq bo'lishi mumkin bo'lgan gaplar: buyruq mayli (-sin) va bo'lim/shaxs tilga olingan."""
+    out = []
+    for line in _n(transcript).splitlines():
+        sp = SPEAKER.match(line)
+        body = line[sp.end():] if sp else line
+        for sent in SENT_SPLIT.split(body):
+            s = _clean(sent)
+            if not s or not IMPERATIVE.search(s): continue
+            # bo'lim/xodim aytilmagan bo'lsa ham band tushib qolmaydi — "aytilmagan" deb ko'rsatiladi, kotib to'ldiradi
+            out.append(s)
+    return out
+
+def _build(sentences, today):
+    tasks = []
+    for i, s in enumerate(sentences):
+        units = _units_in(s)
+        dep = DEP_CUE.search(s)
+        unit = units[0] if units else None
+        due_at, due_text = _parse_due(s, today)
+        person = PERSON.search(s)
+        dep_on, dep_text = None, None
+        if dep:
+            dep_text = dep.group(0).strip()
+            other = [u for u in _units_in(dep_text) if u != unit] or [u for u in units[1:] if u != unit]
+            for j in range(len(tasks) - 1, -1, -1):
+                if other and tasks[j]["unit"] == other[0]:
+                    dep_on = j; break
+        tasks.append({"text": s.rstrip(), "unit": unit, "assignee": person.group(0) if person else None,
+                      "due_at": due_at, "due_text": due_text, "depends_on": dep_on, "dep_text": dep_text, "evidence": s})
+    return tasks
+
+def _minutes(title, transcript, tasks, discussion=None):
+    t = _n(transcript)
+    pick = lambda key: next((l.split(":", 1)[1].strip() for l in t.splitlines() if l.lower().startswith(key)), "")
+    first = t.strip().splitlines()[0] if t.strip() else title
+    lines = [f"BAYONNOMA (qoralama)", first, ""]
+    if pick("qatnashdilar"): lines.append(f"Qatnashdilar: {pick('qatnashdilar')}")
+    if pick("kun tartibi"): lines.append(f"Kun tartibi: {pick('kun tartibi')}")
+    lines += ["", "Muhokama:"]
+    if discussion:
+        lines.append(discussion.strip())
+    else:
+        for l in t.splitlines()[1:]:
+            sp = SPEAKER.match(l)
+            if sp and not l.lower().startswith(("qatnashdilar", "kun tartibi")) and not any(x["evidence"] in _n(l) for x in tasks):
+                lines.append(f"— {sp.group(1)}: {l[sp.end():].strip()}")
+    lines += ["", "Qaror:"]
+    for i, x in enumerate(tasks, 1):
+        lines.append(f"{i}. {x['text']}")
+    return "\n".join(lines)
+
+async def extract(transcript: str, title: str, today: dt.date):
+    """Natija: (tasks, minutes, note). AI bo'lsa — qaror gaplarini tanlash va muhokama xulosasi; maydonlar baribir kod bilan."""
+    from . import ai
+    rule = _candidates(transcript)
+    note = "Lokal AI ishlamayapti — qoidaga asoslangan tahlil: qaror gaplari, bo'lim, muddat va bog'liqlik matndan kod bilan olindi"
+    discussion, chosen = None, rule
+    if await ai.llm_available():
+        try:
+            raw = await ai.llm_once([{"role": "system", "content":
+                "Sen rektorat kotibining yordamchisisan. Senga majlis yozuvi beriladi. "
+                "Majlisda kimgadir topshirilgan har bir ishni ALOHIDA band qilib, manba gapni matndan AYNAN ko'chirib ber (o'zgartirmasdan). "
+                "Bitta gapda ikki bo'limga ikki xil ish berilgan bo'lsa ham alohida yoz. Ism, sana yoki muddat qo'shma. "
+                'Faqat JSON: {"decisions":[{"quote":"..."}]}'},
+                {"role": "user", "content": transcript[:6000]}], fmt="json", max_tokens=400)
+            j = json.loads(raw)
+            norm_t = re.sub(r"\s+", " ", _n(transcript))
+            quotes = []
+            for d in j.get("decisions", []):
+                for part in SENT_SPLIT.split(re.sub(r"\s+", " ", _n(str(d.get("quote", "")))).strip()):
+                    q = _clean(part)
+                    # AI keltirgan gap matnda aynan bo'lishi shart — aks holda tashlanadi (o'ylab topilgan band o'tmaydi)
+                    if len(q) > 12 and q.rstrip(".") in norm_t and IMPERATIVE.search(q):
+                        quotes.append(q)
+            # AI va qoida natijalarini birlashtiramiz (takrorsiz, matndagi tartibda)
+            merged = []
+            for q in quotes + rule:
+                key = q.rstrip(". ").lower()
+                if not any(key in m.lower() or m.rstrip(". ").lower() in key for m in merged):
+                    merged.append(q)
+            merged.sort(key=lambda q: norm_t.find(q.rstrip(".")))
+            if merged: chosen = merged
+            # Eslatma: AI'ga muhokama xulosasini ham yozdirib ko'rdik — sinovda matnda yo'q da'volar qo'shdi.
+            # Shuning uchun muhokama so'zlovchilar gaplaridan aynan olinadi.
+            note = (f"Lokal AI ({ai.MODEL}) qaror gaplarini aniqladi ({len(quotes)} ta, matndan aynan tekshirildi); "
+                    "bo'lim, mas'ul, muddat va bog'liqlik manba gapdan kod bilan olindi; muhokama so'zlovchilar gaplaridan ko'chirildi")
+        except Exception:
+            pass
+    tasks = _build(chosen, today)
+    return tasks, _minutes(title, transcript, tasks, discussion), note
+
+# ---------------------------------------------------------------------------------------------
+# O'qish: qaror kartasi
+# ---------------------------------------------------------------------------------------------
+def _uname(uid):
+    if not uid: return None
+    u = db.one(_con, "SELECT full_name FROM users WHERE id=?", (uid,))
+    return u["full_name"] if u else None
+
+def _short(name):
+    return name.split(":", 1)[1].strip() if name and ":" in name else name
+
+def task_view(c: Ctx, t, by_id=None):
+    now = _now()
+    due = t.get("due_at") or t.get("due")
+    overdue = False
+    if due and t["status"] != "bajarildi":
+        try:
+            dd = dt.datetime.fromisoformat(due) if "T" in due else dt.datetime.combine(dt.date.fromisoformat(due), dt.time(23, 59))
+            overdue = dd < now
+        except ValueError:
+            pass
+    dep = by_id.get(t["depends_on"]) if (by_id and t.get("depends_on")) else (db.one(_con, "SELECT * FROM tasks WHERE id=?", (t["depends_on"],)) if t.get("depends_on") else None)
+    v = {k: t.get(k) for k in ("id", "meeting_id", "text", "unit", "status", "due_at", "due_text", "dep_text", "evidence", "result", "result_at", "updated_at", "pos")}
+    v.update({"due": due, "unit_name": UNITS[t["unit"]][0] if t.get("unit") in UNITS else None,
+              "assignee_user": t.get("assignee_user"), "assignee_name": _short(_uname(t.get("assignee_user"))) or (t.get("assignee") or None),
+              "assignee_stated": t.get("assignee") or None,
+              "result_by": _short(_uname(t.get("result_by"))), "overdue": overdue,
+              "depends_on": t.get("depends_on"),
+              "dep": {"id": dep["id"], "pos": dep.get("pos"), "unit_name": UNITS.get(dep.get("unit"), ("",))[0], "status": dep["status"],
+                      "result": dep.get("result") if can_view(c, dep) else None} if dep else None,
+              "blocked": bool(dep and dep["status"] != "bajarildi"),
+              "can_act": can_act(c, t), "can_assign": is_head(c, t.get("unit")) and t["status"] not in ("qoralama", "bajarildi"),
+              "can_chat": can_chat(c, t)})
+    return v
+
+def decision(c: Ctx, mid: int, audit=True):
+    m = db.one(_con, "SELECT * FROM meetings WHERE id=?", (mid,))
+    if not m or not m.get("source"): raise HTTPException(404, "Qaror topilmadi")
+    ts = db.rows(_con, "SELECT * FROM tasks WHERE meeting_id=? ORDER BY pos, id", (mid,))
+    visible = [t for t in ts if can_view(c, t)]
+    if not visible and not (c.role.key == SECRETARY):
+        raise AccessDenied("⛔ Bu qaror bo'yicha sizga tegishli topshiriq yo'q.")
+    if audit: rbac.audit(_con, c, "majlis qarorini ko'rish", TASKS, True, f"#{mid}")
+    by_id = {t["id"]: t for t in ts}
+    tasks = [task_view(c, t, by_id) for t in visible]
+    ids = [t["id"] for t in visible]
+    chat_ids = sorted({i for t in visible if can_chat(c, t) or c.role.key in LEADERS for i in _linked_ids(t)} & set(ids)) if ids else []
+    msgs = db.rows(_con, f"SELECT * FROM task_msgs WHERE task_id IN ({','.join(map(str, chat_ids))}) ORDER BY id") if chat_ids else []
+    log = db.rows(_con, f"SELECT * FROM task_log WHERE task_id IN ({','.join(map(str, ids))}) ORDER BY id") if ids else []
+    inc = db.one(_con, "SELECT id, title, status, notified_at, notice, (SELECT COUNT(*) FROM requests r WHERE r.incident_id=incidents.id) n FROM incidents WHERE id=?",
+                 (m["incident_id"],)) if m.get("incident_id") else None
+    for x in msgs: x["user_short"] = _short(x["user_name"])
+    for x in log: x["user_short"] = _short(x["user_name"])
+    return {"id": m["id"], "title": m["title"], "date": m["date"], "status": m["status"], "source": m["source"],
+            "minutes": m["minutes"], "transcript": m["transcript"] if c.role.key in (SECRETARY, *LEADERS) else None,
+            "extract_note": m.get("extract_note"),
+            "created_at": m.get("created_at"), "confirmed_at": m.get("confirmed_at"), "confirmed_by": _short(_uname(m.get("confirmed_by"))),
+            "incident": inc, "tasks": tasks, "msgs": msgs, "log": log,
+            "can_edit": c.role.key == SECRETARY and m["status"] == "qoralama",
+            "units": [{"key": k, "name": v[0]} for k, v in UNITS.items()],
+            "staff": _staff_for(c)}
+
+def _staff_for(c: Ctx):
+    u = unit_of(c)
+    if not u or not is_head(c, u): return []
+    roles = [r for r, uu in UNIT_OF_ROLE.items() if uu == u]
+    return [{"id": x["id"], "name": _short(x["full_name"]), "role": rbac.ROLES[x["role"]].title}
+            for x in db.rows(_con, f"SELECT id, full_name, role FROM users WHERE role IN ({','.join('?' * len(roles))}) ORDER BY id", roles)]
+
+def summary_list(c: Ctx):
+    """Qarorlar ro'yxati (rektor paneli va topshiriqlar bo'limi uchun)."""
+    rows = db.rows(_con, "SELECT * FROM meetings WHERE source IS NOT NULL ORDER BY id DESC LIMIT 20")
+    out = []
+    for m in rows:
+        ts = db.rows(_con, "SELECT * FROM tasks WHERE meeting_id=? ORDER BY pos, id", (m["id"],))
+        by_id = {t["id"]: t for t in ts}
+        vis = [t for t in ts if can_view(c, t)]
+        if m["status"] == "qoralama" and c.role.key != SECRETARY: continue
+        if not vis and c.role.key != SECRETARY: continue
+        out.append({"id": m["id"], "title": m["title"], "date": m["date"], "status": m["status"], "source": m["source"],
+                    "confirmed_at": m.get("confirmed_at"),
+                    "tasks": [task_view(c, t, by_id) for t in vis]})
+    return out
+
+def queue(c: Ctx):
+    """Bo'lim navbati: o'z bo'limi topshiriqlari (rahbar) yoki o'ziga biriktirilganlar (xodim)."""
+    u = unit_of(c)
+    if not u: return None
+    if is_head(c, u):
+        ts = db.rows(_con, "SELECT * FROM tasks WHERE unit=? AND status!='qoralama' ORDER BY CASE status WHEN 'bajarildi' THEN 1 ELSE 0 END, id DESC", (u,))
+    else:
+        ts = db.rows(_con, "SELECT * FROM tasks WHERE assignee_user=? AND status!='qoralama' ORDER BY CASE status WHEN 'bajarildi' THEN 1 ELSE 0 END, id DESC", (c.user["id"],))
+    out = []
+    for t in ts:
+        v = task_view(c, t)
+        m = db.one(_con, "SELECT title, date FROM meetings WHERE id=?", (t["meeting_id"],))
+        v["meeting"] = m["title"] if m else ""; v["meeting_date"] = m["date"] if m else ""
+        out.append(v)
+    return {"unit": u, "unit_name": UNITS[u][0], "head": is_head(c, u), "tasks": out, "staff": _staff_for(c)}
+
+# ---------------------------------------------------------------------------------------------
+# HTTP
+# ---------------------------------------------------------------------------------------------
+def C(request: Request) -> Ctx: return _ctx(request)
+
+def _secretary(c: Ctx):
+    if c.role.key != SECRETARY:
+        raise AccessDenied("⛔ Majlis materiali va bayonnomani rektorat kotibi kiritadi va tasdiqlaydi.")
+
+@router.get("/api/dec/capabilities")
+def capabilities(request: Request):
+    C(request)
+    return {"audio": False,
+            "audio_note": "Ovozdan matnga o'tkazish (lokal STT, masalan whisper.cpp) bu serverda o'rnatilmagan. "
+                          "Demo uchun namunaviy transkript ishlatiladi; ovoz tashqi servisga yuborilmaydi.",
+            "sample": demo_transcript(dt.date.today())}
+
+class DraftIn(BaseModel):
+    title: str = Field(..., max_length=200)
+    transcript: str = Field(..., max_length=20000)
+    source: str = "demo"
+
+@router.post("/api/dec/draft")
+async def create_draft(body: DraftIn, request: Request):
+    c = C(request); _guard(c, "majlis materialini JARVIS'ga berish", body.title); _secretary(c)
+    if body.source not in ("demo", "manual"): raise HTTPException(400, "Noto'g'ri manba")
+    if not body.transcript.strip(): raise HTTPException(400, "Majlis matni bo'sh")
+    today = dt.date.today()
+    tasks, minutes, note = await extract(body.transcript, body.title, today)
+    now = _iso(_now())
+    # bog'liq hodisa: Xizmat markazidagi ochiq hodisa mavzusi qarorda tilga olingan bo'lsa
+    inc = None
+    for i in db.rows(_con, "SELECT id, topic FROM incidents WHERE status!='hal qilindi'"):
+        if i["topic"] and re.search(rf"\b{re.escape(i['topic'])}", " ".join(x["text"] for x in tasks), re.I):
+            inc = i["id"]; break
+    cur = _con.execute("INSERT INTO meetings(title,date,kind,transcript,status,minutes,source,created_by,created_at,incident_id,extract_note) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                       (body.title.strip()[:200], today.isoformat(), "Rektorat", body.transcript, "qoralama", minutes, body.source, c.user["id"], now, inc, note))
+    mid = cur.lastrowid
+    ids = []
+    for i, t in enumerate(tasks):
+        r = _con.execute("""INSERT INTO tasks(meeting_id,assignee,assignee_role,text,due,due_at,due_text,status,unit,depends_on,dep_text,evidence,pos,updated_at)
+                            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                         (mid, t["assignee"] or "", UNITS[t["unit"]][1] if t["unit"] else None, t["text"][:500],
+                          (t["due_at"] or "")[:10] or None, t["due_at"], t["due_text"], "qoralama", t["unit"], None, t["dep_text"], t["evidence"][:500], i + 1, now))
+        ids.append(r.lastrowid)
+    for i, t in enumerate(tasks):
+        if t["depends_on"] is not None:
+            _con.execute("UPDATE tasks SET depends_on=? WHERE id=?", (ids[t["depends_on"]], ids[i]))
+    _con.commit()
+    return decision(c, mid, audit=False)
+
+@router.get("/api/dec/list")
+def list_(request: Request):
+    c = C(request); _guard(c, "majlis qarorlari ro'yxati")
+    return {"decisions": summary_list(c), "queue": queue(c), "role": c.role.key}
+
+@router.get("/api/dec/{mid}")
+def get_(mid: int, request: Request):
+    c = C(request); _guard(c, "majlis qarorini ko'rish", f"#{mid}")
+    return decision(c, mid, audit=False)
+
+class TaskEdit(BaseModel):
+    id: int
+    text: str = Field(..., max_length=500)
+    unit: str | None = None
+    assignee: str | None = Field(None, max_length=120)
+    due_at: str | None = None
+    depends_on: int | None = None
+
+class DraftEdit(BaseModel):
+    title: str = Field(..., max_length=200)
+    minutes: str = Field("", max_length=20000)
+    tasks: list[TaskEdit]
+    remove: list[int] = []
+
+def _valid_due(v):
+    if not v: return None
+    try:
+        return dt.datetime.fromisoformat(v).isoformat(timespec="minutes") if "T" in v else dt.date.fromisoformat(v).isoformat()
+    except ValueError:
+        raise HTTPException(400, "Muddat formati noto'g'ri")
+
+@router.put("/api/dec/{mid}")
+def edit_draft(mid: int, body: DraftEdit, request: Request):
+    c = C(request); _guard(c, "bayonnoma qoralamasini tahrirlash", f"#{mid}"); _secretary(c)
+    m = db.one(_con, "SELECT * FROM meetings WHERE id=?", (mid,))
+    if not m or not m.get("source"): raise HTTPException(404)
+    if m["status"] != "qoralama": raise HTTPException(409, "Qaror allaqachon tasdiqlangan — tahrirlab bo'lmaydi")
+    own = {r["id"] for r in db.rows(_con, "SELECT id FROM tasks WHERE meeting_id=?", (mid,))}
+    for t in body.tasks:
+        if t.id not in own: raise HTTPException(400, "Topshiriq bu qarorga tegishli emas")
+        if t.unit and t.unit not in UNITS: raise HTTPException(400, "Noma'lum bo'lim")
+        if t.depends_on and (t.depends_on not in own or t.depends_on == t.id): raise HTTPException(400, "Bog'liqlik noto'g'ri")
+    now = _iso(_now())
+    for rid in body.remove:
+        if rid in own:
+            _con.execute("DELETE FROM tasks WHERE id=? AND status='qoralama'", (rid,))
+            _con.execute("UPDATE tasks SET depends_on=NULL WHERE depends_on=?", (rid,))
+    for t in body.tasks:
+        if t.id in body.remove: continue
+        due = _valid_due(t.due_at)
+        _con.execute("""UPDATE tasks SET text=?, unit=?, assignee_role=?, assignee=?, due_at=?, due=?, depends_on=?, updated_at=?,
+                        due_text=CASE WHEN COALESCE(due_at,'')=COALESCE(?,'') THEN due_text ELSE NULL END
+                        WHERE id=? AND status='qoralama'""",
+                     (t.text.strip(), t.unit, UNITS[t.unit][1] if t.unit else None, (t.assignee or "").strip(), due, (due or "")[:10] or None,
+                      t.depends_on, now, due, t.id))
+    _con.execute("UPDATE meetings SET title=?, minutes=? WHERE id=? AND status='qoralama'", (body.title.strip(), body.minutes, mid))
+    _con.commit()
+    return decision(c, mid, audit=False)
+
+@router.post("/api/dec/{mid}/confirm")
+def confirm(mid: int, request: Request):
+    c = C(request); _guard(c, "bayonnomani tasdiqlash", f"#{mid}"); _secretary(c)
+    m = db.one(_con, "SELECT * FROM meetings WHERE id=?", (mid,))
+    if not m or not m.get("source"): raise HTTPException(404)
+    if m["status"] == "qoralama":
+        bad = db.rows(_con, "SELECT pos FROM tasks WHERE meeting_id=? AND (unit IS NULL OR trim(text)='')", (mid,))
+        if bad: raise HTTPException(400, f"{', '.join(str(b['pos']) for b in bad)}-topshiriqda bo'lim tanlanmagan — navbatga yuborib bo'lmaydi")
+        if not db.one(_con, "SELECT 1 x FROM tasks WHERE meeting_id=?", (mid,)): raise HTTPException(400, "Topshiriq yo'q")
+    now = _iso(_now())
+    # Atomar o'tish: faqat qoralama bo'lsa. Qayta bosilsa rowcount=0 — hech narsa yaratilmaydi.
+    cur = _con.execute("UPDATE meetings SET status='tasdiqlangan', confirmed_at=?, confirmed_by=? WHERE id=? AND status='qoralama'", (now, c.user["id"], mid))
+    if cur.rowcount == 0:
+        _con.commit()
+        return {"ok": True, "already": True, "decision": decision(c, mid, audit=False)}
+    for t in db.rows(_con, "SELECT id, unit FROM tasks WHERE meeting_id=? AND status='qoralama'", (mid,)):
+        _con.execute("UPDATE tasks SET status='yangi', updated_at=? WHERE id=?", (now, t["id"]))
+        _log(t["id"], c, "tasdiqlandi", f"{UNITS[t['unit']][0]} navbatiga yuborildi")
+    _con.commit()
+    return {"ok": True, "already": False, "decision": decision(c, mid, audit=False)}
+
+@router.delete("/api/dec/{mid}")
+def drop_draft(mid: int, request: Request):
+    c = C(request); _guard(c, "qoralamani o'chirish", f"#{mid}"); _secretary(c)
+    m = db.one(_con, "SELECT status FROM meetings WHERE id=? AND source IS NOT NULL", (mid,))
+    if not m: raise HTTPException(404)
+    if m["status"] != "qoralama": raise HTTPException(409, "Tasdiqlangan qarorni o'chirib bo'lmaydi")
+    _con.execute("DELETE FROM tasks WHERE meeting_id=? AND status='qoralama'", (mid,))
+    _con.execute("DELETE FROM meetings WHERE id=?", (mid,)); _con.commit()
+    return {"ok": True}
+
+def _task(tid):
+    t = db.one(_con, "SELECT * FROM tasks WHERE id=?", (tid,))
+    if not t or not t.get("unit"): raise HTTPException(404, "Topshiriq topilmadi")
+    return t
+
+class Assign(BaseModel):
+    user_id: int
+
+@router.post("/api/dec/task/{tid}/assign")
+def assign(tid: int, body: Assign, request: Request):
+    c = C(request); _guard(c, "topshiriqni xodimga biriktirish", f"#{tid}")
+    t = _task(tid)
+    if not is_head(c, t["unit"]): raise AccessDenied("⛔ Topshiriqni faqat shu bo'lim rahbari biriktiradi.")
+    if t["status"] in ("qoralama", "bajarildi"): raise HTTPException(409, "Bu holatda biriktirib bo'lmaydi")
+    u = db.one(_con, "SELECT id, full_name, role FROM users WHERE id=?", (body.user_id,))
+    if not u or UNIT_OF_ROLE.get(u["role"]) != t["unit"]: raise HTTPException(400, "Xodim bu bo'limda emas")
+    if t.get("assignee_user") == u["id"]: return {"ok": True, "same": True}
+    _con.execute("UPDATE tasks SET assignee_user=?, assignee=?, updated_at=? WHERE id=?", (u["id"], _short(u["full_name"]), _iso(_now()), tid))
+    _log(tid, c, "biriktirildi", _short(u["full_name"]))
+    _con.commit(); return {"ok": True}
+
+class Update(BaseModel):
+    status: str
+    result: str | None = Field(None, max_length=3000)
+    notify_incident: bool = False
+
+@router.post("/api/dec/task/{tid}/update")
+def update(tid: int, body: Update, request: Request):
+    c = C(request); _guard(c, "topshiriq holatini yangilash", f"#{tid} → {body.status}")
+    t = _task(tid)
+    if not can_act(c, t): raise AccessDenied("⛔ Holatni faqat bo'lim rahbari yoki biriktirilgan xodim yangilaydi.")
+    if body.status not in ("jarayonda", "bajarildi"): raise HTTPException(400, "Noto'g'ri holat")
+    if t["status"] == "bajarildi": raise HTTPException(409, "Topshiriq allaqachon yakunlangan")
+    res = (body.result or "").strip()
+    now = _iso(_now())
+    if not t.get("assignee_user"):   # rahbar o'zi bajarayotgan bo'lsa — ijrochi sifatida o'zi yoziladi
+        _con.execute("UPDATE tasks SET assignee_user=?, assignee=? WHERE id=?", (c.user["id"], _short(c.user["full_name"]), tid))
+        _log(tid, c, "o'zi ijroga oldi")
+    if body.status == "bajarildi":
+        if not res: raise HTTPException(400, "Yakunlash uchun natijani yozing")
+        if t.get("depends_on"):
+            d = db.one(_con, "SELECT status, unit FROM tasks WHERE id=?", (t["depends_on"],))
+            if d and d["status"] != "bajarildi":
+                raise HTTPException(409, f"Avval bog'liq topshiriq ({UNITS.get(d['unit'], ('oldingi',))[0]}) natijasi kiritilishi kerak")
+        _con.execute("UPDATE tasks SET status='bajarildi', result=?, result_at=?, result_by=?, updated_at=? WHERE id=? AND status!='bajarildi'",
+                     (res, now, c.user["id"], now, tid))
+        _log(tid, c, "yakunlandi", res[:200])
+        if body.notify_incident:
+            m = db.one(_con, "SELECT incident_id FROM meetings WHERE id=?", (t["meeting_id"],))
+            if m and m["incident_id"]:
+                from . import service as SV
+                n = SV.notify_incident(_con, m["incident_id"], res)
+                _log(tid, c, "talabalarga yuborildi", f"Xizmat markazi hodisasi #{m['incident_id']}: {n} ta murojaatga javob")
+    else:
+        if res and res != (t.get("result") or ""):
+            _con.execute("UPDATE tasks SET result=?, result_by=?, result_at=? WHERE id=?", (res, c.user["id"], now, tid))
+            _log(tid, c, "oraliq natija", res[:200])
+        if t["status"] != "jarayonda":
+            _con.execute("UPDATE tasks SET status='jarayonda', updated_at=? WHERE id=?", (now, tid))
+            _log(tid, c, "ish boshlandi")
+        else:
+            _con.execute("UPDATE tasks SET updated_at=? WHERE id=?", (now, tid))
+    _con.commit(); return {"ok": True}
+
+class Msg(BaseModel):
+    text: str = Field(..., min_length=1, max_length=2000)
+
+@router.post("/api/dec/task/{tid}/msg")
+def post_msg(tid: int, body: Msg, request: Request):
+    c = C(request); _guard(c, "topshiriq chatiga yozish", f"#{tid}")
+    t = _task(tid)
+    if not can_chat(c, t): raise AccessDenied("⛔ Bu chatga faqat bog'langan topshiriqlar ijrochilari va kotib yozadi.")
+    txt = body.text.strip()
+    if not txt: raise HTTPException(400, "Bo'sh xabar")
+    # xabar foydalanuvchining o'z bo'limi topshirig'iga yoziladi (zanjir ichida)
+    u = unit_of(c)
+    target = next((i for i in sorted(_linked_ids(t)) if u and (db.one(_con, "SELECT unit FROM tasks WHERE id=?", (i,)) or {}).get("unit") == u), tid)
+    _con.execute("INSERT INTO task_msgs(task_id,ts,user_id,user_name,role,text) VALUES(?,?,?,?,?,?)",
+                 (target, _iso(_now()), c.user["id"], c.user["full_name"], c.role.title, txt))
+    _con.commit(); return {"ok": True}
+
+@router.post("/api/dec/demo-reset")
+def demo_reset(request: Request):
+    """Demoni boshlang'ich holatga qaytarish: shu oqimda yaratilgan qarorlar va LMS hodisasi xabari."""
+    c = C(request)
+    if c.role.key not in (SECRETARY, "rektor"): raise AccessDenied("⛔ Demoni faqat kotib yoki rektor qayta boshlaydi.")
+    rbac.audit(_con, c, "demo ssenariysini qayta boshlash", TASKS, True)
+    ms = db.rows(_con, "SELECT id, incident_id FROM meetings WHERE source IS NOT NULL")
+    for m in ms:
+        ids = [r["id"] for r in db.rows(_con, "SELECT id FROM tasks WHERE meeting_id=?", (m["id"],))]
+        notices = [r["detail"] for r in db.rows(_con, f"SELECT detail FROM task_log WHERE action='talabalarga yuborildi' AND task_id IN ({','.join(map(str, ids)) or '0'})")]
+        if m["incident_id"] and notices:
+            inc = db.one(_con, "SELECT notice FROM incidents WHERE id=?", (m["incident_id"],))
+            if inc and inc["notice"]:
+                _con.execute("UPDATE requests SET status='yangi', answer=NULL WHERE incident_id=? AND answer=?", (m["incident_id"], inc["notice"]))
+            _con.execute("UPDATE incidents SET notice=NULL, notified_at=NULL WHERE id=?", (m["incident_id"],))
+        if ids:
+            q = ",".join(map(str, ids))
+            _con.execute(f"DELETE FROM task_msgs WHERE task_id IN ({q})"); _con.execute(f"DELETE FROM task_log WHERE task_id IN ({q})")
+            _con.execute(f"DELETE FROM tasks WHERE id IN ({q})")
+        _con.execute("DELETE FROM meetings WHERE id=?", (m["id"],))
+    _con.commit()
+    return {"ok": True, "removed": len(ms)}

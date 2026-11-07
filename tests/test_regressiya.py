@@ -1,0 +1,73 @@
+import httpx, sqlite3, sys, asyncio
+sys.path.insert(0, "/Users/levi/Desktop/isft/jarvis-mvp")
+B="http://localhost:8000"; DB=sqlite3.connect("/Users/levi/Desktop/isft/jarvis-mvp/data/jarvis.db")
+fails=[]
+def ok(cond, msg):
+    print(("  ✓ " if cond else "  ✗ ")+msg)
+    if not cond: fails.append(msg)
+def login(uid):
+    c=httpx.Client(base_url=B, timeout=60); assert c.post("/api/login",json={"user_id":uid,"pin":"1234"}).status_code==200; return c
+users=DB.execute("select id,role from users").fetchall()
+print("== 16 rol × barcha GET endpointlar")
+eps=["/api/me","/api/dashboard","/api/section/tasks","/api/docs/catalog","/api/docs/registry","/api/svc/overview","/api/spaces/overview","/api/rbac"]
+err=0
+for uid,role in users:
+    c=login(uid)
+    for e in eps:
+        r=c.get(e)
+        if r.status_code>=500 or r.status_code not in (200,403): err+=1; print("   ",role,e,r.status_code,r.text[:120])
+    for sec in ["academic","risk","contracts","finance","payroll","hr","science","international","admissions","youth","masters","audit","mygroups"]:
+        r=c.get("/api/section/"+sec)
+        if r.status_code not in (200,403): err+=1; print("   ",role,sec,r.status_code)
+ok(err==0, f"{len(users)} rol, xatolar: {err}")
+rk,dek,oq,xo,kg=login(2),login(13),login(15),login(16),login(1)
+print("== Backend tuzatishlari")
+ok(xo.get("/api/docs/lookup/student?q=").status_code==403, "xo'jalik talaba qidira olmaydi (lookup RBAC)")
+ok(kg.get("/api/docs/lookup/student?q=").status_code==403, "kengash talaba qidira olmaydi")
+ok(oq.get("/api/docs/lookup/task").status_code==403, "o'qituvchi rektorat topshiriqlarini ko'rmaydi")
+ok(dek.get("/api/docs/lookup/student?q=").status_code==200, "dekan o'z talabalarini qidira oladi")
+ok(dek.post("/api/svc/incidents/2/notify",json={"text":"x"*30}).status_code==403, "dekan umumiy hodisa xabarini yubora olmaydi")
+ok(dek.get("/api/svc/overview").json()["requests"]["can_broadcast"]==False, "dekan UI'da yuborish tugmasi yo'q")
+ok(rk.post("/api/tasks/1/status",json={"status":"<script>"}).status_code==400, "topshiriq holati whitelist")
+r=rk.post("/api/meetings",json={"title":"Test","transcript":"t","tasks":[{"assignee":"Moliya fakulteti dekani","text":"x","due":"15.11"},{"assignee":"Moliya-iqtisod ishlari prorektori","text":"y","due":"2026-11-31"}]})
+ok(r.status_code==200, "buzuq sanali majlis saqlandi (400/500 emas)")
+row=DB.execute("select assignee_role,due from tasks order by id desc limit 2").fetchall()
+ok(row[1][0]=="dekan" and row[0][0]=="prorektor_moliya", f"rol aniqlash: {row}")
+ok(rk.get("/api/dashboard").status_code==200 and rk.get("/api/section/tasks").status_code==200, "panel buzuq sanadan keyin ham ishlaydi")
+from app import ai
+SAMPLE="""Rektorat yig'ilishi, 2026-yil 6-noyabr.
+Rektor: Moliya fakulteti 2-kurslaridagi vaziyat jiddiy. Dekan: pasaygan guruhlar bo'yicha har bir talaba bilan individual reja tuzsin, muddat 17.11.
+O'quv ishlari prorektori: qo'shimcha konsultatsiya jadvalini tasdiqlash, muddat 12.11.
+Buxgalteriya: kommunal xarajatlar bo'yicha "Toshkent issiqlik" bilan solishtirma dalolatnoma olish, muddat 14.11.
+Xalqaro aloqalar bo'limi: Riga Technical University bilan shartnomani uzaytirish xatini yuborish, muddat 10.11.
+Yoshlar ishlari prorektori: 2-bino isitish masalasini bir hafta ichida yopish va hisobot berish."""
+async def fb():
+    orig=ai.llm_available
+    async def no(): return False
+    ai.llm_available=no
+    try: return await ai.extract_tasks(SAMPLE)
+    finally: ai.llm_available=orig
+t=asyncio.run(fb())
+ok(len(t)==5 and t[0]["assignee"].startswith("Dekan"), f"AI o'chiq: {len(t)} ta topshiriq, 1-mas'ul: {t[0]['assignee'] if t else '-'}")
+ok(ai._parse_date("31.02") is None, "mavjud bo'lmagan sana rad etiladi")
+evs=rk.get("/api/svc/overview").json()["events"]["events"]
+ok(any(e["date"]>"2026-11-06" for e in evs), "kelgusi tadbirlar ro'yxatda (LEFT JOIN)")
+print("== Auditoriyalar")
+o=rk.get("/api/spaces/overview").json()
+ok(o["kpi"]["rooms"]>=36 and o["kpi"]["online"]==o["kpi"]["rooms"], f"barcha kameralar onlayn: {o['kpi']['online']}/{o['kpi']['rooms']}")
+ok(len(o["heatmap"])==6 and len(o["heatmap"][0])==6, "issiqlik xaritasi 6×6")
+ok(any(g["repeat"]>=3 for g in o["ghosts"]), "takror bo'sh dars signali bor")
+ok(o["ghosts"][0].get("teacher") is not None, "rektor o'qituvchi ismini ko'radi")
+xo_o=xo.get("/api/spaces/overview").json()
+ok(all(g.get("teacher") is None for g in xo_o["ghosts"]), "xo'jalik o'qituvchi ismini ko'rmaydi")
+ok(oq.get("/api/spaces/overview").status_code==403, "o'qituvchiga yopiq")
+rd=rk.get(f"/api/spaces/room/{o['live'][0]['id']}").json(); ok("points" in rd, "xona kunlik grafigi")
+ok(rk.get(f"/api/spaces/room/1?day=bad").status_code==400, "noto'g'ri sana → 400")
+ok(dek.post("/api/spaces/cameras",json={"room_id":1,"mode":"isapi","host":"1.2.3.4"}).status_code==403, "dekan kamera sozlay olmaydi")
+ok(xo.post("/api/spaces/cameras",json={"room_id":1,"mode":"isapi","host":"x; rm -rf"}).status_code==422, "IP maydonida injeksiya rad etiladi")
+r=xo.post("/api/spaces/cameras",json={"room_id":1,"mode":"isapi","host":"10.255.255.1","username":"jarvis","password":"secret"})
+cid=DB.execute("select id from cameras where room_id=1").fetchone()[0]
+t=xo.post(f"/api/spaces/cameras/{cid}/test").json(); ok(t["ok"] is False and "Ulanib" in t["error"], f"yetib bo'lmaydigan kamera → aniq xato: {t.get('error','')[:60]}")
+ok("secret" not in xo.get("/api/spaces/overview").text, "parol API javobida yo'q")
+xo.post("/api/spaces/cameras",json={"room_id":1,"mode":"sim"})
+print("\nNATIJA:", "HAMMASI O'TDI" if not fails else f"{len(fails)} ta xato: {fails}")
