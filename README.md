@@ -125,3 +125,9 @@ Backend va frontend mustaqil ko'rib chiqildi; tuzatildi: hujjat qidiruvida rol t
 
 ## Sanalar
 Yagona sana manbai — `services.TODAY = date.today()`. Seed hikoyasi 2026-11-04 ga nisbatan yozilgan; `app/dateshift.py` seed oxirida barcha sanalarni (majlis matnlaridagi "13.10.2026", "15-noyabrgacha" ham) bugungi kunga suradi. Har kuni ertalab `python -m app.seed` — hikoya (3 ta muddati o'tgan topshiriq, 23/47 kunda tugaydigan shartnomalar) o'sha kunga moslashadi.
+
+## Bulutga joylash (Railway) — faqat demo uchun
+`railway.json` va `start.sh` tayyor. Baza uchun `/app/data` ga Volume ulang; muhit o'zgaruvchilari: `TZ=Asia/Tashkent`,
+`JARVIS_PUBLIC_URL=https://<domen>` (QR havolalari uchun). Birinchi ishga tushishda demo ma'lumotlar yaratiladi (2–3 daqiqa).
+Bulutda lokal AI (Ollama) yo'q — chat qoidaga asoslangan zaxira rejimda. Haqiqiy talaba ma'lumotlari bilan bulutga qo'yilmaydi:
+loyiha tamoyili — ma'lumot institut serverida.
