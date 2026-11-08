@@ -25,7 +25,7 @@ INST = {
     "address_uz": "Toshkent viloyati, Qibray tumani, Bobur MFY, Universitet ko'chasi, 7-uy. Indeks: 111200",
     "address_en": "7 University street, Bobur MCA, Kibray district, Tashkent region, 111200, Uzbekistan",
     "phone": "+998 55 508-37-37", "email": "info@isft.uz", "web": "isft.uz",
-    "rector_title_uz": "Rektor", "rector_title_en": "Rector",
+    "rector_title_uz": "Rektor", "rector_title_en": "Rector", "rector_short": "I.R. G'ulomov",
 }
 
 def _font(size, bold=True):

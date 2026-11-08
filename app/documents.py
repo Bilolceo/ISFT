@@ -33,8 +33,7 @@ def letter(score):
 
 # ---------------- katalog ----------------
 DEAN_SIDE = {"dekan", "talabalar", "prorektor_oquv"}
-LEAD = {"rektor", "kengash", "prorektor_oquv", "prorektor_ilmiy", "prorektor_moliya", "prorektor_yoshlar",
-        "prorektor_umumiy", "prorektor_xalqaro", "prorektor_raqam"}
+LEAD = {"rektor", "kengash", "prorektor_oquv", "prorektor_ilmiy", "prorektor_moliya", "prorektor_yoshlar"}
 EVERYONE_STAFF = LEAD | {"qabul", "talabalar", "magistratura", "xalqaro", "buxgalteriya", "kadrlar", "dekan", "kafedra"}
 
 STUDENT_ACTIONS = {
@@ -342,7 +341,7 @@ def g_order_student(I, p):
     B.para(I.doc, f"{'3' if act == 'chetlashtirish_tolov' else '2'}. Fakultet dekanati ushbu o'zgarishni HEMIS tizimida 3 ish kuni ichida aks ettirsin.")
     B.para(I.doc, f"{'4' if act == 'chetlashtirish_tolov' else '3'}. Buyruq ijrosini nazorat qilish o'quv ishlari bo'yicha prorektor zimmasiga yuklansin.")
     p_ = I.doc.add_paragraph(); B.run(p_, f"Asos: {basis}.", 11, False, italic=True)
-    B.signature(I.doc, "Rektor")
+    B.signature(I.doc, "Rektor", B.INST["rector_short"])
     p_ = I.doc.add_paragraph(); B.run(p_, f"Loyiha kiritdi: {I.ctx.role.title}  _______________", 10.5)
     _agree(I.doc, ["O'quv ishlari bo'yicha prorektor", "Yuriskonsult", f"Fakultet dekani ({short(s['dean'])})"])
     I.qr()
@@ -385,7 +384,7 @@ def g_reprimand(I, p):
            f"{reason} uchun HAYFSAN e'lon qilinsin.")
     B.para(I.doc, "2. Tyutor talaba bilan suhbat o'tkazsin va natijasini registrator departamentiga ma'lum qilsin.")
     B.para(I.doc, "3. Buyruq ijrosini nazorat qilish o'quv ishlari bo'yicha prorektor zimmasiga yuklansin.")
-    B.signature(I.doc, "Rektor")
+    B.signature(I.doc, "Rektor", B.INST["rector_short"])
     p_ = I.doc.add_paragraph(); B.run(p_, f"Loyiha kiritdi: {I.ctx.role.title}  _______________", 10.5)
     _agree(I.doc, ["O'quv ishlari bo'yicha prorektor", "Yuridik bo'lim", f"Fakultet dekani ({short(s['dean'])})"])
     I.qr()
@@ -425,7 +424,7 @@ def g_leave_order(I, p):
     B.para(I.doc, "2. Buxgalteriya ta'til haqini belgilangan tartibda hisoblab, ta'til boshlanishidan oldin to'lab bersin.")
     B.para(I.doc, "3. Ta'til davrida xodimning vazifalarini bajarish bo'lim boshlig'i tomonidan taqsimlansin.")
     p_ = I.doc.add_paragraph(); B.run(p_, "Asos: xodimning arizasi, ta'tillar jadvali.", 11, False, italic=True)
-    B.signature(I.doc, "Rektor")
+    B.signature(I.doc, "Rektor", B.INST["rector_short"])
     p_ = I.doc.add_paragraph(); B.run(p_, "Loyiha kiritdi: Kadrlar bo'limi  _______________", 10.5)
     _agree(I.doc, ["Bosh buxgalter", "Yuriskonsult"])
     I.qr()
@@ -472,7 +471,7 @@ def g_debtors_list(I, p):
 def g_load(I, p):
     did = int(p.get("department") or 0)
     if not any(int(r["id"]) == did for r in lookup(I.con, I.ctx, "department")): raise AccessDenied("⛔ Bu kafedra sizning ko'lamingizda emas.")
-    d = db.one(I.con, "SELECT d.*, f.name faculty FROM departments d JOIN faculties f ON f.id=d.faculty_id WHERE d.id=?", (did,))
+    d = db.one(I.con, "SELECT d.*, f.name faculty FROM departments d LEFT JOIN faculties f ON f.id=d.faculty_id WHERE d.id=?", (did,))
     ts = db.rows(I.con, """SELECT t.*, (SELECT GROUP_CONCAT(DISTINCT tg.subject) FROM teacher_groups tg WHERE tg.teacher_id=t.id) subj,
         (SELECT COUNT(DISTINCT tg.group_id) FROM teacher_groups tg WHERE tg.teacher_id=t.id) ng FROM teachers t WHERE department_id=? ORDER BY t.load_hours DESC""", (did,))
     I.page(d["name"])
@@ -534,7 +533,7 @@ def g_exec_notice(I, p):
         B.para(I.doc, f"Bugungi kunga qadar topshiriq ijrosi bo'yicha ma'lumot taqdim etilmagan (muddatdan {late} kun o'tdi). "
                "Topshiriq ijrosini ta'minlash va kechikish sabablari haqida 3 ish kuni ichida yozma tushuntirish berishingiz so'raladi. "
                "Ijro holati JARVIS tizimida qayd etib boriladi.")
-        B.signature(I.doc, "Rektor")
+        B.signature(I.doc, "Rektor", B.INST["rector_short"])
         I.qr()
 
 async def ai_memo_text(recipient, subject, points):

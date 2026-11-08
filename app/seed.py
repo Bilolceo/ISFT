@@ -39,6 +39,7 @@ def short(full):
 #   NQAAE pasporti: https://nqaae.uz/en/higher/303974882 (talabalar 26.06.2026, xodimlar 01.05.2026)
 #   Narxlar va grantlar: https://isft.uz/en/faq ;  fakultet/yo'nalishlar: https://isft.uz/en/about/structure/faculty
 #   Kafedralar: ISFT tashkiliy tuzilmasi (04.09.2024 tasdiqlangan)
+#   Rahbarlar (rektor, prorektorlar, bo'limlar, kafedra mudirlari): institut bergan "Lavozim ism" ro'yxati (2026-11-07)
 # "TAXMIN" deb belgilanganlar manbada yo'q — demo uchun qo'yilgan, institut bilan aniqlashtiriladi.
 # =====================================================================================================
 PROFILE = {
@@ -59,18 +60,48 @@ COURSE_W = [0.29, 0.27, 0.23, 0.21]   # 1-kurs ≈ 2026 qabul (8 184) / jami —
 # Tartib muhim: 2-fakultet — "moliya" hikoyasi (2-kurs pasayishi), 4-kafedra — demo kafedra mudiri akkaunti.
 FACULTIES = [
     ("Iqtisodiyot va axborot texnologiyalari", [
-        ("Iqtisodiyot va kompyuter injiniring", [("Iqtisodiyot", 1.4), ("Bank ishi va audit", 1.2), ("Menejment", 1.0), ("Marketing", 0.8),
+        ("Iqtisodiyot va kompyuter injiniringi", [("Iqtisodiyot", 1.4), ("Bank ishi va audit", 1.2), ("Menejment", 1.0), ("Marketing", 0.8),
                                                  ("Axborot tizimlari va texnologiyalari", 1.0), ("Axborot xavfsizligi", 0.6), ("Xalqaro munosabatlar", 0.7)])]),
     ("Xalqaro iqtisodiyot va moliya", [   # "xalqaro yo'nalishlar" — 50 BHM
         ("Biznes boshqaruvi", [("Biznes va menejment", 1.0)]),
         ("Menejment", [("Moliya sohasida boshqaruv", 1.0)]),
-        ("Buxgalteriya hisobi", [("Buxgalteriya hisobi va moliya", 1.1)])]),   # saytda 7 kafedra (2024 dagi "Fundamental iqtisodiy fanlar" yo'q)
-    ("Ijtimoiy-gumanitar va tillar", [
+        ("Buxgalteriya hisobi", [("Buxgalteriya hisobi va moliya", 1.1)])]),
+    ("Ijtimoiy-gumanitar fanlar va tillar", [
         ("Psixologiya va pedagogika", [("Pedagogika", 1.3), ("Psixologiya", 1.3)]),
         ("Gumanitar va tabiiy fanlar", [("Boshlang'ich ta'lim", 1.4), ("Maktabgacha ta'lim", 1.2)]),
         ("Filologiya va tillarni o'qitish", [("Xorijiy til va adabiyoti", 1.2), ("Filologiya va tillarni o'qitish (ingliz tili)", 1.0)])]),
 ]
 INTL_FACULTY = 2
+# Fakultetga biriktirilmagan (institut miqyosidagi) kafedra: o'z yo'nalishi yo'q, guruhlari yo'q. Ro'yxatda fakultet ko'rsatilmagan.
+INSTITUTE_DEPTS = ["Fundamental iqtisodiy fanlar"]
+FUND_SUBJECTS = {"Makroiqtisodiyot", "Mikroiqtisodiyot", "Ekonometrika", "Statistika"}   # TAXMIN: shu kafedra o'qitadigan fanlar
+# Ism-shariflar — institut ro'yxatidan (tartib: familiya, ism, otasining ismi). Dekanlar ro'yxatda yo'q — ular sun'iy qoladi.
+LEADERS = {
+    "rektor": "G'ulomov Ibroxim Rustam o'g'li",
+    "prorektor_yoshlar": "Narkuziyeva Zulxumor Meliboyevna",
+    "prorektor_oquv": "Temirov Anvar Amir o'g'li",
+    "prorektor_ilmiy": "Azizov Tuxtamish A'zamovich",
+    "prorektor_moliya": "Sharipov Asliddin Fazlitdin o'g'li",
+}
+DEPT_HEADS = {
+    "Iqtisodiyot va kompyuter injiniringi": "Mavlonov Nurali Sherali o'g'li",
+    "Biznes boshqaruvi": "Uktamov Xusniddin Faxriddinovich",
+    "Menejment": "Usmonov Adxamjon A'zamjonovich",
+    "Buxgalteriya hisobi": "Xalilov Sherzod Axmatovich",
+    "Psixologiya va pedagogika": "Abdusamatov Xasanboy Usmonjon o'g'li",
+    "Gumanitar va tabiiy fanlar": "Xidirov Mustafo Toyirqulovich",
+    "Filologiya va tillarni o'qitish": "Najmitdinova Gulnozaxon Baxtiyorovna",
+    "Fundamental iqtisodiy fanlar": "Qarshiyev Daniyar Eshpulatovich",
+}
+# Akademik faoliyat va registrator departamenti (rahbari ro'yxatda ko'rsatilmagan) va boshqa bo'limlar
+UNIT_HEADS = {
+    "Registrator ofisi": "Baratov Ma'rufjon Baxodir o'g'li",
+    "Akademik faoliyatni muvofiqlashtirish bo'limi": "Bo'tayev Xurshid",
+    "Imtihon bo'limi": "Zafarbek Ilkhamovich",
+    "Magistratura bo'limi": "Manukyan Feruza",
+    "Ilmiy tadqiqotlar, innovatsiyalar va ilmiy-pedagogik kadrlar tayyorlash bo'limi": "Bahodirova Gulnoz",
+    "Amaliyot bo'limi": "Suhrob Bahodirovich",
+}
 # Magistratura (isft.uz/en/applicants/master): dastur → kafedra raqami (FACULTIES tartibida, 1 dan)
 MASTERS = [("Davlat moliyaviy nazorati va auditi", 4), ("Pedagogika", 5), ("Xorijiy til va adabiyoti", 7)]
 GROUP_CODE = {"Iqtisodiyot": "IQT", "Bank ishi va audit": "BIA", "Menejment": "MEN", "Marketing": "MRK", "Axborot tizimlari va texnologiyalari": "ATT",
@@ -116,9 +147,13 @@ def run():
         dean, _ = person("M" if fi != 3 else "F")
         c.execute("INSERT INTO faculties VALUES(?,?,?)", (fi, fname, dean))
         for dname, directions in depts:
-            head, _ = person()
+            head = DEPT_HEADS.get(dname) or person()[0]
             c.execute("INSERT INTO departments(faculty_id,name,head) VALUES(?,?,?)", (fi, dname, head))
             dept_rows.append((c.lastrowid, fi, directions))
+    inst_dept_ids = set()
+    for dname in INSTITUTE_DEPTS:   # oxirida — mavjud kafedra id'lari (1–7) o'zgarmaydi
+        c.execute("INSERT INTO departments(faculty_id,name,head) VALUES(?,?,?)", (None, dname, DEPT_HEADS.get(dname) or person()[0]))
+        dept_rows.append((c.lastrowid, None, [])); inst_dept_ids.add(c.lastrowid)
     wsum = sum(w for _, _, ds in dept_rows for _, w in ds)
     group_rows = []   # (gid, did, fi, course, direction, form, size)
     for did, fi, directions in dept_rows:
@@ -167,12 +202,13 @@ def run():
             teachers.append((c.lastrowid, did, fi))
     # o'qituvchi-guruh-fan
     tg = {}
+    fund_teachers = [t for t in teachers if t[1] in inst_dept_ids]   # umumiy iqtisodiy fanlarni institut kafedrasi o'qitadi
     skey = lambda d, level: f"{d} (magistratura)" if level == "magistr" and f"{d} (magistratura)" in SUBJECTS else d
     for gid, did, fi, course, d, form, cnt, level in group_rows:
         key = skey(d, level)
         dept_teachers = [t for t in teachers if t[1] == did]
         for subj in SUBJECTS[key]:
-            t = R.choice(dept_teachers)
+            t = R.choice(fund_teachers if subj in FUND_SUBJECTS and fund_teachers else dept_teachers)
             c.execute("INSERT INTO teacher_groups VALUES(?,?,?)", (t[0], gid, subj))
             tg[(gid, subj)] = t[0]
 
@@ -273,7 +309,14 @@ def run():
 
     # --- kadrlar (shaxsiy ma'lumot — faqat kadrlar bo'limiga) ---
     units = ["Rektorat","Buxgalteriya bo'limi","Kadrlar bo'limi","Akademik faoliyat va registrator departamenti","Marketing bo'limi","Xalqaro hamkorlik bo'limi",
-             "Xo'jalik va texnik bo'lim","Axborot texnologiyalari bo'limi","Axborot-resurs markazi","Devonxona","Yuridik bo'lim"]
+             "Xo'jalik va texnik bo'lim","Axborot texnologiyalari bo'limi","Axborot-resurs markazi","Devonxona","Yuridik bo'lim",
+             "Imtihon bo'limi","Magistratura bo'limi","Amaliyot bo'limi","Ilmiy tadqiqotlar, innovatsiyalar va ilmiy-pedagogik kadrlar tayyorlash bo'limi"]
+    # bo'lim rahbarlari (institut ro'yxati); Registrator ofisi va Akademik faoliyatni muvofiqlashtirish — departament tarkibida
+    for u, nm in UNIT_HEADS.items():
+        parent = "Akademik faoliyat va registrator departamenti" if u in ("Registrator ofisi", "Akademik faoliyatni muvofiqlashtirish bo'limi") else u
+        pos = "Bo'lim boshlig'i" if parent == u else f"{u} boshlig'i"
+        c.execute("INSERT INTO staff(full_name,unit,position,salary,hired,passport) VALUES(?,?,?,?,?,?)",
+                  (nm, parent, pos, R.choice([12, 14, 16]) * 1_000_000, (TODAY - dt.timedelta(days=R.randint(400, 3000))).isoformat(), f"AD{R.randint(1000000, 9999999)}"))
     for t, did, fi in teachers:
         nm = db.one(con, "SELECT full_name, position FROM teachers WHERE id=?", (t,))
         c.execute("INSERT INTO staff(full_name,unit,position,salary,hired,passport) VALUES(?,?,?,?,?,?)",
@@ -325,16 +368,18 @@ def run():
         return db.one(con, "SELECT id, full_name FROM teachers WHERE department_id=? AND position!='Kafedra mudiri' LIMIT 1", (dept_id,))
     dept4 = db.one(con, "SELECT * FROM departments WHERE id=4")
     t = tid_of(4)
+    UH_MAG, UH_AKA = UNIT_HEADS["Magistratura bo'limi"], UNIT_HEADS["Akademik faoliyatni muvofiqlashtirish bo'limi"]
+    UH_ILM = UNIT_HEADS["Ilmiy tadqiqotlar, innovatsiyalar va ilmiy-pedagogik kadrlar tayyorlash bo'limi"]
     users = [
         ("Kuzatuv kengashi a'zosi", "kengash", None, None, None, "KENGASH"),
-        ("Rektor", "rektor", None, None, None, "REKTOR"),
-        ("O'quv ishlari bo'yicha prorektor", "prorektor_oquv", None, None, None, "OQUV"),
-        ("Ilmiy ishlar va innovatsiyalar bo'yicha prorektor", "prorektor_ilmiy", None, None, None, "ILMIY"),
-        ("Moliya-iqtisod ishlari bo'yicha prorektor", "prorektor_moliya", None, None, None, "MOLIYA"),
-        ("Yoshlar masalalari va ma'naviy-ma'rifiy ishlar bo'yicha birinchi prorektor", "prorektor_yoshlar", None, None, None, "YOSHLAR"),
+        (f"Rektor: {LEADERS['rektor']}", "rektor", None, None, None, "REKTOR"),
+        (f"O'quv ishlari bo'yicha prorektor: {LEADERS['prorektor_oquv']}", "prorektor_oquv", None, None, None, "OQUV"),
+        (f"Ilmiy ishlar va innovatsiyalar bo'yicha prorektor: {LEADERS['prorektor_ilmiy']}", "prorektor_ilmiy", None, None, None, "ILMIY"),
+        (f"Moliya-iqtisod ishlari bo'yicha prorektor: {LEADERS['prorektor_moliya']}", "prorektor_moliya", None, None, None, "MOLIYA"),
+        (f"Yoshlar masalalari va ma'naviy-ma'rifiy ishlar bo'yicha birinchi prorektor: {LEADERS['prorektor_yoshlar']}", "prorektor_yoshlar", None, None, None, "YOSHLAR"),
         ("Qabul komissiyasi", "qabul", None, None, None, "QABUL"),
-        ("Akademik faoliyat va registrator departamenti: Yusupova Dilnoza Bahodir qizi", "talabalar", None, None, None, "TALABA"),
-        ("Magistratura bo'limi", "magistratura", None, None, None, "MAGISTR"),
+        ("Akademik faoliyat va registrator departamenti", "talabalar", None, None, None, "TALABA"),   # departament rahbari ro'yxatda ko'rsatilmagan
+        (f"Magistratura bo'limi: {UH_MAG}", "magistratura", None, None, None, "MAGISTR"),
         ("Xalqaro hamkorlik bo'limi", "xalqaro", None, None, None, "XALQARO"),
         ("Buxgalteriya bo'limi", "buxgalteriya", None, None, None, "BUXGALTER"),
         ("Kadrlar bo'limi", "kadrlar", None, None, None, "KADR"),
@@ -342,10 +387,10 @@ def run():
         (f"Kafedra mudiri: {dept4['head']}", "kafedra", 2, 4, None, "KAFEDRA"),
         (f"O'qituvchi: {t['full_name']}", "oqituvchi", 2, 4, t["id"], "USTOZ"),
         ("Xo'jalik va texnik bo'lim", "xojalik", None, None, None, "XOJALIK"),
-        # rasmiy tuzilmadagi qolgan prorektorlar (id'lar 17–19: mavjud demo akkauntlar id'si o'zgarmasligi uchun oxirida)
-        ("Umumiy masalalar bo'yicha prorektor", "prorektor_umumiy", None, None, None, "UMUMIY"),
-        ("Xalqaro aloqalar bo'yicha prorektor", "prorektor_xalqaro", None, None, None, "XALQAROPR"),
-        ("Raqamlashtirish va moliya masalalari bo'yicha prorektor", "prorektor_raqam", None, None, None, "RAQAM"),
+        # departament tarkibidagi bo'limlar va ilmiy bo'lim (id'lar 17–19: keyingi demo akkauntlar id'si o'zgarmasligi uchun shu yerda)
+        (f"Registrator ofisi: {UNIT_HEADS['Registrator ofisi']}", "talabalar", None, None, None, "REGOFIS"),
+        (f"Akademik faoliyatni muvofiqlashtirish bo'limi: {UH_AKA}", "talabalar", None, None, None, "AKADEM"),
+        (f"Ilmiy tadqiqotlar va innovatsiyalar bo'limi: {UH_ILM}", "ilmiy_bolim", None, None, None, "ILMIYBO"),
     ]
     for nm, role, f, d, tid, code in users:
         c.execute("INSERT INTO users(full_name,role,faculty_id,department_id,teacher_id,link_code,pin) VALUES(?,?,?,?,?,?,?)",

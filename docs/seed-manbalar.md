@@ -26,3 +26,10 @@ kabi narsalar yozilib qolmasligi uchun.
 - **Hamkor universitetlar**: saytda ro'yxat e'lon qilinmagan — "Hamkor OTM — <davlat> (namuna)" deb ko'rsatilgan, haqiqiy nomlar ishlatilmagan.
 - Samarqand filiali alohida modellashtirilmagan (NQAAE raqamlari umumiy bo'lishi mumkin).
 - Baholar, davomat, kontrakt to'lovlari, murojaatlar va "hikoyalar" (2-kurs pasayishi, LMS uzilishi) — sun'iy.
+
+## Rahbarlar ro'yxati (2026-11-07)
+Rektor, prorektorlar, bo'lim boshliqlari va kafedra mudirlarining ism-shariflari institut bergan "Lavozim ism" ro'yxatidan olingan
+(`app/seed.py`: `LEADERS`, `DEPT_HEADS`, `UNIT_HEADS`). Dekanlar va boshqa barcha xodim/talaba/o'qituvchilar — sun'iy.
+- Prorektorlar 4 nafar (ro'yxat bo'yicha); 2024 tuzilmasidagi Umumiy masalalar, Xalqaro aloqalar, Raqamlashtirish prorektorlari olib tashlandi.
+- Akademik faoliyat va registrator departamenti: Akademik faoliyatni muvofiqlashtirish bo'limi + Registrator ofisi (departament rahbari ko'rsatilmagan).
+- "Fundamental iqtisodiy fanlar" kafedrasi — fakultetga biriktirilmagan; Statistika, Mikro/Makroiqtisodiyot, Ekonometrika fanlarini o'qitadi (TAXMIN).

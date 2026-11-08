@@ -120,10 +120,9 @@ class Meeting(BaseModel):
 # Mas'ul lavozimni aniqlash. Tartib muhim: "Xalqaro iqtisodiyot va moliya fakulteti dekani" — dekan, prorektor emas;
 # prorektor yo'nalishlari faqat matnda "prorektor" so'zi bo'lsa tekshiriladi.
 ROLE_FIRST = [("dekan", "dekan"), ("kafedra", "kafedra"), ("o'qituvchi", "oqituvchi")]
-ROLE_PROREKTOR = [("raqamlashtirish", "prorektor_raqam"), ("umumiy", "prorektor_umumiy"), ("xalqaro", "prorektor_xalqaro"),
-                  ("o'quv", "prorektor_oquv"), ("ilmiy", "prorektor_ilmiy"), ("moliya", "prorektor_moliya"), ("yoshlar", "prorektor_yoshlar")]
+ROLE_PROREKTOR = [("o'quv", "prorektor_oquv"), ("ilmiy", "prorektor_ilmiy"), ("moliya", "prorektor_moliya"), ("yoshlar", "prorektor_yoshlar")]
 ROLE_UNITS = [("qabul", "qabul"), ("xalqaro", "xalqaro"), ("registrator", "talabalar"), ("axborot texnologiyalari", "it_head"), ("buxgalter", "buxgalteriya"), ("kadr", "kadrlar"), ("talabalar bilan", "talabalar"),
-              ("magistr", "magistratura"), ("xo'jalik", "xojalik")]
+              ("magistr", "magistratura"), ("ilmiy tadqiqot", "ilmiy_bolim"), ("xo'jalik", "xojalik")]
 
 def role_for(who: str) -> str:
     low = ai.norm(who or "")

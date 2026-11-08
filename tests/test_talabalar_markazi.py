@@ -77,8 +77,10 @@ ok(q("SELECT status, close_reason FROM ops_cases WHERE id=?", (kc[0],))[0][0] ==
 ok(q("SELECT COUNT(*) FROM ops_tasks WHERE case_id=? AND status='yangi'", (kc[0],))[0][0] == 0, "Yopilgan holatda ochiq topshiriq qolmadi")
 
 # --- otrabotka ---
-ac = next(c for c in ty2.get("/api/ops/cases?rule=akademik").json() if c["facts"]["fails"])
-subj = ac["facts"]["fails"][0]["subject"]; sid = ac["student_id"]
+# seed ba'zi talabalarga allaqachon otrabotka bergan — ochiq otrabotkasi yo'q fan tanlanadi
+open_rt = {(r[0], r[1]) for r in q("SELECT student_id, subject FROM retakes WHERE status IN ('berildi','topshirildi')")}
+sid, subj = next((c["student_id"], f["subject"]) for c in ty2.get("/api/ops/cases?rule=akademik").json()
+                 for f in c["facts"]["fails"] if (c["student_id"], f["subject"]) not in open_rt)
 r = ty2.post("/api/ops/retakes", json={"student_id": sid, "subject": subj}).json(); ok(r["reg_no"].startswith("OV-"), f"Tyutor otrabotka varaqasi berdi: {r['reg_no']}")
 rid = r["id"]
 ok(ty2.post("/api/ops/retakes", json={"student_id": sid, "subject": subj}).status_code == 409, "Shu fan bo'yicha ikkinchi ochiq otrabotka — 409")
@@ -95,6 +97,8 @@ ok(reg.post(f"/api/ops/retakes/{rid}/approve", json={"score": 90}).status_code =
 ok(any(a[0] == "baho o'zgartirildi (otrabotka)" for a in q("SELECT action FROM audit_log ORDER BY id DESC LIMIT 20")), "Baho o'zgarishi audit jurnalida")
 
 # --- bo'sh ruxsatlar ---
-ok(cc.get(f"/api/ops/student/{sid}").status_code == 403, "Call-markaz o'z navbatida yo'q talaba kartasini ocholmaydi")
+cc_q = {r[0] for r in q("SELECT student_id FROM ops_tasks WHERE assignee_role='call_center'")}
+other = next(r[0] for r in q("SELECT id FROM students ORDER BY id") if r[0] not in cc_q)
+ok(cc.get(f"/api/ops/student/{other}").status_code == 403, "Call-markaz o'z navbatida yo'q talaba kartasini ocholmaydi")
 ccs = cc.get(f"/api/ops/student/{ct[1]['student_id']}").json(); ok(ccs.get("limited") and not ccs["absences"] and "grades" not in json.dumps(ccs), "Call-markaz kartasi: minimal ma'lumot")
 print("\nNATIJA:", "HAMMASI O'TDI" if not fails else f"{fails} TA XATO")

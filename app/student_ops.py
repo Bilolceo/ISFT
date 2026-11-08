@@ -60,7 +60,7 @@ DEMO_USERS = [  # sun'iy ism-shariflar; PIN 1234
     ("Call-markaz operatori: Rahimova Nigora Odil qizi", "call_center", None),
     ("Tyutor (Xalqaro iqtisodiyot va moliya fakulteti): Ergasheva Sitora Komil qizi", "tyutor", 2),
     ("Tyutor (Iqtisodiyot va axborot texnologiyalari fakulteti): Saidov Temur Murod o'g'li", "tyutor", 1),
-    ("Tyutor (Ijtimoiy-gumanitar va tillar fakulteti): Qodirova Laylo Erkin qizi", "tyutor", 3),
+    ("Tyutor (Ijtimoiy-gumanitar fanlar va tillar fakulteti): Qodirova Laylo Erkin qizi", "tyutor", 3),
 ]
 
 def _today(): return dt.date.today()

@@ -298,6 +298,7 @@ const SUGG = {
   kengash: ["Institutning umumiy holati qanday?", "Byudjet ijrosi qanday?", "Xavf ostidagi talabalar ro'yxatini ber"],
   prorektor_oquv: ["Qaysi guruhlarda o'zlashtirish pasaygan?", "Xavf ostidagi talabalar kimlar?", "Byudjet xarajatlari qanday?"],
   prorektor_ilmiy: ["Scopus maqolalar bo'yicha qaysi kafedra ortda?", "Qaysi xalqaro shartnomalar tugayapti?", "Talabalar baholarini ko'rsat"],
+  ilmiy_bolim: ["Scopus maqolalar bo'yicha qaysi kafedra ortda?", "2025 yildan beri maqolasi yo'q o'qituvchilar", "Magistratura holati qanday?"],
   prorektor_moliya: ["Qaysi xarajat moddasi rejadan oshgan?", "Kontrakt qarzi eng ko'p guruhlar?", "Talabalar o'zlashtirishi qanday?"],
   prorektor_yoshlar: ["Yotoqxona holati qanday?", "Hal qilinmagan murojaatlar bormi?", "Byudjet qancha?"],
   dekan: ["Fakultetimda qaysi guruhlar ortda?", "Xavf ostidagi talabalar kimlar?", "Kontrakt qarzdorligi qanday?"],
