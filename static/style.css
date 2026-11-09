@@ -198,7 +198,7 @@ textarea{width:100%;min-height:180px;resize:vertical}
 
 .avatar{display:grid;place-items:center;width:38px;height:38px;flex:none;border-radius:50%;font-weight:700;font-size:13px;color:#fff;background:var(--av1)}
 .avatar.l2{background:var(--av2)}
-.avatar.has-photo,.k-av.has-photo{background:var(--surface-2);overflow:hidden;padding:0;box-shadow:0 0 0 1.5px var(--brand)}
+.avatar.has-photo,.k-av.has-photo{background:var(--surface-2);overflow:hidden;padding:0;box-shadow:0 0 0 1px color-mix(in srgb,var(--ink) 12%,transparent)}
 .avatar.has-photo img,.k-av.has-photo img{width:100%;height:100%;object-fit:cover;border-radius:inherit;display:block}.avatar.l3{background:var(--av3)}.avatar.l4{background:var(--av4)}
 /* kirish sahifasi uslublari — static/login.css */
 
