@@ -156,18 +156,26 @@
   }
   document.addEventListener("mousedown", e => { if (MENU && !MENU.contains(e.target) && !meCard.contains(e.target)) closeMenu(false); });
 
-  /* shaxsiy ma'lumotlar: faqat o'zi haqida (GET /api/me/profile) */
-  const dmyhm = v => { const t = String(v || "").replace(" ", "T"); return t.length >= 16 ? `${t.slice(8, 10)}.${t.slice(5, 7)}.${t.slice(0, 4)} ${t.slice(11, 16)}` : (t ? t.slice(0, 10) : "—"); };
+  /* shaxsiy ma'lumotlar: faqat o'zi haqida (GET /api/me/profile) — akkaunt sahifasi uslubida */
+  const dmyhm = v => { const t = String(v || "").replace(" ", "T"); return t.length >= 16 ? `${t.slice(8, 10)}.${t.slice(5, 7)}.${t.slice(0, 4)}, ${t.slice(11, 16)}` : (t ? t.slice(0, 10) : "—"); };
+  const PERM_GROUPS = [
+    ["Ta'lim jarayoni", ["academic", "students", "ops", "rating", "masters", "admissions"]],
+    ["Moliya", ["contracts", "finance", "payroll"]],
+    ["Xodimlar", ["hr"]],
+    ["Ilmiy va xalqaro faoliyat", ["science", "intl"]],
+    ["Boshqaruv va nazorat", ["kpi", "tasks", "reports", "audit"]],
+    ["Infratuzilma va xizmatlar", ["facilities", "spaces", "requests", "youth"]]];
   async function openProfile() {
     closePalette(true); closeNp(false);
     const nm = String(ME?.name || "").split(":").pop().trim();
-    const av = ME?.photo ? `<span class="avatar has-photo xt-pf-av"><img src="${esc(ME.photo)}" alt=""></span>`
-                         : `<span class="xt-dh-ic">${ico("user", 20)}</span>`;
+    const ini = nm.split(/\s+/).slice(0, 2).map(w => w[0] || "").join("").toUpperCase();
+    const av = ME?.photo ? `<span class="xt-pf-av has"><img src="${esc(ME.photo)}" alt=""></span>` : `<span class="xt-pf-av">${esc(ini)}</span>`;
     const M = openModal({cls: "xt-pfm", labelledby: "xtPfT", html: `
       <div class="xt-pf">
-        <div class="xt-dh">${av}<div><h3 id="xtPfT">${esc(nm || ME?.role || "")}</h3><p class="muted">${esc(ME?.role || "")}</p></div>
-          <button type="button" class="icon-btn xt-x" data-close aria-label="Yopish">${ico("x", 18)}</button></div>
-        <div id="xtPfBody" class="xt-pf-body"><p class="muted">Yuklanmoqda…</p></div>
+        <header class="xt-pf-hd">${av}
+          <div class="xt-pf-who"><h3 id="xtPfT">${esc(nm || ME?.role || "")}</h3><p>${esc(ME?.role || "")}</p></div>
+          <button type="button" class="icon-btn xt-x" data-close aria-label="Yopish">${ico("x", 18)}</button></header>
+        <div id="xtPfBody" class="xt-pf-body"><p class="muted xt-pf-load">Yuklanmoqda…</p></div>
       </div>`});
     M.dlg.querySelectorAll("[data-close]").forEach(b => b.onclick = () => closeModal());
     setTimeout(() => M.dlg.querySelector(".xt-x")?.focus(), 30);
@@ -178,34 +186,66 @@
       if (r.status === 401) { closeModal(); showLogin(); return; }
       if (!r.ok) throw 0;
       p = await r.json();
-    } catch (e) { if (body.isConnected) body.innerHTML = `<p class="xt-form-err">Ma'lumotlarni yuklab bo'lmadi — qayta urinib ko'ring</p>`; return; }
+    } catch (e) { if (body.isConnected) body.innerHTML = `<p class="xt-form-err">Ma'lumotlarni yuklab bo'lmadi. Qayta urinib ko'ring.</p>`; return; }
     if (!body.isConnected) return;
+    M.dlg.querySelector(".xt-pf-who p").textContent = `${p.position} · ${p.unit.name}`;
     const row = (k, v) => v ? `<div class="xt-pf-r"><dt>${k}</dt><dd>${v}</dd></div>` : "";
-    const who = x => x ? `<b>${esc(x.name)}</b><small>${esc(x.position)}</small>` : "";
-    const oth = p.sessions.filter(s => !s.current).length;
+    const who = x => x ? `${esc(x.name)}<small>${esc(x.position)}</small>` : "";
+    const sess = p.sessions, others = sess.filter(s => !s.current).length, SHOW = 4;
+    const sessRow = s => `<li><span class="xt-pf-dev">${ico(/iPhone|Android|iPad/.test(s.device) ? "phone" : "monitor", 16)}</span>
+        <div><b>${esc(s.device)}</b>${s.current ? ` <span class="xt-pf-badge">Joriy qurilma</span>` : ""}<small>IP ${esc(s.ip)} · kirgan: ${esc(dmyhm(s.created))}</small></div></li>`;
+    const perms = p.allow, byKey = Object.fromEntries(perms.map(x => [x.key, x]));
+    const groups = PERM_GROUPS.map(([g, ks]) => [g, ks.filter(k => byKey[k]).map(k => byKey[k])]).filter(([, xs]) => xs.length);
+    const rest = perms.filter(x => !PERM_GROUPS.some(([, ks]) => ks.includes(x.key)));
+    if (rest.length) groups.push(["Boshqa", rest]);
     body.innerHTML = `
-      <section><h4>${ico("users", 15)} Lavozim va bo'lim</h4><dl>
+      <section class="xt-pf-sec"><h4>Xizmat ma'lumotlari</h4><dl class="xt-pf-dl">
+        ${row("To'liq ism", esc(p.name))}
         ${row("Lavozim", esc(p.position))}
-        ${row("Bo'lim", `${esc(p.unit.name)}${p.unit.am_head ? ` <span class="xt-pf-tag">rahbar</span>` : ""}<small>${p.unit.staff} nafar xodim</small>`)}
+        ${row("Bo'lim", `${esc(p.unit.name)}${p.unit.am_head ? ` <span class="xt-pf-badge">Rahbar</span>` : ""}<small>${p.unit.staff} nafar xodim</small>`)}
         ${row("Bevosita rahbar", who(p.head))}
         ${row("Kurator prorektor", who(p.curator))}
         ${row("Ma'lumot ko'lami", esc(p.scope))}
-        ${p.curated.length ? row("Kuratorlikdagi bo'limlar", `<span class="xt-pf-chips">${p.curated.map(n => `<i>${esc(n)}</i>`).join("")}</span>`) : ""}
+        ${p.curated.length ? row("Kuratorlikda", `${p.curated.length} ta bo'linma<small>${p.curated.slice(0, 3).map(esc).join(", ")}${p.curated.length > 3 ? ` va yana ${p.curated.length - 3} ta` : ""}</small>`) : ""}
+        ${row("Akkaunt raqami", `#${p.id}`)}
       </dl></section>
-      <section><h4>${ico("shield", 15)} Ruxsatlar</h4>
-        <p class="xt-pf-chips">${p.allow.length ? p.allow.map(a => `<i>${esc(a)}</i>`).join("") : `<span class="muted">Faqat umumiy bo'limlar</span>`}</p></section>
-      <section><h4>${ico("send", 15)} Telegram bot</h4>
-        ${p.telegram.linked ? `<p class="xt-pf-ok">${ico("check", 15)} Ulangan — eslatmalar va kunlik xulosa Telegram'ga keladi</p>`
-          : `<p class="muted">Ulanmagan. Botga quyidagini yuboring: <code>${esc(p.telegram.code || "KOD")} &lt;parolingiz&gt;</code></p>`}</section>
-      <section><h4>${ico("lock", 15)} Xavfsizlik</h4><dl>
-        ${row("Parol o'zgartirilgan", p.password_changed ? esc(dmyhm(p.password_changed)) : `<span class="muted">Hali o'zgartirilmagan</span> <button type="button" class="btn sm" data-a="pw">O'zgartirish</button>`)}
-        ${row("Faol sessiyalar", `${p.sessions.length} ta${oth ? ` <button type="button" class="btn sm" id="xtPfClose">Boshqa ${oth} ta qurilmadan chiqish</button>` : ` <small>faqat shu brauzer</small>`}`)}
-      </dl>
-      ${p.logins.length ? `<ul class="xt-pf-log">${p.logins.map(l => `<li class="${l.ok ? "" : "bad"}">${ico(l.ok ? "check" : "x", 13)}<span>${esc(dmyhm(l.ts))}</span><small>${l.ok ? "Muvaffaqiyatli kirish" : esc(l.detail || "Rad etildi")}</small></li>`).join("")}</ul>` : ""}
+
+      <section class="xt-pf-sec"><h4>Kirish va xavfsizlik</h4>
+        <div class="xt-pf-set">
+          <div><b>Parol</b><small>${p.password_changed ? `Oxirgi marta o'zgartirilgan: ${esc(dmyhm(p.password_changed))}` : `Boshlang'ich parol hali o'zgartirilmagan`}</small></div>
+          <button type="button" class="btn sm" data-a="pw">O'zgartirish</button></div>
+        ${p.password_changed ? "" : `<p class="xt-pf-warn">${ico("alert", 15)}<span>Xavfsizlik uchun boshlang'ich parolni almashtiring.</span></p>`}
+        ${p.fails30 ? `<p class="xt-pf-warn">${ico("alert", 15)}<span>So'nggi 30 kunda ${p.fails30} ta muvaffaqiyatsiz kirish urinishi qayd etilgan.</span></p>` : ""}
+        <div class="xt-pf-set xt-pf-gap">
+          <div><b>Faol sessiyalar</b><small>${sess.length} ta qurilmada tizimga kirilgan</small></div>
+          ${others ? `<button type="button" class="btn sm danger-ghost" id="xtPfClose">Boshqa qurilmalardan chiqish</button>` : ""}</div>
+        <ul class="xt-pf-list">${sess.slice(0, SHOW).map(sessRow).join("")}</ul>
+        ${sess.length > SHOW ? `<button type="button" class="xt-pf-more" id="xtPfMore">Yana ${sess.length - SHOW} ta sessiyani ko'rsatish</button>` : ""}
+        ${p.logins.length ? `<details class="xt-pf-det"><summary>Kirishlar tarixi</summary>
+          <table class="xt-pf-tb"><thead><tr><th>Sana</th><th>Qurilma</th><th>IP</th><th>Natija</th></tr></thead><tbody>
+          ${p.logins.map(l => `<tr><td>${esc(dmyhm(l.ts))}</td><td>${esc(l.device || (l.channel === "telegram" ? "Telegram" : "—"))}</td><td>${esc(l.ip || "—")}</td>
+            <td class="${l.ok ? "ok" : "bad"}">${l.ok ? "Muvaffaqiyatli" : esc(l.reason || "Rad etildi")}</td></tr>`).join("")}</tbody></table></details>` : ""}
+      </section>
+
+      <section class="xt-pf-sec"><h4>Ruxsatlar</h4>
+        <p class="xt-pf-note">${perms.length} ta ma'lumot turiga ruxsat. Ruxsatlarni AT bo'limi lavozimga qarab belgilaydi.</p>
+        <details class="xt-pf-det"><summary>Batafsil</summary><dl class="xt-pf-dl">
+          ${groups.map(([g, xs]) => row(esc(g), xs.map(x => esc(x.label) + (x.agg ? ` <span class="xt-pf-agg" title="Faqat jamlangan ko'rinishda, shaxsiy ma'lumotlarsiz">jamlangan</span>` : "")).join("<br>"))).join("")}
+        </dl></details>
+      </section>
+
+      <section class="xt-pf-sec"><h4>Telegram bildirishnomalari</h4>
+        <div class="xt-pf-set">
+          <div><b>${p.telegram.linked ? "Ulangan" : "Ulanmagan"}</b><small>${p.telegram.linked ? "Topshiriq va xat muddatlari, kunlik brifing Telegram'ga keladi" : "Topshiriq va xat muddatlari haqida eslatma olish uchun ulang"}</small></div>
+          ${p.telegram.linked ? `<span class="xt-pf-badge ok">Faol</span>` : `<button type="button" class="btn sm" id="xtPfTg">Qanday ulanadi</button>`}</div>
+        <p class="xt-pf-note" id="xtPfTgHelp" hidden>ISFT Core botini oching va bitta xabarda ulash kodingiz hamda parolingizni yuboring: <code>${esc(p.telegram.code || "KOD")} parol</code>. Parol bot tomonidan tekshiriladi va saqlanmaydi.</p>
       </section>`;
     body.querySelector("[data-a=pw]")?.addEventListener("click", () => openPassword());
+    body.querySelector("#xtPfTg")?.addEventListener("click", e => { body.querySelector("#xtPfTgHelp").hidden = false; e.currentTarget.remove(); });
+    body.querySelector("#xtPfMore")?.addEventListener("click", e => { body.querySelector(".xt-pf-list").innerHTML = sess.map(sessRow).join(""); e.currentTarget.remove(); });
     const cb = body.querySelector("#xtPfClose");
     if (cb) cb.onclick = async () => {
+      if (cb.dataset.sure !== "1") { cb.dataset.sure = "1"; cb.textContent = `${others} ta sessiyani yopishni tasdiqlang`; return; }
       cb.disabled = true;
       try {
         const r = await fetch("/api/me/sessions/close-others", {method: "POST", credentials: "same-origin"});

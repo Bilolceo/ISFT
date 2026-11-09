@@ -141,14 +141,22 @@ def my_profile(request: Request):
         cur = db.one(_con, "SELECT * FROM users WHERE role=? AND COALESCE(active,1)=1 ORDER BY id LIMIT 1", (ou["curator"],))
     staff = db.one(_con, "SELECT COUNT(*) n FROM users WHERE unit=? AND COALESCE(active,1)=1", (unit_key,))["n"] if unit_key else 0
     curated = [r["name"] for r in db.rows(_con, "SELECT name FROM org_units WHERE curator=? ORDER BY grp, ord", (c.role.key,))] if c.role.key.startswith("prorektor_") else []
-    tok = request.cookies.get("sid")
+    cur_h = SS._h(request.cookies.get("sid") or "")
     try:
-        sess = [{"created": _iso(dt.datetime.fromtimestamp(s["created"])), "ip": s["ip"] or "—", "current": s["token"] == SS._h(tok or "")}
-                for s in db.rows(_con, "SELECT token, created, ip FROM sessions WHERE user_id=? AND expires>? ORDER BY created DESC", (uid, time.time()))]
+        sess = [{"created": _iso(dt.datetime.fromtimestamp(s["created"])), "ip": s["ip"] or "—", "device": SS.device(s.get("ua") or ""),
+                 "current": s["token"] == cur_h}
+                for s in db.rows(_con, "SELECT * FROM sessions WHERE user_id=? AND expires>? ORDER BY (token=?) DESC, created DESC", (uid, time.time(), cur_h))]
     except Exception:
         sess = []
-    logins = [{"ts": r["ts"], "ok": bool(r["allowed"]), "detail": r["detail"] or "", "channel": r["channel"]}
-              for r in db.rows(_con, "SELECT ts, allowed, detail, channel FROM audit_log WHERE user_id=? AND action='tizimga kirish' ORDER BY id DESC LIMIT 6", (uid,))]
+    def _login(r):
+        d = r["detail"] or ""
+        ip = re.search(r"IP ([^ ·]+)", d); parts = d.split(" · ")
+        dev = parts[-1] if len(parts) > 1 and not parts[-1].startswith("IP") else ""
+        reason = "" if r["allowed"] else (d.split(" · ")[0] if d else "rad etildi")
+        return {"ts": r["ts"], "ok": bool(r["allowed"]), "ip": ip.group(1) if ip else "", "device": dev, "reason": reason, "channel": r["channel"]}
+    logins = [_login(r) for r in db.rows(_con, "SELECT ts, allowed, detail, channel FROM audit_log WHERE user_id=? AND action='tizimga kirish' ORDER BY id DESC LIMIT 8", (uid,))]
+    fails30 = db.one(_con, "SELECT COUNT(*) n FROM audit_log WHERE user_id=? AND action='tizimga kirish' AND allowed=0 AND ts>=?",
+                     (uid, (dt.datetime.now() - dt.timedelta(days=30)).isoformat(timespec="seconds")))["n"]
     pw = db.one(_con, "SELECT ts FROM audit_log WHERE user_id=? AND action='parol o''zgartirildi' ORDER BY id DESC LIMIT 1", (uid,))
     try: scope = c.scope_label(_con)
     except Exception: scope = ""
@@ -156,9 +164,9 @@ def my_profile(request: Request):
         "name": _short(u["full_name"]) or u["full_name"], "position": c.title, "role_key": c.role.key,
         "unit": {"key": unit_key, "name": ou.get("name") or unit_key, "staff": staff, "am_head": ou.get("head_user") == uid},
         "head": _person(head), "curator": _person(cur), "curated": curated, "scope": scope,
-        "allow": [rbac.LABELS.get(a, a) for a in sorted(c.role.allow)],
+        "allow": [{"key": a, "label": rbac.LABELS.get(a, a), "agg": bool(c.aggregate_only(a))} for a in sorted(c.role.allow)],
         "telegram": {"linked": bool(u.get("telegram_id")), "code": u.get("link_code") or ""},
-        "sessions": sess, "logins": logins, "password_changed": pw["ts"] if pw else None,
+        "id": uid, "sessions": sess, "logins": logins, "fails30": fails30, "password_changed": pw["ts"] if pw else None,
         "since": u.get("created_at"),
     }
 

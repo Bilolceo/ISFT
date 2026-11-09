@@ -103,7 +103,7 @@ def login(body: Login, request: Request, response: Response):
     if not u or not rbac.check_password(u["pin"], pw):
         left = SS.LOGIN_USER.fail(body.user_id); SS.LOGIN_IP.fail(ip)
         if u:
-            rbac.audit(con, rbac.Ctx(u, rbac.ROLES[u["role"]]), "tizimga kirish", "auth", False, f"noto'g'ri parol · IP {ip}")
+            rbac.audit(con, rbac.Ctx(u, rbac.ROLES[u["role"]]), "tizimga kirish", "auth", False, f"noto'g'ri parol · IP {ip} · {SS.device(request.headers.get('user-agent', ''))}")
         raise HTTPException(401, "Parol noto'g'ri" + (f" · yana {left} ta urinish qoldi" if 0 < left < 3 else ""))
     if u.get("active") == 0 or rbac.ROLES[u["role"]].legacy:   # faolsizlantirilgan akkaunt yoki bekor qilingan lavozim (sobiq dekan #13)
         rbac.audit(con, rbac.Ctx(u, rbac.ROLES[u["role"]]), "tizimga kirish", "auth", False, f"akkaunt faol emas · IP {ip}")
@@ -113,8 +113,9 @@ def login(body: Login, request: Request, response: Response):
         u = dict(u); u["pin"] = rbac.hash_password(pw)
         con.execute("UPDATE users SET pin=? WHERE id=?", (u["pin"], u["id"])); con.commit()
     c = rbac.Ctx(u, rbac.ROLES[u["role"]])
-    rbac.audit(con, c, "tizimga kirish", "auth", True)
-    response.set_cookie(COOKIE, SS.create(con, u, ip), httponly=True, samesite="lax", max_age=SS.TTL,
+    ua = request.headers.get("user-agent", "")
+    rbac.audit(con, c, "tizimga kirish", "auth", True, f"IP {ip} · {SS.device(ua)}")
+    response.set_cookie(COOKIE, SS.create(con, u, ip, ua), httponly=True, samesite="lax", max_age=SS.TTL,
                         secure=request.url.scheme == "https")
     response.delete_cookie("uid")       # eski formatdagi cookie
     return {"ok": True}

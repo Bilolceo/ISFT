@@ -14,19 +14,37 @@ CREATE INDEX IF NOT EXISTS ix_sessions_user ON sessions(user_id);
 """
 
 def init(con):
-    con.executescript(SCHEMA); con.commit()
+    con.executescript(SCHEMA)
+    if "ua" not in {r[1] for r in con.execute("PRAGMA table_info(sessions)")}:
+        con.execute("ALTER TABLE sessions ADD COLUMN ua TEXT")
+    con.commit()
 
 def _h(tok: str) -> str: return hashlib.sha256(tok.encode()).hexdigest()
 def pw_tag(pin) -> str: return hashlib.sha256(str(pin or "").encode()).hexdigest()[:16]
 
-def create(con, user: dict, ip: str = "") -> str:
+def device(ua: str) -> str:
+    """User-Agent → «Chrome · macOS» kabi qisqa nom (faqat ko'rsatish uchun)."""
+    ua = ua or ""
+    if not ua: return "Noma'lum qurilma"
+    b = next((n for k, n in (("Edg/", "Edge"), ("OPR/", "Opera"), ("YaBrowser", "Yandex"), ("Firefox/", "Firefox"),
+                             ("Chrome/", "Chrome"), ("Safari/", "Safari"), ("python-httpx", "API mijoz"), ("curl/", "API mijoz")) if k in ua), "Brauzer")
+    o = next((n for k, n in (("iPhone", "iPhone"), ("iPad", "iPad"), ("Android", "Android"), ("Windows", "Windows"),
+                             ("Mac OS X", "macOS"), ("Linux", "Linux")) if k in ua), "")
+    return f"{b}, {o}" if o else b
+
+def create(con, user: dict, ip: str = "", ua: str = "") -> str:
     tok, now = secrets.token_urlsafe(32), time.time()
     try:
         con.execute("DELETE FROM sessions WHERE expires<?", (now,))
     except sqlite3.OperationalError:     # baza qayta seed qilingan — jadval yo'q
         init(con)
-    con.execute("INSERT INTO sessions(token,user_id,created,expires,pw_tag,ip) VALUES(?,?,?,?,?,?)",
-                (_h(tok), user["id"], now, now + TTL, pw_tag(user["pin"]), ip[:64]))
+    try:
+        con.execute("INSERT INTO sessions(token,user_id,created,expires,pw_tag,ip,ua) VALUES(?,?,?,?,?,?,?)",
+                    (_h(tok), user["id"], now, now + TTL, pw_tag(user["pin"]), ip[:64], (ua or "")[:300]))
+    except sqlite3.OperationalError:
+        init(con)
+        con.execute("INSERT INTO sessions(token,user_id,created,expires,pw_tag,ip,ua) VALUES(?,?,?,?,?,?,?)",
+                    (_h(tok), user["id"], now, now + TTL, pw_tag(user["pin"]), ip[:64], (ua or "")[:300]))
     con.commit()
     return tok
 
