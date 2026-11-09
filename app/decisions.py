@@ -2,7 +2,7 @@
 
 Oqim:
   1) Kotib majlis materialini beradi (demo transkript yoki qo'lda matn; ovozdan matn — lokal STT o'rnatilmaguncha o'chiq).
-  2) JARVIS bayonnoma qoralamasi va topshiriqlar QORALAMASINI tuzadi. Bo'lim, mas'ul xodim, muddat va bog'liqlik
+  2) ISFT Core bayonnoma qoralamasi va topshiriqlar QORALAMASINI tuzadi. Bo'lim, mas'ul xodim, muddat va bog'liqlik
      faqat matnda AYTILGAN bo'lsa to'ldiriladi — har bir maydon kod bilan manba gapdan qayta tekshiriladi.
      Aytilmagan maydon bo'sh qoladi ("aytilmagan"), o'ylab topilmaydi.
   3) Kotib tahrirlaydi va tasdiqlaydi → topshiriqlar bo'limlar navbatiga tushadi. Tasdiqlash idempotent:
@@ -17,7 +17,7 @@ Tashqi servisga hech narsa yuborilmaydi: AI — lokal Ollama, qolgani kod.
 import datetime as dt, json, re
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel, Field
-from . import db, rbac
+from . import db, rbac, academic_rules as AR
 from .rbac import Ctx, AccessDenied, TASKS
 
 router = APIRouter()
@@ -30,7 +30,12 @@ _ctx = None
 UNITS = {
     # nomlar — ISFT rasmiy tashkiliy tuzilmasidan (2024); majlisdagi og'zaki atamalar ("IT", "registrator") ham taniladi
     "it":           ("Axborot texnologiyalari bo'limi", "it_head", [r"\bIT\b", r"(?i)axborot texnologiyalari bo'lim"]),
-    "registrator":  ("Akademik faoliyat va registrator departamenti", "talabalar", [r"(?i)\bregistrator", r"(?i)akademik faoliyat"]),
+    # Registrator ofisi, Akademik faoliyatni boshqarish, Sirtqi va Ma'lumotlar bazasi bo'limlari: vazifalar va belgilar — app/academic_rules.py (6-slayd)
+    "registrator":  (AR.REGISTRAR_UNIT, "talabalar", [r"(?i)\bregistrator(?!\W*(?:ma'lumotlar )?bazas)"] + AR.UNIT_PATTERNS[AR.REGISTRAR_UNIT]),
+    "akademik":     (AR.ACADEMIC_UNIT, "akademik", [r"(?i)akademik faoliyat"] + AR.UNIT_PATTERNS[AR.ACADEMIC_UNIT]),
+    "sirtqi":       (AR.SIRTQI_UNIT, "sirtqi", AR.UNIT_PATTERNS[AR.SIRTQI_UNIT]),
+    "malumotlar_bazasi": (AR.DB_UNIT, "malumotlar_bazasi", AR.UNIT_PATTERNS[AR.DB_UNIT]),
+    "imtihon":      ("Imtihon bo'limi", "imtihon", [r"(?i)imtihon bo'lim"]),
     "xojalik":      ("Xo'jalik va texnik bo'lim", "xojalik", [r"(?i)xo'jalik"]),
     "buxgalteriya": ("Buxgalteriya bo'limi", "buxgalteriya", [r"(?i)buxgalteriya"]),
     "qabul":        ("Qabul komissiyasi", "qabul", [r"(?i)qabul (?:bo'lim|komissiya)"]),
@@ -42,12 +47,12 @@ UNIT_OF_ROLE = {"it_staff": "it", **{v[1]: k for k, v in UNITS.items()}}
 LEADERS = ("rektor", "kengash")            # qarorlarni to'liq ko'radi (o'qish)
 SECRETARY = "kotib"
 
-# Demo uchun yangi akkauntlar (sun'iy ism-shariflar). PIN — 1234, boshqa demo akkauntlar kabi.
+# Demo uchun yangi akkauntlar (sun'iy ism-shariflar). parol — rbac.DEMO_PASSWORD, boshqa demo akkauntlar kabi.
 DEMO_USERS = [
     ("Rektorat kotibi: Hamidova Malika Shavkat qizi", "kotib"),
     ("Axborot texnologiyalari bo'limi boshlig'i: Sobirov Akmal Rustam o'g'li", "it_head"),
     ("Axborot texnologiyalari bo'limi muhandisi: Nazarov Sardor Ilhom o'g'li", "it_staff"),
-    # Registrator — mavjud "Akademik faoliyat va registrator departamenti" akkaunti (talabalar roli)
+    # Registrator — mavjud "Registrator ofisi" akkaunti (talabalar roli)
 ]
 
 def _now(): return dt.datetime.now().replace(microsecond=0)
@@ -76,7 +81,7 @@ def init(con):
     if have:   # bo'sh baza (seed boshlanishi) emas
         for name, role in DEMO_USERS:
             if role not in have:
-                con.execute("INSERT INTO users(full_name,role,pin) VALUES(?,?,?)", (name, role, "1234"))
+                con.execute("INSERT INTO users(full_name,role,pin) VALUES(?,?,?)", (name, role, rbac.hash_password(rbac.DEMO_PASSWORD)))
     con.commit()
 
 def bind(con, ctx_fn):
@@ -136,9 +141,9 @@ UZ_M = ["yanvar", "fevral", "mart", "aprel", "may", "iyun", "iyul", "avgust", "s
 def demo_transcript(today: dt.date) -> str:
     d = f"{today.day}-{UZ_M[today.month - 1]} {today.year}-yil"
     return f"""Rektorat tezkor yig'ilishi, {d}, soat 10:30.
-Qatnashdilar: rektor, o'quv ishlari bo'yicha prorektor, raqamlashtirish va moliya masalalari bo'yicha prorektor, Axborot texnologiyalari bo'limi boshlig'i, Akademik faoliyat va registrator departamenti rahbari, rektorat kotibi.
+Qatnashdilar: rektor, o'quv ishlari bo'yicha prorektor, moliya-iqtisod ishlari bo'yicha prorektor, Axborot texnologiyalari bo'limi boshlig'i, Registrator ofisi boshlig'i, rektorat kotibi.
 Kun tartibi: talabalarning LMS platformasiga kira olmayotgani.
-O'quv ishlari bo'yicha prorektor: kecha kechqurundan beri talabalar LMS'ga kira olmayapti, Xizmat markaziga shu mavzuda bir nechta murojaat tushgan. Ertaga oraliq nazorat topshiriqlari LMS orqali yuklanishi kerak.
+O'quv ishlari bo'yicha prorektor: kecha kechqurundan beri talabalar LMS'ga kira olmayapti, «Murojaatlar va nosozliklar»ga shu mavzuda bir nechta murojaat tushgan. Ertaga oraliq nazorat topshiriqlari LMS orqali yuklanishi kerak.
 Axborot texnologiyalari bo'limi boshlig'i: muammo kirish (autentifikatsiya) qismida bo'lishi mumkin, aniq sababni tekshiruvdan keyin aytamiz.
 Rektor: talabalar noaniqlikda qolmasin. Qaror: LMS'ga kirish muammosini IT bo'limi bugun soat 15:00 gacha tekshirsin. Registrator esa IT'dan natija kelgach, talabalarga xabar tayyorlasin.
 Rektor: yig'ilish yopildi."""
@@ -398,7 +403,8 @@ def queue(c: Ctx):
         m = db.one(_con, "SELECT title, date FROM meetings WHERE id=?", (t["meeting_id"],))
         v["meeting"] = m["title"] if m else ""; v["meeting_date"] = m["date"] if m else ""
         out.append(v)
-    return {"unit": u, "unit_name": UNITS[u][0], "head": is_head(c, u), "tasks": out, "staff": _staff_for(c)}
+    return {"unit": u, "unit_name": UNITS[u][0], "head": is_head(c, u), "tasks": out, "staff": _staff_for(c),
+            "duties": [d for d in AR.UNIT_DUTIES.get(UNITS[u][0], []) if not d.startswith("talabalar murojaatlari:")]}
 
 # ---------------------------------------------------------------------------------------------
 # HTTP
@@ -424,7 +430,7 @@ class DraftIn(BaseModel):
 
 @router.post("/api/dec/draft")
 async def create_draft(body: DraftIn, request: Request):
-    c = C(request); _guard(c, "majlis materialini JARVIS'ga berish", body.title); _secretary(c)
+    c = C(request); _guard(c, "majlis materialini ISFT Core'ga berish", body.title); _secretary(c)
     if body.source not in ("demo", "manual"): raise HTTPException(400, "Noto'g'ri manba")
     if not body.transcript.strip(): raise HTTPException(400, "Majlis matni bo'sh")
     today = dt.date.today()
@@ -593,7 +599,7 @@ def update(tid: int, body: Update, request: Request):
             if m and m["incident_id"]:
                 from . import service as SV
                 n = SV.notify_incident(_con, m["incident_id"], res)
-                _log(tid, c, "talabalarga yuborildi", f"Xizmat markazi hodisasi #{m['incident_id']}: {n} ta murojaatga javob")
+                _log(tid, c, "talabalarga yuborildi", f"Murojaatlar va nosozliklar hodisasi #{m['incident_id']}: {n} ta murojaatga javob")
     else:
         if res and res != (t.get("result") or ""):
             _con.execute("UPDATE tasks SET result=?, result_by=?, result_at=? WHERE id=?", (res, c.user["id"], now, tid))

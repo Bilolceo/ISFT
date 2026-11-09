@@ -175,4 +175,4 @@ def footer_qr(doc, url, code, note):
     run(p, note, 8.5, False, RGB_GREY)
     p = c.add_paragraph(); run(p, f"Tekshirish kodi / Verification code: {code}", 8.5, True, RGB_TEAL_DARK)
     p = c.add_paragraph(); run(p, url, 8, False, RGB_GREY)
-    p = c.add_paragraph(); run(p, "JARVIS — ISFT hujjat avtomatlashtirish tizimi", 8, False, RGB_GREY, italic=True)
+    p = c.add_paragraph(); run(p, "ISFT Core — hujjat avtomatlashtirish tizimi", 8, False, RGB_GREY, italic=True)

@@ -1,9 +1,9 @@
 import httpx, sys
 B = "http://127.0.0.1:8000"
 def S(uid):
-    c = httpx.Client(base_url=B, timeout=300); r = c.post("/api/login", json={"user_id": uid, "pin": "1234"}); assert r.status_code == 200; return c
+    c = httpx.Client(base_url=B, timeout=300); r = c.post("/api/login", json={"user_id": uid, "password": "Isft2026"}); assert r.status_code == 200; return c
 ok = lambda cond, msg: print(("✓ " if cond else "✗ XATO: ") + msg) or (cond or sys.exit(1))
-kotib, ithead, itstaff, reg, rektor, buxg = S(20), S(21), S(22), S(8), S(2), S(11)
+kotib, ithead, itstaff, reg, rektor, buxg = S(20), S(21), S(22), S(17), S(2), S(11)
 print(rektor.post("/api/dec/demo-reset").json())
 cap = kotib.get("/api/dec/capabilities").json(); ok(cap["audio"] is False, "ovoz: o'chiq, demo transkript bor")
 ok(ithead.post("/api/dec/draft", json={"title": "x", "transcript": cap["sample"]}).status_code == 403, "IT qoralama yarata olmaydi (403)")

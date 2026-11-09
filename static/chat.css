@@ -1,0 +1,159 @@
+/* ISFT Core bilan suhbat: kutib olish, javob kartasi, agent qadamlari, tekshiruv belgisi, amallar; favqulodda kirish */
+
+/* ---- kompozitsiya ---- */
+/* kiritish maydoni ekran pastiga yopishib turadi: main'ning pastki padding'i manfiy margin bilan qoplanadi */
+#v-chat .chatwrap{max-width:1100px;margin:0 auto -44px;width:100%;min-width:0;height:calc(100dvh - 114px)}
+@media (max-width:980px){#v-chat .chatwrap{height:calc(100dvh - 96px);margin-bottom:-38px}}
+#v-chat .msgs{position:relative;gap:16px;padding:4px 2px 18px;overscroll-behavior:contain}
+#v-chat .m{font-size:14.5px;min-width:0}
+#v-chat .m.u{max-width:min(74%,640px);white-space:pre-wrap}
+#v-chat .m.a.card-a,#v-chat .m.a.welcome{align-self:stretch;max-width:none;white-space:normal;border:1px solid var(--line);border-radius:20px;padding:18px 22px;background:var(--surface)}
+#v-chat .m.a.card-a.plain .a-text{white-space:pre-wrap}
+#v-chat .typing::after{content:none}
+
+/* ---- kutib olish ---- */
+.welcome .w-head{display:flex;gap:14px;align-items:center}
+.welcome .w-ava{width:44px;height:44px;border-radius:14px;display:grid;place-items:center;flex:none;color:var(--brand);background:var(--brand-soft)}
+.welcome .w-title{font-size:19px;font-weight:800;letter-spacing:-.01em;color:var(--ink)}
+.welcome .w-sub{font-size:13px;color:var(--muted);margin-top:2px}
+.welcome .w-text{margin:14px 0 0;color:var(--ink-2);line-height:1.6;max-width:760px}
+.welcome .w-flow{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px}
+.welcome .w-flow span{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--ink-2);padding:5px 11px;border-radius:99px;background:var(--surface-2)}
+.welcome .w-flow svg{color:var(--brand)}
+.welcome .w-sugg-h{margin:20px 0 8px;font-size:13px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.welcome .w-sugg{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:8px}
+.w-card{display:flex;align-items:center;justify-content:space-between;gap:10px;text-align:left;font:inherit;font-size:14px;font-weight:600;color:var(--ink);padding:13px 15px;border-radius:14px;border:1px solid var(--line);background:var(--surface-2);cursor:pointer;transition:border-color .15s var(--ease),background .15s var(--ease),transform .15s var(--ease)}
+.w-card svg{color:var(--muted);transition:transform .15s var(--ease),color .15s}
+.w-card:hover{border-color:var(--brand);background:var(--brand-soft)}
+.w-card:hover svg{color:var(--brand);transform:translateX(3px)}
+.w-card:focus-visible,.sg-toggle:focus-visible,.sg-chip:focus-visible,.chip-btn:focus-visible,.a-run:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+.started .welcome .w-sugg-h,.started .welcome .w-sugg{display:none}
+
+/* ---- tayyor savollar (suhbat boshlangach — bitta kichik tugma) ---- */
+#v-chat .suggest{display:none;flex-direction:column;align-items:flex-start;gap:8px;margin:0 0 8px}
+#v-chat .started .suggest{display:flex}
+.sg-toggle{display:inline-flex;align-items:center;gap:6px;font:inherit;font-size:13px;font-weight:600;color:var(--ink-2);padding:5px 12px;border-radius:99px;border:1px solid var(--line);background:var(--surface);cursor:pointer}
+.sg-toggle:hover{color:var(--brand);border-color:var(--brand)}
+.sg-toggle svg{color:var(--brand)}
+.sg-chev svg{color:var(--muted);transform:rotate(-90deg);transition:transform .2s var(--ease)}
+.suggest.open .sg-chev svg{transform:rotate(90deg)}
+.sg-list{display:none;flex-wrap:wrap;gap:6px}
+.suggest.open .sg-list{display:flex}
+.sg-chip{font:inherit;font-size:13px;padding:6px 12px;border-radius:99px;border:1px solid var(--line-2);background:var(--surface);color:var(--ink);cursor:pointer;text-align:left}
+.sg-chip:hover{border-color:var(--brand);color:var(--brand)}
+
+/* ---- agent qadamlari ---- */
+.a-run{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;width:100%;font:inherit;font-size:13px;color:var(--muted);background:none;border:0;padding:0 0 12px;margin:0 0 14px;border-bottom:1px solid var(--line);cursor:pointer;text-align:left}
+.a-run:disabled{cursor:default}
+.pending .a-run{cursor:default;color:var(--ink-2)}
+.a-run:not(:disabled):hover .chev svg,.a-run:not(:disabled):hover>span:nth-child(2){color:var(--ink)}
+.a-run-ico{display:inline-flex}
+.a-run-n{margin-left:auto;font-variant-numeric:tabular-nums}
+.chev{display:inline-flex;margin-left:auto}
+.chev svg{transform:rotate(90deg);transition:transform .2s var(--ease)}
+.folded .chev svg{transform:rotate(0)}
+.vbadge{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:var(--ok);background:var(--ok-soft);padding:3px 10px 3px 8px;border-radius:99px}
+.vbadge.warn{color:var(--warn);background:var(--warn-soft)}
+.spin{display:inline-flex;color:var(--brand)}
+.spin svg,.step.run .si svg{animation:jspin 1s linear infinite}
+@keyframes jspin{to{transform:rotate(360deg)}}
+.dots{display:inline-flex;gap:3px;margin-left:-4px}
+.dots i{width:4px;height:4px;border-radius:50%;background:currentColor;opacity:.3;animation:jdot 1.2s infinite}
+.dots i:nth-child(2){animation-delay:.2s}.dots i:nth-child(3){animation-delay:.4s}
+@keyframes jdot{40%{opacity:1;transform:translateY(-2px)}}
+
+#v-chat .m.a .steps{display:flex;flex-direction:column;gap:6px;margin:-4px 0 14px;padding:12px 14px;border-radius:14px;background:var(--surface-2);font-size:13px;color:var(--ink-2)}
+#v-chat .m.a .steps:empty,#v-chat .m.a.folded .steps{display:none}
+.step{display:flex;gap:9px;align-items:flex-start;line-height:1.45;animation:stepin .25s var(--ease)}
+.step .si{width:16px;height:19px;flex:none;display:inline-flex;align-items:center;justify-content:center}
+.step .si svg{vertical-align:0}
+.step.run{color:var(--muted)}.step.run .si{color:var(--brand)}
+.step.done .si{color:var(--ok)}
+.step.denied{color:var(--bad)}
+@keyframes stepin{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
+
+/* kutish skeleti */
+.skel{display:flex;flex-direction:column;gap:9px;padding:2px 0 4px}
+.skel i{display:block;height:12px;border-radius:6px;background:linear-gradient(90deg,var(--surface-2) 25%,var(--line) 50%,var(--surface-2) 75%);background-size:200% 100%;animation:jshim 1.4s linear infinite}
+.skel i:nth-child(1){width:62%;height:16px}.skel i:nth-child(2){width:88%}.skel i:nth-child(3){width:74%}
+@keyframes jshim{from{background-position:200% 0}to{background-position:-200% 0}}
+@media (prefers-reduced-motion:reduce){.skel i,.spin svg,.step.run .si svg,.dots i{animation:none}}
+
+/* ---- javob ---- */
+#v-chat .m.a .ans{white-space:normal}
+.a-sum{font-size:17px;font-weight:700;line-height:1.45;color:var(--ink);letter-spacing:-.005em;margin-bottom:10px}
+.a-facts{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:4px;font-size:14px;color:var(--ink-2);line-height:1.5}
+.a-facts li{position:relative;padding-left:14px}
+.a-facts li::before{content:"";position:absolute;left:2px;top:.62em;width:5px;height:5px;border-radius:50%;background:var(--line-2)}
+.a-facts li.sub{padding-left:28px;font-size:13.5px;color:var(--muted)}
+.a-facts li.sub::before{left:16px;background:none;border:1px solid var(--line-2);width:4px;height:4px}
+.a-sec{margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
+.a-h{display:flex;align-items:center;gap:7px;font-weight:700;font-size:13px;text-transform:uppercase;letter-spacing:.05em;margin:0 0 8px;color:var(--ink-2)}
+.a-sec.why .a-h svg{color:var(--teal)}
+.a-sec.recs .a-h svg{color:var(--brand)}
+.a-list{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:5px;line-height:1.5}
+.a-list li::marker{color:var(--teal)}
+.a-recs{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px}
+.a-recs li{display:grid;grid-template-columns:26px 1fr auto;gap:4px 12px;align-items:center;padding:11px 12px;border-radius:14px;background:var(--surface-2)}
+.a-rn{width:24px;height:24px;border-radius:8px;display:grid;place-items:center;font-size:12.5px;font-weight:700;color:var(--brand);background:var(--brand-soft);align-self:start}
+.a-rt{line-height:1.5;min-width:0}
+.a-ra{display:flex;justify-content:flex-end}
+.a-ra .btn,.a-acts .btn{white-space:nowrap;font-size:13px}
+.a-done{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:var(--ok);background:var(--ok-soft);padding:6px 12px;border-radius:10px;animation:stepin .25s var(--ease)}
+.a-done.wait{color:var(--teal);background:var(--teal-soft)}
+.a-text{line-height:1.6}
+.a-acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.a-deny{display:flex;gap:12px;align-items:flex-start;line-height:1.5}
+.a-deny b{display:block;color:var(--bad);margin-bottom:2px}
+.a-deny-i{width:36px;height:36px;border-radius:12px;display:grid;place-items:center;flex:none;color:var(--bad);background:var(--surface)}
+#v-chat .m.a.card-a.deny{border-color:var(--bad);background:var(--bad-soft)}
+.a-denied{margin-top:12px;display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--bad)}
+.a-denied div{display:flex;gap:7px;align-items:flex-start}.a-denied svg{margin-top:2px}
+.a-err{display:flex;align-items:center;gap:8px;font-size:14px;color:var(--bad)}
+
+.a-foot{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:16px;padding-top:12px;border-top:1px solid var(--line);font-size:13px;color:var(--muted)}
+.a-src-l{display:inline-flex;align-items:center;gap:5px;margin-right:2px}
+.a-src{font-size:13px;padding:2px 9px;border-radius:99px;background:var(--surface-2);color:var(--ink-2)}
+.a-mode{margin-left:auto}
+.deny .a-src,.deny .a-foot{border-color:transparent}
+.a-fu{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:12px}
+.a-fu-l{display:inline-flex;align-items:center;gap:5px;font-size:13px;color:var(--muted);margin-right:2px}
+.chip-btn{font:inherit;font-size:13px;padding:5px 12px;border-radius:99px;border:1px solid var(--line-2);background:var(--surface);color:var(--ink);cursor:pointer;text-align:left}
+.chip-btn:hover{border-color:var(--brand);color:var(--brand);background:var(--brand-soft)}
+
+/* ---- kiritish ---- */
+/* kiritish — suzuvchi shisha: xabarlar uning ostidan o'tadi (msgs pastki qismi kompozitor ortiga kiradi) */
+#v-chat .chatform{position:relative;z-index:2;background:var(--glass-bg);border:1px solid var(--glass-brd);
+  -webkit-backdrop-filter:var(--glass-blur);backdrop-filter:var(--glass-blur);box-shadow:var(--glass-hi),var(--glass-shadow)}
+#v-chat .chatform::before{content:"";position:absolute;inset:0;border-radius:inherit;background:var(--glass-spec);pointer-events:none}
+#v-chat .chatform>*{position:relative}
+#v-chat .chatform:focus-within{border-color:color-mix(in srgb,var(--brand) 60%,transparent);box-shadow:var(--glass-hi),var(--glass-shadow),0 0 0 3px var(--brand-soft)}
+#v-chat .chatform input::placeholder{color:var(--muted);opacity:1}
+#v-chat .msgs{padding-bottom:34px;margin-bottom:-26px}
+#v-chat .suggest{position:relative;z-index:2}
+
+/* ---- mobil ---- */
+@media (max-width:980px){#v-chat .m.u{max-width:88%}}
+@media (max-width:600px){
+  #v-chat .m.a.card-a,#v-chat .m.a.welcome{padding:14px 14px;border-radius:16px}
+  #v-chat .msgs{gap:12px}
+  .a-sum{font-size:16px}
+  .welcome .w-sugg{grid-template-columns:1fr}
+  .welcome .w-flow{display:none}
+  .a-recs li{grid-template-columns:24px 1fr}
+  .a-ra{grid-column:2;justify-content:flex-start}
+  .a-ra .btn{white-space:normal;text-align:left}
+  .a-run-n{margin-left:0}
+  .a-mode{margin-left:0;width:100%}
+  #v-chat .chatform .send-l{display:none}
+  #v-chat .chatform input{min-width:0;padding:10px 8px}
+}
+
+/* ---- favqulodda kirish (dashboard xavf kartasi) ---- */
+.bg-box{margin-top:10px}
+.bg-box .bg-form{display:none}
+.bg-box.open .bg-form{display:block}
+.bg-box.open > .btn{display:none}
+.bg-form input{width:100%;box-sizing:border-box;padding:8px 10px;border-radius:var(--r-sm);border:1px solid var(--line-2);background:var(--surface);color:var(--ink);font:inherit;margin-bottom:6px}
+.bg-note{display:flex;gap:7px;align-items:flex-start;margin:8px 0;font-size:13px;color:var(--bad)}
+.bg-note svg{margin-top:1px}

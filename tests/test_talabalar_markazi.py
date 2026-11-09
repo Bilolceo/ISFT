@@ -4,13 +4,13 @@ sys.path.insert(0, "/Users/levi/Desktop/isft/jarvis-mvp")
 from app import db as DB, student_ops as OPS
 B = "http://127.0.0.1:8000"; DBP = "/Users/levi/Desktop/isft/jarvis-mvp/data/jarvis.db"
 def S(uid):
-    c = httpx.Client(base_url=B, timeout=120); assert c.post("/api/login", json={"user_id": uid, "pin": "1234"}).status_code == 200; return c
+    c = httpx.Client(base_url=B, timeout=120); assert c.post("/api/login", json={"user_id": uid, "password": "Isft2026"}).status_code == 200; return c
 fails = 0
 def ok(cond, msg):
     global fails
     print(("✓ " if cond else "✗ XATO: ") + msg); fails += (not cond)
 q = lambda sql, a=(): sqlite3.connect(DBP).execute(sql, a).fetchall()
-reg, cc, ty2, ty1, rek, dek, pro, bux = S(8), S(23), S(24), S(25), S(2), S(13), S(3), S(11)
+reg, cc, ty2, ty1, rek, dek, pro, bux = S(17), S(23), S(24), S(25), S(2), S(13), S(3), S(11)
 
 # --- ruxsatlar ---
 ok(rek.get("/api/ops/summary").status_code == 200, "Rektor: jamlangan holat ochiladi")

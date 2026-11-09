@@ -1,0 +1,475 @@
+"""Qo'shimcha imkoniyatlar: parolni o'zgartirish, global qidiruv (Ctrl+K), bildirishnomalar markazi va majlislar kalendari.
+
+Tamoyillar:
+  * Hamma narsa mavjud ma'lumotdan hisoblanadi — yangi xabar shinasi yo'q. Yangi jadval faqat bitta: `notif_reads`
+    (foydalanuvchi bildirishnomalarni qachongacha o'qiganini bildiruvchi "suv belgisi").
+  * Qidiruv natijalari RBAC bo'yicha filtrlanadi: ruxsat yo'q bo'lsa natija umuman qaytarilmaydi ("ruxsatingiz yo'q" deb ham ko'rsatilmaydi).
+    Jamlangan ko'rinishdagi lavozimlar (rektor, kengash) individual talaba natijasini olmaydi.
+  * Talaba ismi bo'yicha qidiruv audit jurnaliga yoziladi (portal umumiy bazalaridagi `q=` qidiruvi kabi), takrorlar birlashtiriladi.
+  * Parolni o'zgartirish: joriy parol tekshiriladi, xeshlanadi, audit jurnaliga yoziladi; 10 daqiqada 5 ta xato urinishdan keyin bloklanadi.
+
+CLI (faqat server administratori — server fayl tizimiga kirishi bor odam):
+    python -m app.extras reset-passwords            # barcha akkauntlar paroli → sinov paroli (rbac.DEMO_PASSWORD)
+    python -m app.extras reset-passwords --user 2   # bitta akkaunt
+"""
+import datetime as dt, os, re, sys, threading, time
+from fastapi import APIRouter, Request, HTTPException
+from fastapi.responses import Response
+from pydantic import BaseModel
+from . import db, rbac, sessions as SS
+from .rbac import AccessDenied, Ctx
+
+router = APIRouter()
+_con = None
+_ctx = None
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS notif_reads(user_id INTEGER PRIMARY KEY, seen_at TEXT);
+CREATE INDEX IF NOT EXISTS ix_students_hemis ON students(hemis_id);
+CREATE INDEX IF NOT EXISTS ix_students_name_nc ON students(full_name COLLATE NOCASE);
+"""
+
+def init(con):
+    try:
+        con.executescript(SCHEMA); con.commit()
+    except Exception as e:      # bo'sh baza (seed boshlanmagan) — keyingi so'rovda qayta urinadi
+        print("extras.init:", e)
+
+def bind(con, ctx_fn):
+    global _con, _ctx
+    _con, _ctx = con, ctx_fn
+
+def C(request: Request) -> Ctx:
+    try:
+        _con.execute("SELECT 1 FROM notif_reads LIMIT 1")
+    except Exception:            # baza qayta seed qilingan (server to'xtatilmagan)
+        init(_con)
+    return _ctx(request)
+
+def _now(): return dt.datetime.now().replace(microsecond=0)
+def _iso(t): return t.isoformat(timespec="seconds")
+def _today() -> dt.date:
+    from . import services as S
+    return S.TODAY
+def _ts(v) -> str:
+    """Har xil sana ko'rinishini solishtirsa bo'ladigan ISO satrga keltiradi."""
+    v = str(v or "").replace(" ", "T")[:19]
+    return v + "T00:00:00" if len(v) == 10 else v
+def _short(name): return (name or "").split(":", 1)[1].strip() if ":" in (name or "") else (name or "")
+def _pos(name): return (name or "").split(":", 1)[0].strip() if ":" in (name or "") else ""
+def _dmy(v) -> str:
+    v = str(v or "")[:10]
+    return f"{v[8:10]}.{v[5:7]}.{v[:4]}" if len(v) == 10 and v[4] == "-" else v
+def _norm(q: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[ʻʼ‘’`´]", "'", str(q or ""))).strip()
+
+# =============================================================================================
+# 1. Ochiq sozlama: sinov paroli izohini yashirish (jonli namoyish uchun)
+# =============================================================================================
+def hide_demo_hint() -> bool:
+    return os.getenv("ISFT_CORE_HIDE_DEMO_HINT", "").strip().lower() in ("1", "true", "yes", "ha")
+
+@router.get("/api/public/config")
+def public_config():
+    return {"hide_demo_hint": hide_demo_hint()}
+
+@router.get("/api/public/config.js")
+def public_config_js():
+    """Kirish sahifasi variantlari (static/login/vN.js) yuklanishidan oldin sinxron o'qiladi."""
+    body = f"window.ISFT_HIDE_DEMO_HINT={'true' if hide_demo_hint() else 'false'};\n"
+    return Response(body, media_type="application/javascript", headers={"Cache-Control": "no-store"})
+
+# =============================================================================================
+# 2. Parolni o'zgartirish
+# =============================================================================================
+PW_LIMIT = SS.Limiter(5, 600)       # 10 daqiqada 5 ta xato urinish
+
+class PasswordIn(BaseModel):
+    current: str = ""
+    new: str = ""
+
+def password_problem(pw: str) -> str | None:
+    if len(pw) < 8: return "Yangi parol kamida 8 ta belgidan iborat bo'lsin"
+    if len(pw) > 128: return "Parol juda uzun (ko'pi bilan 128 belgi)"
+    if not re.search(r"[^\W\d_]", pw): return "Yangi parolda kamida bitta harf bo'lsin"
+    if not re.search(r"\d", pw): return "Yangi parolda kamida bitta raqam bo'lsin"
+    if pw.strip() != pw: return "Parol bo'sh joy bilan boshlanmasin va tugamasin"
+    return None
+
+def _err(status, field, message, **extra):
+    raise HTTPException(status, {"field": field, "message": message, **extra})
+
+@router.post("/api/me/password")
+def change_password(body: PasswordIn, request: Request):
+    c = C(request); uid = c.user["id"]
+    wait = PW_LIMIT.wait_min(uid)
+    if wait:
+        rbac.audit(_con, c, "parolni o'zgartirish", "auth", False, "bloklangan: ko'p marta noto'g'ri joriy parol")
+        _err(429, "current", f"Juda ko'p noto'g'ri urinish. {wait} daqiqadan keyin qayta urinib ko'ring.", wait_min=wait)
+    if not rbac.check_password(c.user.get("pin"), body.current):
+        left = PW_LIMIT.fail(uid)
+        rbac.audit(_con, c, "parolni o'zgartirish", "auth", False, "joriy parol noto'g'ri")
+        _err(400, "current", "Joriy parol noto'g'ri" + (f" · yana {left} ta urinish qoldi" if 0 < left < PW_LIMIT.limit else ""), left=left)
+    p = password_problem(body.new)
+    if p: _err(400, "new", p)
+    if body.new == body.current: _err(400, "new", "Yangi parol joriy paroldan farq qilsin")
+    h = rbac.hash_password(body.new)
+    _con.execute("UPDATE users SET pin=? WHERE id=?", (h, uid)); _con.commit()
+    PW_LIMIT.reset(uid)
+    # boshqa brauzer/qurilmalardagi sessiyalar bekor qilinadi, joriy sessiya yangi parol bilan davom etadi
+    n = SS.revoke_user(_con, uid, keep_tok=request.cookies.get("sid"), new_pin=h)
+    rbac.audit(_con, c, "parol o'zgartirildi", "auth", True, f"boshqa sessiyalar yopildi: {n}")
+    return {"ok": True, "message": "Parol o'zgartirildi. Boshqa qurilmalardagi sessiyalar yopildi."}
+
+# =============================================================================================
+# 3. Global qidiruv
+# =============================================================================================
+LIM = 6
+_last_search: dict[int, tuple] = {}
+
+def _student_detail(c: Ctx) -> bool:
+    return c.can(rbac.STUDENTS) and not c.aggregate_only(rbac.STUDENTS)
+
+def _ops_card(c: Ctx) -> bool:
+    """Talabalar markazidagi kartani ochishi mumkinmi (student_ops._view_guard bilan bir xil shart)."""
+    from . import student_ops as OPSM
+    return c.can(rbac.OPS) and c.role.key not in OPSM.AGG_VIEW and c.role.key != "call_center" and (
+        c.role.key in OPSM.FULL_VIEW or c.role.key in OPSM.FAC_VIEW)
+
+def _like_parts(q):
+    """"aliyev elyor" → '%aliyev%elyor%' (so'zlar tartibi saqlanadi)."""
+    return "%" + "%".join(q.split(" ")) + "%"
+
+def _search_students(c: Ctx, q: str) -> list[dict]:
+    if not _student_detail(c): return []
+    sc = c.student_scope("s")
+    base = f"""SELECT s.id, s.full_name, s.hemis_id, s.status, g.name grp, g.course, f.name fac FROM students s
+               LEFT JOIN groups_ g ON g.id=s.group_id LEFT JOIN faculties f ON f.id=s.faculty_id WHERE {sc} AND """
+    out, seen = [], set()
+    def add(rows):
+        for r in rows:
+            if r["id"] not in seen and len(out) < LIM: seen.add(r["id"]); out.append(r)
+    if q.isdigit():
+        if len(q) >= 3: add(db.rows(_con, base + "s.hemis_id GLOB ? ORDER BY s.hemis_id LIMIT ?", (q + "*", LIM)))
+    else:
+        add(db.rows(_con, base + "s.full_name LIKE ? ORDER BY s.full_name LIMIT ?", (q + "%", LIM)))      # indeksli prefiks
+        if len(out) < LIM:
+            add(db.rows(_con, base + "s.full_name LIKE ? ORDER BY s.full_name LIMIT ?", (_like_parts(q), LIM * 2)))
+    card = _ops_card(c)
+    return [{"id": r["id"], "title": r["full_name"], "sub": " · ".join(x for x in [r["grp"], f"{r['course']}-kurs" if r["course"] else "", r["fac"],
+             f"HEMIS {r['hemis_id']}", "" if r["status"] == "faol" else r["status"]] if x),
+             "icon": "user", "link": {"view": "ops", "student": r["id"]} if card else {"view": "portal", "dataset": "kontingent", "q": r["full_name"]}}
+            for r in out]
+
+def _search_groups(c: Ctx, q: str) -> list[dict]:
+    rows = db.rows(_con, """SELECT g.id, g.name, g.course, g.direction, g.form, f.name fac FROM groups_ g LEFT JOIN faculties f ON f.id=g.faculty_id
+                            WHERE g.name LIKE ? OR g.direction LIKE ? ORDER BY CASE WHEN g.name LIKE ? THEN 0 ELSE 1 END, g.name LIMIT ?""",
+                   (f"%{q}%", f"%{q}%", f"{q}%", LIM))
+    return [{"id": r["id"], "title": r["name"], "sub": " · ".join(x for x in [f"{r['course']}-kurs" if r["course"] else "", r["direction"], r["fac"], r["form"]] if x),
+             "icon": "users", "link": {"view": "portal", "dataset": "kontingent", "q": r["name"]}} for r in rows]
+
+def _search_people(c: Ctx, q: str) -> list[dict]:
+    from . import portal as PT
+    out = []
+    like = _like_parts(q)
+    for u in db.rows(_con, "SELECT id, full_name, role, faculty_id, department_id FROM users WHERE full_name LIKE ? ORDER BY id LIMIT ?", (like, LIM)):
+        if u["role"] not in rbac.ROLES: continue
+        pos = rbac.user_title(u); nm = _short(u["full_name"])
+        out.append({"id": f"u{u['id']}", "title": nm or pos, "sub": pos if nm else "Lavozim", "icon": "shield",
+                    "link": {"view": "portal", "compose": PT.unit_key(u)}, "hint": "Xat yozish"})
+    if len(out) < LIM:
+        for t in db.rows(_con, """SELECT t.id, t.full_name, t.position, t.degree, d.name dep FROM teachers t LEFT JOIN departments d ON d.id=t.department_id
+                                  WHERE t.full_name LIKE ? OR t.position LIKE ? ORDER BY t.full_name LIMIT ?""", (like, f"%{q}%", LIM - len(out))):
+            out.append({"id": f"t{t['id']}", "title": t["full_name"], "sub": " · ".join(x for x in [t["position"], t["degree"] if t["degree"] not in (None, "", "—") else "", t["dep"] and t["dep"] + " kafedrasi"] if x),
+                        "icon": "cap", "link": {"view": "portal", "dataset": "oqituvchilar", "q": t["full_name"]}})
+    if c.can(rbac.HR) and len(out) < LIM:      # kadrlar ro'yxati — faqat Kadrlar bo'limi (maosh va pasport ko'rsatilmaydi)
+        for s in db.rows(_con, "SELECT id, full_name, unit, position FROM staff WHERE full_name LIKE ? OR position LIKE ? ORDER BY full_name LIMIT ?",
+                         (like, f"%{q}%", LIM - len(out))):
+            out.append({"id": f"s{s['id']}", "title": s["full_name"], "sub": f"{s['position']} · {s['unit']}", "icon": "user",
+                        "link": {"view": "panel", "tab": "ijro"}})
+    return out
+
+def _search_docs(c: Ctx, q: str) -> list[dict]:
+    w = "1=1" if c.role.key == "rektor" else f"created_by={int(c.user['id'])}"     # documents.registry bilan bir xil
+    rows = db.rows(_con, f"""SELECT id, reg_no, title, holder, status, created_at FROM documents WHERE {w}
+                             AND (reg_no LIKE ? OR title LIKE ? OR holder LIKE ?) ORDER BY id DESC LIMIT ?""", (f"%{q}%", f"%{q}%", f"%{q}%", LIM))
+    st = {"loyiha": "imzo kutilmoqda", "imzolangan": "imzolangan", "berilgan": "berilgan", "bekor": "bekor qilingan"}
+    return [{"id": r["id"], "title": r["title"], "sub": " · ".join(x for x in [r["reg_no"], r["holder"], st.get(r["status"], r["status"]), _dmy(r["created_at"])] if x),
+             "icon": "file", "link": {"view": "documents", "reg": r["reg_no"]}} for r in rows]
+
+def _search_letters(c: Ctx, q: str) -> list[dict]:
+    from . import portal as PT
+    me = PT.my_unit(c)
+    if PT.is_leader(c): w, a = "1=1", ()
+    else: w, a = PT._part_sql(), (me, me, me)
+    rows = db.rows(_con, f"""SELECT t.id, t.ref_no, t.subject, t.from_unit, t.due, t.created_at FROM portal_threads t WHERE {w}
+                             AND (t.subject LIKE ? OR t.ref_no LIKE ?) ORDER BY t.updated_at DESC, t.id DESC LIMIT ?""", (*a, f"%{q}%", f"%{q}%", LIM))
+    um = PT.unit_map(_con)
+    return [{"id": r["id"], "title": r["subject"], "sub": " · ".join(x for x in [r["ref_no"], PT._uname(um, r["from_unit"]), f"muddat {_dmy(r['due'])}" if r["due"] else ""] if x),
+             "icon": "mail", "link": {"view": "portal", "thread": r["id"]}} for r in rows]
+
+def _search_files(c: Ctx, q: str) -> list[dict]:
+    from . import portal as PT
+    vw, va = PT._vis_sql(c)
+    rows = db.rows(_con, f"""SELECT f.id, f.name, f.ext, f.category, f.owner_unit, f.created_at FROM portal_files f WHERE f.latest=1 AND {vw}
+                             AND (f.name LIKE ? OR f.note LIKE ?) ORDER BY f.created_at DESC LIMIT ?""", (*va, f"%{q}%", f"%{q}%", LIM))
+    um = PT.unit_map(_con)
+    return [{"id": r["id"], "title": r["name"], "sub": " · ".join(x for x in [r["category"], PT._uname(um, r["owner_unit"]), _dmy(r["created_at"])] if x),
+             "icon": "folder", "link": {"view": "portal", "file": r["name"]}} for r in rows]
+
+def _visible_tasks(c: Ctx) -> list[dict]:
+    from . import services as S
+    try:
+        return S.tasks_list(_con, c, quiet=True)["tasks"]
+    except AccessDenied:
+        return []
+
+def _task_link(t):
+    return {"view": "tasks", "meeting": t["meeting_id"]} if t.get("source") else {"view": "tasks"}
+
+def _search_tasks(c: Ctx, q: str) -> list[dict]:
+    ql = q.lower(); out = []
+    for t in _visible_tasks(c):
+        hay = _norm(f"{t.get('text')} {t.get('assignee')} {t.get('meeting')}").lower()
+        if all(w in hay for w in ql.split(" ")):
+            due = t.get("due_at") or t.get("due")
+            out.append({"id": t["id"], "title": t["text"], "sub": " · ".join(x for x in [t.get("assignee"), t.get("meeting"),
+                        f"muddat {_dmy(due)}" if due else "", "muddati o'tgan" if t.get("overdue") else t.get("status")] if x),
+                        "icon": "tasks", "link": _task_link(t), "bad": bool(t.get("overdue"))})
+        if len(out) >= LIM: break
+    return out
+
+GROUPS = [("talabalar", "Talabalar", _search_students), ("guruhlar", "Guruhlar", _search_groups), ("xodimlar", "Xodimlar va lavozimlar", _search_people),
+          ("hujjatlar", "Hujjatlar", _search_docs), ("xatlar", "Portal xatlari", _search_letters), ("fayllar", "Portal fayllari", _search_files),
+          ("topshiriqlar", "Topshiriqlar", _search_tasks)]
+
+def _audit_student_search(c: Ctx, q: str, n: int):
+    """Talaba ma'lumoti ko'rsatildi — auditga yoziladi. Har bir harf uchun alohida yozuv bo'lmasin: bir qidiruv seansida
+    (oldingisini davom ettiruvchi so'rovlar, 60 soniya ichida, ko'pi bilan 5 daqiqa) bitta yozuv yangilanib boradi va unda
+    eng to'liq (aniq) so'rov qoladi — oxirida haqiqatan qidirilgan talaba nomi jurnalda ko'rinadi."""
+    uid = c.user["id"]; now = time.time(); ql = q.lower()
+    prev = _last_search.get(uid)    # (eng to'liq so'rov, oxirgi vaqt, seans boshi, audit yozuvi id)
+    if prev and now - prev[1] < 60 and now - prev[2] < 300:
+        if prev[0].startswith(ql):               # takror yoki qisqartirish — yozuvdagi aniqroq so'rov yetarli
+            _last_search[uid] = (prev[0], now, prev[2], prev[3]); return
+        if ql.startswith(prev[0]):               # davom ettirish — yozuv aniqroq so'rov bilan yangilanadi
+            _con.execute("UPDATE audit_log SET detail=? WHERE id=?", (f"q={q[:60]} · {n} ta natija", prev[3])); _con.commit()
+            _last_search[uid] = (ql, now, prev[2], prev[3]); return
+    rid = rbac.audit(_con, c, "global qidiruv: talabalar", rbac.STUDENTS, True, f"q={q[:60]} · {n} ta natija")
+    _last_search[uid] = (ql, now, now, rid)
+
+@router.get("/api/search")
+def search(request: Request, q: str = ""):
+    c = C(request); q = _norm(q)[:60]
+    if len(q) < 2: return {"q": q, "groups": [], "ms": 0}
+    t0 = time.perf_counter(); groups = []
+    for key, title, fn in GROUPS:
+        try:
+            items = fn(c, q)
+        except AccessDenied:
+            items = []         # ruxsat yo'q — guruh umuman ko'rsatilmaydi
+        if items: groups.append({"key": key, "title": title, "items": items})
+    st = next((g for g in groups if g["key"] == "talabalar"), None)
+    if st: _audit_student_search(c, q, len(st["items"]))
+    return {"q": q, "groups": groups, "ms": round(1000 * (time.perf_counter() - t0), 1)}
+
+# =============================================================================================
+# 4. Bildirishnomalar markazi
+# =============================================================================================
+def _seen(uid) -> str | None:
+    r = db.one(_con, "SELECT seen_at FROM notif_reads WHERE user_id=?", (uid,))
+    return r["seen_at"] if r else None
+
+def _day_ts(d: dt.date) -> str: return _iso(dt.datetime.combine(d, dt.time(0, 0)))
+
+def _due_date(v) -> dt.date | None:
+    try: return dt.date.fromisoformat(str(v)[:10]) if v else None
+    except ValueError: return None
+
+def notifications(c: Ctx) -> list[dict]:
+    from . import portal as PT, agent_hub as AH
+    items = []; today = _today(); me = PT.my_unit(c); um = PT.unit_map(_con)
+    # --- portal: o'qilmagan xatlar va javoblar (shu xodim bo'yicha; tizim yozuvlari hisobga olinmaydi) ---
+    uid = c.user["id"]
+    rows = db.rows(_con, """SELECT t.id, t.subject, t.ref_no, t.from_unit, t.priority, m.created_at last_at, m.unit last_unit, m.kind last_kind
+        FROM portal_threads t
+        JOIN (SELECT thread_id, MAX(id) mid FROM portal_msgs WHERE unit!=? AND COALESCE(kind,'xat')!='tizim' GROUP BY thread_id) x ON x.thread_id=t.id
+        JOIN portal_msgs m ON m.id=x.mid
+        LEFT JOIN portal_user_reads pr ON pr.thread_id=t.id AND pr.user_id=?
+        WHERE t.status='ochiq' AND NOT EXISTS(SELECT 1 FROM portal_hidden h WHERE h.thread_id=t.id AND h.user_id=?)
+          AND (t.from_unit=? OR EXISTS(SELECT 1 FROM portal_recipients r WHERE r.thread_id=t.id AND r.unit=?)
+               OR EXISTS(SELECT 1 FROM portal_watchers w WHERE w.thread_id=t.id AND w.unit=?))
+          AND x.mid > COALESCE(pr.last_msg, 0)
+        ORDER BY x.mid DESC LIMIT 15""", (me, uid, uid, me, me, me))
+    for r in rows:
+        res = r["last_kind"] == "rezolyutsiya"
+        reply = r["from_unit"] == me
+        items.append({"id": f"pt{r['id']}", "kind": "xat", "icon": "mail", "level": "bad" if r["priority"] == "shoshilinch" or res else "info",
+                      "title": ("Rezolyutsiya: " if res else "Javob keldi: " if reply else "Yangi xat: ") + f"«{r['subject']}»",
+                      "sub": " · ".join(x for x in [PT._uname(um, r["last_unit"]), r["ref_no"], "shoshilinch" if r["priority"] == "shoshilinch" else ""] if x),
+                      "ts": _ts(r["last_at"]), "link": {"view": "portal", "thread": r["id"]}})
+    # --- portal: muddat eslatmalari (menga biriktirilgan / bo'limimga / javob kelmagan / rezolyutsiya ijrosi) ---
+    for it in PT.reminders_for(_con, c.user):
+        d = _due_date(it["due"])
+        if not d: continue
+        over = it["kind"] == "otgan"
+        lab = {"menga": "", "bolimga": "", "yuborgan": "Javob kelmadi: ", "nazorat": "Rezolyutsiya ijrosi kechikmoqda: "}[it["who"]]
+        n = it["days_left"]
+        when = "bugun" if n == 0 else "ertaga" if n == 1 else f"{n} kundan keyin"
+        title = lab + f"«{it['subject']}»" if lab else (f"Javob muddati o'tgan: «{it['subject']}»" if over else f"Javob muddati {when}: «{it['subject']}»")
+        sub = " · ".join(x for x in [PT.WHO_LABEL[it["who"]] if it["who"] in ("menga", "bolimga") else "", PT._uname(um, it.get("from_unit")) if it["who"] in ("menga", "bolimga") else "",
+                                     it["ref_no"], f"muddat {d.strftime('%d.%m.%Y')}"] if x)
+        items.append({"id": f"p{it['who'][0]}{it['thread_id']}", "kind": "xat_muddat", "icon": "alert" if over else "clock", "level": "bad" if over else "warn",
+                      "title": title, "sub": sub, "ts": _day_ts(d + dt.timedelta(days=1)) if over else _day_ts(d - dt.timedelta(days=1)),
+                      "link": {"view": "portal", "thread": it["thread_id"]}})
+    # --- majlis topshiriqlari ---
+    tl = _visible_tasks(c)
+    if tl:
+        lead = c.role.key in ("rektor", "kengash", "kotib")
+        for t in tl:
+            if not t.get("mine") or t["status"] in ("bajarildi", "qoralama"): continue
+            d = _due_date(t.get("due_at") or t.get("due"))
+            if not d: continue
+            days = (d - today).days
+            if t.get("overdue"):
+                items.append({"id": f"to{t['id']}", "kind": "topshiriq_muddat", "icon": "alert", "level": "bad",
+                              "title": f"Topshiriq muddati o'tgan: {t['text']}", "sub": f"{t.get('meeting') or 'Majlis'} · muddat {d.strftime('%d.%m.%Y')} · {-days} kun o'tdi" if days < 0 else f"{t.get('meeting') or 'Majlis'} · muddat bugun edi",
+                              "ts": _day_ts(d + dt.timedelta(days=1)), "link": _task_link(t)})
+            elif 0 <= days <= 2:
+                items.append({"id": f"tn{t['id']}", "kind": "topshiriq", "icon": "clock", "level": "warn",
+                              "title": f"Topshiriq muddati {'bugun' if days == 0 else 'ertaga' if days == 1 else '2 kundan keyin'}: {t['text']}",
+                              "sub": f"{t.get('meeting') or 'Majlis'} · muddat {d.strftime('%d.%m.%Y')}",
+                              "ts": _day_ts(d - dt.timedelta(days=2)), "link": _task_link(t)})
+        if lead:   # rahbariyat: institut bo'yicha muddati o'tganlar — bitta jamlangan bildirishnoma
+            over = [t for t in tl if t.get("overdue")]
+            if over:
+                last = max((_due_date(t.get("due_at") or t.get("due")) for t in over), default=today) or today
+                items.append({"id": "tall", "kind": "topshiriq_muddat", "icon": "tasks", "level": "bad",
+                              "title": f"Institut bo'yicha {len(over)} ta topshiriq muddati o'tgan",
+                              "sub": " · ".join(sorted({str(t.get('assignee') or '') for t in over if t.get('assignee')})[:4]),
+                              "ts": _day_ts(last + dt.timedelta(days=1)), "link": {"view": "tasks"}})
+    # --- AI agentlar takliflari (faqat rahbariyat, tasdiqlash huquqi bo'lsa) ---
+    if AH.can_view_page(c) and c.role.key != "kengash":
+        props = [r for r in db.rows(_con, "SELECT id, agent, title, created_at FROM agent_actions WHERE status='taklif' ORDER BY id DESC")
+                 if AH.can_approve(c, r["agent"])]
+        if 0 < len(props) <= 3:
+            for r in props:
+                items.append({"id": f"ag{r['id']}", "kind": "agent", "icon": "spark", "level": "info", "title": f"AI agent taklifi: {r['title']}",
+                              "sub": f"{AH.AG.get(r['agent'], {}).get('name', r['agent'])} · tasdiqingizni kutmoqda", "ts": _ts(r["created_at"]), "link": {"view": "agents"}})
+        elif props:
+            names = sorted({AH.AG.get(r["agent"], {}).get("name", r["agent"]) for r in props})
+            items.append({"id": "agall", "kind": "agent", "icon": "spark", "level": "info",
+                          "title": f"AI agentlar: {len(props)} ta taklif tasdiqingizni kutmoqda", "sub": " · ".join(names[:3]) + (f" va yana {len(names) - 3}" if len(names) > 3 else ""),
+                          "ts": max(_ts(r["created_at"]) for r in props), "link": {"view": "agents"}})
+    # --- hujjatlar: imzo kutayotgan buyruq loyihalari (faqat rektor imzolaydi) ---
+    if c.role.key == "rektor":
+        for r in db.rows(_con, "SELECT id, reg_no, title, holder, created_at FROM documents WHERE status='loyiha' ORDER BY id DESC LIMIT 10"):
+            items.append({"id": f"dc{r['id']}", "kind": "hujjat", "icon": "file", "level": "warn", "title": f"Imzo kutilmoqda: {r['title']}",
+                          "sub": " · ".join(x for x in [r["reg_no"], r["holder"]] if x), "ts": _ts(r["created_at"]), "link": {"view": "documents", "reg": r["reg_no"]}})
+    now = _iso(_now())
+    for it in items: it["ts"] = min(it["ts"], now)      # kelajakdagi vaqt "… oldin" deb ko'rinmasin
+    items.sort(key=lambda x: x["ts"], reverse=True)
+    return items[:40]
+
+@router.get("/api/notifications")
+def api_notifications(request: Request):
+    c = C(request); seen = _seen(c.user["id"])
+    items = notifications(c)
+    for it in items: it["unread"] = not seen or it["ts"] > seen
+    return {"items": items, "unread": sum(it["unread"] for it in items), "seen_at": seen, "now": _iso(_now())}
+
+@router.post("/api/notifications/read")
+def api_notifications_read(request: Request):
+    c = C(request); now = _iso(_now())
+    _con.execute("INSERT INTO notif_reads(user_id, seen_at) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET seen_at=excluded.seen_at", (c.user["id"], now))
+    _con.commit()
+    return {"ok": True, "seen_at": now}
+
+# =============================================================================================
+# 5. Majlislar kalendari
+# =============================================================================================
+@router.get("/api/calendar")
+def api_calendar(request: Request, month: str = ""):
+    from . import portal as PT
+    c = C(request); today = _today()
+    m = re.fullmatch(r"(\d{4})-(\d{2})", month or "")
+    y, mo = (int(m[1]), int(m[2])) if m and 1 <= int(m[2]) <= 12 else (today.year, today.month)
+    first = dt.date(y, mo, 1); nxt = dt.date(y + (mo == 12), mo % 12 + 1, 1)
+    lo, hi = first - dt.timedelta(days=7), nxt + dt.timedelta(days=7)      # to'rdagi qo'shni oylar kunlari uchun ham
+    inr = lambda d: d is not None and lo <= d < hi
+    ev = []
+    tl = _visible_tasks(c)
+    has_tasks = c.can(rbac.TASKS)
+    if has_tasks:
+        lead = c.role.key in ("rektor", "kengash", "kotib")
+        mids = {t["meeting_id"] for t in tl}
+        for mt in db.rows(_con, "SELECT id, title, date, kind, status, source FROM meetings WHERE COALESCE(status,'')!='qoralama' ORDER BY date"):
+            d = _due_date(mt["date"])
+            if not inr(d) or not (lead or mt["id"] in mids): continue
+            n = sum(1 for t in tl if t["meeting_id"] == mt["id"])
+            ev.append({"id": f"m{mt['id']}", "type": "majlis", "date": d.isoformat(), "title": mt["title"],
+                       "sub": " · ".join(x for x in [mt["kind"], f"{n} ta topshiriq" if n else "", "majlis qarori (ISFT Core)" if mt["source"] else ""] if x),
+                       "status": mt["status"] or "o'tkazildi", "overdue": False, "done": d < today,
+                       "link": {"view": "tasks", "meeting": mt["id"]} if mt["source"] else {"view": "tasks"}})
+        for t in tl:
+            due = t.get("due_at") or t.get("due"); d = _due_date(due)
+            if not inr(d): continue
+            ev.append({"id": f"t{t['id']}", "type": "topshiriq", "date": d.isoformat(), "time": str(due)[11:16] if "T" in str(due) else "",
+                       "title": t["text"], "sub": " · ".join(x for x in [t.get("assignee"), t.get("meeting")] if x),
+                       "status": t["status"], "overdue": bool(t.get("overdue")), "done": t["status"] == "bajarildi", "mine": bool(t.get("mine")),
+                       "link": _task_link(t)})
+    me = PT.my_unit(c); um = PT.unit_map(_con)
+    for r in db.rows(_con, """SELECT * FROM (SELECT t.id, t.subject, t.ref_no, t.from_unit, t.status tstatus,
+                                     COALESCE(NULLIF((SELECT x.due FROM portal_recipients x WHERE x.thread_id=t.id AND x.unit=?),''), t.due) due,
+                                     (SELECT status FROM portal_recipients x WHERE x.thread_id=t.id AND x.unit=?) my_status,
+                                     (SELECT COUNT(*) FROM portal_recipients x WHERE x.thread_id=t.id AND x.status IN ('yangi','o''qilgan')) pending
+                              FROM portal_threads t WHERE (t.from_unit=? OR EXISTS(SELECT 1 FROM portal_recipients x WHERE x.thread_id=t.id AND x.unit=?)))
+                              WHERE due IS NOT NULL AND due!='' AND due>=? AND due<? ORDER BY due""", (me, me, me, me, lo.isoformat(), hi.isoformat())):
+        d = _due_date(r["due"])
+        if not d: continue
+        sent = r["from_unit"] == me
+        done = r["tstatus"] == "yopilgan" or ((r["pending"] == 0) if sent else (r["my_status"] in ("javob berilgan", "yo'naltirilgan")))
+        ev.append({"id": f"p{r['id']}", "type": "xat", "date": d.isoformat(), "title": r["subject"],
+                   "sub": " · ".join(x for x in [r["ref_no"], ("Yuborilgan · " + (f"{r['pending']} ta bo'lim javob bermagan" if r["pending"] else "hammasi javob bergan"))
+                                                 if sent else f"{PT._uname(um, r['from_unit'])}dan"] if x),
+                   "status": "javob berilgan" if done else "javob kutilmoqda", "overdue": (not done) and d < today, "done": done,
+                   "link": {"view": "portal", "thread": r["id"]}})
+    order = {"majlis": 0, "topshiriq": 1, "xat": 2}
+    ev.sort(key=lambda e: (e["date"], order[e["type"]], e["title"]))
+    rbac.audit(_con, c, "majlislar kalendari", rbac.TASKS if has_tasks else "portal", True, f"{y}-{mo:02d}")
+    return {"month": f"{y}-{mo:02d}", "today": today.isoformat(), "events": ev, "has_tasks": has_tasks,
+            "counts": {k: sum(1 for e in ev if e["type"] == k and first <= dt.date.fromisoformat(e["date"]) < nxt) for k in order}}
+
+# =============================================================================================
+# CLI: demo parollarini tiklash
+# =============================================================================================
+def reset_passwords(con, user_id: int | None = None) -> int:
+    h = rbac.hash_password(rbac.DEMO_PASSWORD)    # bitta xesh — hamma uchun (sinov rejimi)
+    if user_id:
+        n = con.execute("UPDATE users SET pin=? WHERE id=?", (h, user_id)).rowcount
+    else:
+        n = con.execute("UPDATE users SET pin=?", (h,)).rowcount
+    con.execute("INSERT INTO audit_log(ts,user_id,user_name,role,channel,action,resource,allowed,detail) VALUES(?,?,?,?,?,?,?,?,?)",
+                (_iso(_now()), 0, "Server administratori (CLI)", "admin", "cli", "demo parollari tiklandi", "auth", 1,
+                 f"{n} ta akkaunt" + (f" · #{user_id}" if user_id else "")))
+    con.commit()
+    return n
+
+def _cli(argv):
+    if not argv or argv[0] not in ("reset-passwords",):
+        print("Foydalanish: python -m app.extras reset-passwords [--user ID]\n"
+              "  barcha (yoki bitta) akkaunt parolini sinov paroliga qaytaradi — faqat server administratori uchun", file=sys.stderr); return 2
+    uid = None
+    if "--user" in argv:
+        try: uid = int(argv[argv.index("--user") + 1])
+        except (IndexError, ValueError):
+            print("--user dan keyin akkaunt raqamini yozing", file=sys.stderr); return 2
+    con = db.connect()
+    if uid and not db.one(con, "SELECT 1 x FROM users WHERE id=?", (uid,)):
+        print(f"#{uid} akkaunt topilmadi", file=sys.stderr); return 1
+    n = reset_passwords(con, uid)
+    print(f"Tayyor: {n} ta akkaunt paroli sinov paroliga qaytarildi ({'#' + str(uid) if uid else 'barchasi'}). Audit jurnaliga yozildi.")
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(_cli(sys.argv[1:]))

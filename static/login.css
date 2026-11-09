@@ -1,0 +1,100 @@
+/* =====================================================================
+   KIRISH SAHIFASI — chapda ISFT qirmizi panel (to'liq balandlik), o'ngda kirish kartasi.
+   Kontent balandligi tab almashganda o'zgarmaydi (ro'yxat qat'iy balandlikda).
+   ===================================================================== */
+.login{min-height:100vh;min-height:100dvh;display:grid;grid-template-columns:minmax(0,1.08fr) minmax(460px,.92fr);background:var(--bg-solid)}
+.hero{position:relative;overflow:hidden;color:#fff;display:flex;flex-direction:column;justify-content:space-between;gap:40px;
+  padding:48px clamp(32px,5vw,88px);
+  background:radial-gradient(1100px 600px at 110% 110%,rgba(255,255,255,.10),transparent 60%),
+             radial-gradient(700px 500px at -10% -20%,rgba(0,0,0,.22),transparent 60%),#870037}
+.hero::after{content:"";position:absolute;right:-180px;bottom:-180px;width:520px;height:520px;border-radius:50%;
+  border:1px solid rgba(255,255,255,.10);box-shadow:0 0 0 80px rgba(255,255,255,.025),0 0 0 160px rgba(255,255,255,.02);pointer-events:none}
+.hero>*{position:relative;z-index:1}
+.hero-brand{display:flex;gap:14px;align-items:center}
+.hero-logo{display:grid;place-items:center;width:56px;height:56px;border-radius:50%;background:#fff;flex:none}
+.hero-logo img{width:42px;height:36px;object-fit:contain}
+.hero-brand b{display:block;font-size:20px;font-weight:800;letter-spacing:.01em}
+.hero-brand small{display:block;color:rgba(255,255,255,.75);font-size:13px}
+.hero-copy{max-width:560px}
+.eyebrow{display:inline-block;font-size:12.5px;font-weight:700;color:#fff;padding:6px 12px;border-radius:99px;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.22)}
+.hero h1{color:#fff;font-size:clamp(52px,6vw,84px);line-height:1;margin:18px 0 16px;font-weight:800;letter-spacing:-.035em}
+.hero-copy p{font-size:17px;line-height:1.6;color:rgba(255,255,255,.88);margin:0 0 32px}
+.hero-points{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:18px}
+.hero-points li{display:flex;gap:14px;align-items:flex-start}
+.hero-points b{display:block;font-size:15px;font-weight:700;line-height:1.35}
+.hero-points small{display:block;margin-top:2px;color:rgba(255,255,255,.75);font-size:13.5px;line-height:1.45}
+.hp-ic{display:grid;place-items:center;width:40px;height:40px;flex:none;border-radius:12px;background:rgba(255,255,255,.12);color:#fff}
+.hero-foot{font-size:13px;color:rgba(255,255,255,.7)}
+
+.signin{position:relative;z-index:2;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:14px;padding:40px clamp(20px,4vw,56px)}
+.signin-card{width:100%;max-width:440px;background:var(--surface);border:1px solid var(--line);border-radius:24px;padding:32px 30px 26px;
+  box-shadow:0 1px 2px rgba(16,24,40,.04),0 12px 32px -12px rgba(16,24,40,.12)}
+.signin-head h2{font-size:26px;margin:0;letter-spacing:-.01em}
+.signin-head p{margin:6px 0 20px;font-size:14px}
+.signin-foot{margin:0;text-align:center;font-size:13px;color:var(--muted)}
+
+/* segmentli tanlov */
+.seg{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:2px;padding:4px;border-radius:14px;background:var(--surface-2);border:1px solid var(--line);margin-bottom:12px}
+.seg button{border:0;background:transparent;color:var(--muted);font:inherit;font-size:13px;font-weight:700;padding:9px 4px;border-radius:10px;cursor:pointer;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:background .15s,color .15s,box-shadow .15s}
+.seg button:hover{color:var(--ink)}
+.seg button.on{background:var(--surface);color:var(--ink);box-shadow:0 1px 3px rgba(16,24,40,.12)}
+
+/* qidiruv */
+.role-search{display:flex;align-items:center;gap:8px;padding:0 12px;height:42px;border:1px solid var(--line-2);border-radius:12px;background:var(--surface);color:var(--muted);margin-bottom:8px}
+.role-search:focus-within{border-color:var(--teal);box-shadow:0 0 0 3px var(--teal-soft)}
+.role-search input{flex:1;min-width:0;border:0;outline:0;background:transparent;color:var(--ink);font:inherit;font-size:14px;height:100%}
+
+/* ro'yxat — qat'iy balandlik, sahifa sakramaydi */
+.role-list{display:flex;flex-direction:column;gap:4px;height:218px;overflow-y:auto;overscroll-behavior:contain;margin:0;padding:2px;scrollbar-width:thin}
+.role-list.fade{-webkit-mask-image:linear-gradient(#000 82%,transparent);mask-image:linear-gradient(#000 82%,transparent)}
+.role-row{display:flex;align-items:center;gap:12px;padding:10px 12px;min-height:58px;border-radius:12px;border:1px solid var(--line);background:var(--surface);cursor:pointer;flex:none;
+  transition:border-color .15s,background .15s}
+.role-row:hover{border-color:var(--line-2);background:var(--surface-3)}
+.role-row.sel{border-color:var(--brand);background:var(--brand-soft)}
+.role-row>div{min-width:0;flex:1}
+.role-row b{display:block;font-size:14px;font-weight:700;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.role-row small{display:block;color:var(--muted);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.role-row .avatar{width:36px;height:36px;font-size:12.5px}
+.role-row .chk{width:20px;height:20px;border-radius:50%;border:1.5px solid var(--line-2);display:grid;place-items:center;flex:none;color:#fff}
+.role-row.sel .chk{background:var(--brand-fill);border-color:var(--brand)}
+.role-empty{display:grid;place-items:center;height:100%;color:var(--muted);font-size:14px;text-align:center}
+
+/* PIN */
+.pin-row{display:flex;justify-content:space-between;align-items:center;margin:18px 0 8px}
+.pin-label{font-size:13px;font-weight:700;color:var(--ink-2)}
+.pin-demo{font-weight:500;color:var(--muted)}
+.pin-eye{border:0;background:transparent;color:var(--muted);cursor:pointer;padding:4px;border-radius:8px;display:grid;place-items:center}
+.pin-eye:hover{color:var(--ink)}
+.pin-eye.on{color:var(--teal)}
+.otp{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:18px}
+.otp input{width:100%;min-width:0;height:56px;text-align:center;font:inherit;font-size:24px;font-weight:700;color:var(--ink);border-radius:12px;border:1px solid var(--line-2);background:var(--surface);
+  transition:border-color .15s,box-shadow .15s}
+.otp.masked input{-webkit-text-security:disc;font-size:34px;letter-spacing:0}
+.otp input:focus{outline:none;border-color:var(--teal);box-shadow:0 0 0 3px var(--teal-soft)}
+.otp.err input{border-color:var(--bad);animation:shake .35s}
+@keyframes shake{25%{transform:translateX(-5px)}75%{transform:translateX(5px)}}
+#loginBtn{padding:14px;font-size:15px;border-radius:12px;gap:8px}
+#loginBtn[data-busy]{opacity:.75;pointer-events:none}
+.signin-note{display:flex;gap:10px;align-items:flex-start;margin-top:16px;padding:12px 14px;border-radius:12px;background:var(--surface-2);font-size:13px;line-height:1.5;color:var(--ink-2)}
+.signin-note svg{color:var(--teal);margin-top:2px;flex:none}
+
+@media (max-width:1180px){.login{grid-template-columns:minmax(0,1fr) minmax(440px,1fr)}.hero-points small{display:none}}
+@media (max-width:980px){
+  .login{grid-template-columns:minmax(0,1fr);background:var(--bg-solid)}
+  .hero{padding:24px 20px 88px;gap:18px}
+  .hero::after{display:none}
+  .hero-points,.hero-foot{display:none}
+  .hero h1{font-size:44px;margin:12px 0 8px}
+  .hero-copy p{font-size:14.5px;margin:0}
+  .signin{padding:0 16px 32px;margin-top:-64px;justify-content:flex-start}
+  .signin-card{max-width:520px;padding:24px 20px 20px}
+}
+@media (max-width:420px){.seg button{font-size:12px;padding:9px 2px}.hero-brand b{font-size:18px}.role-list{height:206px}}
+@media (min-width:981px) and (max-height:760px){.signin{padding:24px}.signin-card{padding:24px 26px 20px}.signin-head h2{font-size:23px}.signin-head p{margin-bottom:14px}.role-list{height:190px}.pin-row{margin-top:12px}.otp input{height:50px}}
+.login.lv0 .pw-wrap{display:flex;align-items:center;gap:8px;height:52px;padding:0 6px 0 14px;border:1px solid var(--line-2);border-radius:12px;background:var(--surface);color:var(--muted);margin:8px 0 18px}
+.login.lv0 .pw-wrap:focus-within{border-color:var(--teal);box-shadow:0 0 0 3px var(--teal-soft)}
+.login.lv0 .pw-wrap input{flex:1;min-width:0;border:0;outline:0;background:transparent;color:var(--ink);font:inherit;font-size:16px}
+.login.lv0 .pw-wrap.err{border-color:var(--bad);animation:shake .35s}
+.login.lv0 .pw-eye{border:0;background:transparent;color:var(--muted);cursor:pointer;padding:8px;border-radius:8px;display:grid}
+.login.lv0 .pw-eye.on{color:var(--teal)}

@@ -10,6 +10,7 @@ Tuzilma: ISFT rasmiy tashkiliy tuzilmasi (2024, 04.09.2024 tasdiqlangan) — fak
 """
 import random, datetime as dt
 from . import db
+from .academic_rules import OTHER_UNIT_HEADS
 
 R = random.Random(42)
 TODAY = dt.date(2026, 11, 4)
@@ -61,20 +62,27 @@ COURSE_W = [0.29, 0.27, 0.23, 0.21]   # 1-kurs ≈ 2026 qabul (8 184) / jami —
 FACULTIES = [
     ("Iqtisodiyot va axborot texnologiyalari", [
         ("Iqtisodiyot va kompyuter injiniringi", [("Iqtisodiyot", 1.4), ("Bank ishi va audit", 1.2), ("Menejment", 1.0), ("Marketing", 0.8),
-                                                 ("Axborot tizimlari va texnologiyalari", 1.0), ("Axborot xavfsizligi", 0.6), ("Xalqaro munosabatlar", 0.7)])]),
+                                                 ("Axborot tizimlari va texnologiyalari", 1.0), ("Axborot xavfsizligi", 0.6)])]),
     ("Xalqaro iqtisodiyot va moliya", [   # "xalqaro yo'nalishlar" — 50 BHM
         ("Biznes boshqaruvi", [("Biznes va menejment", 1.0)]),
         ("Menejment", [("Moliya sohasida boshqaruv", 1.0)]),
         ("Buxgalteriya hisobi", [("Buxgalteriya hisobi va moliya", 1.1)])]),
     ("Ijtimoiy-gumanitar fanlar va tillar", [
-        ("Psixologiya va pedagogika", [("Pedagogika", 1.3), ("Psixologiya", 1.3)]),
-        ("Gumanitar va tabiiy fanlar", [("Boshlang'ich ta'lim", 1.4), ("Maktabgacha ta'lim", 1.2)]),
+        # taqdimot (4-slayd): pedagogik yo'nalishlar — Psixologiya va pedagogika kafedrasida; Xalqaro munosabatlar va
+        # mahalliy yo'nalishlarda 1-kursning ijtimoiy-gumanitar fanlari — Gumanitar va tabiiy fanlar kafedrasida
+        ("Psixologiya va pedagogika", [("Pedagogika", 1.3), ("Psixologiya (faoliyat turlari bo'yicha)", 1.3), ("Boshlang'ich ta'lim", 1.4),
+                                       ("Maktabgacha ta'lim", 1.2), ("Pedagogika va psixologiya", 0.6)]),
+        ("Gumanitar va tabiiy fanlar", [("Xalqaro munosabatlar", 0.7)]),
         ("Filologiya va tillarni o'qitish", [("Xorijiy til va adabiyoti", 1.2), ("Filologiya va tillarni o'qitish (ingliz tili)", 1.0)])]),
 ]
 INTL_FACULTY = 2
 # Fakultetga biriktirilmagan (institut miqyosidagi) kafedra: o'z yo'nalishi yo'q, guruhlari yo'q. Ro'yxatda fakultet ko'rsatilmagan.
 INSTITUTE_DEPTS = ["Fundamental iqtisodiy fanlar"]
 FUND_SUBJECTS = {"Makroiqtisodiyot", "Mikroiqtisodiyot", "Ekonometrika", "Statistika"}   # TAXMIN: shu kafedra o'qitadigan fanlar
+# Taqdimot (4-slayd): mahalliy yo'nalishlarda 1-kursning ijtimoiy-gumanitar fanlarini Gumanitar va tabiiy fanlar kafedrasi o'qitadi
+HUM_DEPT, HUM_SUBJECT = "Gumanitar va tabiiy fanlar", "O'zbekiston tarixi"   # fan nomi — TAXMIN (namuna)
+def subjects_for(key, course, level, fi):
+    return SUBJECTS[key] + ([HUM_SUBJECT] if course == 1 and level == "bakalavr" and fi != INTL_FACULTY else [])
 # Ism-shariflar — institut ro'yxatidan (tartib: familiya, ism, otasining ismi). Dekanlar ro'yxatda yo'q — ular sun'iy qoladi.
 LEADERS = {
     "rektor": "G'ulomov Ibroxim Rustam o'g'li",
@@ -93,10 +101,11 @@ DEPT_HEADS = {
     "Filologiya va tillarni o'qitish": "Najmitdinova Gulnozaxon Baxtiyorovna",
     "Fundamental iqtisodiy fanlar": "Qarshiyev Daniyar Eshpulatovich",
 }
-# Akademik faoliyat va registrator departamenti (rahbari ro'yxatda ko'rsatilmagan) va boshqa bo'limlar
+# Bo'limlar rahbarlari (institut ro'yxati, "Lavozim ism" hujjati). Avvalgi "Akademik faoliyat va registrator departamenti"
+# ikkiga bo'lingan: Registrator ofisi va Akademik faoliyatni boshqarish bo'limi.
 UNIT_HEADS = {
-    "Registrator ofisi": "Baratov Ma'rufjon Baxodir o'g'li",
-    "Akademik faoliyatni muvofiqlashtirish bo'limi": "Bo'tayev Xurshid",
+    "Registrator ofisi": "Baratov Ma'rufbek Baxodir o'g'li",
+    "Akademik faoliyatni boshqarish bo'limi": "Bo'tayev Xurshid",
     "Imtihon bo'limi": "Zafarbek Ilkhamovich",
     "Magistratura bo'limi": "Manukyan Feruza",
     "Ilmiy tadqiqotlar, innovatsiyalar va ilmiy-pedagogik kadrlar tayyorlash bo'limi": "Bahodirova Gulnoz",
@@ -106,7 +115,7 @@ UNIT_HEADS = {
 MASTERS = [("Davlat moliyaviy nazorati va auditi", 4), ("Pedagogika", 5), ("Xorijiy til va adabiyoti", 7)]
 GROUP_CODE = {"Iqtisodiyot": "IQT", "Bank ishi va audit": "BIA", "Menejment": "MEN", "Marketing": "MRK", "Axborot tizimlari va texnologiyalari": "ATT",
               "Axborot xavfsizligi": "AXV", "Xalqaro munosabatlar": "XM", "Biznes va menejment": "BM", "Moliya sohasida boshqaruv": "MSB",
-              "Buxgalteriya hisobi va moliya": "BHM", "Pedagogika": "PED", "Psixologiya": "PSX", "Boshlang'ich ta'lim": "BT", "Maktabgacha ta'lim": "MT",
+              "Buxgalteriya hisobi va moliya": "BHM", "Pedagogika": "PED", "Psixologiya (faoliyat turlari bo'yicha)": "PSX", "Pedagogika va psixologiya": "PP", "Boshlang'ich ta'lim": "BT", "Maktabgacha ta'lim": "MT",
               "Xorijiy til va adabiyoti": "XTA", "Filologiya va tillarni o'qitish (ingliz tili)": "FIL",
               "Davlat moliyaviy nazorati va auditi": "MAG-DMN", }
 SUBJECTS = {
@@ -121,7 +130,8 @@ SUBJECTS = {
     "Moliya sohasida boshqaruv": ["Moliya","Korporativ moliya","FinTech asoslari","Moliyaviy matematika","Ingliz tili"],
     "Buxgalteriya hisobi va moliya": ["Buxgalteriya hisobi","Korporativ moliya","Moliyaviy matematika","Moliyaviy hisobot (IFRS)","Ingliz tili"],
     "Pedagogika": ["Umumiy pedagogika","Didaktika","Pedagogik mahorat","Ta'lim texnologiyalari","Ingliz tili"],
-    "Psixologiya": ["Umumiy psixologiya","Ijtimoiy psixologiya","Yosh psixologiyasi","Statistika","Ingliz tili"],
+    "Psixologiya (faoliyat turlari bo'yicha)": ["Umumiy psixologiya","Ijtimoiy psixologiya","Yosh psixologiyasi","Statistika","Ingliz tili"],
+    "Pedagogika va psixologiya": ["Pedagogika nazariyasi","Pedagogik psixologiya","Tarbiya metodikasi","Psixodiagnostika","Ingliz tili"],
     "Boshlang'ich ta'lim": ["Boshlang'ich ta'lim metodikasi","Ona tili","Matematika o'qitish metodikasi","Pedagogika","Ingliz tili"],
     "Maktabgacha ta'lim": ["Maktabgacha pedagogika","Bolalar psixologiyasi","Nutq o'stirish","Pedagogika","Ingliz tili"],
     "Xorijiy til va adabiyoti": ["Amaliy grammatika","Fonetika","Adabiyot tarixi","Tarjima nazariyasi","Ikkinchi xorijiy til"],
@@ -203,12 +213,14 @@ def run():
     # o'qituvchi-guruh-fan
     tg = {}
     fund_teachers = [t for t in teachers if t[1] in inst_dept_ids]   # umumiy iqtisodiy fanlarni institut kafedrasi o'qitadi
+    hum_id = next(did for did, _, _ in dept_rows if db.one(con, "SELECT name FROM departments WHERE id=?", (did,))["name"] == HUM_DEPT)
+    hum_teachers = [t for t in teachers if t[1] == hum_id]
     skey = lambda d, level: f"{d} (magistratura)" if level == "magistr" and f"{d} (magistratura)" in SUBJECTS else d
     for gid, did, fi, course, d, form, cnt, level in group_rows:
         key = skey(d, level)
         dept_teachers = [t for t in teachers if t[1] == did]
-        for subj in SUBJECTS[key]:
-            t = R.choice(fund_teachers if subj in FUND_SUBJECTS and fund_teachers else dept_teachers)
+        for subj in subjects_for(key, course, level, fi):
+            t = R.choice(fund_teachers if subj in FUND_SUBJECTS and fund_teachers else hum_teachers if subj == HUM_SUBJECT else dept_teachers)
             c.execute("INSERT INTO teacher_groups VALUES(?,?,?)", (t[0], gid, subj))
             tg[(gid, subj)] = t[0]
 
@@ -226,14 +238,16 @@ def run():
             nm, g = person()
             amount = price
             if R.random() < 0.04: amount = int(price * (1 - P["family_discount"]))   # oilaviy chegirma
-            base = R.gauss(74, 9)
+            # 100 ballik ball institut shkalasida (o'tish 40, «5» — 65+; app/academic_rules.py): o'rtacha ~58 («4», C).
+            # Fanlar bo'yicha: ~28% «5», ~47% «4», ~17% «3», ~7% o'zlashtirmagan.
+            base = R.gauss(58, 9)
             # HIKOYA: Xalqaro iqtisodiyot va moliya fakulteti 2-kurs keskin pasaygan
             drop = 11 if (fi == 2 and course == 2) else R.uniform(-2, 3)
-            gpa = max(35, min(99, base - drop))
-            prev = max(40, min(99, base + R.uniform(-2, 2)))
+            gpa = max(20, min(97, base - drop))
+            prev = max(24, min(97, base + R.uniform(-2, 2)))
             if form == "masofaviy": att = None                     # masofaviy — auditoriya davomati yo'q
-            elif form == "sirtqi": att = max(50, min(100, R.gauss(91, 6) - (12 if gpa < 55 else 0)))   # sessiya davomati
-            else: att = max(40, min(100, R.gauss(88, 7) - (9 if (fi == 2 and course == 2) else 0) - (12 if gpa < 55 else 0)))
+            elif form == "sirtqi": att = max(50, min(100, R.gauss(91, 6) - (12 if gpa < 40 else 0)))   # sessiya davomati
+            else: att = max(40, min(100, R.gauss(88, 7) - (9 if (fi == 2 and course == 2) else 0) - (12 if gpa < 40 else 0)))
             paid_ratio = R.choices([1, 0.75, 0.5, 0.25, 0], [72, 10, 9, 5, 4])[0]
             if fi == 2 and course == 2 and R.random() < .15: paid_ratio = 0.25
             status = "faol" if R.random() > 0.01 else "akademik ta'til"
@@ -242,8 +256,8 @@ def run():
                       (f"3{R.randint(10**11, 10**12-1)}", nm, gid, fi, g, R.choice(REGIONS), "kontrakt", amount, int(amount * paid_ratio),
                        round(gpa, 1), round(att, 1) if att is not None else None, round(prev, 1), status, level, form))
             if form == "kunduzgi" and level == "bakalavr": day_pool.setdefault(course, []).append((sid, gpa))
-            for subj in SUBJECTS[key]:
-                c.execute("INSERT INTO grades VALUES(?,?,?,?,?)", (sid, subj, tg[(gid, subj)], int(max(20, min(100, R.gauss(gpa, 8)))), 1))
+            for subj in subjects_for(key, course, level, fi):
+                c.execute("INSERT INTO grades VALUES(?,?,?,?,?)", (sid, subj, tg[(gid, subj)], int(max(8, min(100, R.gauss(gpa, 8)))), 1))
     # grantlar: har yili 300 (250 umumiy tanlov — eng yuqori natija, 50 ijtimoiy) — faqat kunduzgi bakalavr (isft.uz/en/faq)
     for course, pool in day_pool.items():
         top = [s for s, _ in sorted(pool, key=lambda x: -x[1])[:P["grants_per_year"] - P["grants_social"]]]
@@ -308,15 +322,20 @@ def run():
             c.execute("INSERT INTO budget(month,category,planned,actual) VALUES(?,?,?,?)", (f"2026-{m:02d}", cat, plan, int(plan * k)))
 
     # --- kadrlar (shaxsiy ma'lumot — faqat kadrlar bo'limiga) ---
-    units = ["Rektorat","Buxgalteriya bo'limi","Kadrlar bo'limi","Akademik faoliyat va registrator departamenti","Marketing bo'limi","Xalqaro hamkorlik bo'limi",
+    units = ["Rektorat","Buxgalteriya bo'limi","Kadrlar bo'limi","Registrator ofisi","Akademik faoliyatni boshqarish bo'limi","Marketing bo'limi","Xalqaro hamkorlik bo'limi",
              "Xo'jalik va texnik bo'lim","Axborot texnologiyalari bo'limi","Axborot-resurs markazi","Devonxona","Yuridik bo'lim",
              "Imtihon bo'limi","Magistratura bo'limi","Amaliyot bo'limi","Ilmiy tadqiqotlar, innovatsiyalar va ilmiy-pedagogik kadrlar tayyorlash bo'limi"]
-    # bo'lim rahbarlari (institut ro'yxati); Registrator ofisi va Akademik faoliyatni muvofiqlashtirish — departament tarkibida
+    # bo'lim rahbarlari (institut ro'yxati); Registrator ofisi va Akademik faoliyatni boshqarish — departament tarkibida
     for u, nm in UNIT_HEADS.items():
-        parent = "Akademik faoliyat va registrator departamenti" if u in ("Registrator ofisi", "Akademik faoliyatni muvofiqlashtirish bo'limi") else u
-        pos = "Bo'lim boshlig'i" if parent == u else f"{u} boshlig'i"
+        parent = u
+        pos = "Bo'lim boshlig'i"
         c.execute("INSERT INTO staff(full_name,unit,position,salary,hired,passport) VALUES(?,?,?,?,?,?)",
                   (nm, parent, pos, R.choice([12, 14, 16]) * 1_000_000, (TODAY - dt.timedelta(days=R.randint(400, 3000))).isoformat(), f"AD{R.randint(1000000, 9999999)}"))
+    # Sirtqi bo'lim va Ma'lumotlar bazasi bo'limi — alohida bo'limlar (akademik qoidalar taqdimoti). Tasodifiy son ishlatilmaydi —
+    # keyingi demo ma'lumotlar (hikoyalar) o'zgarmasligi uchun.
+    for i, (unit, nm) in enumerate(OTHER_UNIT_HEADS.items()):
+        c.execute("INSERT INTO staff(full_name,unit,position,salary,hired,passport) VALUES(?,?,?,?,?,?)",
+                  (nm, unit, "Bo'lim boshlig'i", 12_000_000, (TODAY - dt.timedelta(days=900 + 370 * i)).isoformat(), f"AD{4810233 + 77 * i}"))
     for t, did, fi in teachers:
         nm = db.one(con, "SELECT full_name, position FROM teachers WHERE id=?", (t,))
         c.execute("INSERT INTO staff(full_name,unit,position,salary,hired,passport) VALUES(?,?,?,?,?,?)",
@@ -368,8 +387,10 @@ def run():
         return db.one(con, "SELECT id, full_name FROM teachers WHERE department_id=? AND position!='Kafedra mudiri' LIMIT 1", (dept_id,))
     dept4 = db.one(con, "SELECT * FROM departments WHERE id=4")
     t = tid_of(4)
-    UH_MAG, UH_AKA = UNIT_HEADS["Magistratura bo'limi"], UNIT_HEADS["Akademik faoliyatni muvofiqlashtirish bo'limi"]
+    UH_MAG, UH_AKA = UNIT_HEADS["Magistratura bo'limi"], UNIT_HEADS["Akademik faoliyatni boshqarish bo'limi"]
     UH_ILM = UNIT_HEADS["Ilmiy tadqiqotlar, innovatsiyalar va ilmiy-pedagogik kadrlar tayyorlash bo'limi"]
+    from .rbac import hash_password, DEMO_PASSWORD
+    PW = hash_password(DEMO_PASSWORD)   # demo: barcha akkauntlar uchun bitta parol (xeshlangan)
     users = [
         ("Kuzatuv kengashi a'zosi", "kengash", None, None, None, "KENGASH"),
         (f"Rektor: {LEADERS['rektor']}", "rektor", None, None, None, "REKTOR"),
@@ -378,23 +399,23 @@ def run():
         (f"Moliya-iqtisod ishlari bo'yicha prorektor: {LEADERS['prorektor_moliya']}", "prorektor_moliya", None, None, None, "MOLIYA"),
         (f"Yoshlar masalalari va ma'naviy-ma'rifiy ishlar bo'yicha birinchi prorektor: {LEADERS['prorektor_yoshlar']}", "prorektor_yoshlar", None, None, None, "YOSHLAR"),
         ("Qabul komissiyasi", "qabul", None, None, None, "QABUL"),
-        ("Akademik faoliyat va registrator departamenti", "talabalar", None, None, None, "TALABA"),   # departament rahbari ro'yxatda ko'rsatilmagan
+        (f"Imtihon bo'limi: {UNIT_HEADS['Imtihon bo\'limi']}", "imtihon", None, None, None, "IMTIHON"),   # id 8 (avval umumiy departament akkaunti edi)
         (f"Magistratura bo'limi: {UH_MAG}", "magistratura", None, None, None, "MAGISTR"),
         ("Xalqaro hamkorlik bo'limi", "xalqaro", None, None, None, "XALQARO"),
         ("Buxgalteriya bo'limi", "buxgalteriya", None, None, None, "BUXGALTER"),
         ("Kadrlar bo'limi", "kadrlar", None, None, None, "KADR"),
         (f"Dekan: {fac[1]['dean']}", "dekan", 2, None, None, "DEKAN"),
-        (f"Kafedra mudiri: {dept4['head']}", "kafedra", 2, 4, None, "KAFEDRA"),
+        (f"{dept4['name']} kafedrasi mudiri: {dept4['head']}", "kafedra", 2, 4, None, "KAFEDRA"),
         (f"O'qituvchi: {t['full_name']}", "oqituvchi", 2, 4, t["id"], "USTOZ"),
         ("Xo'jalik va texnik bo'lim", "xojalik", None, None, None, "XOJALIK"),
         # departament tarkibidagi bo'limlar va ilmiy bo'lim (id'lar 17–19: keyingi demo akkauntlar id'si o'zgarmasligi uchun shu yerda)
         (f"Registrator ofisi: {UNIT_HEADS['Registrator ofisi']}", "talabalar", None, None, None, "REGOFIS"),
-        (f"Akademik faoliyatni muvofiqlashtirish bo'limi: {UH_AKA}", "talabalar", None, None, None, "AKADEM"),
-        (f"Ilmiy tadqiqotlar va innovatsiyalar bo'limi: {UH_ILM}", "ilmiy_bolim", None, None, None, "ILMIYBO"),
+        (f"Akademik faoliyatni boshqarish bo'limi: {UH_AKA}", "akademik", None, None, None, "AKADEM"),
+        (f"Ilmiy tadqiqotlar, innovatsiyalar va ilmiy-pedagogik kadrlar tayyorlash bo'limi: {UH_ILM}", "ilmiy_bolim", None, None, None, "ILMIYBO"),
     ]
     for nm, role, f, d, tid, code in users:
         c.execute("INSERT INTO users(full_name,role,faculty_id,department_id,teacher_id,link_code,pin) VALUES(?,?,?,?,?,?,?)",
-                  (nm, role, f, d, tid, code, "1234"))
+                  (nm, role, f, d, tid, code, PW))
     from . import seed_extra
     seed_extra.run(con, R, TODAY, teachers)
     con.commit()
@@ -435,8 +456,12 @@ def run():
     from . import student_ops   # talabalar markazi: telefonlar, to'lov jadvali, dars qoldirishlar, ta'tillar, otrabotkalar (sun'iy)
     student_ops.init(con)
     student_ops.evaluate(con)
+    # Sirtqi bo'lim va Ma'lumotlar bazasi bo'limi (taqdimot). Oxirida qo'shiladi — mavjud demo akkauntlar id'si o'zgarmaydi.
+    for unit, role in (("Sirtqi bo'lim", "sirtqi"), ("Ma'lumotlar bazasi bo'limi", "malumotlar_bazasi")):
+        con.execute("INSERT INTO users(full_name,role,pin) VALUES(?,?,?)", (f"{unit} boshlig'i: {OTHER_UNIT_HEADS[unit]}", role, PW))
+    con.commit()
     counts = {t: con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in
-              ["faculties","departments","groups_","teachers","students","grades","publications","grants","partners","applicants","budget","staff","events","appeals","meetings","tasks","users","documents","audit_log","rooms","tickets","requests","incidents","event_checkin","schedule","cameras","occupancy"]}
+              ["faculties","departments","groups_","teachers","students","grades","publications","grants","partners","applicants","budget","staff","events","appeals","meetings","tasks","users","documents","audit_log","rooms","tickets","requests","incidents","event_checkin","schedule","cameras","occupancy","cam_events","cam_queue"]}
     print("Seed tayyor:", counts)
 
 if __name__ == "__main__":

@@ -3,86 +3,92 @@
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#870037">
-<title>JARVIS — ISFT</title>
+<title>ISFT Core</title>
 <script>try{const t=localStorage.getItem("jarvis-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
 <link rel="preload" href="/fonts/manrope-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="cams.css">
+<script src="/api/public/config.js"></script><!-- extras: ISFT_HIDE_DEMO_HINT -->
+<script>
+/* Kirish sahifasi dizayn variantlari: ?login=1..3 yoki localStorage "jarvis-login". 0 — avvalgi dizayn. */
+(function(){var v=null,m=location.search.match(/[?&]login=(\d)/);if(m){v=m[1];try{localStorage.setItem("jarvis-login",v)}catch(e){}}
+else{try{v=localStorage.getItem("jarvis-login")}catch(e){}}if(!/^[0-3]$/.test(v||""))v="1";window.LV=v;
+document.write(v==="0"?'<link rel="stylesheet" href="login.css">':'<link rel="stylesheet" href="/login/v'+v+'.css"><script src="/login/v'+v+'.js"><\/script>');
+document.write('<link rel="stylesheet" href="/login/switcher.css">');})();
+</script>
 <link rel="icon" type="image/png" href="/brand/favicon.png">
 </head>
 <body>
 <!-- ============ KIRISH ============ -->
 <div id="login" class="login hidden">
-  <section class="hero">
-    <div class="hero-in">
-      <div class="hero-brand"><span class="hero-logo"><img src="/brand/logo-sm.png" alt="ISFT instituti logotipi"></span>
-        <div><b>ISFT instituti</b><small>International School of Finance and Technology</small></div></div>
-      <div class="hero-copy">
-        <span class="eyebrow">Boshqaruv tizimi</span>
-        <h1>JARVIS</h1>
-        <p>Institut ma'lumotlari, hujjatlar va xizmatlar bir joyda. Rahbariyat qaror qabul qilishi uchun kerakli raqamlar har kuni yangilanib turadi.</p>
-      </div>
+  <section class="hero" aria-label="ISFT Core haqida">
+    <div class="hero-brand"><span class="hero-logo"><img src="/brand/logo-sm.png" alt="ISFT instituti logotipi"></span>
+      <div><b>ISFT instituti</b><small>International School of Finance and Technology</small></div></div>
+    <div class="hero-copy">
+      <span class="eyebrow">Boshqaruv tizimi</span>
+      <h1>ISFT Core</h1>
+      <p>Institut ma'lumotlari, hujjatlar va xizmatlar bir joyda. Rahbariyat qaror qabul qilishi uchun kerakli raqamlar har kuni yangilanib turadi.</p>
       <ul class="hero-points">
-        <li><span class="hp-ic" data-ico="server"></span><div><b>Ma'lumot institutdan chiqmaydi</b><small>Sun'iy intellekt institut serverida ishlaydi, tashqi bulut ishlatilmaydi</small></div></li>
-        <li><span class="hp-ic" data-ico="shield"></span><div><b>Har bir lavozim o'z ko'lamida</b><small>Dekan o'z fakultetini, o'qituvchi o'z guruhlarini ko'radi</small></div></li>
-        <li><span class="hp-ic" data-ico="history"></span><div><b>Har bir so'rov qayd etiladi</b><small>Kim, qachon va nimani ko'rgani audit jurnalida saqlanadi</small></div></li>
+        <li><span class="hp-ic" data-ico="server"></span><div><b>Ma'lumot institutdan chiqmaydi</b><small>Sun'iy intellekt institut serverida ishlaydi</small></div></li>
+        <li><span class="hp-ic" data-ico="shield"></span><div><b>Har bir lavozim o'z ko'lamida</b><small>Dekan — o'z fakultetini, o'qituvchi — o'z guruhlarini ko'radi</small></div></li>
+        <li><span class="hp-ic" data-ico="history"></span><div><b>Har bir so'rov qayd etiladi</b><small>Kim, qachon va nimani ko'rgani audit jurnalida</small></div></li>
       </ul>
-      <div class="hero-foot">Toshkent viloyati, Qibray tumani · isft.uz</div>
     </div>
+    <div class="hero-foot">Toshkent viloyati, Qibray tumani · isft.uz</div>
   </section>
   <section class="signin">
-    <div class="signin-card">
+    <form class="signin-card" id="loginForm" autocomplete="off" onsubmit="event.preventDefault()">
       <div class="signin-head">
         <h2>Tizimga kirish</h2>
         <p class="muted">Lavozimingizni tanlang va PIN kodni kiriting</p>
       </div>
-      <div class="seg" id="lvlTabs" role="tablist"></div>
+      <div class="seg" id="lvlTabs" role="tablist" aria-label="Lavozim guruhi"></div>
+      <label class="role-search"><span data-ico="search"></span><input id="roleSearch" type="search" placeholder="Lavozim yoki ism bo'yicha qidirish" aria-label="Lavozim yoki ism bo'yicha qidirish"></label>
       <div id="roleList" class="role-list" role="listbox" aria-label="Lavozimlar"></div>
-      <label class="pin-label" for="pin1">PIN kod</label>
-      <div class="otp" id="otp">
-        <input id="pin1" inputmode="numeric" maxlength="1" aria-label="PIN 1-raqam" autocomplete="off">
-        <input inputmode="numeric" maxlength="1" aria-label="PIN 2-raqam" autocomplete="off">
-        <input inputmode="numeric" maxlength="1" aria-label="PIN 3-raqam" autocomplete="off">
-        <input inputmode="numeric" maxlength="1" aria-label="PIN 4-raqam" autocomplete="off">
-      </div>
-      <input id="pin" type="hidden" value="1234">
-      <button id="loginBtn" class="btn primary block" disabled>Kirish <span data-ico="arrow"></span></button>
-      <div class="signin-note"><span data-ico="info"></span><span>Sinov rejimi: barcha lavozimlar uchun PIN <b>1234</b>. Haqiqiy tizimda kirish OneID yoki HEMIS akkaunti orqali bo'ladi.</span></div>
-    </div>
-    <p class="signin-foot tiny muted">JARVIS MVP · ma'lumotlar sun'iy (demo) · server va AI mahalliy</p>
+      <label class="pin-label" for="password">Parol <span class="pin-demo">· sinov rejimi: Isft2026</span></label>
+      <div class="pw-wrap" id="pwWrap"><span data-ico="lock"></span><input id="password" type="password" autocomplete="current-password" placeholder="Parolingiz"><button type="button" class="pw-eye" id="pwEye" aria-label="Parolni ko'rsatish"><span data-ico="eye"></span></button></div>
+      <button id="loginBtn" type="button" class="btn primary block" disabled><span id="loginTxt">Kirish</span> <span data-ico="arrow"></span></button>
+    </form>
+    <p class="signin-foot">Haqiqiy tizimda kirish OneID yoki HEMIS akkaunti orqali · ma'lumotlar sun'iy (demo)</p>
   </section>
 </div>
 
+<script>/* tanlangan variant markup'i (id'lar app.js bilan bir xil) */
+(function(){var L=document.getElementById("login");if(window.LOGIN_HTML){L.innerHTML=LOGIN_HTML;}L.classList.add("lv"+LV);})();</script>
 <!-- ============ ILOVA ============ -->
 <div id="app" class="hidden">
   <aside class="side" id="side">
-    <div class="side-brand"><img class="logo" src="/brand/logo-sm.png" alt="ISFT"><div><b>JARVIS</b><small>ISFT instituti</small></div></div>
-    <nav id="nav">
+    <div class="side-brand"><img class="logo" src="/brand/logo-sm.png" alt="ISFT"><div><b>ISFT Core</b></div>
+      <button type="button" class="side-tg" id="menuBtn" aria-label="Menyuni yig'ish" aria-controls="side" aria-expanded="true"><span data-ico="menu"></span></button></div>
+    <!-- IA: kundalik bo'limlar tepada; kam ishlatiladiganlari yig'iladigan "Sozlamalar va xavfsizlik" guruhida (nav.js) -->
+    <nav id="nav" aria-label="Asosiy menyu">
       <div class="nav-h">Asosiy</div>
       <a href="#" data-v="panel" data-i="dashboard" class="on">Boshqaruv paneli</a>
-      <a href="#" data-v="chat" data-i="chat">JARVIS bilan suhbat</a>
-      <div class="nav-h">Boshqaruv</div>
+      <a href="#" data-v="chat" data-i="chat">ISFT Core bilan suhbat</a>
+      <a href="#" data-v="agents" data-i="spark">AI agentlar</a>
       <a href="#" data-v="tasks" data-i="tasks">Majlislar va topshiriqlar</a>
-      <a href="#" data-v="reports" data-i="report">Hisobotlar</a>
+      <div class="nav-h">Ish jarayonlari</div>
+      <a href="#" data-v="portal" data-i="portal">Portal</a>
       <a href="#" data-v="documents" data-i="folder">Hujjatlar markazi</a>
-      <a href="#" data-v="docs" data-i="languages">Yozishma yordamchisi</a>
-      <div class="nav-h">Xizmatlar</div>
-      <a href="#" data-v="service" data-i="wrench">Xizmat markazi</a>
-      <a href="#" data-v="spaces" data-i="camera">Auditoriyalar</a>
       <a href="#" data-v="ops" data-i="users">Talabalar markazi</a>
-      <div class="nav-h">Xavfsizlik</div>
-      <a href="#" data-v="rbac" data-i="shield">Ruxsat darajalari</a>
-      <a href="#" data-v="audit" data-i="history">Audit jurnali</a>
+      <a href="#" data-v="service" data-i="wrench">Murojaatlar va nosozliklar</a>
+      <a href="#" data-v="reports" data-i="report">Hisobotlar</a>
+      <button type="button" class="nav-h nav-tg" id="navCfg" aria-expanded="false">Sozlamalar va xavfsizlik</button>
+      <a href="#" data-v="spaces" data-i="camera" data-g="cfg">Auditoriyalar</a>
+      <a href="#" data-v="cams" data-i="cctv" data-g="cfg">Kameralar va xavfsizlik</a>
+      <a href="#" data-v="docs" data-i="languages" data-g="cfg">Tarjima va shartnoma</a>
+      <a href="#" data-v="rbac" data-i="shield" data-g="cfg">Ruxsat darajalari</a>
+      <a href="#" data-v="audit" data-i="history" data-g="cfg">Audit jurnali</a>
     </nav>
     <div class="side-foot">
       <div class="me"><span class="avatar" id="meAv"></span><div><b id="meName"></b><small id="meScope"></small></div></div>
-      <button class="btn ghost sm block" id="switchBtn"><span data-ico="switch"></span> Lavozimni almashtirish</button>
     </div>
   </aside>
   <div class="scrim" id="scrim"></div>
   <div class="shell">
     <header class="top">
-      <button class="icon-btn menu-btn" id="menuBtn" aria-label="Menyu"><span data-ico="menu"></span></button>
-      <div class="crumb"><span class="muted">ISFT</span><span class="sep">/</span><b id="crumb">Boshqaruv paneli</b></div>
+      <button type="button" class="icon-btn menu-btn" id="menuOpen" aria-label="Menyuni ochish" title="Menyuni ochish" aria-controls="side" aria-expanded="false"><span data-ico="menu"></span></button>
+      <img class="top-logo" src="/brand/logo-sm.png" alt="ISFT" width="40" height="36"><div class="crumb"><b id="crumb">Boshqaruv paneli</b></div>
       <div class="top-actions">
         <span class="chip" id="todayChip"></span>
         <span class="chip ai" id="aiChip"><span id="llmDot" class="dot"></span><span id="aiTxt">AI</span></span>
@@ -95,14 +101,17 @@
         <div class="chatwrap">
           <div id="msgs" class="msgs"></div>
           <div id="suggest" class="suggest"></div>
-          <form id="chatForm" class="chatform"><input id="q" placeholder="Savol bering: masalan, «Qaysi yo'nalishda ortda qolyapmiz?»" autocomplete="off"><button class="btn primary"><span data-ico="send"></span> Yuborish</button></form>
+          <form id="chatForm" class="chatform"><input id="q" placeholder="Savol bering: masalan, «Qaysi yo'nalishda ortda qolyapmiz?»" autocomplete="off"><button class="btn primary" aria-label="Yuborish"><span data-ico="send"></span><span class="send-l">Yuborish</span></button></form>
         </div>
       </section>
+      <section id="v-agents" class="view hidden"></section>
       <section id="v-tasks" class="view hidden"></section>
       <section id="v-reports" class="view hidden"></section>
       <section id="v-documents" class="view hidden"></section>
+      <section id="v-portal" class="view hidden"></section>
       <section id="v-service" class="view hidden"></section>
       <section id="v-spaces" class="view hidden"></section>
+      <section id="v-cams" class="view hidden"></section>
       <section id="v-ops" class="view hidden"></section>
       <section id="v-docs" class="view hidden"></section>
       <section id="v-rbac" class="view hidden"></section>
@@ -112,5 +121,12 @@
 </div>
 <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 <script src="app.js"></script>
+<script src="agents.js"></script>
+<script src="portal.js"></script>
+<script src="cams.js"></script>
+<script src="nav.js"></script>
+<script src="extras.js"></script>
+<script src="/login/switcher.js"></script>
+<script>window.LOGIN_AFTER && LOGIN_AFTER();</script>
 </body>
 </html>

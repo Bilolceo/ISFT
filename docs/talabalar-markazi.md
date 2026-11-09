@@ -33,13 +33,14 @@ Qaror va imzo — har doim odamda.
 | `att_call_hours` | 30 | Sababsiz qoldirilgan soat ≥30 → call-markaz qo'ng'irog'i |
 | `att_letter_hours` | 48 | ≥48 → ogohlantirish xati (registrator) |
 | `att_reprimand_hours` | 72 | ≥72 → hayfsan buyrug'i loyihasi + tyutor suhbati |
-| `pass_score` | 56 | Fan bo'yicha o'tish bali (100 ballik) |
+| `pass_score` | 40 | Fan bo'yicha o'tish bali (100 ballik, «3») — institut qoidasi (akademik qoidalar taqdimoti), tasdiqlangan |
 | `gpa_min` | 3.0 | JPA minimal (5 ballik) |
 | `fails_warn` | 2 | Shuncha fandan o'tmasa — JPA yetarli bo'lsa ham ogohlantirish |
 | `medical_doc_days` | 3 | Kasallikdan keyin hujjat topshirish muddati (kun) |
 | `leave_warn_days` | 30 | Akademik ta'til tugashiga shuncha kun qolganda ogohlantirish |
 | `retake_days` | 3 | Otrabotka varaqasini qaytarish muddati (kun) |
 | `call_max_attempts` | 3 | Javob bermasa — shuncha urinishdan keyin tyutorga o'tadi |
+| `call_daily_capacity` | 60 | Bir operatorning kunlik qo'ng'iroqlari: bugungi ro'yxat = operatorlar × 60; qolganlari jiddiylik tartibida keyingi ish kunlariga rejalashtiriladi (`ops_tasks.planned_on`), hech biri o'chirilmaydi |
 
 Sababli dars qoldirish (kasallik — tasdiqlangan hujjat bilan, komandirovka, mehnat ta'tili) zinapoyaga qo'shilmaydi;
 hujjati yo'q bo'lsa — alohida "hujjat so'rash" topshirig'i.
@@ -47,7 +48,7 @@ hujjati yo'q bo'lsa — alohida "hujjat so'rash" topshirig'i.
 ## Rollar
 | Rol | Ko'radi | Qiladi |
 |---|---|---|
-| Akademik faoliyat va registrator departamenti | Barcha holatlar | Xat/hayfsan loyihasi, otrabotka tasdiqlash, topshiriqni qayta yo'naltirish |
+| Registrator ofisi (Akademik faoliyatni boshqarish bo'limi — ko'rish) | Barcha holatlar | Xat/hayfsan loyihasi, otrabotka tasdiqlash, topshiriqni qayta yo'naltirish |
 | Call-markaz operatori | O'z navbatidagi qo'ng'iroqlar | Natija: gaplashildi / va'da (sana) / javob bermadi / noto'g'ri raqam |
 | Tyutor (fakultet) | O'z fakulteti | Suhbat, hujjat so'rash, otrabotka varaqasi berish |
 | Dekan | O'z fakulteti (o'qish) | — |
@@ -67,4 +68,4 @@ hujjati yo'q bo'lsa — alohida "hujjat so'rash" topshirig'i.
 - Dvigatel: server ishga tushganda va har 10 daqiqada (`poller`), har natija kiritilganda; qo'lda — "Hozir tekshirish".
 - Testlar: `tests/test_talabalar_markazi.py` — ruxsatlar, idempotentlik, va'da → qayta qo'ng'iroq, 3 urinish → tyutor, hujjat → holat yopilishi,
   to'lov → holat yopilishi, xat/hayfsan hujjatlari, otrabotka (fayl tekshiruvi, rol cheklovlari, baho o'zgarishi, audit).
-- Demo akkauntlar (PIN 1234): call-markaz operatori (23), tyutorlar (24–26, har fakultetga bittadan); registrator — "Akademik faoliyat va registrator departamenti" (8).
+- Demo akkauntlar (parol Isft2026): call-markaz operatori (23), tyutorlar (24–26, har fakultetga bittadan); registrator — "Registrator ofisi" (17); "Akademik faoliyatni boshqarish bo'limi" (18) — ko'rish.

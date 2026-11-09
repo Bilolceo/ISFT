@@ -1,6 +1,6 @@
 """Ma'lumot servislari. Har bir funksiya avval RBAC tekshiruvidan o'tadi va faqat ruxsat etilgan ko'lamni qaytaradi."""
-import datetime as dt
-from . import db
+import datetime as dt, sqlite3
+from . import db, academic_rules as AR
 from .rbac import (Ctx, require, AccessDenied, KPI, ACADEMIC, STUDENTS, CONTRACTS, FINANCE, PAYROLL, HR, SCIENCE,
                    INTL, ADMISSIONS, YOUTH, MASTERS, TASKS, AUDIT)
 
@@ -26,58 +26,140 @@ def academic_overview(con, ctx: Ctx, quiet=False):
         WHERE {sc} AND s.status='faol' GROUP BY 1 ORDER BY 1""")
     for r in rows: r["delta"] = round(r["gpa"] - r["gpa_prev"], 1)
     total = db.one(con, f"SELECT COUNT(*) n, ROUND(AVG(gpa),1) gpa, ROUND(AVG(gpa_prev),1) gpa_prev, ROUND(AVG(attendance),1) attendance FROM students s WHERE {sc} AND status='faol'")
-    # eng ko'p pasaygan guruhlar
-    drops = db.rows(con, f"""SELECT g.name, g.course, f.name faculty, COUNT(*) n, ROUND(AVG(s.gpa),1) gpa, ROUND(AVG(s.gpa)-AVG(s.gpa_prev),1) delta,
-        ROUND(AVG(s.attendance),1) attendance FROM students s JOIN groups_ g ON g.id=s.group_id JOIN faculties f ON f.id=s.faculty_id
-        WHERE {sc} GROUP BY g.id HAVING delta < -4 ORDER BY delta LIMIT 8""")
-    return {"scope": ctx.scope_label(con), "total": total, "breakdown": rows, "breakdown_by": "fakultet" if by == "f.name" else "guruh", "declining_groups": drops}
+    # keskin (4 balldan ko'p) pasaygan guruhlar — hammasi; panelda eng ko'p pasaygan 8 tasi
+    drops = db.rows(con, f"""SELECT g.name, g.course, f.name faculty, COUNT(*) n, ROUND(AVG(s.gpa),1) gpa, ROUND(AVG(s.gpa_prev),1) gpa_prev,
+        ROUND(AVG(s.gpa)-AVG(s.gpa_prev),1) delta, ROUND(AVG(s.attendance),1) attendance, SUM(s.gpa) gsum, SUM(s.gpa_prev) psum
+        FROM students s JOIN groups_ g ON g.id=s.group_id JOIN faculties f ON f.id=s.faculty_id
+        WHERE {sc} GROUP BY g.id HAVING delta < -4 ORDER BY delta""")
+    for r in drops: r["delta"] = round(r["gpa"] - r["gpa_prev"], 1)   # ko'rsatilgan ikki raqamdan — "57.6 dan 46.2 ga (−11.4)" doim mos
+    drops.sort(key=lambda r: (r["delta"], r["name"]))
+    return {"scope": ctx.scope_label(con), "total": total, "breakdown": rows, "breakdown_by": "fakultet" if by == "f.name" else "guruh",
+            "declining_groups": [{k: v for k, v in r.items() if k not in ("gsum", "psum")} for r in drops[:8]],
+            "declining_count": len(drops), "declining_clusters": decline_clusters(drops)}
 
-def risk_score(s):
+def decline_clusters(drops):
+    """Pasaygan guruhlarni bitta ildiz sabab bo'yicha birlashtirish: fakultet + kurs. Eng katta klaster birinchi."""
+    cl = {}
+    for g in drops:
+        c = cl.setdefault((g["faculty"], g["course"]), {"faculty": g["faculty"], "course": g["course"], "groups": 0, "students": 0,
+                                                         "_g": 0.0, "_p": 0.0, "group_names": [], "worst": None})
+        c["groups"] += 1; c["students"] += g["n"]; c["_g"] += g["gsum"]; c["_p"] += g["psum"]; c["group_names"].append(g["name"])
+        if c["worst"] is None or g["delta"] < c["worst"]["delta"]:
+            c["worst"] = {k: g[k] for k in ("name", "gpa_prev", "gpa", "delta", "attendance", "n")}
+    out = []
+    for c in cl.values():
+        gs = [g["delta"] for g in drops if (g["faculty"], g["course"]) == (c["faculty"], c["course"])]
+        c["gpa"], c["gpa_prev"] = round(c.pop("_g") / c["students"], 1), round(c.pop("_p") / c["students"], 1)
+        c["delta"] = round(c["gpa"] - c["gpa_prev"], 1)
+        c["delta_min"], c["delta_max"] = max(gs), min(gs)     # eng kichik va eng katta pasayish (manfiy)
+        out.append(c)
+    return sorted(out, key=lambda c: (-c["groups"], c["delta"]))
+
+def _num(x): return f"−{abs(x)}" if x < 0 else f"{x}"     # tipografik minus
+
+def decline_text(c):
+    """Klaster ogohlantirishi: ikkala raqam bilan ("57.6 dan 46.2 ga"), "11.5 ballga tushgan" emas."""
+    w = c["worst"]
+    att = f", davomat {w['attendance']}%" if w.get("attendance") is not None else ""
+    if c["groups"] == 1:
+        return f"{w['name']} guruhida ({c['faculty']}, {c['course']}-kurs) o'rtacha ball {w['gpa_prev']} dan {w['gpa']} ga pasaygan ({_num(w['delta'])}){att}"
+    rng = _num(c["delta_min"]) if c["delta_min"] == c["delta_max"] else f"{_num(c['delta_min'])}…{_num(c['delta_max'])}"
+    return (f"{c['faculty']}, {c['course']}-kurs: {c['groups']} ta guruhda o'rtacha ball keskin pasaygan — {c['gpa_prev']} dan {c['gpa']} ga "
+            f"({_num(c['delta'])}; guruhlar bo'yicha {rng}); eng ko'p: {w['name']} — {w['gpa_prev']} dan {w['gpa']} ga{att}")
+
+# Ball bo'yicha xavf chegaralari institut shkalasiga bog'langan: o'tish bali 40 («3»); 47 dan past — «3» zonasining quyi qismi.
+LOW_SCORE = AR.PASS + 7
+RISK_LABEL = "O'qishda xavf"
+RISK_DEF = ("o'zlashtirish (JPA / qarzdor fanlar) yoki davomat (sababsiz soatlar) bo'yicha «kritik» yoki «jiddiy» ochiq holati bor faol talabalar; "
+            "kontrakt qarzi bu songa kirmaydi")
+RISK_DEF_PRELIM = ("dastlabki baho (Talabalar markazi holatlari hali hisoblanmagan): ball, davomat va ball pasayishi bo'yicha xavf darajasi 40+ bo'lgan "
+                   "faol talabalar; kontrakt qarzi bu songa kirmaydi. Markaz qoidalari ishga tushgach (bir necha daqiqa) aniq raqam chiqadi")
+
+def risk_score(s, contract=True):
     r = 0
-    if s["gpa"] < 56: r += 45
-    elif s["gpa"] < 63: r += 25
+    if s["gpa"] < AR.PASS: r += 45
+    elif s["gpa"] < LOW_SCORE: r += 25
     att = s["attendance"]            # masofaviy ta'limda auditoriya davomati yo'q (None) — hisobga olinmaydi
     if att is not None and att < 70: r += 30
     elif att is not None and att < 80: r += 15
     if s["gpa"] - s["gpa_prev"] < -10: r += 15
-    if s["contract_amount"] and s["paid_amount"] / s["contract_amount"] < 0.5: r += 15
+    if contract and s["contract_amount"] and s["paid_amount"] / s["contract_amount"] < 0.5: r += 15
     return min(100, r)
 
-def at_risk_students(con, ctx: Ctx, limit=15, quiet=False):
-    _g(con, ctx, STUDENTS, "xavf ostidagi talabalar", quiet)
-    sc = ctx.student_scope("s")
+_RISK_CACHE: dict = {}
+RISK_TTL = 15        # soniya: bitta panel so'rovi (KPI + ogohlantirishlar + panel) uchta to'liq hisob o'rniga bittasini qiladi
+
+def _reasons(r):
+    reasons = []
+    if r["gpa"] < LOW_SCORE: reasons.append(f"past ball ({r['gpa']})")
+    if r["attendance"] is not None and r["attendance"] < 80: reasons.append(f"davomat {r['attendance']}%")
+    if r["gpa"] - r["gpa_prev"] < -10: reasons.append(f"ball {r['gpa_prev']} dan {r['gpa']} ga pasaygan")
+    if r["contract_amount"] and r["paid_amount"] / r["contract_amount"] < .5: reasons.append("kontrakt qarzi")
+    return ", ".join(reasons)
+
+def _risk_core(con, sc: str):
+    """(faol talabalar soni, xavfdagilar [ro'yxat, xavf bo'yicha saralangan], model hisoblanganmi). Qisqa muddat keshlanadi."""
+    import time
+    hit = _RISK_CACHE.get(sc)
+    if hit and time.monotonic() - hit[0] < RISK_TTL: return hit[1]
     rows = db.rows(con, f"""SELECT s.id, s.full_name, s.hemis_id, g.name grp, g.course, f.name faculty, s.gpa, s.gpa_prev, s.attendance,
         s.contract_amount, s.paid_amount FROM students s JOIN groups_ g ON g.id=s.group_id JOIN faculties f ON f.id=s.faculty_id
         WHERE {sc} AND s.status='faol'""")
-    for r in rows:
-        r["risk"] = risk_score(r)
-        reasons = []
-        if r["gpa"] < 63: reasons.append(f"past ball ({r['gpa']})")
-        if r["attendance"] is not None and r["attendance"] < 80: reasons.append(f"davomat {r['attendance']}%")
-        if r["gpa"] - r["gpa_prev"] < -10: reasons.append(f"ball {round(r['gpa_prev']-r['gpa'],1)} ga tushgan")
-        if r["contract_amount"] and r["paid_amount"] / r["contract_amount"] < .5: reasons.append("kontrakt qarzi")
-        r["reasons"] = ", ".join(reasons)
-    risky = sorted([r for r in rows if r["risk"] >= 40], key=lambda x: -x["risk"])
+    # Yagona xavf modeli: Talabalar markazi qoidalar dvigateli (ops_cases) — panel, suhbat va markaz bir xil raqamni ko'radi
+    ops, evaluated = {}, False
+    try:
+        # holatlar dvigateli kamida bir marta ishlaganmi (ochiq holat 0 ta bo'lsa ham model — yagona)
+        evaluated = con.execute("SELECT 1 FROM ops_cases LIMIT 1").fetchone() is not None
+        if evaluated:
+            for x in con.execute("SELECT student_id, rule, level FROM ops_cases WHERE status='ochiq' AND rule IN ('akademik','davomat') AND level>=2"):
+                ops.setdefault(x[0], []).append((x[1], x[2]))
+    except sqlite3.OperationalError:     # jadval hali yo'q (yangi baza) — dastlabki baho
+        evaluated = False
+    if evaluated:
+        LV = {2: "kritik", 3: "jiddiy"}
+        risky = [r for r in rows if r["id"] in ops]
+        for r in risky:
+            r["risk"] = max(risk_score(r), 20 * max(l for _, l in ops[r["id"]]))
+            extra = ", ".join(f"{'o' + chr(39) + 'zlashtirish' if k == 'akademik' else 'davomat'} ({LV.get(l, l)})" for k, l in ops[r["id"]])
+            base = _reasons(r)
+            r["reasons"] = (base + ", " if base else "") + extra
+    else:
+        risky = [r for r in rows if risk_score(r, contract=False) >= 40]
+        for r in risky:
+            r["risk"] = risk_score(r); r["reasons"] = _reasons(r)
+    risky.sort(key=lambda x: -x["risk"])
+    res = (len(rows), risky, evaluated)
+    if len(_RISK_CACHE) > 64: _RISK_CACHE.clear()
+    _RISK_CACHE[sc] = (time.monotonic(), res)
+    return res
+
+def at_risk_students(con, ctx: Ctx, limit=15, quiet=False):
+    _g(con, ctx, STUDENTS, "xavf ostidagi talabalar", quiet)
+    n_all, risky, evaluated = _risk_core(con, ctx.student_scope("s"))
     by_group = {}
     for r in risky:
         by_group[r["grp"]] = by_group.get(r["grp"], 0) + 1
-    out = {"scope": ctx.scope_label(con), "count": len(risky), "of": len(rows),
+    out = {"scope": ctx.scope_label(con), "count": len(risky), "of": n_all,
            "by_group": sorted([{"group": k, "count": v} for k, v in by_group.items()], key=lambda x: -x["count"])[:10]}
+    out["model"] = "yagona" if evaluated else "dastlabki"
+    # "O'qishda xavf" — TALABALAR soni (o'zlashtirish yoki davomat). Talabalar markazidagi "holatlar" boshqa ko'rsatkich:
+    # u barcha qoidalarni (kontrakt, hujjat, ta'til...) sanaydi va bitta talabada bir nechta holat bo'lishi mumkin.
+    out["label"] = RISK_LABEL
+    out["definition"] = RISK_DEF if evaluated else RISK_DEF_PRELIM
     if ctx.aggregate_only(STUDENTS):
         out["note"] = "Shaxsiy ma'lumotlar bu darajaga faqat jamlangan shaklda chiqadi"
     else:
-        for r in risky:
-            r.pop("contract_amount"); r.pop("paid_amount")
-        out["students"] = risky[:limit]
+        # kesh buzilmasin — nusxa; moliyaviy maydonlar tashqariga chiqmaydi
+        out["students"] = [{k: v for k, v in r.items() if k not in ("contract_amount", "paid_amount")} for r in risky[:limit]]
     return out
 
 def teacher_groups(con, ctx: Ctx, quiet=False):
     _g(con, ctx, ACADEMIC, "o'z guruhlari", quiet)
     if ctx.role.scope != "o'qituvchi":
         return None
-    return db.rows(con, """SELECT g.name grp, tg.subject, SUM(gr.semester=1) n, ROUND(AVG(CASE WHEN gr.semester=1 THEN gr.score END),1) avg_score,
+    return db.rows(con, f"""SELECT g.name grp, tg.subject, SUM(gr.semester=1) n, ROUND(AVG(CASE WHEN gr.semester=1 THEN gr.score END),1) avg_score,
         ROUND(AVG(CASE WHEN gr.semester=0 THEN gr.score END),1) prev_score,
-        SUM(gr.semester=1 AND gr.score<56) failing FROM teacher_groups tg JOIN groups_ g ON g.id=tg.group_id
+        SUM(gr.semester=1 AND gr.score<{AR.PASS}) failing FROM teacher_groups tg JOIN groups_ g ON g.id=tg.group_id
         LEFT JOIN grades gr ON gr.teacher_id=tg.teacher_id AND gr.subject=tg.subject AND gr.student_id IN (SELECT id FROM students WHERE group_id=g.id)
         WHERE tg.teacher_id=? GROUP BY g.id, tg.subject""", (ctx.user["teacher_id"],))
 
@@ -204,12 +286,13 @@ def alerts(con, ctx: Ctx):
         try: return fn(con, ctx, *a, quiet=True)
         except AccessDenied: return None
     a = safe(academic_overview)
-    if a:
-        for g in a["declining_groups"][:3]:
-            out.append({"level": "high", "area": "O'quv", "text": f"{g['name']} guruhida ({g['faculty']}, {g['course']}-kurs) o'rtacha ball {abs(g['delta'])} ballga tushgan, davomat {g['attendance']}%"})
+    if a:   # bir fakultet+kurs guruhlari — bitta ildiz sabab, bitta ogohlantirish (guruhlar ro'yxati panels.academic da)
+        for c in a["declining_clusters"][:3]:
+            out.append({"level": "high", "area": "O'quv", "text": decline_text(c)})
     r = safe(at_risk_students)
     if r and r["count"]:
-        out.append({"level": "mid", "area": "Talabalar", "text": f"{r['count']} nafar talaba akademik xavf ostida (eng ko'p: {r['by_group'][0]['group']} — {r['by_group'][0]['count']} nafar)"})
+        out.append({"level": "mid", "area": "Talabalar", "text": f"O'qishda xavf: {r['count']:,} nafar talaba".replace(",", " ") +
+                    f" — o'zlashtirish yoki davomat bo'yicha kritik/jiddiy holat (eng ko'p: {r['by_group'][0]['group']} — {r['by_group'][0]['count']} nafar)"})
     c = safe(contracts_summary)
     if c:
         w = c["worst_groups"][0]
@@ -217,7 +300,7 @@ def alerts(con, ctx: Ctx):
     f = safe(finance_summary)
     if f and f["overruns"]:
         o = f["overruns"][0]
-        out.append({"level": "high", "area": "Moliya", "text": f"{o['category']}: {o['month']} oyida reja {o['over_pct']}% ga oshib ketgan (ketma-ket {sum(1 for x in f['overruns'] if x['category']==o['category'])} oy)"})
+        out.append({"level": "high", "area": "Moliya", "text": f"{o['category']}: {o['month']} oyida xarajat {mln(o['actual'])} — rejadagi {mln(o['planned'])} dan {o['over_pct']}% ko'p (ketma-ket {sum(1 for x in f['overruns'] if x['category']==o['category'])} oy)"})
     i = safe(international_summary)
     if i:
         for p in i["expiring"]:
@@ -237,42 +320,115 @@ def alerts(con, ctx: Ctx):
     order = {"high": 0, "mid": 1, "low": 2}
     return sorted(out, key=lambda x: order[x["level"]])
 
+# ---------- KPI ----------
+# Har bir KPI elementi (eski maydonlar o'zgarmagan — joriy UI ishlayveradi):
+#   label, value, sub            — ko'rsatiladigan matn
+#   trend (ixtiyoriy)            — o'tgan davrga nisbatan o'zgarish (son)
+#   bad (ixtiyoriy)              — eski UI uchun qizil belgi
+# Yangi (ixtiyoriy) maydonlar — dizayn uchun:
+#   key        — barqaror identifikator (label o'zgarsa ham o'zgarmaydi)
+#   source     — ma'lumot manbasi (demo bazada nimani ifodalasa — o'sha tizim nomi)
+#   updated    — ma'lumot holati sanasi, ISO datetime
+#   spark      — mini-grafik uchun qisqa sonlar qatori; har doim bazadan deterministik hisoblanadi (so'rov paytida tasodifiy emas)
+#   spark_kind — "line": vaqt qatori (eskidan yangiga) · "bars": kategoriyalar (spark_labels — nomlari)
+#                "ring": [qism, butun] (ulush = qism/butun) · "progress": [joriy, maksimal] bir xil birlikda
+#   spark_labels (ixtiyoriy) — spark nuqtalari/ustunlari nomlari
+def _sync_at():
+    """HEMIS va buxgalteriya bilan kunlik sinxronlash vaqti. DEMO TAXMIN: jadval — har kuni 08:00 (demo bazada ma'lumot sun'iy)."""
+    now = dt.datetime.now().replace(microsecond=0)
+    t = dt.datetime.combine(now.date(), dt.time(8, 0))
+    return (t if now >= t else t - dt.timedelta(days=1)).isoformat()
+
+def _now_iso(): return dt.datetime.now().replace(microsecond=0).isoformat()
+
+def _k(key, label, value, sub, source, updated, spark=None, spark_kind=None, labels=None, **old):
+    k = {"label": label, "value": value, "sub": sub, **old, "key": key, "source": source, "updated": updated}
+    if spark:
+        k["spark"], k["spark_kind"] = spark, spark_kind
+        if labels: k["spark_labels"] = labels
+    return k
+
 def kpis(con, ctx: Ctx):
     out = []
     def safe(fn):
         try: return fn(con, ctx, quiet=True)
         except AccessDenied: return None
+    sync = _sync_at()
     a = safe(academic_overview)
+    if a and not a["total"]["n"]:   # masalan, institut kafedrasi (Fundamental iqtisodiy fanlar) — o'z guruhlari yo'q
+        out.append(_k("talabalar", "Talabalar", 0, "kafedraga biriktirilgan guruh yo'q", "HEMIS", sync)); a = None
     if a:
         t = a["total"]
         sc = ctx.student_scope("s")
         frm = {r["f"]: r["n"] for r in db.rows(con, f"SELECT COALESCE(study_form,'kunduzgi') f, COUNT(*) n FROM students s WHERE {sc} AND status='faol' GROUP BY 1")}
         k = lambda x: f"{x / 1000:.1f}k" if x >= 1000 else str(x)
-        sub = " · ".join(f"{lbl} {k(frm[f])}" for f, lbl in (("kunduzgi", "kunduzgi"), ("sirtqi", "sirtqi"), ("masofaviy", "masofaviy")) if frm.get(f)) or a["scope"]
-        out += [{"label": "Faol talabalar", "value": f"{t['n']:,}".replace(",", " "), "sub": sub},
-                {"label": "O'rtacha ball", "value": t["gpa"], "sub": f"o'tgan semestr: {t['gpa_prev']}", "trend": round(t["gpa"] - t["gpa_prev"], 1)},
-                {"label": "Davomat", "value": f"{t['attendance']}%", "sub": "kunduzgi va sirtqi (masofaviy — onlayn)"}]
+        forms = [(f, lbl) for f, lbl in (("kunduzgi", "kunduzgi"), ("sirtqi", "sirtqi"), ("masofaviy", "masofaviy")) if frm.get(f)]
+        sub = " · ".join(f"{lbl} {k(frm[f])}" for f, lbl in forms) or a["scope"]
+        att = db.rows(con, f"""SELECT g.course, ROUND(AVG(s.attendance),1) a FROM students s JOIN groups_ g ON g.id=s.group_id
+                               WHERE {sc} AND s.status='faol' AND s.attendance IS NOT NULL GROUP BY g.course ORDER BY g.course""")
+        out += [_k("talabalar", "Faol talabalar", f"{t['n']:,}".replace(",", " "), sub, "HEMIS", sync,
+                   [frm[f] for f, _ in forms], "bars", [lbl for _, lbl in forms]),
+                # semestrlar bo'yicha o'rtacha ball (talabalar kartasidagi gpa_prev → gpa) — qiymat bilan bir xil manba
+                _k("ball", "O'rtacha ball", t["gpa"], f"o'tgan semestr: {t['gpa_prev']}", "HEMIS", sync,
+                   [t["gpa_prev"], t["gpa"]], "line", ["bahorgi semestr", "kuzgi semestr"], trend=round(t["gpa"] - t["gpa_prev"], 1)),
+                _k("davomat", "Davomat", f"{t['attendance']}%", "kunduzgi va sirtqi (masofaviy — onlayn)", "HEMIS", sync,
+                   [r["a"] for r in att], "bars", [f"{r['course']}-kurs" for r in att])]
     r = safe(at_risk_students)
-    if r: out.append({"label": "Xavf ostida", "value": r["count"], "sub": f"{round(100*r['count']/max(1,r['of']),1)}% talaba", "bad": True})
+    if r:
+        last = db.one(con, "SELECT value FROM ops_policy WHERE key='_last_run'") if db.one(con, "SELECT 1 x FROM sqlite_master WHERE name='ops_policy'") else None
+        upd = dt.datetime.fromtimestamp(last["value"]).replace(microsecond=0).isoformat() if last else sync
+        out.append(_k("oqishda_xavf", RISK_LABEL, r["count"], f"{round(100*r['count']/max(1,r['of']),1)}% talaba · o'zlashtirish yoki davomat",
+                      "Talabalar markazi qoidalari (HEMIS baholari va davomati)", upd, [r["count"], r["of"]], "ring", bad=True))
     c = safe(contracts_summary)
-    if c: out.append({"label": "Kontrakt tushumi", "value": f"{c['total']['pct']}%", "sub": f"qarz {mln(c['total']['debt'])}"})
+    if c:
+        out.append(_k("kontrakt", "Kontrakt tushumi", f"{c['total']['pct']}%", f"qarz {mln(c['total']['debt'])}", "Buxgalteriya (kontrakt to'lovlari)", sync,
+                      [c["total"]["pct"], 100], "progress"))
+    try:   # kameralar: bugungi P1/P2 voqealar, oflayn kameralar, eng band bino (faqat auditoriyalar ruxsati borlarga)
+        from . import camsec
+        ck = camsec.kpi(con, ctx)
+        if ck: out.append(ck)
+    except Exception as e:
+        print("camsec.kpi:", e)
     f = safe(finance_summary)
-    if f: out.append({"label": "Byudjet ijrosi", "value": f"{f['total']['pct']}%", "sub": f"{mln(f['total']['actual'])} / {mln(f['total']['planned'])}"})
+    if f:
+        out.append(_k("byudjet", "Byudjet ijrosi", f"{f['total']['pct']}%", f"{mln(f['total']['actual'])} / {mln(f['total']['planned'])}",
+                      "Buxgalteriya (byudjet ijrosi)", sync, [round(100 * m["actual"] / m["planned"], 1) for m in f["months"] if m["planned"]], "line",
+                      [m["month"] for m in f["months"] if m["planned"]]))
     s = safe(science_summary)
     if s:
         sc = sum(k["n"] for k in s["kinds_2026"] if k["kind"] in ("Scopus", "Web of Science"))
-        out.append({"label": "Scopus/WoS 2026", "value": sc, "sub": f"ilmiy daraja: {s['degree_pct']}%"})
+        ts = ctx.teacher_scope("t")
+        yr = db.rows(con, f"""SELECT p.year y, COUNT(*) n FROM publications p JOIN teachers t ON t.id=p.teacher_id WHERE {ts}
+                              AND p.kind IN ('Scopus','Web of Science') AND p.year BETWEEN 2022 AND 2026 GROUP BY 1 ORDER BY 1""")
+        out.append(_k("scopus", "Scopus/WoS 2026", sc, f"ilmiy daraja: {s['degree_pct']}%", "Ilmiy nashrlar bazasi", sync,
+                      [x["n"] for x in yr], "line", [str(x["y"]) for x in yr]))
     i = safe(international_summary)
-    if i: out.append({"label": "Xalqaro hamkorlar", "value": i["active"], "sub": f"{len(i['expiring'])} tasi tugamoqda"})
+    if i:
+        yrs = list(range(TODAY.year - 4, TODAY.year + 1))   # yil oxiridagi amaldagi shartnomalar soni (imzolangan va tugamagan)
+        ps = i["partners"]
+        act = [sum(1 for p in ps if p["signed"][:4] <= str(y) and p["expires"] >= (f"{y}-12-31" if y < TODAY.year else TODAY.isoformat())) for y in yrs]
+        out.append(_k("hamkorlar", "Xalqaro hamkorlar", i["active"], f"{len(i['expiring'])} tasi tugamoqda", "Xalqaro shartnomalar reyestri", sync,
+                      act, "line", [str(y) for y in yrs]))
     ad = safe(admissions_summary)
-    if ad: out.append({"label": "Qabul 2026", "value": f"{ad['total']:,}".replace(",", " "), "sub": "ariza"})
+    if ad:
+        wk = ad["weekly"][-10:]
+        out.append(_k("qabul", "Qabul 2026", f"{ad['total']:,}".replace(",", " "), "ariza", "Qabul bazasi", sync,
+                      [w["n"] for w in wk], "bars", [w["start"] for w in wk]))
     t = safe(tasks_list)
-    if t: out.append({"label": "Topshiriqlar", "value": f"{t['done']}/{len(t['tasks'])}", "sub": f"{t['overdue']} tasi muddati o'tgan", "bad": t["overdue"] > 0})
+    if t: out.append(_k("topshiriqlar", "Topshiriqlar", f"{t['done']}/{len(t['tasks'])}", f"{t['overdue']} tasi muddati o'tgan",
+                        "ISFT Core · majlis topshiriqlari", _now_iso(), [t["done"], len(t["tasks"])], "progress", bad=t["overdue"] > 0))
     y = safe(youth_summary)
-    if y: out.append({"label": "Murojaatlar", "value": y["appeals_open"], "sub": "hal qilinmagan"})
+    if y:
+        wk = [(TODAY - dt.timedelta(days=7 * (5 - j) + 6), TODAY - dt.timedelta(days=7 * (5 - j))) for j in range(6)]   # oxirgi 6 hafta
+        ser = [sum(1 for x in y["appeals"] if a0.isoformat() <= x["date"] <= a1.isoformat()) for a0, a1 in wk]
+        out.append(_k("murojaatlar", "Murojaatlar", y["appeals_open"], "hal qilinmagan", "ISFT Core · anonim murojaatlar", _now_iso(),
+                      ser, "bars", [a1.isoformat() for _, a1 in wk]))
     m = safe(masters_summary)
-    if m: out.append({"label": "Magistrantlar", "value": m["total"], "sub": "dissertatsiya jarayonida"})
+    if m: out.append(_k("magistrantlar", "Magistrantlar", m["total"], "dissertatsiya jarayonida", "Magistratura bazasi", sync,
+                        [x["n"] for x in m["stages"]], "bars", [x["stage"] for x in m["stages"]]))
     try:
-        h = hr_list(con, ctx, quiet=True); out.append({"label": "Xodimlar", "value": sum(x["n"] for x in h["by_unit"]), "sub": "shtat"})
+        h = hr_list(con, ctx, quiet=True)
+        out.append(_k("xodimlar", "Xodimlar", sum(x["n"] for x in h["by_unit"]), "shtat", "Kadrlar bazasi", sync,
+                      [x["n"] for x in h["by_unit"][:6]], "bars", [x["unit"] for x in h["by_unit"][:6]]))
     except AccessDenied: pass
-    return out[:8]
+    return out[:10]

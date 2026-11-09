@@ -1,0 +1,327 @@
+/* =====================================================================
+   Kirish sahifasi · 2-variant "Kiosk" — planshet / proyektor / sensorli ekran
+   1-qadam: lavozimlar katta plitkalar to'rida. 2-qadam: parol (katta, sensorga qulay maydon).
+   Barcha uslublar .login.lv2 ichida. Ranglar style.css o'zgaruvchilaridan.
+   ===================================================================== */
+.login.lv2{
+  --k-gut:clamp(16px,3vw,44px);
+  --k-acc:var(--brand);
+  --k-shadow:0 1px 2px rgba(16,24,40,.05);
+  --k-lift:0 18px 36px -18px rgba(16,24,40,.28),0 2px 6px -2px rgba(16,24,40,.08);
+  position:relative;display:flex;flex-direction:column;min-height:100vh;min-height:100dvh;
+  padding-bottom:74px;overflow-x:clip;color:var(--ink);font-family:var(--font);
+  background:
+    radial-gradient(1200px 560px at 50% -240px,color-mix(in srgb,var(--brand) 9%,transparent),transparent 72%),
+    var(--bg-solid);
+}
+:root[data-theme="dark"] .login.lv2{--k-acc:var(--brand-fill);--k-shadow:0 1px 0 rgba(255,255,255,.03) inset;--k-lift:0 18px 40px -18px rgba(0,0,0,.7)}
+@media (prefers-color-scheme:dark){:root[data-theme="auto"] .login.lv2{--k-acc:var(--brand-fill);--k-shadow:0 1px 0 rgba(255,255,255,.03) inset;--k-lift:0 18px 40px -18px rgba(0,0,0,.7)}}
+.login.lv2 [hidden]{display:none!important}
+.login.lv2 svg.i{stroke-width:1.9}
+
+/* ---------- yuqori panel ---------- */
+.login.lv2 .k-top{display:flex;align-items:center;gap:16px;height:72px;padding:0 var(--k-gut);flex:none}
+.login.lv2 .k-brand,.login.lv2 .k-when{flex:1 1 0;min-width:0}
+.login.lv2 .k-brand{display:flex;align-items:center;gap:12px}
+.login.lv2 .k-logo{display:grid;place-items:center;width:48px;height:48px;flex:none;border-radius:50%;background:#fff;
+  box-shadow:0 0 0 1px rgba(16,24,40,.07),0 6px 14px -6px rgba(16,24,40,.25)}
+.login.lv2 .k-logo img{width:34px;height:26px;object-fit:contain}
+/* "ISFT Core" so'z belgisi: ISFT — qalin, Core — urg'u rangida; ostida qisqa izoh */
+.login.lv2 .k-bt{display:flex;flex-direction:column;gap:3px;min-width:0;white-space:nowrap}
+.login.lv2 .k-wm{font-size:21px;line-height:1;letter-spacing:-.035em;color:var(--ink)}
+.login.lv2 .k-wm b{font-weight:800}
+.login.lv2 .k-wm span{font-weight:700;color:var(--k-acc)}
+.login.lv2 .k-bt small{font-size:12px;line-height:1.2;font-weight:600;letter-spacing:.01em;color:var(--muted)}
+
+.login.lv2 .k-steps{display:flex;align-items:center;gap:10px;list-style:none;margin:0;padding:6px;border-radius:99px;
+  background:var(--surface);border:1px solid var(--line);box-shadow:var(--k-shadow);flex:none}
+.login.lv2 .k-st{display:flex;align-items:center;gap:10px}
+.login.lv2 .k-st+.k-st::before{content:"";width:26px;height:2px;border-radius:2px;background:var(--line-2);transition:background .3s}
+.login.lv2 .k-st button,.login.lv2 .k-stb{display:flex;align-items:center;gap:9px;padding:4px 14px 4px 4px;border:0;border-radius:99px;background:none;
+  font:700 13.5px/1 var(--font);color:var(--muted);cursor:default}
+.login.lv2 .k-st i{position:relative;display:grid;place-items:center;width:28px;height:28px;border-radius:50%;font-style:normal;
+  background:var(--surface-2);color:var(--muted);font-size:13px;font-weight:800;transition:background .3s,color .3s}
+.login.lv2 .k-st i svg{position:absolute;width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round;opacity:0}
+.login.lv2 .k-st[aria-current="step"] :is(button,.k-stb){color:var(--ink)}
+.login.lv2 .k-st[aria-current="step"] i{background:var(--k-acc);color:#fff}
+.login.lv2[data-step="2"] .k-st[data-s="1"] i{background:var(--teal);color:var(--on-teal)}
+.login.lv2[data-step="2"] .k-st[data-s="1"] i b{opacity:0}
+.login.lv2[data-step="2"] .k-st[data-s="1"] i svg{opacity:1}
+.login.lv2[data-step="2"] .k-st[data-s="1"] button{cursor:pointer;color:var(--ink-2)}
+.login.lv2[data-step="2"] .k-st[data-s="1"] button:hover{background:var(--hover)}
+.login.lv2[data-step="2"] .k-st+.k-st::before{background:var(--teal)}
+
+.login.lv2 .k-when{display:flex;flex-direction:column;align-items:flex-end;gap:3px;line-height:1.1;text-align:right}
+.login.lv2 .k-when b{font-size:22px;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.login.lv2 .k-when span{font-size:13px;font-weight:600;color:var(--muted);white-space:nowrap}
+
+/* ---------- sahna: ikki qadam bitta katakda (o'tish paytida ustma-ust) ---------- */
+.login.lv2 .k-stage{flex:1;display:grid;padding:clamp(4px,1.8vh,24px) var(--k-gut) 0;min-height:0}
+.login.lv2 .k-step{grid-area:1/1;min-width:0;width:100%}
+.login.lv2 .k-step:focus{outline:none}
+
+/* ---------- 1-qadam ---------- */
+.login.lv2 .k-s1{align-self:start;justify-self:center;max-width:1380px;display:flex;flex-direction:column;align-items:center}
+.login.lv2 .k-head{text-align:center;margin-bottom:18px}
+.login.lv2 .k-head h1{margin:0;font-size:clamp(30px,2.7vw,42px);line-height:1.08;letter-spacing:-.035em;font-weight:800}
+.login.lv2 .k-head p{margin:8px 0 0;font-size:16px;color:var(--muted)}
+.login.lv2 .k-controls{display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:12px;margin-bottom:22px;width:100%}
+
+.login.lv2 #lvlTabs{display:flex;gap:4px;padding:5px;border-radius:99px;background:var(--surface);border:1px solid var(--line);box-shadow:var(--k-shadow)}
+.login.lv2 #lvlTabs button{height:46px;padding:0 22px;border:0;border-radius:99px;background:transparent;color:var(--ink-2);
+  font:700 15px/1 var(--font);white-space:nowrap;cursor:pointer;transition:background .2s,color .2s,box-shadow .2s}
+.login.lv2 #lvlTabs button:hover:not(.on){background:var(--hover);color:var(--ink)}
+.login.lv2 #lvlTabs button.on{background:var(--k-acc);color:#fff;box-shadow:0 8px 16px -8px color-mix(in srgb,var(--k-acc) 80%,transparent)}
+.login.lv2 #lvlTabs button:focus-visible{outline:3px solid var(--teal);outline-offset:2px}
+
+.login.lv2 .k-search{display:flex;align-items:center;gap:10px;width:min(360px,100%);height:58px;padding:0 10px 0 20px;border-radius:99px;cursor:text;
+  background:var(--surface);border:1px solid var(--line);color:var(--muted);box-shadow:var(--k-shadow);transition:border-color .2s,box-shadow .2s}
+.login.lv2 .k-search:focus-within{border-color:var(--teal);box-shadow:0 0 0 4px color-mix(in srgb,var(--teal) 18%,transparent)}
+.login.lv2 #roleSearch{flex:1;min-width:0;height:100%;border:0;outline:0;background:transparent;color:var(--ink);font:500 15.5px var(--font)}
+.login.lv2 #roleSearch::placeholder{color:var(--muted);opacity:1}
+.login.lv2 .k-kbd{display:grid;place-items:center;min-width:30px;height:30px;padding:0 8px;border-radius:9px;border:1px solid var(--line-2);
+  background:var(--surface-2);color:var(--muted);font:700 13px/1 var(--font)}
+.login.lv2 .k-search:focus-within .k-kbd,.login.lv2 .k-search:has(#roleSearch:not(:placeholder-shown)) .k-kbd{display:none}
+@media (pointer:coarse){.login.lv2 .k-kbd{display:none}}
+
+/* plitkalar to'ri: ustunlar soni JS'da muvozanatlanadi (--cols) */
+.login.lv2 #roleList{--tile-min:220px;--tile-max:268px;--tile-dense:150px;--gap:14px;
+  display:grid;grid-template-columns:repeat(var(--cols,4),minmax(0,1fr));gap:var(--gap);align-content:start;
+  width:100%;max-width:calc(var(--cols,4) * var(--tile-max) + (var(--cols,4) - 1) * var(--gap));margin:0 auto;padding:4px}
+.login.lv2 .role-row{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;min-width:0;min-height:136px;padding:15px 18px 14px;
+  border-radius:22px;background:var(--surface);border:1px solid var(--line);box-shadow:var(--k-shadow);cursor:pointer;text-align:center;
+  -webkit-tap-highlight-color:transparent;user-select:none;
+  transition:transform .22s cubic-bezier(.2,.8,.2,1),box-shadow .22s,border-color .22s,background .22s}
+.login.lv2 .role-row .avatar{width:52px;height:52px;font-size:16.5px;font-weight:800;letter-spacing:.02em;margin-bottom:11px;
+  box-shadow:inset 0 -10px 18px -10px rgba(0,0,0,.25)}
+.login.lv2 .role-row>div{display:flex;flex-direction:column;align-items:center;gap:4px;min-width:0;width:100%}
+.login.lv2 .role-row b{font-size:15.5px;line-height:1.3;font-weight:700;letter-spacing:-.01em;color:var(--ink);
+  display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+.login.lv2 .role-row b{max-width:100%;text-wrap:balance}
+.login.lv2 .role-row small{max-width:100%;font-size:13px;line-height:1.35;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* o'ng yuqori burchak: tanlangan — belgi; ustiga kelganda — "keyingi" o'qi */
+.login.lv2 .role-row .chk{position:absolute;top:16px;right:16px;display:grid;place-items:center;width:28px;height:28px;border-radius:50%;
+  color:#fff;background:var(--k-acc);opacity:0;transform:scale(.6);transition:opacity .2s,transform .2s}
+.login.lv2 .role-row .chk svg{width:15px;height:15px;stroke-width:2.6}
+.login.lv2 .role-row::after{content:"";position:absolute;top:16px;right:16px;width:28px;height:28px;border-radius:50%;
+  background:var(--k-acc) center/16px no-repeat url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12h14M13 6l6 6-6 6'/%3E%3C/svg%3E");
+  opacity:0;transform:translateX(-6px);transition:opacity .2s,transform .22s cubic-bezier(.2,.8,.2,1)}
+.login.lv2 .role-row:focus-visible{transform:translateY(-3px);box-shadow:var(--k-lift);border-color:color-mix(in srgb,var(--k-acc) 38%,var(--line))}
+.login.lv2 .role-row:focus-visible::after{opacity:1;transform:none}
+@media (hover:hover){
+  .login.lv2 .role-row:hover{transform:translateY(-3px);box-shadow:var(--k-lift);border-color:color-mix(in srgb,var(--k-acc) 38%,var(--line))}
+  .login.lv2 .role-row:hover::after{opacity:1;transform:none}
+  .login.lv2 .role-row.sel:hover .chk{opacity:0}
+}
+.login.lv2 .role-row:active{transform:translateY(0) scale(.975);transition-duration:.08s}
+.login.lv2 .role-row:focus-visible{outline:3px solid var(--teal);outline-offset:3px}
+.login.lv2 .role-row.sel{border-color:var(--k-acc);box-shadow:0 0 0 1px var(--k-acc),var(--k-shadow);background:color-mix(in srgb,var(--k-acc) 4%,var(--surface))}
+.login.lv2 .role-row.sel .chk{opacity:1;transform:none}
+.login.lv2 .role-row.sel:focus-visible .chk{opacity:0}
+/* kam lavozimli guruh (bir qator) — kattaroq plitkalar */
+.login.lv2 #roleList.k-few{--tile-max:296px;--gap:18px}
+.login.lv2 #roleList.k-few .role-row{min-height:232px;padding:30px 24px 24px;border-radius:26px}
+.login.lv2 #roleList.k-few .avatar{width:84px;height:84px;font-size:27px;margin-bottom:18px;box-shadow:0 0 0 6px color-mix(in srgb,var(--surface-2) 100%,transparent),inset 0 -14px 24px -12px rgba(0,0,0,.28)}
+.login.lv2 #roleList.k-few .role-row>div{gap:6px}
+.login.lv2 #roleList.k-few .role-row b{font-size:17.5px}
+.login.lv2 #roleList.k-few .role-row small{font-size:14px}
+.login.lv2 #roleList.k-few .role-row.sel .avatar{box-shadow:0 0 0 6px color-mix(in srgb,var(--k-acc) 14%,transparent),inset 0 -14px 24px -12px rgba(0,0,0,.28)}
+/* zich rejim: past ekranda ko'p lavozim (masalan, 1280×720 da Bo'limlar) */
+.login.lv2 #roleList.k-dense{--gap:10px;--tile-max:250px}
+.login.lv2 .k-s1:has(#roleList.k-dense) .k-head p{display:none}
+.login.lv2 #roleList.k-dense .role-row{min-height:0;padding:13px 12px 12px;border-radius:18px}
+.login.lv2 #roleList.k-dense .role-row .avatar{width:44px;height:44px;font-size:14.5px;margin-bottom:9px}
+.login.lv2 #roleList.k-dense .role-row b{font-size:13.5px;line-height:1.28}
+.login.lv2 #roleList.k-dense .role-row small{font-size:12px}
+.login.lv2 #roleList.k-dense .role-row .chk,.login.lv2 #roleList.k-dense .role-row::after{top:10px;right:10px;width:22px;height:22px;background-size:13px}
+.login.lv2 .role-empty{grid-column:1/-1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;min-height:170px;padding:20px;
+  border:1.5px dashed var(--line-2);border-radius:24px;color:var(--muted);text-align:center;font-size:15px;line-height:1.55}
+.login.lv2 .role-empty::before{content:"";width:44px;height:44px;margin-bottom:10px;border-radius:50%;background:var(--surface-2) center/22px no-repeat url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238a8a93' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E")}
+.login.lv2 .k-skel{min-height:148px;border-radius:22px;background:linear-gradient(100deg,var(--surface) 30%,var(--surface-2) 50%,var(--surface) 70%) 0 0/300% 100%;
+  border:1px solid var(--line);animation:lv2sk 1.3s linear infinite}
+@keyframes lv2sk{to{background-position:-150% 0}}
+
+/* ---------- 2-qadam: parol ---------- */
+.login.lv2 .k-s2{align-self:center;justify-self:center;display:flex;justify-content:center;padding:8px 0 4px}
+.login.lv2 .k-card{display:grid;grid-template-columns:minmax(300px,380px) minmax(0,1fr);width:min(940px,100%);overflow:hidden;
+  border-radius:32px;background:var(--surface);border:1px solid var(--line);
+  box-shadow:0 40px 80px -40px rgba(16,24,40,.35),0 2px 8px -2px rgba(16,24,40,.06)}
+:root[data-theme="dark"] .login.lv2 .k-card{box-shadow:0 40px 80px -30px rgba(0,0,0,.8)}
+
+/* chap: kim kiryapti */
+.login.lv2 .k-who{position:relative;isolation:isolate;overflow:hidden;display:flex;flex-direction:column;gap:24px;padding:28px 30px 28px;color:#fff;
+  background:radial-gradient(420px 320px at 0% 0%,rgba(255,255,255,.12),transparent 70%),linear-gradient(165deg,#9b0a47 0%,#870037 42%,#5c0026 100%)}
+.login.lv2 .k-who::after{content:"";position:absolute;z-index:-1;right:-150px;bottom:-150px;width:340px;height:340px;border-radius:50%;
+  border:1px solid rgba(255,255,255,.12);box-shadow:0 0 0 56px rgba(255,255,255,.03),0 0 0 112px rgba(255,255,255,.025)}
+.login.lv2 .k-back{align-self:flex-start;display:inline-flex;align-items:center;gap:8px;height:44px;padding:0 18px 0 12px;border-radius:99px;cursor:pointer;
+  border:1px solid rgba(255,255,255,.24);background:rgba(255,255,255,.1);color:#fff;font:700 14px/1 var(--font);transition:background .2s,border-color .2s}
+.login.lv2 .k-back svg{transform:rotate(180deg);transition:transform .2s}
+.login.lv2 .k-back:hover{background:rgba(255,255,255,.18);border-color:rgba(255,255,255,.4)}
+.login.lv2 .k-back:hover svg{transform:rotate(180deg) translateX(3px)}
+.login.lv2 .k-back:focus-visible{outline:3px solid #fff;outline-offset:2px}
+.login.lv2 .k-id{flex:1;display:flex;flex-direction:column;justify-content:center;gap:18px}
+.login.lv2 .k-av{display:grid;place-items:center;width:96px;height:96px;flex:none;border-radius:50%;font-size:32px;font-weight:800;letter-spacing:.02em;
+  background:rgba(255,255,255,.14);border:2px solid rgba(255,255,255,.42);box-shadow:0 0 0 8px rgba(255,255,255,.06),0 18px 30px -16px rgba(0,0,0,.5)}
+.login.lv2 .k-idt{display:flex;flex-direction:column;gap:8px;min-width:0}
+.login.lv2 .k-lvl{align-self:flex-start;font-size:11.5px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:rgba(255,255,255,.82);
+  padding:5px 10px;border-radius:99px;background:rgba(255,255,255,.12)}
+.login.lv2 .k-who h2{margin:0;color:#fff;font-size:26px;line-height:1.18;letter-spacing:-.02em;font-weight:800;overflow-wrap:anywhere;
+  display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
+.login.lv2 .k-who p{margin:0;font-size:15.5px;line-height:1.4;color:rgba(255,255,255,.84);font-weight:600}
+.login.lv2 .k-note{display:flex;gap:10px;align-items:flex-start;margin:0;font-size:12.5px;line-height:1.45;color:rgba(255,255,255,.7)}
+.login.lv2 .k-note svg{width:16px;height:16px;flex:none;margin-top:1px}
+
+/* o'ng: parol maydoni */
+.login.lv2 .k-pad{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 48px 38px}
+.login.lv2 .k-pw{display:flex;flex-direction:column;align-items:center;width:100%;max-width:420px}
+.login.lv2 .k-pwbadge{display:grid;place-items:center;width:60px;height:60px;margin-bottom:16px;border-radius:20px;color:var(--k-acc);
+  background:color-mix(in srgb,var(--k-acc) 10%,var(--surface));box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--k-acc) 18%,transparent)}
+.login.lv2 .k-pwbadge svg{width:28px;height:28px;stroke-width:1.9}
+.login.lv2 .k-pw h3{margin:0;font-size:26px;line-height:1.15;font-weight:800;letter-spacing:-.025em;text-align:center}
+.login.lv2 .k-pw h3 label{cursor:inherit}
+.login.lv2 .k-pwsub{margin:7px 0 22px;font-size:14.5px;line-height:1.4;color:var(--muted);text-align:center}
+.login.lv2 .k-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;border:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+/* katta, sensorga qulay maydon: qulf · input · ko'z */
+.login.lv2 .k-field{position:relative;display:flex;align-items:center;gap:4px;width:100%;height:66px;padding:0 9px 0 20px;border-radius:20px;cursor:text;
+  background:var(--surface-2);border:2px solid var(--line-2);color:var(--muted);
+  transition:border-color .2s,box-shadow .2s,background .2s,color .2s}
+.login.lv2 .k-field:hover{border-color:color-mix(in srgb,var(--ink) 22%,var(--line-2))}
+.login.lv2 .k-field:focus-within{border-color:var(--teal);background:var(--surface);color:var(--teal);box-shadow:0 0 0 5px color-mix(in srgb,var(--teal) 20%,transparent)}
+.login.lv2 .k-fico{display:grid;place-items:center;flex:none;width:28px}
+.login.lv2 .k-fico svg{width:23px;height:23px}
+.login.lv2 #password{flex:1;min-width:0;height:100%;padding:0 6px 0 10px;border:0;outline:0;background:transparent;color:var(--ink);
+  font:600 19px/1 var(--font);letter-spacing:.01em}
+.login.lv2 #password::placeholder{color:var(--muted);opacity:1;font-weight:500;font-size:17px;letter-spacing:0}
+.login.lv2 #password[type="password"]:not(:placeholder-shown){font-size:22px;letter-spacing:.22em}
+.login.lv2 #password::-ms-reveal{display:none}
+.login.lv2 #password::selection{background:color-mix(in srgb,var(--teal) 22%,transparent)}
+.login.lv2 .k-eye{position:relative;display:grid;place-items:center;flex:none;width:48px;height:48px;border-radius:14px;
+  border:1px solid transparent;background:transparent;color:var(--muted);cursor:pointer;-webkit-tap-highlight-color:transparent;
+  transition:background .2s,color .2s,border-color .2s}
+.login.lv2 .k-eye svg{width:22px;height:22px}
+.login.lv2 .k-eye:hover{background:var(--hover);color:var(--ink)}
+/* ochiq rejim: ko'z ustiga chiziq (yashirish) */
+.login.lv2 .k-eye.on{color:var(--teal);border-color:color-mix(in srgb,var(--teal) 35%,transparent);background:var(--teal-soft)}
+.login.lv2 .k-eye.on::after{content:"";position:absolute;width:25px;height:2px;border-radius:2px;background:currentColor;transform:rotate(-45deg)}
+.login.lv2 .k-eye:focus-visible{outline:3px solid var(--teal);outline-offset:2px}
+/* xato parol: app.js 450ms .err beradi */
+.login.lv2 #pwWrap.err{border-color:var(--bad);color:var(--bad);background:color-mix(in srgb,var(--bad) 7%,var(--surface));
+  box-shadow:0 0 0 5px color-mix(in srgb,var(--bad) 16%,transparent);animation:lv2shake .4s cubic-bezier(.36,.07,.19,.97)}
+@keyframes lv2shake{10%,90%{transform:translateX(-2px)}20%,80%{transform:translateX(5px)}30%,50%,70%{transform:translateX(-10px)}40%,60%{transform:translateX(10px)}}
+
+.login.lv2 .k-msg{display:inline-flex;align-items:center;gap:7px;min-height:30px;margin:14px 0 0;padding:5px 13px 5px 10px;border-radius:99px;
+  font-size:13px;font-weight:700;color:var(--teal);background:var(--teal-soft);transition:background .2s,color .2s}
+.login.lv2 .k-msg svg{width:16px;height:16px}
+.login.lv2 .k-msg.bad{color:var(--bad);background:var(--bad-soft)}
+.login.lv2 .k-msg.warn{color:var(--warn);background:var(--warn-soft)}
+
+.login.lv2 .k-go{width:100%;height:62px;margin-top:22px;border-radius:20px;font-size:17px;font-weight:800;gap:10px;
+  background:var(--k-acc);border-color:var(--k-acc);box-shadow:0 12px 24px -12px color-mix(in srgb,var(--k-acc) 85%,transparent);touch-action:manipulation}
+.login.lv2 .k-go:hover:not(:disabled){background:var(--brand-fill-2);border-color:var(--brand-fill-2)}
+.login.lv2 .k-go svg{transition:transform .2s}
+.login.lv2 .k-go:hover:not(:disabled) svg{transform:translateX(3px)}
+.login.lv2 .k-go:active:not(:disabled){transform:scale(.985)}
+.login.lv2 .k-go:focus-visible{outline:3px solid var(--teal);outline-offset:3px}
+.login.lv2 .k-go[data-busy]{pointer-events:none}
+.login.lv2 .k-go[data-busy] svg{display:none}
+.login.lv2 .k-go[data-busy]::after{content:"";width:18px;height:18px;border-radius:50%;border:2.5px solid rgba(255,255,255,.35);border-top-color:#fff;animation:lv2spin .7s linear infinite}
+@keyframes lv2spin{to{transform:rotate(360deg)}}
+.login.lv2:has(.k-go[data-busy]) .k-field{opacity:.6;pointer-events:none}
+
+/* umumiy bildirishnoma (app.js toast) — pastdagi variant almashtirgich ustiga tushmasin */
+.login.lv2:not(.hidden)~.toast{bottom:86px}
+
+/* ---------- past balandlikdagi ekranlar (1280×720, proyektor) ---------- */
+@media (max-height:780px) and (min-width:721px){
+  .login.lv2 .k-top{height:66px}
+  .login.lv2 .k-logo{width:42px;height:42px}.login.lv2 .k-logo img{width:30px;height:23px}
+  .login.lv2 .k-when b{font-size:19px}
+  .login.lv2 .k-head{margin-bottom:16px}
+  .login.lv2 .k-head h1{font-size:30px}
+  .login.lv2 .k-head p{margin-top:6px;font-size:14.5px}
+  .login.lv2 .k-controls{margin-bottom:18px}
+  .login.lv2 #lvlTabs button{height:42px;padding:0 20px;font-size:14.5px}
+  .login.lv2 .k-search{height:54px}
+  .login.lv2 #roleList{--gap:12px}
+  .login.lv2 .role-row{min-height:132px;padding:15px 16px 14px;border-radius:20px}
+  .login.lv2 .role-row .avatar{width:42px;height:42px;font-size:14.5px;margin-bottom:11px}
+  .login.lv2 .role-row b{font-size:14.5px}
+  .login.lv2 .role-row small{font-size:12.5px}
+  .login.lv2 .role-row .chk,.login.lv2 .role-row::after{top:13px;right:13px;width:26px;height:26px}
+  .login.lv2 #roleList.k-few .role-row{min-height:170px}
+  .login.lv2 .k-card{border-radius:28px}
+  .login.lv2 .k-who{padding:24px 26px}
+  .login.lv2 .k-av{width:84px;height:84px;font-size:28px}
+  .login.lv2 .k-pad{padding:30px 40px}
+  .login.lv2 .k-pwbadge{width:52px;height:52px;margin-bottom:12px;border-radius:17px}
+  .login.lv2 .k-pw h3{font-size:23px}
+  .login.lv2 .k-pwsub{margin:5px 0 18px}
+  .login.lv2 .k-field{height:62px}
+  .login.lv2 .k-go{height:58px;margin-top:18px}
+}
+
+/* ---------- planshet tik holat va tor ekranlar ---------- */
+@media (max-width:900px){
+  .login.lv2 .k-card{grid-template-columns:minmax(0,1fr) minmax(0,1.15fr)}
+  .login.lv2 .k-pad{padding:26px 22px}
+}
+@media (max-width:720px){
+  .login.lv2{padding-bottom:72px}
+  .login.lv2 .k-top{height:64px;gap:10px}
+  .login.lv2 .k-logo{width:40px;height:40px}.login.lv2 .k-logo img{width:29px;height:22px}
+  .login.lv2 .k-brand{flex:none;gap:10px}
+  .login.lv2 .k-wm{font-size:18px}
+  .login.lv2 .k-bt small{display:none}
+  .login.lv2 .k-steps{padding:4px;gap:6px}
+  .login.lv2 .k-st+.k-st::before{width:12px}
+  .login.lv2 .k-st button,.login.lv2 .k-stb{padding:3px}
+  .login.lv2 .k-st :is(button,.k-stb)>span{display:none}
+  .login.lv2 .k-st i{width:26px;height:26px}
+  .login.lv2 .k-when b{font-size:17px}
+  .login.lv2 .k-when span{font-size:12px}
+  .login.lv2 .k-stage{padding-top:10px}
+  .login.lv2 .k-head{margin-bottom:18px}
+  .login.lv2 .k-head h1{font-size:27px}
+  .login.lv2 .k-head p{font-size:14.5px;margin-top:8px}
+  .login.lv2 .k-controls{gap:10px;margin-bottom:18px}
+  .login.lv2 #lvlTabs{display:grid;grid-template-columns:1fr 1fr;width:100%;border-radius:22px}
+  .login.lv2 #lvlTabs button{height:44px;padding:0 10px;border-radius:17px;font-size:14.5px}
+  .login.lv2 .k-search{width:100%;height:52px}
+  .login.lv2 #roleList{--tile-min:140px;--gap:10px;padding:2px}
+  .login.lv2 .role-row,.login.lv2 #roleList.k-few .role-row{min-height:128px;padding:14px 12px 13px;border-radius:20px}
+  .login.lv2 .role-row .avatar,.login.lv2 #roleList.k-few .avatar{width:40px;height:40px;font-size:14px;margin-bottom:12px}
+  .login.lv2 #roleList.k-few .role-row>div{margin-top:0}
+  .login.lv2 .role-row b,.login.lv2 #roleList.k-few .role-row b{font-size:14px;line-height:1.28;-webkit-line-clamp:5}
+  .login.lv2 .role-row small,.login.lv2 #roleList.k-few .role-row small{font-size:12px}
+  .login.lv2 .role-row .chk,.login.lv2 .role-row::after{top:12px;right:12px;width:24px;height:24px}
+  .login.lv2 .role-row::after{background-size:14px}
+
+  .login.lv2 .k-s2{align-self:start;padding-top:0}
+  .login.lv2 .k-card{grid-template-columns:minmax(0,1fr);border-radius:28px}
+  .login.lv2 .k-who{gap:14px;padding:14px 14px 16px}
+  .login.lv2 .k-back{height:40px;font-size:13.5px}
+  .login.lv2 .k-id{flex-direction:row;align-items:center;gap:14px}
+  .login.lv2 .k-av{width:60px;height:60px;font-size:20px;box-shadow:0 0 0 5px rgba(255,255,255,.06)}
+  .login.lv2 .k-idt{gap:4px}
+  .login.lv2 .k-lvl{font-size:10.5px;padding:3px 8px}
+  .login.lv2 .k-who h2{font-size:19px;-webkit-line-clamp:3}
+  .login.lv2 .k-who p{font-size:13.5px}
+  .login.lv2 .k-note{display:none}
+  .login.lv2 .k-pad{padding:20px 16px 20px}
+  .login.lv2 .k-pwbadge{display:none}
+  .login.lv2 .k-pw h3{font-size:21px}
+  .login.lv2 .k-pwsub{margin:4px 0 14px;font-size:13.5px}
+  .login.lv2 .k-field{height:60px;padding-left:16px;border-radius:18px}
+  .login.lv2 #password{font-size:17px}   /* >=16px — iOS maydonni kattalashtirmaydi */
+  .login.lv2 .k-msg{margin-top:12px}
+  .login.lv2 .k-go{margin-top:16px;height:58px;border-radius:18px}
+}
+
+/* tor telefon: so'z belgisi va qadamlar sig'ishi uchun — faqat soat */
+@media (max-width:440px){.login.lv2 .k-when span{display:none}}
+
+@media (prefers-reduced-motion:reduce){
+  .login.lv2 *,.login.lv2 *::before,.login.lv2 *::after{animation:none!important;transition:none!important}
+  .login.lv2 .role-row:is(:hover,:focus-visible),.login.lv2 .k-go:active{transform:none}
+}

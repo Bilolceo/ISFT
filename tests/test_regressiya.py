@@ -6,7 +6,7 @@ def ok(cond, msg):
     print(("  ✓ " if cond else "  ✗ ")+msg)
     if not cond: fails.append(msg)
 def login(uid):
-    c=httpx.Client(base_url=B, timeout=60); assert c.post("/api/login",json={"user_id":uid,"pin":"1234"}).status_code==200; return c
+    c=httpx.Client(base_url=B, timeout=60); assert c.post("/api/login",json={"user_id":uid,"password": "Isft2026"}).status_code==200; return c
 users=DB.execute("select id,role from users").fetchall()
 print("== 16 rol × barcha GET endpointlar")
 eps=["/api/me","/api/dashboard","/api/section/tasks","/api/docs/catalog","/api/docs/registry","/api/svc/overview","/api/spaces/overview","/api/rbac"]
@@ -54,7 +54,8 @@ evs=rk.get("/api/svc/overview").json()["events"]["events"]
 ok(any(e["date"]>"2026-11-06" for e in evs), "kelgusi tadbirlar ro'yxatda (LEFT JOIN)")
 print("== Auditoriyalar")
 o=rk.get("/api/spaces/overview").json()
-ok(o["kpi"]["rooms"]>=36 and o["kpi"]["online"]==o["kpi"]["rooms"], f"barcha kameralar onlayn: {o['kpi']['online']}/{o['kpi']['rooms']}")
+# demo: bir nechta kamera ataylab oflayn (kameralar moduli hikoyasi) — ko'pchiligi onlayn bo'lishi kerak
+ok(o["kpi"]["rooms"]>=36 and o["kpi"]["online"]>=0.9*o["kpi"]["rooms"], f"kameralarning ko'pchiligi onlayn: {o['kpi']['online']}/{o['kpi']['rooms']}")
 ok(len(o["heatmap"])==6 and len(o["heatmap"][0])==6, "issiqlik xaritasi 6×6")
 ok(any(g["repeat"]>=3 for g in o["ghosts"]), "takror bo'sh dars signali bor")
 ok(o["ghosts"][0].get("teacher") is not None, "rektor o'qituvchi ismini ko'radi")

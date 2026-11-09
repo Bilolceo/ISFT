@@ -1,6 +1,6 @@
-"""JARVIS yadrosi: lavozimga asoslangan ruxsat nazorati (RBAC) va audit jurnali.
+"""ISFT Core yadrosi: lavozimga asoslangan ruxsat nazorati (RBAC) va audit jurnali.
 Har bir ma'lumot so'rovi shu yerdan o'tadi. Taklifnomaning 4-bo'limidagi jadval aynan shu yerda kodlangan."""
-import datetime as dt
+import datetime as dt, hashlib, hmac, os
 from dataclasses import dataclass
 from . import db
 
@@ -29,7 +29,7 @@ LABELS = {KPI: "Umumiy KPI", ACADEMIC: "O'zlashtirish va davomat", STUDENTS: "Ta
           FINANCE: "Byudjet va xarajatlar", PAYROLL: "Ish haqi", HR: "Kadrlar shaxsiy ma'lumoti", SCIENCE: "Ilmiy faoliyat",
           INTL: "Xalqaro hamkorlik", ADMISSIONS: "Qabul", YOUTH: "Yoshlar va yotoqxona", MASTERS: "Magistratura",
           TASKS: "Majlis topshiriqlari", AUDIT: "Audit jurnali", REPORTS: "Hisobotlar",
-          FACILITIES: "Xo'jalik nosozliklari", OPS: "Talabalar bilan ishlash markazi", REQUESTS: "Murojaatlar markazi", SPACES: "Auditoriyalar bandligi"}
+          FACILITIES: "Xo'jalik nosozliklari", OPS: "Talabalar bilan ishlash markazi", REQUESTS: "Murojaatlar va hodisalar", SPACES: "Auditoriyalar bandligi"}
 
 @dataclass(frozen=True)
 class Role:
@@ -58,7 +58,15 @@ ROLES = {r.key: r for r in [
     Role("prorektor_yoshlar", "Yoshlar masalalari va ma'naviy-ma'rifiy ishlar bo'yicha birinchi prorektor", 2, R(KPI, YOUTH, TASKS, FACILITIES),
          deny_note="Moliyaviy ma'lumot, individual o'quv baholari"),
     Role("qabul", "Qabul komissiyasi", 3, R(ADMISSIONS, CONTRACTS, TASKS), aggregate_only=R(CONTRACTS)),
-    Role("talabalar", "Akademik faoliyat va registrator departamenti", 3, R(STUDENTS, CONTRACTS, ACADEMIC, TASKS, REQUESTS, YOUTH, OPS)),
+    Role("talabalar", "Registrator ofisi", 3, R(STUDENTS, CONTRACTS, ACADEMIC, TASKS, REQUESTS, YOUTH, OPS)),
+    Role("akademik", "Akademik faoliyatni boshqarish bo'limi", 3, R(ACADEMIC, STUDENTS, TASKS, REQUESTS, OPS),
+         deny_note="Moliya va kadrlar ma'lumoti"),
+    # Sirtqi bo'lim va Ma'lumotlar bazasi bo'limi — vazifalari app/academic_rules.py (DUTIES) da
+    Role("sirtqi", "Sirtqi bo'lim", 3, R(ACADEMIC, STUDENTS, TASKS, REQUESTS), deny_note="Moliya, kontrakt va kadrlar ma'lumoti"),
+    Role("malumotlar_bazasi", "Ma'lumotlar bazasi bo'limi", 3, R(KPI, ACADEMIC, STUDENTS, TASKS),
+         deny_note="Moliya, kontrakt va kadrlar ma'lumoti"),
+    Role("imtihon", "Imtihon bo'limi", 3, R(ACADEMIC, STUDENTS, TASKS), deny_note="Moliya, kontrakt va kadrlar ma'lumoti"),
+    Role("amaliyot", "Amaliyot bo'limi", 3, R(STUDENTS, TASKS), deny_note="Baholar tafsiloti, moliya va kadrlar ma'lumoti"),
     Role("magistratura", "Magistratura bo'limi", 3, R(MASTERS, TASKS)),
     Role("xalqaro", "Xalqaro hamkorlik bo'limi", 3, R(INTL, TASKS)),
     Role("buxgalteriya", "Buxgalteriya bo'limi", 3, R(FINANCE, CONTRACTS, PAYROLL, TASKS), local_only=True),
@@ -91,6 +99,12 @@ class Ctx:
     user: dict
     role: Role
     channel: str = "web"   # web | telegram
+
+    @property
+    def title(self) -> str:
+        """Foydalanuvchining aniq lavozimi ("Registrator ofisi: …" → "Registrator ofisi"); bo'lmasa rol nomi."""
+        n = self.user.get("full_name") or ""
+        return n.split(":")[0].strip() if ":" in n else self.role.title
 
     def can(self, resource: str) -> bool:
         if resource not in self.role.allow:
@@ -140,10 +154,11 @@ def ctx_for(con, user_id: int, channel="web") -> Ctx:
     return Ctx(u, ROLES[u["role"]], channel)
 
 def audit(con, ctx: Ctx, action: str, resource: str, allowed: bool, detail: str = ""):
-    con.execute("INSERT INTO audit_log(ts,user_id,user_name,role,channel,action,resource,allowed,detail) VALUES(?,?,?,?,?,?,?,?,?)",
-                (dt.datetime.now().isoformat(timespec="seconds"), ctx.user["id"], ctx.user["full_name"], ctx.role.title,
-                 ctx.channel, action, resource, int(allowed), detail[:300]))
+    cur = con.execute("INSERT INTO audit_log(ts,user_id,user_name,role,channel,action,resource,allowed,detail) VALUES(?,?,?,?,?,?,?,?,?)",
+                      (dt.datetime.now().isoformat(timespec="seconds"), ctx.user["id"], ctx.user["full_name"], ctx.title,
+                       ctx.channel, action, resource, int(allowed), detail[:300]))
     con.commit()
+    return cur.lastrowid
 
 def require(con, ctx: Ctx, resource: str, action: str, detail: str = ""):
     ok = ctx.can(resource)
@@ -156,3 +171,43 @@ def require(con, ctx: Ctx, resource: str, action: str, detail: str = ""):
 def matrix():
     return [{"key": r.key, "title": r.title, "level": r.level, "scope": r.scope, "local_only": r.local_only,
              "allow": sorted(r.allow), "aggregate_only": sorted(r.aggregate_only), "deny_note": r.deny_note} for r in ROLES.values()]
+
+# ---------- Parollar ----------
+DEMO_PASSWORD = os.getenv("ISFT_CORE_DEMO_PASSWORD", "Isft2026")   # sinov rejimi: barcha demo akkauntlar uchun
+
+def hash_password(pw: str) -> str:
+    salt = os.urandom(16)
+    h = hashlib.pbkdf2_hmac("sha256", pw.encode(), salt, 120_000)
+    return f"pbkdf2${salt.hex()}${h.hex()}"
+
+def check_password(stored: str | None, pw: str) -> bool:
+    if not stored or not pw: return False
+    if stored.startswith("pbkdf2$"):
+        _, salt, h = stored.split("$")
+        return hmac.compare_digest(hashlib.pbkdf2_hmac("sha256", pw.encode(), bytes.fromhex(salt), 120_000).hex(), h)
+    return hmac.compare_digest(str(stored).encode(), pw.encode())   # eski (ochiq) yozuv — keyingi kirishda xeshga o'tkaziladi
+
+_PATR = ("ovich", "evich", "ovna", "evna")
+
+def polite_name(full_name: str) -> str | None:
+    """Hurmat bilan murojaat: ism + otasining ismi ("G'ulomov Ibroxim Rustam o'g'li" → "Ibroxim Rustamovich").
+    Shaxs ismi yo'q (bo'lim akkaunti) bo'lsa — None."""
+    if ":" not in (full_name or ""): return None
+    p = full_name.split(":", 1)[1].split()
+    if len(p) >= 4 and p[-1].lower().replace("ʻ", "'").replace("’", "'") in ("o'g'li", "qizi"):
+        ota = p[2]; male = p[-1].lower() != "qizi"
+        suf = ("yevich" if male else "yevna") if ota[-1].lower() in "aeiou" else ("ovich" if male else "ovna")
+        return f"{p[1]} {ota}{suf}"
+    if len(p) >= 3 and p[2].lower().endswith(_PATR): return f"{p[1]} {p[2]}"
+    if len(p) == 2: return " ".join(p) if p[1].lower().endswith(_PATR) else p[1]
+    return p[1] if len(p) >= 2 else p[0] if p else None
+
+def greeting(u: dict) -> str:
+    """Panel sarlavhasi: "Rektor Ibroxim Rustamovich"; boshqalar — hurmatli ism; shaxssiz bo'lim akkaunti — lavozim."""
+    title, name = user_title(u), polite_name(u.get("full_name") or "")
+    if not name: return title
+    return f"{title} {name}" if u.get("role") in ("rektor", "dekan") else name
+
+def user_title(u: dict) -> str:
+    n = u.get("full_name") or ""
+    return n.split(":")[0].strip() if ":" in n else ROLES[u["role"]].title

@@ -1,13 +1,26 @@
 """Hikvision ISAPI emulyatori — haqiqiy kamera kelgunicha ulagichni sinash uchun (FAQAT ishlab chiqish/test).
 
 Taqlid qiladi: HTTP Digest (MD5, qop=auth), deviceInfo, time (soat farqi bilan), counting capabilities/search,
-Event/triggers va alertStream (multipart: yurak urishi, chiziq kesish/hududga kirish voqealari, ba'zan JPEG qism).
-Javob tuzilmasi Hikvision ISAPI hujjatlariga yaqin, lekin har bir model farq qilishi mumkin — haqiqiy kamerada albatta qayta sinash kerak.
+Event/triggers (model oilasiga qarab), alertStream (multipart: yurak urishi, aqlli voqealar, ba'zan JPEG qism)
+va navbat holati (queueManagement/status).
+
+DIQQAT: teg va maydon nomlari (eventType qiymatlari, <maxTemperature>, <queueLength>, <waitingTime>, <regionPeopleNum>,
+queueManagement yo'li, triggers ro'yxati) Hikvision ISAPI hujjatlariga TAXMINAN yaqin. Har bir model/proshivkada farq
+qilishi mumkin — haqiqiy kamerada albatta qayta tekshirilishi SHART (docs/hikvision.md, "Haqiqiy kamerada qayta sinash").
 
 Ishga tushirish:
     .venv/bin/python -m uvicorn tools.fake_hikvision:app --host 127.0.0.1 --port 18090
-Sozlash (muhit o'zgaruvchilari): FAKE_HIK_USER, FAKE_HIK_PASS, FAKE_HIK_MODEL, FAKE_HIK_SKEW (soniya), FAKE_HIK_COUNTING (1/0),
-    FAKE_HIK_FW_DATE (masalan "build 230815"), FAKE_HIK_EVENT_SEC (voqealar oralig'i), FAKE_HIK_STREAM_LIMIT (test uchun: N qismdan keyin oqim tugaydi).
+Sozlash (muhit o'zgaruvchilari):
+    FAKE_HIK_USER, FAKE_HIK_PASS, FAKE_HIK_SKEW (soniya), FAKE_HIK_COUNTING (1/0), FAKE_HIK_FW_DATE (masalan "build 230815"),
+    FAKE_HIK_MODEL        — model; Event/triggers ro'yxati shunga bog'liq (AcuSense / oddiy / DeepinView / termal)
+    FAKE_HIK_EVENT_SEC    — voqealar oralig'i (soniya)
+    FAKE_HIK_STREAM_LIMIT — test uchun: N ta XML qismdan keyin oqim tugaydi (JPEG qismlar hisoblanmaydi)
+    FAKE_HIK_EVENTS       — vergul bilan ro'yxat; berilsa aylanish AYNAN shu (o'zgarishsiz). Element sintaksisi:
+                            tur[:holat][+jpeg][=qiymat], masalan "videoloss:inactive,fielddetection+jpeg,TMA=80.5,personQueueDetection=30"
+                            (=qiymat: TMA → maxTemperature, personQueueDetection → queueLength, regionPeopleCounting → regionPeopleNum)
+    FAKE_HIK_THERMAL      — 1: standart aylanishga fireDetection/smokeDetection/TMA qo'shiladi (standart 0)
+    FAKE_HIK_QUEUE        — 1/0: queueManagement/status bormi (0 → 404; standart 1)
+    FAKE_HIK_QUEUE_LEN    — navbat uzunligini qat'iy belgilash (test uchun); bo'sh bo'lsa vaqtga qarab
 """
 import asyncio, datetime as dt, hashlib, os, random, secrets
 from fastapi import FastAPI, Request
@@ -19,6 +32,8 @@ CFG = {
     "skew": int(os.getenv("FAKE_HIK_SKEW", "0")), "counting": os.getenv("FAKE_HIK_COUNTING", "1") == "1",
     "fw_date": os.getenv("FAKE_HIK_FW_DATE", "build 230815"), "event_sec": float(os.getenv("FAKE_HIK_EVENT_SEC", "2")),
     "stream_limit": int(os.getenv("FAKE_HIK_STREAM_LIMIT", "0")),
+    "events": os.getenv("FAKE_HIK_EVENTS", "").strip(), "thermal": os.getenv("FAKE_HIK_THERMAL", "0") == "1",
+    "queue": os.getenv("FAKE_HIK_QUEUE", "1") == "1", "queue_len": os.getenv("FAKE_HIK_QUEUE_LEN", "").strip(),
 }
 NS = 'xmlns="http://www.hikvision.com/ver20/XMLSchema"'
 app = FastAPI(title="Fake Hikvision ISAPI")
@@ -92,9 +107,54 @@ async def counting_search(ch: int, req: Request):
                f'<timeSpan><startTime>{dt.date.today()}T00:00:00</startTime><endTime>{dt.date.today()}T23:59:59</endTime></timeSpan>'
                f'<enterCount>{e}</enterCount><exitCount>{x}</exitCount></matchElement></matchList></CountingStatisticsResult>')
 
+# --- Model oilalari → qo'llanadigan eventType'lar (TAXMINIY; datasheet/proshivka bo'yicha tasdiqlash kerak) ---
+BASIC = ["VMD", "videoloss", "shelteralarm", "linedetection", "fielddetection"]
+ACUSENSE = BASIC + ["defocus", "scenechangedetection", "regionEntrance", "regionExiting"]
+DEEPINVIEW = ACUSENSE + ["loitering", "peopleGathering", "running", "unattendedBaggage", "objectRemoval", "attendedBaggage",
+                         "personQueueDetection", "regionPeopleCounting", "peopleCounting"]
+THERMAL = ["fireDetection", "smokeDetection", "TMA", "linedetection", "fielddetection", "VMD", "videoloss", "shelteralarm"]
+# tartib muhim: aniqroq prefikslar birinchi ("iDS-2CD7…" ichida "DS-2CD" ham bor)
+FAMILIES = [("deepinview", ("iDS-2CD7",), DEEPINVIEW), ("thermal", ("DS-2TD",), THERMAL),
+            ("acusense", ("DS-2CD2346G2", "G2-I"), ACUSENSE), ("basic", ("DS-2CD3D46G2T", "DS-2CD"), BASIC)]
+
+def _family(model: str):
+    for name, keys, evs in FAMILIES:
+        if any(model.startswith(k) or k in model for k in keys): return name, evs
+    return "basic", BASIC
+
 @app.get("/ISAPI/Event/triggers")
 def triggers():
-    return xml(f'<EventTriggerList version="2.0" {NS}><EventTrigger><id>linedetection-1</id><eventType>linedetection</eventType></EventTrigger></EventTriggerList>')
+    _, evs = _family(CFG["model"])
+    items = "".join(f'<EventTrigger><id>{e}-1</id><eventType>{e}</eventType><videoInputChannelID>1</videoInputChannelID></EventTrigger>' for e in evs)
+    return xml(f'<EventTriggerList version="2.0" {NS}>{items}</EventTriggerList>')
+
+def _queue(t: dt.datetime, ch: int = 1):
+    """Navbat (kishi, kutish soniyasi): dushanba 10–12 → 25+, tushlik 12–14 → 8–18, qolgan ish vaqti 0–8, kechasi 0."""
+    if CFG["queue_len"]: n = int(CFG["queue_len"])
+    else:
+        r = random.Random(t.date().toordinal() * 100 + t.hour * 7 + ch)
+        if t.weekday() == 0 and 10 <= t.hour < 12: n = 25 + r.randint(0, 12)
+        elif 12 <= t.hour < 14: n = 8 + r.randint(0, 10)
+        elif 8 <= t.hour < 18 and t.weekday() < 6: n = r.randint(0, 8)
+        else: n = 0
+    return n, n * 40                           # ~40 s bir kishiga (taxmin)
+
+@app.get("/ISAPI/Intelligent/channels/{ch}/queueManagement/status")   # yo'l TAXMINIY — modelga qarab farq qiladi
+def queue_status(ch: int):
+    if not CFG["queue"]: return Response(status_code=404)
+    n, w = _queue(dt.datetime.now(), ch)
+    return xml(f'<QueueStatus version="2.0" {NS}><channelID>{ch}</channelID><queueLength>{n}</queueLength><waitingTime>{w}</waitingTime></QueueStatus>')
+
+def _extra(typ: str, val: str) -> str:
+    """Voqea turiga xos qo'shimcha maydonlar (teg nomlari TAXMINIY)."""
+    if typ == "TMA":
+        return f'<ThermometryAlarm><ruleID>1</ruleID><maxTemperature>{val or "71.5"}</maxTemperature><alarmRule>highestGreater</alarmRule></ThermometryAlarm>'
+    if typ == "personQueueDetection":
+        n = int(val) if val else _queue(dt.datetime.now())[0]
+        return f'<QueueInfo><queueLength>{n}</queueLength><waitingTime>{n * 40}</waitingTime></QueueInfo>'
+    if typ == "regionPeopleCounting":
+        return f'<RegionPeopleCounting><regionPeopleNum>{val or random.randint(5, 40)}</regionPeopleNum></RegionPeopleCounting>'
+    return ""
 
 def _alert(event_type: str, state="active", extra=""):
     t = (dt.datetime.now().astimezone() + dt.timedelta(seconds=CFG["skew"])).replace(microsecond=0).isoformat()
@@ -102,16 +162,32 @@ def _alert(event_type: str, state="active", extra=""):
             f'<activePostCount>1</activePostCount><eventType>{event_type}</eventType><eventState>{state}</eventState>'
             f'<eventDescription>{event_type} alarm</eventDescription>{extra}</EventNotificationAlert>')
 
+# Standart aylanish: dastlabki 7 ta element o'zgarmagan (testlar STREAM_LIMIT=7 bilan shularga tayanadi), keyin yangi aqlli voqealar.
+BASE_SEQ = ["videoloss:inactive", "linedetection", "videoloss:inactive", "fielddetection+jpeg", "VMD", "shelteralarm", "videoloss:inactive"]
+SMART_SEQ = ["regionEntrance+jpeg", "regionExiting", "videoloss:inactive", "loitering", "peopleGathering", "running", "videoloss:inactive",
+             "unattendedBaggage+jpeg", "attendedBaggage", "objectRemoval", "videoloss:inactive", "defocus", "scenechangedetection",
+             "personQueueDetection", "regionPeopleCounting", "videoloss:inactive"]
+THERMAL_SEQ = ["fireDetection+jpeg", "smokeDetection", "TMA", "videoloss:inactive"]
+
+def _sequence() -> list:
+    if CFG["events"]: return [s.strip() for s in CFG["events"].split(",") if s.strip()]   # aynan berilgani
+    return BASE_SEQ + SMART_SEQ + (THERMAL_SEQ if CFG["thermal"] else [])
+
+def _item(item: str):
+    """'tur[:holat][+jpeg][=qiymat]' → (tur, holat, jpeg, qiymat)."""
+    item, _, val = item.partition("=")
+    jpeg = "+jpeg" in item; item = item.replace("+jpeg", "")
+    typ, _, st = item.partition(":")
+    return typ.strip(), (st.strip() or "active"), jpeg, val.strip()
+
 @app.get("/ISAPI/Event/notification/alertStream")
 async def alert_stream():
+    seq = _sequence()
     async def gen():
-        seq = ["videoloss:inactive", "linedetection", "videoloss:inactive", "fielddetection+jpeg", "VMD", "shelteralarm", "videoloss:inactive"]
         n = 0
-        while True:
-            item = seq[n % len(seq)]; n += 1
-            typ, _, st = item.partition(":")
-            jpeg = typ.endswith("+jpeg"); typ = typ.replace("+jpeg", "")
-            x = _alert(typ, st or "active").encode()
+        while seq:
+            typ, st, jpeg, val = _item(seq[n % len(seq)]); n += 1
+            x = _alert(typ, st, _extra(typ, val)).encode()
             yield b"--boundary\r\nContent-Type: application/xml; charset=\"UTF-8\"\r\nContent-Length: " + str(len(x)).encode() + b"\r\n\r\n" + x + b"\r\n"
             if jpeg:   # haqiqiy kameralar voqea bilan rasm ham yuboradi — ulagich uni saqlamasdan tashlashi kerak
                 img = b"\xff\xd8\xff\xe0" + os.urandom(2048) + b"\xff\xd9"
@@ -122,4 +198,4 @@ async def alert_stream():
 
 @app.get("/__stats")   # faqat emulyator: test uchun hisoblagichlar (haqiqiy kamerada yo'q)
 def stats():
-    return STATS
+    return {**STATS, "model": CFG["model"], "family": _family(CFG["model"])[0], "events": len(_sequence())}

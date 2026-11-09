@@ -1,19 +1,41 @@
-"""JARVIS MVP — veb-server. Ishga tushirish: ./run.sh  (http://localhost:8000)"""
+"""ISFT Core MVP — veb-server. Ishga tushirish: ./run.sh  (http://localhost:8000)"""
 import datetime as dt
 from pathlib import Path
 from fastapi import FastAPI, Request, HTTPException, Response
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from . import db, rbac, services as S, ai, reports, documents as D, service as SV, occupancy as OC, decisions as DEC, student_ops as OPSM
+from . import db, rbac, services as S, ai, reports, documents as D, service as SV, occupancy as OC, decisions as DEC, student_ops as OPSM, agent as AG
 from .rbac import AccessDenied
 
 ROOT = Path(__file__).resolve().parent.parent
-app = FastAPI(title="JARVIS — ISFT")
+app = FastAPI(title="ISFT Core")
 con = db.connect()
 db.init(con)  # yangi jadvallar (masalan, documents) mavjud bazaga ham qo'shiladi
 DEC.init(con)  # majlis qarori oqimi: meetings/tasks kengaytmasi, chat, tarix, demo akkauntlar
 OPSM.init(con)  # talabalar markazi: qoidalar, holatlar, call-markaz, otrabotka
+# "Lavozim ism" hujjatidagi bo'lim (id'lar o'zgarmasligi uchun seed'dan keyin qo'shiladi)
+if db.one(con, "SELECT 1 x FROM users") and not db.one(con, "SELECT 1 x FROM users WHERE role='amaliyot'"):
+    con.execute("INSERT INTO users(full_name,role,link_code,pin) VALUES(?,?,?,?)",
+                ("Amaliyot bo'limi: Suhrob Bahodirovich", "amaliyot", "AMALIYOT", rbac.hash_password(rbac.DEMO_PASSWORD))); con.commit()
+# Har bir kafedra mudiri uchun akkaunt ("Lavozim ism" hujjati) — kirish sahifasidagi "Kafedralar" bo'limi
+if db.one(con, "SELECT 1 x FROM users"):
+    for d in db.rows(con, "SELECT * FROM departments ORDER BY id"):
+        if not d.get("head") or db.one(con, "SELECT 1 x FROM users WHERE role='kafedra' AND department_id=?", (d["id"],)): continue
+        con.execute("INSERT INTO users(full_name,role,faculty_id,department_id,link_code,pin) VALUES(?,?,?,?,?,?)",
+                    (f"{d['name']} kafedrasi mudiri: {d['head']}", "kafedra", d["faculty_id"], d["id"], f"KAF{d['id']}", rbac.hash_password(rbac.DEMO_PASSWORD)))
+    con.commit()
+
+# Rahbarlar rasmlari (isft.uz saytidan): static/brand/people/index.json — {ism: /brand/people/av/…jpg}
+import json as _json, re as _re
+def _pkey(n):
+    n = _re.sub(r"[ʻʼ‘’'`´]", "", (n or "").split(":")[-1].lower()).split()
+    return " ".join(n[:2])
+try:
+    PHOTOS = {_pkey(k): v for k, v in _json.load(open(ROOT / "static" / "brand" / "people" / "index.json", encoding="utf-8")).items()}
+except (OSError, ValueError):
+    PHOTOS = {}
+def photo_of(u): return PHOTOS.get(_pkey(u["full_name"])) if ":" in (u.get("full_name") or "") else None
 
 @app.on_event("startup")
 async def _warm():
@@ -23,12 +45,16 @@ async def _warm():
     asyncio.create_task(OC.events_supervisor())   # Hikvision voqealar oqimi tinglovchilari
     asyncio.create_task(OPSM.poller())   # qoidalar har 10 daqiqada qayta hisoblanadi
 
+from . import sessions as SS
+SS.init(con)
+COOKIE = "sid"
+
 def ctx(request: Request) -> rbac.Ctx:
-    uid = request.cookies.get("uid")
+    uid = SS.resolve(con, request.cookies.get(COOKIE))
     if not uid:
         raise HTTPException(401, "Kirish talab qilinadi")
     try:
-        return rbac.ctx_for(con, int(uid))
+        return rbac.ctx_for(con, uid)
     except AccessDenied as e:
         raise HTTPException(401, str(e))
 
@@ -38,31 +64,57 @@ async def denied(_, e: AccessDenied):
 
 class Login(BaseModel):
     user_id: int
-    pin: str
+    password: str = ""
+    pin: str = ""      # eski mijozlar uchun
 
 @app.get("/api/users")
 def users():
-    return [{"id": u["id"], "name": u["full_name"], "role": rbac.ROLES[u["role"]].title, "level": rbac.ROLES[u["role"]].level}
-            for u in db.rows(con, "SELECT * FROM users ORDER BY id")]
+    us = db.rows(con, "SELECT * FROM users ORDER BY id")
+    # "Kafedralar" bo'limida faqat kafedra mudirlari (kafedralar tartibida); dekan/tyutor/o'qituvchi demo akkauntlari
+    # kirish ro'yxatida ko'rsatilmaydi (API orqali ishlashda davom etadi)
+    us = [u for u in us if rbac.ROLES[u["role"]].level != 4 or u["role"] == "kafedra"]
+    us.sort(key=lambda u: (rbac.ROLES[u["role"]].level, u.get("department_id") or 0, u["id"]))
+    return [{"id": u["id"], "name": u["full_name"], "role": rbac.user_title(u), "level": rbac.ROLES[u["role"]].level, "photo": photo_of(u)} for u in us]
+
+def _ip(request: Request) -> str:
+    return (request.client.host if request.client else "") or "?"
 
 @app.post("/api/login")
-def login(body: Login, response: Response):
+def login(body: Login, request: Request, response: Response):
+    ip = _ip(request)
+    wait = SS.LOGIN_USER.wait_min(body.user_id) or SS.LOGIN_IP.wait_min(ip)
+    if wait:
+        raise HTTPException(429, f"Juda ko'p noto'g'ri urinish. {wait} daqiqadan keyin qayta urinib ko'ring.")
     u = db.one(con, "SELECT * FROM users WHERE id=?", (body.user_id,))
-    if not u or u["pin"] != body.pin:
-        raise HTTPException(401, "PIN noto'g'ri")
+    pw = body.password or body.pin
+    if not u or not rbac.check_password(u["pin"], pw):
+        left = SS.LOGIN_USER.fail(body.user_id); SS.LOGIN_IP.fail(ip)
+        if u:
+            rbac.audit(con, rbac.Ctx(u, rbac.ROLES[u["role"]]), "tizimga kirish", "auth", False, f"noto'g'ri parol · IP {ip}")
+        raise HTTPException(401, "Parol noto'g'ri" + (f" · yana {left} ta urinish qoldi" if 0 < left < 3 else ""))
+    SS.LOGIN_USER.reset(body.user_id)
+    if not str(u["pin"]).startswith("pbkdf2$"):   # eski ochiq yozuvni xeshga o'tkazamiz
+        u = dict(u); u["pin"] = rbac.hash_password(pw)
+        con.execute("UPDATE users SET pin=? WHERE id=?", (u["pin"], u["id"])); con.commit()
     c = rbac.Ctx(u, rbac.ROLES[u["role"]])
     rbac.audit(con, c, "tizimga kirish", "auth", True)
-    response.set_cookie("uid", str(u["id"]), httponly=True, samesite="lax", max_age=12*3600)
+    response.set_cookie(COOKIE, SS.create(con, u, ip), httponly=True, samesite="lax", max_age=SS.TTL,
+                        secure=request.url.scheme == "https")
+    response.delete_cookie("uid")       # eski formatdagi cookie
     return {"ok": True}
 
 @app.post("/api/logout")
-def logout(response: Response):
-    response.delete_cookie("uid"); return {"ok": True}
+def logout(request: Request, response: Response):
+    tok = request.cookies.get(COOKIE)
+    uid = SS.resolve(con, tok)
+    if uid: AG.forget(uid)
+    SS.revoke(con, tok)
+    response.delete_cookie(COOKIE); response.delete_cookie("uid"); return {"ok": True}
 
 @app.get("/api/me")
 def me(request: Request):
     c = ctx(request)
-    return {"id": c.user["id"], "name": c.user["full_name"], "role": c.role.title, "role_key": c.role.key, "level": c.role.level,
+    return {"id": c.user["id"], "name": c.user["full_name"], "role": c.title, "greet": rbac.greeting(c.user), "photo": photo_of(c.user), "role_key": c.role.key, "level": c.role.level,
             "scope": c.scope_label(con), "allow": sorted(c.role.allow), "deny_note": c.role.deny_note,
             "labels": rbac.LABELS, "today": S.TODAY.isoformat()}
 
@@ -96,7 +148,17 @@ class Q(BaseModel):
 @app.post("/api/chat")
 async def chat(body: Q, request: Request):
     c = ctx(request)
-    return StreamingResponse(ai.answer(con, c, body.q.strip()[:1000]), media_type="text/plain; charset=utf-8")
+    return StreamingResponse(AG.run(con, c, body.q.strip()[:1000]), media_type="application/x-ndjson; charset=utf-8")
+
+class Reason(BaseModel):
+    reason: str
+
+@app.post("/api/students/breakglass")
+def breakglass(body: Reason, request: Request):
+    try:
+        return AG.breakglass(con, ctx(request), body.reason)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 @app.get("/api/report/{kind}")
 def report(kind: str, request: Request):
@@ -122,7 +184,9 @@ class Meeting(BaseModel):
 ROLE_FIRST = [("dekan", "dekan"), ("kafedra", "kafedra"), ("o'qituvchi", "oqituvchi")]
 ROLE_PROREKTOR = [("o'quv", "prorektor_oquv"), ("ilmiy", "prorektor_ilmiy"), ("moliya", "prorektor_moliya"), ("yoshlar", "prorektor_yoshlar")]
 ROLE_UNITS = [("qabul", "qabul"), ("xalqaro", "xalqaro"), ("registrator", "talabalar"), ("axborot texnologiyalari", "it_head"), ("buxgalter", "buxgalteriya"), ("kadr", "kadrlar"), ("talabalar bilan", "talabalar"),
-              ("magistr", "magistratura"), ("ilmiy tadqiqot", "ilmiy_bolim"), ("xo'jalik", "xojalik")]
+              ("magistr", "magistratura"), ("ilmiy tadqiqot", "ilmiy_bolim"), ("xo'jalik", "xojalik"),
+              ("akademik faoliyat", "akademik"), ("imtihon", "imtihon"),
+              ("sirtqi", "sirtqi"), ("ma'lumotlar bazasi", "malumotlar_bazasi")]
 
 def role_for(who: str) -> str:
     low = ai.norm(who or "")
@@ -179,8 +243,8 @@ async def doc(body: Doc, request: Request):
     c = ctx(request)
     if body.mode not in ("translate", "contract", "reply"): raise HTTPException(400)
     if c.role.level > 3 and c.role.key != "dekan":
-        raise AccessDenied("⛔ Hujjat yordamchisi rahbariyat va bo'limlar uchun.")
-    rbac.audit(con, c, f"hujjat yordamchisi: {body.mode}", "docs", True, body.text[:80])
+        raise AccessDenied("⛔ Tarjima va shartnoma yordamchisi rahbariyat va bo'limlar uchun.")
+    rbac.audit(con, c, f"tarjima va shartnoma yordamchisi: {body.mode}", "docs", True, body.text[:80])
     return {"result": await ai.doc_assist(body.text, body.mode)}
 
 @app.get("/api/rbac")
@@ -271,9 +335,24 @@ SV.bind(con, ctx)
 app.include_router(SV.router)
 OC.bind(con, ctx)
 app.include_router(OC.router)
+from . import camsec as CS   # kameralar: xavfsizlik voqealari, salomatlik, navbat, haftalik hisobot
+CS.bind(con, ctx)
+app.include_router(CS.router)
 DEC.bind(con, ctx)
 app.include_router(DEC.router)
 OPSM.bind(con, ctx)
 app.include_router(OPSM.router)
+from . import agent_hub as AH
+AH.init(con)
+AH.bind(con, ctx)
+app.include_router(AH.router)
+from . import portal as PT   # bo'limlararo portal: yozishmalar, fayllar, umumiy bazalar
+PT.init(con)
+PT.bind(con, ctx)
+app.include_router(PT.router)
+from . import extras as XT   # parolni o'zgartirish, global qidiruv, bildirishnomalar, kalendar
+XT.init(con)
+XT.bind(con, ctx)
+app.include_router(XT.router)
 
 app.mount("/", StaticFiles(directory=ROOT / "static", html=True), name="static")

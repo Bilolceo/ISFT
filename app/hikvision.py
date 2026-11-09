@@ -44,28 +44,60 @@ def xml_ints(text: str, *names) -> dict:
 # ---------------------------------------------------------------------------------------------
 # Voqealar: normallashtirish
 # ---------------------------------------------------------------------------------------------
-# Hikvision eventType → JARVIS turi. None — saqlanmaydi (shovqin).
+# Hikvision eventType (kichik harfda) → ISFT Core turi. None — saqlanmaydi (shovqin).
+# Ustuvorlik va kimga borishi — app/camsec.py POLICY. Teg nomlari ISAPI hujjatlariga yaqin; haqiqiy proshivkada qayta tekshiriladi.
 EVENT_KIND = {
     "linedetection": "chiziq_kesish", "fielddetection": "hududga_kirish", "regionentrance": "hududga_kirish",
-    "regionexiting": "hududdan_chiqish", "peoplecounting": "odam_soni", "regionpeoplecounting": "odam_soni",
+    "regionexiting": "hududdan_chiqish", "loitering": "uzoq_turish", "peoplegathering": "toplanish", "running": "yugurish",
+    "unattendedbaggage": "qarovsiz_buyum", "attendedbaggage": "buyum_olindi", "objectremoval": "buyum_olindi",
+    "peoplecounting": "odam_soni", "regionpeoplecounting": "odam_soni",
     "videoloss": "video_yoqoldi", "shelteralarm": "kamera_yopildi", "tamperdetection": "kamera_yopildi",
-    "scenechangedetection": "kamera_siljidi", "defocus": "kamera_siljidi", "vmd": None,
+    "scenechangedetection": "kamera_siljidi", "defocus": "kamera_siljidi",
+    "firedetection": "yongin", "smokedetection": "tutun", "smokeandfiredetection": "yongin",
+    "tma": "harorat", "tmpa": "harorat", "temperature": "harorat", "temperaturealarm": "harorat", "thermometry": "harorat",
+    "personqueuedetection": "navbat", "queuemanagement": "navbat", "personqueuecounting": "navbat", "personqueuetime": "navbat",
+    "vmd": "harakat",
 }
-KIND_LABEL = {"chiziq_kesish": "Chiziq kesildi", "hududga_kirish": "Hududga kirish", "hududdan_chiqish": "Hududdan chiqish",
-              "odam_soni": "Odamlar soni", "video_yoqoldi": "Tasvir yo'qoldi", "kamera_yopildi": "Kamera yopildi / buzildi",
-              "kamera_siljidi": "Kamera siljidi / fokus", "olomon": "Olomon zichligi"}
+# Biometrik / avtoraqam voqealari — bayroq ortida (standart holatda O'CHIQ, ZRU-547: alohida yozma rozilik kerak)
+FACE_TYPES = {"facesnap", "facecapture", "facedetection", "facematch", "facecontrast", "alarmresult", "accesscontrollerevent"}
+ANPR_TYPES = {"anpr", "vehicledetection", "licenseplate"}
+KIND_LABEL = {"chiziq_kesish": "Chiziq kesildi", "hududga_kirish": "Taqiqlangan hududga kirish", "hududdan_chiqish": "Hududdan chiqish",
+              "uzoq_turish": "Uzoq turib qolish", "toplanish": "Odamlar to'planishi", "yugurish": "Yugurish",
+              "qarovsiz_buyum": "Qarovsiz buyum", "buyum_olindi": "Buyum olib ketildi",
+              "odam_soni": "Odamlar soni", "video_yoqoldi": "Tasvir yo'qoldi", "kamera_yopildi": "Kamera to'sib qo'yildi / buzildi",
+              "kamera_siljidi": "Kamera siljidi / fokus buzildi", "olomon": "Olomon zichligi", "yongin": "Yong'in aniqlandi",
+              "tutun": "Tutun aniqlandi", "harorat": "Harorat chegaradan oshdi", "navbat": "Navbat chegaradan oshdi",
+              "harakat": "Harakat (qo'riqlanadigan hudud)", "sigim_oshdi": "Xona sig'imdan oshdi (110%+)",
+              "xodim_keldi": "Xodim keldi (rozilik bergan)", "avtoraqam": "Xodim avtomobili"}
 
-def normalize(ev: dict) -> dict | None:
-    """Xom voqea → normallashtirilgan. Yurak urishi (videoloss inactive) va shovqin (VMD) — None."""
+def normalize(ev: dict, keep_vmd: bool = False, face: bool = False, anpr: bool = False) -> dict | None:
+    """Xom voqea → normallashtirilgan. Yurak urishi (videoloss inactive) va shovqin — None.
+    VMD (oddiy harakat) faqat qo'riqlanadigan hududda (keep_vmd) saqlanadi. Yuz va avtoraqam — faqat bayroq yoqilganda."""
     raw = (ev.get("type") or "").strip()
     low = raw.lower()
     state = (ev.get("state") or "").lower()
     if low == "videoloss" and state != "active":
         return None                         # Hikvision oqimi har ~10 s shunday "yurak urishi" yuboradi
-    kind = EVENT_KIND.get(low, "olomon" if "density" in low or "crowd" in low else f"boshqa:{low}" if low else None)
+    if low in FACE_TYPES:
+        if not face: return None            # FEATURE_FACE=0 — biometrik voqea umuman qayta ishlanmaydi
+        kind = "xodim_keldi"
+    elif low in ANPR_TYPES:
+        if not anpr: return None
+        kind = "avtoraqam"
+    else:
+        kind = EVENT_KIND.get(low, "olomon" if "density" in low or "crowd" in low else f"boshqa:{low}" if low else None)
+    if kind == "harakat" and not keep_vmd: return None
     if kind is None: return None
     return {"kind": kind, "raw_type": raw, "state": state or "active", "channel": ev.get("channel"),
-            "dev_ts": ev.get("ts"), "count": ev.get("count"), "desc": ev.get("desc")}
+            "dev_ts": ev.get("ts"), "count": ev.get("count"), "desc": ev.get("desc"), "value": ev.get("value"),
+            "wait_s": ev.get("wait_s"), "subject": ev.get("subject") if face or anpr else None}
+
+def _num(m, *keys):
+    for k in keys:
+        v = (m.get(k) or "").strip()
+        try: return float(v)
+        except ValueError: pass
+    return None
 
 def parse_alert(xml_text: str) -> dict | None:
     try:
@@ -74,9 +106,14 @@ def parse_alert(xml_text: str) -> dict | None:
         return None
     if "eventType" not in m: return None
     ch = m.get("channelID") or m.get("dynChannelID") or m.get("videoInputChannelID")
-    cnt = next((int(m[k]) for k in ("peopleNum", "personCount", "regionPeopleNum", "currentPeopleNum") if m.get(k, "").isdigit()), None)
+    cnt = next((int(m[k]) for k in ("peopleNum", "personCount", "regionPeopleNum", "currentPeopleNum", "queueLength", "personQueueNum",
+                                    "queuePeopleNum") if m.get(k, "").isdigit()), None)
+    wait = _num(m, "waitingTime", "waitTime", "averageWaitingTime")
+    temp = _num(m, "maxTemperature", "currentTemperature", "temperature")
+    # yuz/avtoraqam: rasm EMAS — faqat xodim raqami / avtoraqam matni (bayroq yoqilganda, ro'yxat bilan solishtiriladi)
+    subj = m.get("employeeNoString") or m.get("licensePlate") or None
     return {"type": m.get("eventType"), "state": m.get("eventState"), "channel": int(ch) if (ch or "").isdigit() else None,
-            "ts": m.get("dateTime"), "desc": m.get("eventDescription"), "count": cnt}
+            "ts": m.get("dateTime"), "desc": m.get("eventDescription"), "count": cnt, "wait_s": wait, "value": temp, "subject": subj}
 
 class AlertStreamParser:
     """alertStream baytlaridan XML voqealarni ajratadi. Multipart chegaralariga tayanmaydi (modellar orasida farq qiladi):
@@ -205,6 +242,18 @@ class HikClient:
         if not v.get("enterCount"): raise IsapiError("Kamera kirish/chiqish statistikasini qaytarmadi")
         return max(0, sum(v["enterCount"]) - sum(v.get("exitCount", [0])))
 
+    async def queue_status(self, channel: int = 1, path: str = "/ISAPI/Intelligent/channels/{ch}/queueManagement/status") -> dict:
+        """Navbat uzunligi va kutish vaqti (DeepinView/AcuSense navbat boshqaruvi). Yo'l modelga bog'liq — ISFT_CORE_CAM_QUEUE_PATH."""
+        try:
+            r = await self._req("GET", path.format(ch=channel), "Navbat holati")
+        except NotSupported:
+            raise IsapiError("Kamerada navbat boshqaruvi (Queue Management) yo'q yoki yoqilmagan")
+        m = xml_map(r.text)
+        n = _num(m, "queueLength", "personQueueNum", "queuePeopleNum")
+        if n is None: raise IsapiError("Javobda navbat uzunligi topilmadi")
+        w = _num(m, "waitingTime", "waitTime", "averageWaitingTime")
+        return {"length": int(n), "wait_s": int(w) if w is not None else None}
+
     async def alert_stream(self, stats: dict | None = None):
         """Uzluksiz voqealar oqimi. Har bir XML voqeani (xom) qaytaradi; rasm qismlari tashlanadi.
         Ulanish uzilsa — generator tugaydi (qayta ulanish chaqiruvchida, backoff bilan)."""
@@ -221,17 +270,26 @@ class HikClient:
         except httpx.TimeoutException: raise IsapiError("Voqealar oqimi: 90 s davomida ma'lumot kelmadi")
         except httpx.HTTPError as e: raise IsapiError(f"Voqealar oqimi uzildi: {e.__class__.__name__}")
 
+SKEW_WARN_S = 60
+
+def _dur(s: int) -> str:
+    return f"{s} soniya" if s < 120 else f"{s // 60} daqiqa"
+
+def fw_too_old(fw_date: str) -> bool:
+    d = re.sub(r"\D", "", fw_date or "")   # "build 210628" yoki "20210628"
+    ym = (2000 + int(d[:2]), int(d[2:4])) if len(d) == 6 else (int(d[:4]), int(d[4:6])) if len(d) == 8 else None
+    return bool(ym and ym < (2021, 9))
+
 def warnings(caps: dict) -> list:
     w = []
     sk = caps.get("clock_skew_s")
-    if sk is not None and abs(sk) > 120:
-        w.append(f"Qurilma soati serverdan {abs(sk) // 60} daqiqa {'oldinda' if sk > 0 else 'orqada'} — NTP sozlansin (sanash hisobotlari siljiydi)")
+    if sk is not None and abs(sk) > SKEW_WARN_S:
+        w.append(f"Qurilma soati serverdan {_dur(abs(sk))} {'oldinda' if sk > 0 else 'orqada'} — NTP sozlansin (voqealar server vaqti bilan yoziladi, "
+                 "lekin kamera hisobotlari siljiydi)")
     if caps.get("counting") is False and not caps.get("region_counting"):
         w.append("Odam sanash funksiyasi yo'q yoki yoqilmagan — bandlik o'lchanmaydi")
     if caps.get("events") is False:
         w.append("Voqealar tizimi mavjud emas — faqat davriy so'rov ishlaydi")
-    d = re.sub(r"\D", "", (caps.get("device") or {}).get("firmware_date", ""))   # "build 210628" yoki "20210628"
-    ym = (2000 + int(d[:2]), int(d[2:4])) if len(d) == 6 else (int(d[:4]), int(d[4:6])) if len(d) == 8 else None
-    if ym and ym < (2021, 9):
+    if fw_too_old((caps.get("device") or {}).get("firmware_date", "")):
         w.append("Proshivka 2021-sentabrdan eski — CVE-2021-36260 zaifligi bo'lishi mumkin, yangilansin")
     return w

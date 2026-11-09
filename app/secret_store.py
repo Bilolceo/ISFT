@@ -3,7 +3,7 @@
 Nega: SQLite bazasi zaxira nusxalarga, eksportlarga va tahlil skriptlariga tushadi; parol u yerda ochiq turmasligi kerak.
 
 Rejimlar:
-  * fernet  — `cryptography` o'rnatilgan bo'lsa: AES-128-CBC + HMAC (Fernet). Kalit: JARVIS_SECRET_KEY muhit o'zgaruvchisi
+  * fernet  — `cryptography` o'rnatilgan bo'lsa: AES-128-CBC + HMAC (Fernet). Kalit: ISFT_CORE_SECRET_KEY muhit o'zgaruvchisi
               yoki data/secrets/master.key (0600, birinchi ishga tushishda yaratiladi). Kalit bazadan alohida saqlanishi shart.
   * file    — kutubxona yo'q bo'lsa: qiymatlar data/secrets/store.json da (0600, faqat server foydalanuvchisi o'qiydi).
               Bu shifrlash EMAS — faqat bazadan ajratish. `status()` buni ochiq aytadi; ishlab chiqarishda fernet rejimi talab qilinadi:
@@ -13,7 +13,7 @@ O'z kriptografiyamizni yozmaymiz.
 import base64, json, os, threading
 from pathlib import Path
 
-DIR = Path(os.getenv("JARVIS_SECRETS_DIR", Path(__file__).resolve().parent.parent / "data" / "secrets"))
+DIR = Path(os.getenv("ISFT_CORE_SECRETS_DIR", Path(__file__).resolve().parent.parent / "data" / "secrets"))
 STORE = DIR / "store.json"
 KEYFILE = DIR / "master.key"
 _lock = threading.Lock()
@@ -40,7 +40,7 @@ def _write_private(path: Path, data: bytes):
 
 def _fernet():
     if Fernet is None: return None
-    k = os.getenv("JARVIS_SECRET_KEY")
+    k = os.getenv("ISFT_CORE_SECRET_KEY")
     if not k:
         if not KEYFILE.exists():
             _write_private(KEYFILE, Fernet.generate_key())
@@ -69,7 +69,7 @@ def get(name: str) -> str | None:
         f = _fernet()
         if not f: raise RuntimeError("Sir fernet bilan shifrlangan, lekin `cryptography` o'rnatilmagan")
         try: return f.decrypt(d["v"].encode()).decode()
-        except InvalidToken: raise RuntimeError("Sirni ochib bo'lmadi: kalit noto'g'ri (JARVIS_SECRET_KEY / master.key)")
+        except InvalidToken: raise RuntimeError("Sirni ochib bo'lmadi: kalit noto'g'ri (ISFT_CORE_SECRET_KEY / master.key)")
     return base64.b64decode(d["v"]).decode()
 
 def delete(name: str) -> None:

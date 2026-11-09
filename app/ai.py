@@ -1,4 +1,4 @@
-"""JARVIS AI qatlami. Til modeli mahalliy (Ollama) ishlaydi — ma'lumot serverdan chiqmaydi.
+"""ISFT Core AI qatlami. Til modeli mahalliy (Ollama) ishlaydi — ma'lumot serverdan chiqmaydi.
 Muhim tamoyil: model bazaga to'g'ridan-to'g'ri kirmaydi. U faqat RBAC dan o'tgan servis natijalarini ko'radi."""
 import json, os, re, datetime as dt
 import httpx
@@ -6,11 +6,11 @@ from . import services as S, db
 from .rbac import AccessDenied, Ctx, audit
 
 OLLAMA = os.getenv("OLLAMA_URL", "http://localhost:11434")
-MODEL = os.getenv("JARVIS_MODEL", "qwen3:8b")
+MODEL = os.getenv("ISFT_CORE_MODEL", "qwen3:8b")
 
 TOOLS = {
     "academic": (S.academic_overview, "o'zlashtirish, o'rtacha ball, davomat, pasaygan guruhlar"),
-    "risk": (S.at_risk_students, "akademik xavf ostidagi talabalar"),
+    "risk": (S.at_risk_students, "o'qishda xavf ostidagi talabalar (o'zlashtirish yoki davomat)"),
     "contracts": (S.contracts_summary, "kontrakt to'lovlari va qarzdorlik"),
     "finance": (S.finance_summary, "byudjet rejasi va haqiqiy xarajatlar"),
     "payroll": (S.payroll_summary, "ish haqi fondi"),
@@ -21,6 +21,8 @@ TOOLS = {
     "youth": (S.youth_summary, "tadbirlar, anonim murojaatlar (institutda yotoqxona yo'q)"),
     "masters": (S.masters_summary, "magistratura, dissertatsiyalar"),
     "tasks": (S.tasks_list, "majlis topshiriqlari va ularning muddati"),
+    "cameras": (lambda con, ctx, quiet=False: __import__("app.camsec", fromlist=["agent_tool"]).agent_tool(con, ctx, quiet),
+                "kameralar: bo'sh turgan xonalar, xavfsizlik voqealari, navbat, kamera holati (faqat metama'lumot)"),
 }
 KEYWORDS = {
     "academic": ["o'zlashtir", "baho", "ball", "gpa", "davomat", "akademik", "pasay", "o'quv", "kurs", "guruh"],
@@ -35,6 +37,8 @@ KEYWORDS = {
     "youth": ["yotoqxona", "tadbir", "murojaat", "yoshlar", "ma'naviy", "isitish"],
     "masters": ["magistr", "dissertatsiya", "ilmiy rahbar"],
     "tasks": ["topshiriq", "majlis", "kengash", "muddat", "vazifa", "bajaril"],
+    "cameras": ["kamera", "xavfsizlik voqea", "xavfsizlik hodisa", "bo'sh turdi", "bo'sh turgan", "bo'sh qolgan", "xonalar bo'sh", "bo'sh xona",
+                "oshxona", "serverxona", "navbat uzun", "navbatda", "navbat qancha", "oflayn", "tungi kirish", "noto'g'ri signal"],
 }
 STRATEGIC = ["ortda", "muammo", "umumiy holat", "nima qilish", "tavsiya", "xulosa", "qanday holat", "e'tibor", "strateg", "brifing", "bugun"]
 
@@ -44,6 +48,8 @@ def norm(t: str) -> str:
 def route(q: str) -> list[str]:
     q = norm(q)
     hit = [k for k, ws in KEYWORDS.items() if any(w in q for w in ws)]
+    if "cameras" in hit and "risk" in hit and not any(w in q.replace("xavfsizlik", "") for w in KEYWORDS["risk"]):
+        hit.remove("risk")      # "xavfsizlik voqeasi" — kamera mavzusi, "o'qishda xavf" emas
     if "risk" in hit and "academic" in hit: hit.remove("academic")
     return hit
 
@@ -140,7 +146,7 @@ def gather(con, ctx: Ctx, names: list[str], q: str):
             denied.append(str(e))
     return data, denied
 
-SYSTEM = """Sen JARVIS — {inst} rahbariyati uchun sun'iy intellektli yordamchisan.
+SYSTEM = """Sen ISFT Core — {inst} rahbariyati uchun sun'iy intellektli yordamchisan.
 Bugun: {today}. Suhbatdosh: {who} ({role}). Ko'rish ko'lami: {scope}.
 QOIDALAR:
 1. Faqat o'zbek tilida (lotin yozuvida) javob ber. Rasmiy, qisqa va aniq yoz.
@@ -158,9 +164,9 @@ def fallback_answer(data: dict, denied: list[str]) -> str:
     for k, v in data.items():
         if k == "academic":
             t = v["total"]; lines.append(f"• {v['scope']}: {t['n']} talaba, o'rtacha ball {t['gpa']} (avval {t['gpa_prev']}), davomat {t['attendance']}%.")
-            for g in v["declining_groups"][:3]: lines.append(f"• {g['name']} guruhi ({g['faculty']}): o'rtacha ball {round(g['gpa'] - g['delta'], 1)} dan {g['gpa']} ga tushgan ({abs(g['delta'])} ballga pasaygan)" + (f", davomat {g['attendance']}%." if g['attendance'] is not None else " (masofaviy guruh)."))
+            for c in v.get("declining_clusters", [])[:3]: lines.append(f"• {S.decline_text(c)}.")
         elif k == "risk":
-            lines.append(f"• Xavf ostida: {v['count']} nafar talaba ({v['of']} nafardan). Eng ko'p: " + ", ".join(f"{g['group']} ({g['count']} nafar)" for g in v["by_group"][:4]) + ".")
+            lines.append(f"• O'qishda xavf: {v['count']} nafar talaba ({v['of']} nafardan; o'zlashtirish yoki davomat). Eng ko'p: " + ", ".join(f"{g['group']} ({g['count']} nafar)" for g in v["by_group"][:4]) + ".")
             if v.get("note"): lines.append(f"• {v['note']}.")
             for st in v.get("students", [])[:5]: lines.append(f"  – {st['full_name']} ({st['grp']}): xavf bali {st['risk']}, sabab: {st['reasons']}")
         elif k == "contracts":
@@ -169,7 +175,7 @@ def fallback_answer(data: dict, denied: list[str]) -> str:
             lines.append("• Eng past tushumli guruhlar: " + ", ".join(f"{g['grp']} ({g['pct']}%)" for g in v["worst_groups"][:4]) + ".")
         elif k == "finance":
             t = v["total"]; lines.append(f"• Byudjet ijrosi {t['pct']}% ({S.mln(t['actual'])} / {S.mln(t['planned'])}).")
-            for o in v["overruns"][:2]: lines.append(f"• {o['category']} {o['month']}: reja {o['over_pct']}% ga oshgan.")
+            for o in v["overruns"][:2]: lines.append(f"• {o['category']} {o['month']}: xarajat {S.mln(o['actual'])} — rejadagi {S.mln(o['planned'])} dan {o['over_pct']}% ko'p.")
         elif k == "science":
             lines.append(f"• Ilmiy daraja: {v['degree_pct']}%. 2026 nashrlari: " + ", ".join(f"{x['kind']} {x['n']}" for x in v["kinds_2026"]) + f". 2025 yildan beri nashrsiz: {v['no_pubs_since_2025']} o'qituvchi.")
         elif k == "international":

@@ -31,5 +31,5 @@ kabi narsalar yozilib qolmasligi uchun.
 Rektor, prorektorlar, bo'lim boshliqlari va kafedra mudirlarining ism-shariflari institut bergan "Lavozim ism" ro'yxatidan olingan
 (`app/seed.py`: `LEADERS`, `DEPT_HEADS`, `UNIT_HEADS`). Dekanlar va boshqa barcha xodim/talaba/o'qituvchilar — sun'iy.
 - Prorektorlar 4 nafar (ro'yxat bo'yicha); 2024 tuzilmasidagi Umumiy masalalar, Xalqaro aloqalar, Raqamlashtirish prorektorlari olib tashlandi.
-- Akademik faoliyat va registrator departamenti: Akademik faoliyatni muvofiqlashtirish bo'limi + Registrator ofisi (departament rahbari ko'rsatilmagan).
+- Avvalgi "Akademik faoliyat va registrator departamenti" ikkiga bo'lingan: **Registrator ofisi** (Baratov M.) va **Akademik faoliyatni boshqarish bo'limi** (Bo'tayev X.; nomi — taqdimot bo'yicha); alohida bo'limlar: Sirtqi bo'lim (Shayzakova Dilbar) va Ma'lumotlar bazasi bo'limi (Ismatov Ravshan) — "O'quv jarayoni va akademik qoidalar" taqdimoti; to'rt bo'lim vazifalari, Registrator ofisi manzili va murojaat masalalari (e'lon, 07.09) — `app/academic_rules.py`; shuningdek Imtihon bo'limi (Zafarbek Ilkhamovich) va Amaliyot bo'limi (Suhrob Bahodirovich) — "Lavozim ism" hujjati, 2026-11-08.
 - "Fundamental iqtisodiy fanlar" kafedrasi — fakultetga biriktirilmagan; Statistika, Mikro/Makroiqtisodiyot, Ekonometrika fanlarini o'qitadi (TAXMIN).

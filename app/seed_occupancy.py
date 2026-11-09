@@ -54,6 +54,11 @@ def run(con, R):
     OC._sched_cache["t"] = 0; OC.GHOST_TEACHER["id"] = None
     OC._sched(con)
 
+    # --- xizmat zonalari (qabul, kassa, oshxona, serverxona...) va hikoya-1 — app/seed_cameras.py ---
+    from . import seed_cameras
+    seed_cameras.prepare(con, R)
+    OC._sched(con)
+    rooms = [dict(r) for r in con.execute("SELECT * FROM rooms ORDER BY name")]   # endi koridor va xizmat zonalari ham kamerali
     # --- kameralar: hammasi simulyator (haqiqiy kamera ulanganda rejim 'isapi' ga o'tkaziladi) ---
     for r in rooms:
         c.execute("INSERT INTO cameras(room_id,vendor,mode,channel,status) VALUES(?,?,?,1,'kutilmoqda')", (r["id"], "Simulyator", "sim"))
@@ -71,3 +76,4 @@ def run(con, R):
     for r in rooms:
         c.execute("UPDATE cameras SET status='onlayn', last_seen=?, last_count=? WHERE room_id=?", (OC.iso(now), OC.sim_count(con, r["id"], now), r["id"]))
     con.commit()
+    seed_cameras.run(con, R)    # modellar, holat (oflayn / to'sib qo'yilgan / soat farqi), 30 kunlik voqealar, navbatlar

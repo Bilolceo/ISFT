@@ -7,7 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 TMP = Path(tempfile.mkdtemp(prefix="jarvis-hik-"))
-os.environ["JARVIS_SECRETS_DIR"] = str(TMP / "secrets")        # importdan OLDIN
+os.environ["ISFT_CORE_SECRETS_DIR"] = str(TMP / "secrets")        # importdan OLDIN
 sys.path.insert(0, str(ROOT))
 from app import db, hikvision as HK, secret_store as SS          # noqa: E402
 
@@ -16,7 +16,7 @@ def ok(cond, msg):
     global fails
     print(("✓ " if cond else "✗ XATO: ") + msg); fails += (not cond)
 
-PORT_OK, PORT_BAD, PORT_DEAD = 18090, 18091, 18099
+PORT_OK, PORT_BAD, PORT_DEAD, PORT_Q, PORT_EV = 18090, 18091, 18099, 18092, 18093
 PY = str(ROOT / ".venv" / "bin" / "python")
 procs = []
 def emulator(port, **env):
@@ -122,11 +122,12 @@ async def main():
     import datetime as dt
     con.execute("UPDATE rooms SET guard=1 WHERE id=?", (room,)); con.commit()
     camd = db.one(con, "SELECT * FROM cameras WHERE id=?", (cid,))
-    night = dt.datetime.now().replace(hour=23, minute=40)
+    # kechagi sana: bugungi kelajakdagi vaqt (masalan, yarim tundan keyin 23:40) takror-filtrni buzib, fon testini yiqitadi
+    night = (dt.datetime.now() - dt.timedelta(days=1)).replace(hour=23, minute=40)
     r1 = OC.handle_event(con, camd, {"type": "fielddetection", "state": "active"}, night)
     ok(r1 and r1["alert"] == 1, "Tunda qo'riqlanadigan xonaga kirish → ogohlantirish")
-    ok(OC.handle_event(con, camd, {"type": "fielddetection", "state": "active"}, night + dt.timedelta(seconds=10)) is None, "30 s ichida takror voqea — bitta yozuv")
-    day = dt.datetime.now().replace(hour=11, minute=0)
+    ok(OC.handle_event(con, camd, {"type": "fielddetection", "state": "active"}, night + dt.timedelta(seconds=10)) is None, "Dedup oynasida (5 daqiqa) takror voqea — bitta yozuv")
+    day = (dt.datetime.now() - dt.timedelta(days=1)).replace(hour=11, minute=0)
     if day.weekday() == 6: day -= dt.timedelta(days=1)
     r2 = OC.handle_event(con, camd, {"type": "linedetection", "state": "active"}, day)
     ok(r2 and r2["alert"] == 0, "Ish vaqtida kirish — ogohlantirishsiz qayd")
@@ -145,6 +146,94 @@ async def main():
     after = db.one(con, "SELECT COUNT(*) n FROM cam_events WHERE camera_id=?", (cid,))["n"]
     ok(after > before, f"Fon tinglovchisi voqealarni yozdi (+{after - before}); uzilgandan keyin qayta ulanadi")
     ok(not any(Path(TMP).rglob("*.jpg")) and db.one(con, "SELECT COUNT(*) n FROM cam_events WHERE raw_type LIKE '%jpeg%'")["n"] == 0, "Rasm/kadr saqlanmadi")
+
+    # ---------------- D. Kengaytma: yangi eventType'lar, ustuvorlik, dedup, bayroqlar, RBAC, navbat ----------------
+    from app import camsec as CS, rbac
+    from app.rbac import AccessDenied
+    NEW = {"linedetection": "chiziq_kesish", "fielddetection": "hududga_kirish", "regionEntrance": "hududga_kirish", "regionExiting": "hududdan_chiqish",
+           "loitering": "uzoq_turish", "peopleGathering": "toplanish", "running": "yugurish", "unattendedBaggage": "qarovsiz_buyum",
+           "attendedBaggage": "buyum_olindi", "objectRemoval": "buyum_olindi", "shelteralarm": "kamera_yopildi", "videoloss": "video_yoqoldi",
+           "defocus": "kamera_siljidi", "scenechangedetection": "kamera_siljidi", "fireDetection": "yongin", "smokeDetection": "tutun",
+           "TMA": "harorat", "temperature": "harorat", "personQueueDetection": "navbat", "regionPeopleCounting": "odam_soni"}
+    bad = [k for k, v in NEW.items() if (HK.normalize({"type": k, "state": "active"}) or {}).get("kind") != v]
+    ok(not bad, f"{len(NEW)} ta eventType normallashtirildi" + (f" — XATO: {bad}" if bad else ""))
+    ok(all(k in CS.POLICY for k in set(NEW.values())), "Har bir tur uchun ustuvorlik siyosati bor (P1–P4, kimga)")
+    ok(HK.normalize({"type": "VMD"}, keep_vmd=True)["kind"] == "harakat", "VMD faqat qo'riqlanadigan hududda saqlanadi")
+    ok(HK.normalize({"type": "faceSnap"}) is None and HK.normalize({"type": "ANPR"}) is None and not CS.FEATURE_FACE and not CS.FEATURE_ANPR,
+       "Yuzni tanish va avtoraqam — standart holatda O'CHIQ (voqea umuman qayta ishlanmaydi)")
+    q = HK.parse_alert('<EventNotificationAlert><eventType>personQueueDetection</eventType><queueLength>27</queueLength><waitingTime>840</waitingTime></EventNotificationAlert>')
+    ok(q["count"] == 27 and q["wait_s"] == 840, "Navbat voqeasi: uzunlik va kutish vaqti o'qildi")
+    ok(len(HK.warnings({"clock_skew_s": 75, "counting": True, "events": True, "device": {}})) == 1, "Soat farqi > 60 s — ogohlantirish")
+
+    con.execute("UPDATE cameras SET ticket_id=NULL WHERE id=?", (cid,)); con.commit()
+    camd = db.one(con, "SELECT * FROM cameras WHERE id=?", (cid,))
+    base = (dt.datetime.now() - dt.timedelta(days=2)).replace(hour=14, minute=0, second=0, microsecond=0)
+    if base.weekday() == 6: base -= dt.timedelta(days=1)
+    e1 = OC.handle_event(con, camd, {"type": "unattendedBaggage", "state": "active"}, base)
+    ok(e1 and e1["priority"] == 2 and "rektor" in e1["route"], f"Qarovsiz buyum → P{e1 and e1['priority']}, kimga: {e1 and e1['route']}")
+    ok(OC.handle_event(con, camd, {"type": "unattendedBaggage", "state": "active"}, base + dt.timedelta(minutes=4)) is None, "Dedup: 4 daqiqadan keyin takror — yangi yozuv yo'q")
+    ok(db.one(con, "SELECT dup FROM cam_events WHERE id=?", (e1["id"],))["dup"] == 1, "Dedup: takror mavjud yozuvga qo'shildi (dup=1)")
+    e3 = OC.handle_event(con, camd, {"type": "unattendedBaggage", "state": "active"}, base + dt.timedelta(minutes=10))
+    ok(e3 is not None, "Dedup oynasi (5 daqiqa) tugagach — yangi yozuv")
+    f1 = OC.handle_event(con, camd, {"type": "fireDetection", "state": "active"}, base + dt.timedelta(minutes=20))
+    ok(f1 and f1["priority"] == 1 and f1["ticket_id"], "Yong'in → P1, darhol xavfsizlik tiketi")
+    n0 = db.one(con, "SELECT COUNT(*) n FROM cam_events")["n"]
+    OC.handle_event(con, camd, {"type": "fireDetection", "state": "inactive"}, base + dt.timedelta(minutes=22))
+    ok(db.one(con, "SELECT COUNT(*) n FROM cam_events")["n"] == n0 and db.one(con, "SELECT status FROM cam_events WHERE id=?", (f1["id"],))["status"] == "yopildi",
+       "Voqea tugadi (inactive) — ochiq yozuv yopildi, yangi qator yo'q")
+
+    # RBAC: kamerani sozlash va voqeani belgilash — faqat rektor va xo'jalik
+    def uid(role): return db.one(con, "SELECT id FROM users WHERE role=? ORDER BY id LIMIT 1", (role,))["id"]
+    pro, dek, xoj = rbac.ctx_for(con, uid("prorektor_oquv")), rbac.ctx_for(con, uid("dekan")), rbac.ctx_for(con, uid("xojalik"))
+    OC._con = con
+    for c_, nm in ((pro, "O'quv prorektori"), (dek, "Dekan")):
+        try: OC._manage(c_, "kamera sozlamasi"); ok(False, f"{nm} kamerani sozlay olmasligi kerak")
+        except AccessDenied: ok(True, f"{nm} kamerani sozlay olmaydi (403)")
+        try: CS.event_action(con, c_, e1["id"], "notogri"); ok(False, f"{nm} voqeani belgilay olmasligi kerak")
+        except AccessDenied: ok(True, f"{nm} voqeani belgilay olmaydi (403)")
+    r = CS.event_action(con, xoj, e1["id"], "notogri", "test")
+    ok(r["status"] == "notogri", "Xo'jalik bo'limi voqeani 'noto'g'ri signal' deb belgiladi")
+    ok(db.one(con, "SELECT COUNT(*) n FROM audit_log WHERE action LIKE 'kamera voqeasi:%' AND allowed=0")["n"] >= 2, "Rad etilgan urinishlar audit jurnalida")
+    st = CS.events(con, xoj, days=7, quiet=True)["stats"]
+    ok(st["false"] >= 1, f"Noto'g'ri signal statistikaga kirdi ({st['false']} ta, {st['false_rate']}%)")
+
+    # Oflayn kamera (simulyator nosozligi) → 10 daqiqadan keyin BITTA tiket, ko'p so'rovda ham dublikat yo'q
+    sim = db.one(con, "SELECT c.id, c.room_id FROM cameras c JOIN rooms r ON r.id=c.room_id WHERE c.mode='sim' AND r.zone IS NULL AND c.id!=? "
+                      "AND c.sim_fault IS NULL LIMIT 1", (cid,))
+    con.execute("UPDATE cameras SET sim_fault='oflayn', ticket_id=NULL, fail_count=0, last_seen=? WHERE id=?",
+                ((dt.datetime.now() - dt.timedelta(minutes=12)).isoformat(timespec="seconds"), sim["id"])); con.commit()
+    for _ in range(OC.OFFLINE_FAILS + 3):
+        await OC.poll_once()
+    tk = db.rows(con, "SELECT id FROM tickets WHERE room_id=? AND item='Kamera' AND status!='hal qilindi'", (sim["room_id"],))
+    ok(len(tk) == 1, f"Oflayn kamera → bitta tiket (dublikat yo'q): {len(tk)} ta")
+    con.execute("UPDATE cameras SET sim_fault=NULL WHERE id=?", (sim["id"],)); con.commit()
+    await OC.poll_once()
+    ok(db.one(con, "SELECT status FROM tickets WHERE id=?", (tk[0]["id"],))["status"] == "hal qilindi", "Kamera qayta onlayn → tiket avtomatik yopildi")
+
+    # Navbat: emulyatordan holat + chegaradan oshganda voqea va cam_queue namunasi
+    emulator(PORT_Q, model="iDS-2CD7A46G0-IZHS", queue_len=27)
+    ok(wait_port(PORT_Q), "DeepinView emulyatori ishga tushdi")
+    qs = await HK.HikClient("127.0.0.1", "jarvis", "Test-Pass-123", port=PORT_Q).queue_status(1)
+    ok(qs["length"] == 27, f"Navbat holati (ISAPI queueManagement): {qs}")
+    qroom = db.one(con, "SELECT id FROM rooms WHERE zone='qabul'")
+    if qroom:
+        qc = db.one(con, "SELECT c.*, r.zone, r.capacity FROM cameras c JOIN rooms r ON r.id=c.room_id WHERE c.room_id=?", (qroom["id"],))
+        r = OC.handle_event(con, qc, {"type": "personQueueDetection", "state": "active", "count": 27, "wait_s": 840}, base + dt.timedelta(hours=1))
+        ok(r and r["priority"] == 3 and r["route"] == ["qabul"], f"Navbat 27 > 20 → P3, Qabul komissiyasiga ({r and r['route']})")
+        ok(db.one(con, "SELECT COUNT(*) n FROM cam_queue WHERE room_id=? AND length=27", (qroom["id"],))["n"] >= 1, "Navbat namunasi saqlandi")
+    else:
+        ok(False, "Qabul zonasi topilmadi (seed eskirgan — python -m app.seed)")
+
+    # Emulyatordagi yangi voqealar oqimi: rasm qismlari tashlanadi, voqealar saqlanadi
+    emulator(PORT_EV, events="unattendedBaggage+jpeg,running,fireDetection+jpeg,videoloss:inactive,TMA=72.5", stream_limit=5, event_sec=0.1, thermal=1)
+    ok(wait_port(PORT_EV), "Termal emulyator ishga tushdi")
+    stats = {}
+    evs = [e async for e in HK.HikClient("127.0.0.1", "jarvis", "Test-Pass-123", port=PORT_EV).alert_stream(stats)]
+    ok([e["type"] for e in evs] == ["unattendedBaggage", "running", "fireDetection", "videoloss", "TMA"] and stats.get("dropped_bytes", 0) > 2000,
+       f"Yangi voqealar o'qildi, JPEG qismlar xotirada tashlandi ({stats.get('dropped_bytes')} bayt)")
+    tma = next(e for e in evs if e["type"] == "TMA")
+    ok(tma["value"] == 72.5, "Termal: harorat qiymati o'qildi (72.5 °C)")
+    ok(not any(Path(TMP).rglob("*.jp*g")), "Diskda birorta ham rasm fayli yo'q")
 
 try:
     asyncio.run(main())

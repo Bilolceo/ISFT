@@ -1,0 +1,334 @@
+/* =====================================================================
+   Kirish sahifasi · 3-variant "Ko'rinish" (ISFT Core)
+   44% — oq kirish shakli · 56% — qirmizi panel + ilovaning namuna ko'rinishi.
+   Barcha uslublar .login.lv3 ichida. Pastdagi ~72px variant almashtirgich uchun bo'sh.
+   ===================================================================== */
+.login.lv3{
+  --v3-cta:#870037;--v3-cta-h:#6e002d;--v3-ring:rgba(135,0,55,.14);--v3-sel:rgba(135,0,55,.05);
+  --v3-panel:radial-gradient(120% 80% at 100% 0%,rgba(255,255,255,.16),transparent 55%),
+             radial-gradient(90% 70% at 0% 100%,rgba(0,87,91,.42),transparent 60%),
+             linear-gradient(155deg,#9c0b47 0%,#870037 42%,#62002a 100%);
+  /* namuna oynasi ranglari */
+  --m-bg:#ffffff;--m-side:#f5f5f7;--m-card:#ffffff;--m-line:#ebebef;--m-sk:#ececf1;--m-sk2:#dcdce3;
+  --m-ink:#141418;--m-mut:#8b8b95;--m-brand:#870037;--m-brand-soft:#f6e6ed;--m-teal:#00575B;--m-teal-soft:#e3f0f0;
+  --m-ok:#0f7a4a;--m-ok-soft:#e2f3ea;--m-bad:#c0262d;
+  --m-brand-fill:#870037;--m-glass:rgba(255,255,255,.78);--m-agent-mut:#5c565b;--m-glass-brd:rgba(255,255,255,.7);--m-glass-hi:rgba(255,255,255,.9);--m-glass-solid:#ffffff;
+  --v3-av3:#4b5563;--v3-av3-bg:#eef0f3;--v3-av4:#0369a1;--v3-av4-bg:#e4f1f9;
+  display:grid;grid-template-columns:minmax(min(100%,470px),44fr) minmax(0,56fr);
+  min-height:100vh;min-height:100dvh;background:var(--surface);color:var(--ink);font-family:var(--font)}
+:root[data-theme="dark"] .login.lv3{
+  --v3-cta:#a3265b;--v3-cta-h:#b8326b;--v3-ring:rgba(224,122,158,.22);--v3-sel:rgba(224,122,158,.09);
+  --v3-panel:radial-gradient(120% 80% at 100% 0%,rgba(255,255,255,.07),transparent 55%),
+             radial-gradient(90% 70% at 0% 100%,rgba(0,87,91,.32),transparent 60%),
+             linear-gradient(155deg,#5a0c2f 0%,#3f0820 50%,#200510 100%);
+  --m-bg:#1c1619;--m-side:#161114;--m-card:#231c20;--m-line:rgba(255,232,242,.08);--m-sk:rgba(255,232,242,.09);--m-sk2:rgba(255,232,242,.16);
+  --m-ink:#efe9ec;--m-mut:#9e959a;--m-brand:#e07a9e;--m-brand-fill:#a3265b;--m-brand-soft:rgba(224,122,158,.16);--m-teal:#5fb3b0;--m-teal-soft:rgba(95,179,176,.16);
+  --m-ok:#62bf8c;--m-ok-soft:rgba(98,191,140,.15);--m-bad:#ee8580;
+  --m-glass:rgba(36,28,33,.72);--m-agent-mut:#b3aaaf;--m-glass-brd:rgba(255,232,242,.14);--m-glass-hi:rgba(255,255,255,.08);--m-glass-solid:#241d21;
+  --v3-av3:#c9c1c6;--v3-av3-bg:rgba(255,232,242,.08);--v3-av4:#8cc6e6;--v3-av4-bg:rgba(90,170,220,.15)}
+@media (prefers-color-scheme:dark){:root[data-theme="auto"] .login.lv3{
+  --v3-cta:#a3265b;--v3-cta-h:#b8326b;--v3-ring:rgba(224,122,158,.22);--v3-sel:rgba(224,122,158,.09);
+  --v3-panel:radial-gradient(120% 80% at 100% 0%,rgba(255,255,255,.07),transparent 55%),
+             radial-gradient(90% 70% at 0% 100%,rgba(0,87,91,.32),transparent 60%),
+             linear-gradient(155deg,#5a0c2f 0%,#3f0820 50%,#200510 100%);
+  --m-bg:#1c1619;--m-side:#161114;--m-card:#231c20;--m-line:rgba(255,232,242,.08);--m-sk:rgba(255,232,242,.09);--m-sk2:rgba(255,232,242,.16);
+  --m-ink:#efe9ec;--m-mut:#9e959a;--m-brand:#e07a9e;--m-brand-fill:#a3265b;--m-brand-soft:rgba(224,122,158,.16);--m-teal:#5fb3b0;--m-teal-soft:rgba(95,179,176,.16);
+  --m-ok:#62bf8c;--m-ok-soft:rgba(98,191,140,.15);--m-bad:#ee8580;
+  --m-glass:rgba(36,28,33,.72);--m-agent-mut:#b3aaaf;--m-glass-brd:rgba(255,232,242,.14);--m-glass-hi:rgba(255,255,255,.08);--m-glass-solid:#241d21;
+  --v3-av3:#c9c1c6;--v3-av3-bg:rgba(255,232,242,.08);--v3-av4:#8cc6e6;--v3-av4-bg:rgba(90,170,220,.15)}}
+/* logotip qorong'i fonda — nozik yorug' taglik */
+:root[data-theme="dark"] .login.lv3 .v3-brand img{padding:4px 5px;border-radius:12px;background:#f4eef1;width:56px}
+@media (prefers-color-scheme:dark){:root[data-theme="auto"] .login.lv3 .v3-brand img{padding:4px 5px;border-radius:12px;background:#f4eef1;width:56px}}
+
+/* ---------------- chap: kirish shakli ---------------- */
+.login.lv3 .v3-form{display:flex;flex-direction:column;justify-content:center;align-items:center;min-width:0;
+  padding:clamp(20px,4vh,40px) clamp(24px,5vw,72px) 76px}
+.login.lv3 .v3-inner{width:100%;max-width:416px;animation:v3-in .5s var(--ease) both}
+
+.login.lv3 .v3-brand{display:flex;align-items:center;gap:12px;margin-bottom:clamp(18px,4.2vh,40px)}
+.login.lv3 .v3-brand img{width:50px;height:auto;flex:none}
+.login.lv3 .v3-brand b{display:block;font-size:15px;font-weight:800;letter-spacing:-.005em;line-height:1.2}
+.login.lv3 .v3-brand small{display:block;font-size:12.5px;color:var(--muted);line-height:1.35}
+
+.login.lv3 .v3-head{margin-bottom:clamp(16px,3vh,26px)}
+.login.lv3 .v3-eyebrow{margin:0 0 4px;font-size:13px;font-weight:700;color:var(--brand);letter-spacing:.01em}
+.login.lv3 .v3-head h1{margin:0;font-size:clamp(26px,3.7vh,32px);line-height:1.15;font-weight:800;letter-spacing:-.025em}
+.login.lv3 .v3-wm{white-space:nowrap}
+.login.lv3 .v3-wm em{font-style:normal;color:var(--brand)}
+.login.lv3 .v3-sub{margin:6px 0 0;font-size:14.5px;color:var(--muted)}
+
+/* tablar — tagi chizilgan */
+.login.lv3 .v3-tabs{display:flex;gap:22px;border-bottom:1px solid var(--line);margin-bottom:14px}
+.login.lv3 .v3-tabs button{position:relative;border:0;background:none;padding:9px 0 11px;margin:0;font:inherit;font-size:13.5px;font-weight:600;
+  color:var(--muted);cursor:pointer;white-space:nowrap;transition:color .18s}
+.login.lv3 .v3-tabs button::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;border-radius:2px;background:var(--brand);
+  transform:scaleX(0);transition:transform .25s var(--ease)}
+.login.lv3 .v3-tabs button:hover{color:var(--ink)}
+.login.lv3 .v3-tabs button.on{color:var(--ink);font-weight:700}
+.login.lv3 .v3-tabs button.on::after{transform:scaleX(1)}
+.login.lv3 .v3-tabs button:focus-visible{outline:2px solid var(--teal);outline-offset:2px;border-radius:4px}
+
+/* qidiruv */
+.login.lv3 .v3-search{display:flex;align-items:center;gap:9px;height:40px;padding:0 12px;margin-bottom:10px;border:1px solid var(--line-2);border-radius:10px;
+  background:var(--surface);color:var(--muted);transition:border-color .15s,box-shadow .15s}
+.login.lv3 .v3-search svg.i{width:16px;height:16px}
+.login.lv3 .v3-search:focus-within{border-color:var(--brand);box-shadow:0 0 0 3px var(--v3-ring)}
+.login.lv3 .v3-search input{flex:1;min-width:0;height:100%;border:0;outline:0;background:transparent;color:var(--ink);font:inherit;font-size:14px}
+.login.lv3 .v3-search input::placeholder{color:var(--muted);opacity:.85}
+
+/* lavozimlar ro'yxati — ajratuvchi chiziqlar, tabiiy balandlik, chegaradan oshsa skroll */
+.login.lv3 .v3-list{max-height:clamp(146px,calc(100vh - 600px),300px);max-height:var(--v3-max,clamp(146px,calc(100dvh - 600px),300px));
+  overflow-y:auto;overscroll-behavior:contain;border:1px solid var(--line);border-radius:12px;background:var(--surface);
+  scrollbar-width:thin;transition:height .3s var(--ease)}
+.login.lv3 .v3-list.fade{-webkit-mask-image:linear-gradient(#000 calc(100% - 36px),transparent);mask-image:linear-gradient(#000 calc(100% - 36px),transparent)}
+.login.lv3 .role-row{position:relative;display:flex;align-items:center;gap:12px;min-height:50px;padding:8px 14px 8px 14px;cursor:pointer;
+  border-top:1px solid var(--line);transition:background .15s}
+.login.lv3 .role-row:first-child{border-top:0}
+.login.lv3 .role-row::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--brand);transform:scaleY(0);transition:transform .2s var(--ease)}
+.login.lv3 .role-row:hover{background:var(--hover)}
+.login.lv3 .role-row.sel{background:var(--v3-sel)}
+.login.lv3 .role-row.sel::before{transform:scaleY(1)}
+.login.lv3 .role-row:focus-visible{outline:2px solid var(--teal);outline-offset:-2px;border-radius:0}
+.login.lv3 .role-row>div{flex:1;min-width:0}
+.login.lv3 .role-row b{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;font-size:13.5px;font-weight:700;line-height:1.3;overflow:hidden;overflow-wrap:anywhere;text-wrap:pretty}
+.login.lv3 .role-row small{display:block;font-size:12.5px;line-height:1.35;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.login.lv3 .role-row .avatar{width:40px;height:40px;font-size:13px;font-weight:800;letter-spacing:.02em;color:var(--brand);background:var(--brand-soft);transition:background .15s,color .15s}
+.login.lv3 .role-row .avatar.l2{color:var(--teal);background:var(--teal-soft)}
+.login.lv3 .role-row .avatar.l3{color:var(--v3-av3);background:var(--v3-av3-bg)}
+.login.lv3 .role-row .avatar.l4{color:var(--v3-av4);background:var(--v3-av4-bg)}
+.login.lv3 .role-row.sel .avatar{color:#fff;background:var(--v3-cta)}
+.login.lv3 .role-row .chk{display:grid;place-items:center;width:20px;height:20px;flex:none;border-radius:50%;color:#fff}
+.login.lv3 .role-row .chk svg.i{width:12px;height:12px;stroke-width:3}
+.login.lv3 .role-row.sel .chk{background:var(--v3-cta)}
+.login.lv3 .role-empty{padding:26px 16px;text-align:center;font-size:13.5px;line-height:1.5;color:var(--muted)}
+
+/* Parol */
+.login.lv3 .v3-pwrow{display:flex;align-items:center;gap:10px;margin:18px 0 8px}
+.login.lv3 .v3-pwrow label{font-size:13px;font-weight:700;color:var(--ink-2)}
+.login.lv3 .v3-hint{margin-left:auto;min-width:0;font-size:12px;font-weight:600;color:var(--muted);padding:3px 9px;border-radius:99px;background:var(--surface-2);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.login.lv3 .v3-pw{display:flex;align-items:center;gap:10px;height:clamp(46px,6vh,50px);padding:0 6px 0 13px;margin-bottom:16px;
+  border:1px solid var(--line-2);border-radius:10px;background:var(--surface);color:var(--muted);transition:border-color .15s,box-shadow .15s,color .15s}
+.login.lv3 .v3-pw:hover{border-color:color-mix(in srgb,var(--line-2) 60%,var(--muted))}
+.login.lv3 .v3-pw:focus-within{border-color:var(--brand);box-shadow:0 0 0 3px var(--v3-ring);color:var(--brand)}
+.login.lv3 .v3-pw-ico{display:grid;place-items:center;flex:none}
+.login.lv3 .v3-pw-ico svg.i{width:17px;height:17px}
+.login.lv3 .v3-pw input{flex:1;min-width:0;height:100%;padding:0;border:0;outline:0;background:transparent;color:var(--ink);
+  font:inherit;font-size:15px;font-weight:600;letter-spacing:.01em}
+.login.lv3 .v3-pw input[type="password"]{letter-spacing:.14em}
+.login.lv3 .v3-pw input::placeholder{color:var(--muted);opacity:.85;font-weight:500;letter-spacing:0}
+.login.lv3 .v3-pw input::-ms-reveal{display:none}
+.login.lv3 .v3-eye{position:relative;display:grid;place-items:center;width:34px;height:34px;flex:none;padding:0;border:0;border-radius:8px;background:transparent;color:var(--muted);cursor:pointer;transition:color .15s,background .15s}
+.login.lv3 .v3-eye svg.i{width:17px;height:17px}
+.login.lv3 .v3-eye:hover{color:var(--ink);background:var(--hover)}
+.login.lv3 .v3-eye.on{color:var(--brand);background:var(--v3-sel)}
+/* ochiq holat — ko'z ustida qiya chiziq ("yashirish") */
+.login.lv3 .v3-eye::after{content:"";position:absolute;left:50%;top:50%;width:19px;height:2px;border-radius:2px;background:currentColor;
+  transform:translate(-50%,-50%) rotate(-45deg) scaleX(0);transition:transform .2s var(--ease)}
+.login.lv3 .v3-eye.on::after{transform:translate(-50%,-50%) rotate(-45deg) scaleX(1)}
+.login.lv3 .v3-eye:focus-visible{outline:2px solid var(--teal);outline-offset:1px}
+.login.lv3 .v3-pw.err{border-color:var(--bad);box-shadow:0 0 0 3px color-mix(in srgb,var(--bad) 18%,transparent);color:var(--bad);animation:v3-shake .35s}
+
+.login.lv3 .v3-btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;height:46px;border:0;border-radius:10px;cursor:pointer;
+  font:inherit;font-size:15px;font-weight:700;color:#fff;background:var(--v3-cta);
+  box-shadow:0 1px 2px rgba(16,24,40,.08),inset 0 1px 0 rgba(255,255,255,.12);transition:background .18s,transform .1s,opacity .18s}
+.login.lv3 .v3-btn svg.i{width:17px;height:17px;transition:transform .2s var(--ease)}
+.login.lv3 .v3-btn:hover:not(:disabled){background:var(--v3-cta-h)}
+.login.lv3 .v3-btn:hover:not(:disabled) svg.i{transform:translateX(3px)}
+.login.lv3 .v3-btn:active:not(:disabled){transform:translateY(1px)}
+.login.lv3 .v3-btn:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+.login.lv3 .v3-btn:disabled{opacity:.45;cursor:default}
+.login.lv3 .v3-btn[data-busy]{opacity:.75;pointer-events:none}
+.login.lv3 .v3-foot{display:flex;align-items:center;justify-content:center;gap:6px;margin:14px 0 0;font-size:12.5px;color:var(--muted);text-align:center}
+.login.lv3 .v3-foot svg.i{width:14px;height:14px}
+
+/* ---------------- o'ng: mahsulot ko'rinishi ---------------- */
+.login.lv3 .v3-show{position:relative;overflow:hidden;isolation:isolate;display:flex;flex-direction:column;gap:clamp(14px,2.6vh,26px);min-width:0;
+  margin:12px 12px 12px 0;border-radius:24px;color:#fff;background:var(--v3-panel);
+  padding:clamp(26px,5vh,48px) clamp(28px,3.8vw,60px) 78px}
+.login.lv3 .v3-show::before{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;
+  background-image:radial-gradient(rgba(255,255,255,.16) 1px,transparent 1.4px);background-size:22px 22px;
+  -webkit-mask-image:radial-gradient(70% 60% at 62% 52%,#000,transparent 75%);mask-image:radial-gradient(70% 60% at 62% 52%,#000,transparent 75%)}
+.login.lv3 .v3-show::after{content:"";position:absolute;right:-14%;top:-22%;width:62%;aspect-ratio:1;z-index:-1;border-radius:50%;pointer-events:none;
+  border:1px solid rgba(255,255,255,.1);box-shadow:0 0 0 70px rgba(255,255,255,.025),0 0 0 140px rgba(255,255,255,.018)}
+
+.login.lv3 .v3-show-head{max-width:560px;animation:v3-in .6s .05s var(--ease) both}
+.login.lv3 .v3-pill{display:inline-flex;align-items:center;gap:7px;padding:6px 12px 6px 10px;border-radius:99px;font-size:12.5px;font-weight:700;
+  background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.2);backdrop-filter:blur(6px)}
+.login.lv3 .v3-pill svg.i{width:15px;height:15px}
+.login.lv3 .v3-show h2{margin:14px 0 8px;color:#fff;font-size:clamp(23px,3.4vh,30px);line-height:1.18;font-weight:800;letter-spacing:-.025em;text-wrap:balance}
+.login.lv3 .v3-show-head p{margin:0;max-width:500px;font-size:14.5px;line-height:1.55;color:rgba(255,255,255,.8)}
+
+/* sahna: o'lcham konteynerga qarab — barcha ichki o'lchamlar em'da */
+.login.lv3 .v3-stage{position:relative;flex:1 1 0;min-height:0;container-type:size;display:grid;place-items:center}
+.login.lv3 .v3-float{animation:v3-float 7s ease-in-out infinite}
+.login.lv3 .v3-mock{position:relative;left:-2em;width:60em;font-size:min(calc(100cqw / 66),calc(100cqh / 42.5),14.5px);
+  transform:perspective(170em) rotateY(-9deg) rotateX(4deg);transform-style:preserve-3d;animation:v3-rise .9s .12s var(--ease) both}
+
+.login.lv3 .m-win{position:relative;border-radius:1.3em;overflow:hidden;background:var(--m-bg);color:var(--m-ink);
+  box-shadow:0 0 0 1px rgba(255,255,255,.28),0 2.6em 6em -1em rgba(35,0,14,.55),0 1em 2em -1em rgba(35,0,14,.35)}
+.login.lv3 .m-bar{display:flex;align-items:center;gap:.55em;height:3.1em;padding:0 1.3em;border-bottom:1px solid var(--m-line);background:var(--m-side)}
+.login.lv3 .m-bar>i{width:.85em;height:.85em;border-radius:50%;background:var(--m-sk2)}
+.login.lv3 .m-bar>i:first-child{background:#ef6b6b}.login.lv3 .m-bar>i:nth-child(2){background:#f2c14e}.login.lv3 .m-bar>i:nth-child(3){background:#5cc489}
+.login.lv3 .m-wm{display:inline-flex;align-items:center;gap:.4em;margin-left:1em;font-size:1.1em;font-weight:800;letter-spacing:.02em;color:var(--m-ink)}
+.login.lv3 .m-wm span{padding:.12em .5em;border-radius:.45em;font-size:.88em;font-weight:800;letter-spacing:.03em;color:var(--m-brand);background:var(--m-brand-soft)}
+.login.lv3 .m-tag{margin-left:auto;font-size:1em;font-weight:700;color:var(--m-mut);padding:.25em .8em;border:1px dashed var(--m-sk2);border-radius:99px}
+
+.login.lv3 .m-body{display:grid;grid-template-columns:5.2em minmax(0,1fr);height:36em}
+.login.lv3 .m-side{display:flex;flex-direction:column;align-items:center;gap:.9em;padding:1.3em 0;background:var(--m-side);border-right:1px solid var(--m-line);color:var(--m-mut)}
+.login.lv3 .m-side img{width:3em;height:auto;margin-bottom:.5em}
+.login.lv3 .m-side span{display:grid;place-items:center;width:2.9em;height:2.9em;border-radius:.8em}
+.login.lv3 .m-side span.on{background:var(--m-brand-fill);color:#fff}
+.login.lv3 .m-side svg.i{width:1.55em;height:1.55em}
+
+.login.lv3 .m-main{display:flex;flex-direction:column;gap:1.3em;padding:1.6em 1.8em;min-width:0}
+.login.lv3 .sk{display:block;width:var(--w,60%);height:.75em;border-radius:99px;background:var(--m-sk)}
+.login.lv3 .m-top{display:flex;align-items:flex-start;justify-content:space-between}
+.login.lv3 .m-top b{display:block;font-size:1.6em;font-weight:800;letter-spacing:-.02em;line-height:1.2;margin-bottom:.45em}
+.login.lv3 .m-live{display:inline-flex;align-items:center;gap:.5em;font-size:1.05em;font-weight:700;padding:.35em .85em;border-radius:99px;color:var(--m-ok);background:var(--m-ok-soft)}
+.login.lv3 .m-live i{width:.6em;height:.6em;border-radius:50%;background:currentColor;box-shadow:0 0 0 .25em color-mix(in srgb,currentColor 22%,transparent)}
+
+.login.lv3 .m-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1em}
+.login.lv3 .m-kpi{display:flex;flex-direction:column;gap:.55em;height:9.4em;padding:1.05em 1.1em;border-radius:1em;border:1px solid var(--m-line);background:var(--m-card);overflow:hidden}
+.login.lv3 .m-kpi .m-num{height:1.75em;border-radius:.45em;background:var(--m-sk2);margin-top:.1em}
+.login.lv3 .m-kpi svg{display:block;width:100%;height:2.6em;margin-top:auto;overflow:visible}
+.login.lv3 .m-area{fill:var(--m-teal-soft)}
+.login.lv3 .m-line{fill:none;stroke:var(--m-teal);stroke-width:2;vector-effect:non-scaling-stroke;stroke-linejoin:round}
+.login.lv3 .m-cols{display:flex;align-items:flex-end;gap:.35em;height:2.6em;margin-top:auto}
+.login.lv3 .m-cols i{flex:1;height:var(--h);border-radius:.25em .25em .1em .1em;background:var(--m-teal);opacity:.35}
+.login.lv3 .m-cols i:last-child,.login.lv3 .m-cols i:nth-last-child(2){opacity:1}
+.login.lv3 .m-kpi-ring{flex-direction:row;align-items:center;gap:.6em}
+.login.lv3 .m-kpi-ring>div{display:flex;flex-direction:column;gap:.55em;flex:1;min-width:0}
+.login.lv3 .m-kpi-ring svg{width:4.6em;height:4.6em;flex:none;margin:0;transform:rotate(-90deg)}
+.login.lv3 .m-rt{fill:none;stroke:var(--m-sk);stroke-width:4.2}
+.login.lv3 .m-rf{fill:none;stroke:var(--m-brand);stroke-width:4.2;stroke-linecap:round}
+.login.lv3 .m-prog{display:block;height:.6em;border-radius:99px;background:var(--m-sk);overflow:hidden;margin-top:auto}
+.login.lv3 .m-prog i{display:block;width:var(--w);height:100%;border-radius:inherit;background:var(--m-brand)}
+.login.lv3 .m-trend{display:flex;align-items:center;gap:.45em;color:var(--m-ok)}
+.login.lv3 .m-trend svg.i{width:1.4em;height:1.4em}
+
+.login.lv3 .m-grid{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:1em;flex:1;min-height:0}
+.login.lv3 .m-chat{display:flex;flex-direction:column;gap:.8em;min-width:0}
+.login.lv3 .m-q{align-self:flex-end;max-width:92%;padding:.65em 1em;border-radius:1.1em 1.1em .3em 1.1em;font-size:1.22em;font-weight:600;line-height:1.35;
+  color:#fff;background:var(--m-brand-fill);box-shadow:0 .4em 1em -.4em color-mix(in srgb,var(--m-brand-fill) 60%,transparent)}
+.login.lv3 .m-a{display:flex;flex-direction:column;gap:.5em;flex:1;min-height:0;padding:.95em 1.1em 1em;border-radius:.3em 1.1em 1.1em 1.1em;border:1px solid var(--m-line);background:var(--m-card)}
+.login.lv3 .m-a-h{display:flex;align-items:center;gap:.55em;margin-bottom:.15em}
+.login.lv3 .m-a-h b{font-size:1.1em;font-weight:800}
+.login.lv3 .m-a-h .sk{margin-left:auto;width:var(--w)}
+.login.lv3 .m-av{display:grid;place-items:center;width:2em;height:2em;border-radius:50%;color:#fff;background:var(--m-teal)}
+.login.lv3 .m-av svg.i{width:1.2em;height:1.2em}
+.login.lv3 .m-hb{display:flex;flex-direction:column;gap:.45em;margin:.25em 0 .3em}
+.login.lv3 .m-hb>div{display:grid;grid-template-columns:6em minmax(0,1fr);align-items:center;gap:.6em}
+.login.lv3 .m-hb>div>span{height:.75em;border-radius:99px;background:var(--m-sk);overflow:hidden}
+.login.lv3 .m-hb>div>span i{display:block;width:var(--w);height:100%;border-radius:inherit;background:var(--m-teal)}
+.login.lv3 .m-hb>div.low>span i{background:var(--m-bad)}
+.login.lv3 .m-ok{display:inline-flex;align-items:center;gap:.4em;align-self:flex-start;margin-top:auto;padding:.35em .8em .35em .55em;border-radius:99px;
+  font-size:1.05em;font-weight:700;color:var(--m-ok);background:var(--m-ok-soft)}
+.login.lv3 .m-ok svg.i{width:1.25em;height:1.25em;stroke-width:2.6}
+
+.login.lv3 .m-chart{display:flex;flex-direction:column;gap:.55em;padding:1.05em 1.1em;border-radius:1em;border:1px solid var(--m-line);background:var(--m-card);min-width:0}
+.login.lv3 .m-chart .m-sk-s{height:.6em;opacity:.7}
+.login.lv3 .m-vb{display:flex;align-items:flex-end;gap:.6em;flex:1;min-height:0;margin-top:.6em;padding-bottom:.1em;border-bottom:1px solid var(--m-line)}
+.login.lv3 .m-vb i{flex:1;height:var(--h);border-radius:.35em .35em .1em .1em;background:var(--m-teal)}
+.login.lv3 .m-vb i.low{background:var(--m-bad)}
+.login.lv3 .m-vb-x{display:flex;gap:.6em}
+.login.lv3 .m-vb-x i{flex:1;height:.5em;border-radius:99px;background:var(--m-sk)}
+
+/* namuna ichidagi bo'laklar ketma-ket paydo bo'ladi */
+.login.lv3 .m-kpi,.login.lv3 .m-q,.login.lv3 .m-a,.login.lv3 .m-chart{animation:v3-pop .55s var(--ease) both}
+.login.lv3 .m-kpi:nth-child(1){animation-delay:.45s}.login.lv3 .m-kpi:nth-child(2){animation-delay:.52s}
+.login.lv3 .m-kpi:nth-child(3){animation-delay:.59s}.login.lv3 .m-kpi:nth-child(4){animation-delay:.66s}
+.login.lv3 .m-chart{animation-delay:.75s}.login.lv3 .m-q{animation-delay:.95s}.login.lv3 .m-a{animation-delay:1.2s}
+.login.lv3 .m-hb>div>span i,.login.lv3 .m-prog i{transform-origin:left;animation:v3-grow .8s 1.4s var(--ease) both}
+.login.lv3 .m-ok{animation:v3-pop .45s 1.75s var(--ease) both}
+
+/* suzib turgan "AI agent" kartasi */
+/* suzuvchi karta — suyuq shisha: ostidagi namuna oynasi xira ko'rinadi */
+.login.lv3 .m-agent{position:absolute;right:-4em;bottom:-2.6em;width:21em;display:flex;flex-direction:column;gap:.6em;padding:1.1em 1.2em 1.2em;
+  border-radius:1.1em;color:var(--m-ink);transform:translateZ(3em);
+  background:linear-gradient(180deg,var(--m-glass-hi),transparent 42%),var(--m-glass);border:1px solid var(--m-glass-brd);
+  -webkit-backdrop-filter:blur(16px) saturate(1.8);backdrop-filter:blur(16px) saturate(1.8);
+  box-shadow:inset 0 1px 0 var(--m-glass-hi),0 1.8em 3.6em -.8em rgba(35,0,14,.55);animation:v3-pop .6s 1.95s var(--ease) both,v3-float2 7s 2.6s ease-in-out infinite}
+.login.lv3 .m-agent-h{display:flex;align-items:center;gap:.7em;margin-bottom:.15em}
+.login.lv3 .m-agent-h b{display:block;font-size:1.2em;font-weight:800;line-height:1.2}
+.login.lv3 .m-agent-h small{display:block;font-size:1.02em;color:var(--m-agent-mut);line-height:1.3}
+.login.lv3 .m-agent-ic{display:grid;place-items:center;width:2.6em;height:2.6em;flex:none;border-radius:.75em;color:var(--m-teal);background:var(--m-teal-soft)}
+.login.lv3 .m-agent-ic svg.i{width:1.45em;height:1.45em}
+.login.lv3 .m-agent-a{display:flex;gap:.5em;margin-top:.35em}
+.login.lv3 .m-btn{display:inline-flex;align-items:center;justify-content:center;padding:.55em 1.1em;border-radius:.6em;font-size:1.05em;font-weight:700;color:#fff;background:var(--m-brand-fill)}
+.login.lv3 .m-btn.ghost{color:var(--m-ink);background:transparent;box-shadow:inset 0 0 0 1px var(--m-sk2)}
+
+@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){.login.lv3 .m-agent{background:var(--m-glass-solid)}}
+@media (prefers-reduced-transparency:reduce){.login.lv3 .m-agent{background:var(--m-glass-solid);-webkit-backdrop-filter:none;backdrop-filter:none}}
+
+/* qadriyatlar */
+.login.lv3 .v3-props{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;margin:0;padding:18px 0 0;list-style:none;border-top:1px solid rgba(255,255,255,.16);
+  animation:v3-in .6s .2s var(--ease) both}
+.login.lv3 .v3-props li{display:flex;align-items:center;gap:11px;min-width:0}
+.login.lv3 .v3-props li>span{display:grid;place-items:center;width:34px;height:34px;flex:none;border-radius:10px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.14)}
+.login.lv3 .v3-props svg.i{width:17px;height:17px}
+.login.lv3 .v3-props b{max-width:11.5em;font-size:13.5px;font-weight:700;line-height:1.3;color:rgba(255,255,255,.95);text-wrap:balance}
+
+/* ---------------- harakat ---------------- */
+@keyframes v3-in{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+@keyframes v3-rise{from{opacity:0;translate:0 24px}to{opacity:1;translate:0 0}}
+@keyframes v3-pop{from{opacity:0;scale:.94}to{opacity:1;scale:1}}
+@keyframes v3-grow{from{transform:scaleX(0)}to{transform:none}}
+@keyframes v3-float{0%,100%{translate:0 0}50%{translate:0 -8px}}
+@keyframes v3-float2{0%,100%{translate:0 0}50%{translate:0 6px}}
+@keyframes v3-shake{25%{transform:translateX(-5px)}75%{transform:translateX(5px)}}
+@media (prefers-reduced-motion:reduce){
+  .login.lv3 *,.login.lv3 *::before,.login.lv3 *::after{animation:none!important;transition:none!important}
+}
+
+/* ---------------- moslashuv ---------------- */
+@media (max-height:780px) and (min-width:981px){
+  .login.lv3 .v3-show-head p{display:none}
+  .login.lv3 .v3-show h2{margin-bottom:0}
+}
+@media (max-height:760px){
+  .login.lv3 .v3-brand{margin-bottom:16px}
+  .login.lv3 .v3-brand img{width:44px}
+  .login.lv3 .v3-head{margin-bottom:14px}
+  .login.lv3 .v3-head h1{font-size:26px}
+  .login.lv3 .v3-tabs{margin-bottom:10px}
+  .login.lv3 .v3-search{margin-bottom:8px}
+  .login.lv3 .v3-pwrow{margin:14px 0 6px}
+  .login.lv3 .v3-pw{height:46px;margin-bottom:12px}
+  .login.lv3 .v3-foot{margin-top:10px}
+}
+@media (max-width:1180px) and (min-width:981px){
+  .login.lv3 .v3-props{gap:12px}
+  .login.lv3 .v3-props li{flex-direction:column;align-items:flex-start;gap:8px}
+  .login.lv3 .v3-props li>span{width:30px;height:30px;border-radius:9px}
+  .login.lv3 .v3-props b{font-size:12.5px}
+}
+@media (max-width:980px){
+  .login.lv3{grid-template-columns:minmax(0,1fr)}
+  .login.lv3 .v3-show{display:none}
+  .login.lv3 .v3-form{justify-content:flex-start;padding:28px 20px 96px;border-top:3px solid var(--v3-cta)}
+  .login.lv3 .v3-inner{max-width:440px}
+  .login.lv3 .v3-list{max-height:var(--v3-max,clamp(200px,calc(100dvh - 560px),320px))}
+}
+@media (max-width:980px) and (min-width:600px){
+  .login.lv3 .v3-form{justify-content:center}
+}
+@media (max-width:980px) and (min-width:600px) and (min-height:1100px){
+  .login.lv3{grid-template-rows:auto 1fr}
+  .login.lv3 .v3-form{border-top:0;padding-top:32px}
+  .login.lv3 .v3-show{display:flex;order:-1;margin:12px 12px 0;padding:30px 36px 26px;gap:20px}
+  .login.lv3 .v3-stage,.login.lv3 .v3-show-head p{display:none}
+  .login.lv3 .v3-show h2{font-size:26px;margin-bottom:0;max-width:520px}
+  .login.lv3 .v3-props b{font-size:13px}
+}
+@media (max-width:600px) and (max-height:700px){
+  .login.lv3 .v3-sub{display:none}
+  .login.lv3 .v3-brand{margin-bottom:14px}
+}
+@media (max-width:420px){
+  .login.lv3 .v3-form{padding:22px 16px 92px}
+  .login.lv3 .v3-brand{margin-bottom:22px}
+  .login.lv3 .v3-tabs{gap:0;justify-content:space-between}
+  .login.lv3 .v3-tabs button{font-size:13px}
+  .login.lv3 .v3-hint{font-size:11.5px}
+}

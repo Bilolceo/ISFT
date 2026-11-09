@@ -9,13 +9,14 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from . import db, brand as B
 from .rbac import Ctx, AccessDenied, audit
 from .services import TODAY, mln
+from . import academic_rules as AR
 
 OUT = Path(__file__).resolve().parent.parent / "data" / "docs"
 UZ_MONTHS = ["yanvar", "fevral", "mart", "aprel", "may", "iyun", "iyul", "avgust", "sentabr", "oktabr", "noyabr", "dekabr"]
 EN_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
 ACAD_YEAR = "2026-2027"
-PASS = 56            # o'tish bali (100 ballik)
-CREDITS = 6          # bir fan uchun kredit (demo)
+PASS = AR.PASS       # o'tish bali (100 ballik) — institut qoidasi: 40 ball = «3»
+CREDITS = 6          # bir fan uchun kredit (demo; taqdimotdagi GPA misolida ham 6 kredit)
 LOAD_NORM = 840      # 1 stavka yillik o'quv yuklamasi, soat (institut nizomiga ko'ra sozlanadi)
 
 def d_uz(d): d = dt.date.fromisoformat(d) if isinstance(d, str) else d; return f"{d.year}-yil {d.day}-{UZ_MONTHS[d.month-1]}"
@@ -23,13 +24,7 @@ def d_en(d): d = dt.date.fromisoformat(d) if isinstance(d, str) else d; return f
 def short(full):
     p = (full or "").split()
     return f"{p[0]} {p[1][0]}." if len(p) > 1 else full
-def grade5(score):
-    if score >= 86: return 5, "a'lo"
-    if score >= 71: return 4, "yaxshi"
-    if score >= PASS: return 3, "qoniqarli"
-    return 2, "qoniqarsiz"
-def letter(score):
-    return "A" if score >= 86 else "B" if score >= 71 else "C" if score >= PASS else "F"
+grade5, letter = AR.grade5, AR.letter   # 65–100 «5» A · 60–64 «4» B · 50–59 «4» C · 45–49 «3» D · 40–44 «3» E · 0–39 «2» F
 
 # ---------------- katalog ----------------
 DEAN_SIDE = {"dekan", "talabalar", "prorektor_oquv"}
@@ -51,7 +46,7 @@ CATALOG = [
          desc="Talaba haqiqatan o'qishini tasdiqlovchi ma'lumotnoma (o'zbek/ingliz). Guruh bo'yicha ommaviy chiqarish mumkin.",
          roles=DEAN_SIDE, params=[("target", "student_or_group"), ("purpose", "select:" + "|".join(PURPOSES)), ("lang", "select:uz|en")]),
     dict(key="transcript", cat="Talabalar va dekanat", title="Akademik ma'lumotnoma (transkript)", prefix="AM",
-         desc="Fanlar, kreditlar, 100 ballik va 5 ballik baholar, GPA — HEMIS baholaridan avtomatik.",
+         desc="Fanlar, kreditlar, 100 ballik, harfli va 5 ballik baholar, GPA (kreditga vaznli) — HEMIS baholaridan avtomatik.",
          roles=DEAN_SIDE, params=[("target", "student")]),
     dict(key="debt_letter", cat="Talabalar va dekanat", title="Kontrakt qarzdorligi: ota-onaga xat", prefix="QX",
          desc="Qarzdor talabalar ota-onasiga rasmiy ogohlantirish. Guruh yoki fakultet bo'yicha bir tugmada barcha qarzdorlarga.",
@@ -76,10 +71,11 @@ CATALOG = [
          desc="Xodimga yillik mehnat ta'tili. Kadrlar loyihalaydi, rektor imzolaydi.",
          roles={"kadrlar"}, sign=True, params=[("staff", "staff"), ("start", "date"), ("days", "number")]),
     dict(key="exam_sheet", cat="O'quv jarayoni", title="Yakuniy nazorat qaydnomasi", prefix="QN",
-         desc="Guruh + fan bo'yicha qaydnoma: ballar, baholar, o'zlashtirish foizi. 'Barcha fanlar' — butun guruh paketi.",
-         roles={"dekan", "kafedra", "oqituvchi", "prorektor_oquv"}, params=[("group", "group"), ("subject", "subject")]),
+         desc="Guruh + fan bo'yicha qaydnoma: oraliq (30) + yakuniy (70) = jami ball, harf va 5 ballik baho, o'zlashtirish foizi. 'Barcha fanlar' — butun guruh paketi.",
+         # yakuniy nazoratni imtihon bo'limi o'tkazadi, Akademik faoliyatni boshqarish bo'limi tashkil qiladi (akademik qoidalar)
+         roles={"dekan", "kafedra", "oqituvchi", "prorektor_oquv", "imtihon", "akademik"}, params=[("group", "group"), ("subject", "subject")]),
     dict(key="debtors_list", cat="O'quv jarayoni", title="Akademik qarzdorlar ro'yxati", prefix="AQ",
-         desc="56 balldan past fanlari bor talabalar, fanlar kesimida, qayta topshirish muddati bilan.",
+         desc=f"{AR.PASS} balldan past (o'zlashtirilmagan) fanlari bor talabalar, fanlar kesimida, qayta topshirish muddati bilan.",
          roles={"dekan", "kafedra", "prorektor_oquv"}, params=[("deadline", "date")]),
     dict(key="load", cat="O'quv jarayoni", title="O'quv yuklama taqsimoti", prefix="OY",
          desc="Kafedra o'qituvchilari yuklamasi, stavka, fanlar va guruhlar — ortiqcha/kam yuklama belgilanadi.",
@@ -91,7 +87,7 @@ CATALOG = [
          desc="Muddati o'tgan topshiriq bo'yicha mas'ulga rasmiy xat. 'Barchasi' — hamma qarzdor ijrochilarga birdan.",
          roles={"rektor", "kengash"}, params=[("task", "task")]),
     dict(key="memo", cat="Rektorat va ijro nazorati", title="Xizmat xati", prefix="XX",
-         desc="Qabul qiluvchi, mavzu va asosiy fikrlarni yozing — JARVIS rasmiy uslubda matnni tuzadi (mahalliy AI).",
+         desc="Qabul qiluvchi, mavzu va asosiy fikrlarni yozing — ISFT Core rasmiy uslubda matnni tuzadi (mahalliy AI).",
          roles=EVERYONE_STAFF, params=[("recipient", "text"), ("subject_line", "text"), ("points", "textarea"), ("use_ai", "check")]),
     dict(key="work_cert", cat="Kadrlar", title="Ish joyidan ma'lumotnoma", prefix="IJ",
          desc="Xodim ishlashini tasdiqlovchi ma'lumotnoma, ixtiyoriy ravishda o'rtacha oylik bilan.",
@@ -106,7 +102,7 @@ CAT = {t["key"]: t for t in CATALOG}
 LABELS = {"target": "Talaba / guruh", "purpose": "Qayerga taqdim etish uchun", "lang": "Til", "deadline": "Muddat", "org": "Tashkilot",
           "start": "Boshlanish sanasi", "end": "Tugash sanasi", "action": "Buyruq turi", "reason": "Asos / sabab", "from_date": "Sanadan boshlab",
           "staff": "Xodim", "days": "Kunlar soni", "group": "Guruh", "subject": "Fan", "department": "Kafedra", "meeting": "Majlis",
-          "task": "Topshiriq", "recipient": "Kimga", "subject_line": "Mavzu", "points": "Asosiy fikrlar", "use_ai": "Matnni JARVIS tuzsin (AI)",
+          "task": "Topshiriq", "recipient": "Kimga", "subject_line": "Mavzu", "points": "Asosiy fikrlar", "use_ai": "Matnni ISFT Core tuzsin (AI)",
           "with_salary": "O'rtacha oylikni ko'rsatish", "guest": "Mehmon F.I.Sh.", "guest_org": "Mehmon tashkiloti", "country": "Davlat",
           "purpose_en": "Tashrif maqsadi (inglizcha)", "basis": "Asos", "retake": "Otrabotka", "passport": "Pasport raqami (ixtiyoriy)", "expenses": "Xarajatlarni kim qoplaydi"}
 DEFAULTS = {"deadline": (TODAY + dt.timedelta(days=21)).isoformat(), "start": (TODAY + dt.timedelta(days=14)).isoformat(),
@@ -263,19 +259,22 @@ def g_transcript(I, p):
     t = [("F.I.Sh.", s["full_name"]), ("HEMIS ID", s["hemis_id"]), ("Fakultet", s["faculty"]), ("Yo'nalish", s["direction"]),
          ("Kurs / guruh", f"{s['course']}-kurs, {s['grp']}"), ("Ta'lim shakli / asosi", f"kunduzgi, {s['payment_type']}")]
     B.table(I.doc, ["Ma'lumot", ""], t, widths=[5, 12], size=10.5)
-    total_cr, wsum = 0, 0
-    for sem, label in [(0, "2025-2026 o'quv yili, bahorgi semestr (yakuniy)"), (1, f"{ACAD_YEAR} o'quv yili, kuzgi semestr (joriy, oraliq natija)")]:
+    done = None   # yakunlangan semestr: (o'zlashtirilgan kredit, jami kredit, GPA)
+    for sem, label in [(0, "2025-2026 o'quv yili, bahorgi semestr (yakuniy)"), (1, f"{ACAD_YEAR} o'quv yili, kuzgi semestr (joriy natija)")]:
         rows = db.rows(I.con, "SELECT subject, score FROM grades WHERE student_id=? AND semester=? ORDER BY subject", (s["id"], sem))
         if not rows: continue
         p_ = I.doc.add_paragraph(); B.run(p_, label, 11, True, B.RGB_TEAL_DARK)
         data = []
         for i, r in enumerate(rows, 1):
             g5, word = grade5(r["score"]); data.append((i, r["subject"], CREDITS, r["score"], letter(r["score"]), f"{g5} ({word})"))
-            if sem == 0: total_cr += CREDITS if r["score"] >= PASS else 0; wsum += r["score"] * CREDITS
         B.table(I.doc, ["№", "Fan", "Kredit", "Ball (100)", "Harf", "Baho (5)"], data, widths=[1, 7, 1.6, 2.2, 1.4, 3.8], size=10)
-    n0 = db.one(I.con, "SELECT COUNT(*) n FROM grades WHERE student_id=? AND semester=0", (s["id"],))["n"]
-    B.para(I.doc, f"Yakunlangan semestr bo'yicha o'zlashtirilgan kreditlar: {total_cr}. O'rtacha ball (vaznli): "
-           f"{round(wsum / max(1, n0 * CREDITS), 1)}. Baholash shkalasi: 86–100 — «a'lo» (A), 71–85 — «yaxshi» (B), {PASS}–70 — «qoniqarli» (C), {PASS} dan past — «qoniqarsiz» (F).", indent=False, size=10.5)
+        if sem == 0:
+            done = (sum(CREDITS for r in rows if r["score"] >= PASS), CREDITS * len(rows), AR.gpa([(CREDITS, grade5(r["score"])[0]) for r in rows]))
+    if done:
+        B.para(I.doc, f"Yakunlangan semestr bo'yicha o'zlashtirilgan kreditlar: {done[0]} / {done[1]}. GPA (5 ballik): {done[2]:.2f}.", indent=False, size=10.5, bold=True)
+    B.para(I.doc, f"Baholash shkalasi (100 ballik → 5 baho → harf): {AR.SCALE_TEXT}. Fan kamida {PASS} ball bilan o'zlashtirilganda "
+           "uning krediti to'liq hisoblanadi.", indent=False, size=9.5)
+    B.para(I.doc, f"{AR.GPA_FORMULA}; {AR.CREDIT_NOTE}.", indent=False, size=9.5)
     B.signature(I.doc, "Fakultet dekani", short(s["dean"]))
     I.qr()
 
@@ -357,7 +356,7 @@ def g_warn_letter(I, p):
     B.run(p_, f"{s['faculty']} fakulteti {s['course']}-kurs {s['grp']}-guruh talabasi\n{s['full_name']}ga\n(nusxasi: ota-onasi / qonuniy vakiliga)", 11.5, True)
     B.title(I.doc, "OGOHLANTIRISH", "davomat bo'yicha" if basis == "davomat" else "o'zlashtirish bo'yicha")
     if basis == "davomat":
-        B.para(I.doc, f"Akademik faoliyat va registrator departamenti ma'lumotlariga ko'ra, Siz {ACAD_YEAR} o'quv yilining joriy semestrida "
+        B.para(I.doc, f"Registrator ofisi ma'lumotlariga ko'ra, Siz {ACAD_YEAR} o'quv yilining joriy semestrida "
                f"jami {f['unexcused']} soat mashg'ulotni sababsiz qoldirgansiz (sababli qoldirilgan {f['excused']} soat hisobga olinmagan).")
         B.para(I.doc, "Mashg'ulotlarga muntazam qatnashish talabaning asosiy majburiyatlaridan biridir. Sababsiz qoldirishlar davom etsa, "
                "institut ichki tartib qoidalariga muvofiq intizomiy choralar (hayfsan, talabalar safidan chetlashtirish masalasini ko'rib chiqish) qo'llanilishi mumkin.")
@@ -365,9 +364,9 @@ def g_warn_letter(I, p):
         fl = ", ".join(f"{x['subject']} ({x['score']} ball)" for x in f["fails"]) or "—"
         B.para(I.doc, f"Joriy semestr natijalariga ko'ra Sizning JPA ko'rsatkichingiz {f['gpa5']} (5 ballik), o'zlashtirilmagan fanlar: {fl}.")
         B.para(I.doc, "Hatto umumiy ko'rsatkich yetarli bo'lsa ham, o'zlashtirilmagan fanlar akademik qarzdorlikka va keyingi kursga o'tkazilmaslikka olib kelishi mumkin. "
-               "Qayta topshirish (otrabotka) tartibi bo'yicha tyutoringiz yoki registrator departamentiga murojaat qiling.")
+               f"Qayta topshirish (otrabotka) tartibi bo'yicha tyutoringiz yoki Registrator ofisiga ({AR.REGISTRAR_ROOMS_TEXT}) murojaat qiling.")
     B.para(I.doc, "Ushbu ogohlantirish bilan tanishganingizni imzongiz bilan tasdiqlang.")
-    B.signature(I.doc, "Akademik faoliyat va registrator departamenti boshlig'i")
+    B.signature(I.doc, "Registrator ofisi boshlig'i")
     p_ = I.doc.add_paragraph(); B.run(p_, "Tanishdim: ____________________  (talaba imzosi)        Sana: «___» __________ 20___ y.", 10.5)
     I.qr()
 
@@ -378,11 +377,11 @@ def g_reprimand(I, p):
     reason = (p.get("reason") or "").strip() or f"joriy semestrda {f['unexcused']} soat mashg'ulotni sababsiz qoldirgani"
     I.page(s["full_name"], title="Buyruq loyihasi: hayfsan e'lon qilish")
     B.title(I.doc, "BUYRUQ (LOYIHA)", "Talabaga intizomiy jazo qo'llash to'g'risida")
-    B.para(I.doc, "Institut Ustavi va ichki tartib qoidalariga muvofiq, Akademik faoliyat va registrator departamentining bildirgisi asosida")
+    B.para(I.doc, "Institut Ustavi va ichki tartib qoidalariga muvofiq, Registrator ofisining bildirgisi asosida")
     p_ = I.doc.add_paragraph(); p_.alignment = WD_ALIGN_PARAGRAPH.CENTER; B.run(p_, "BUYURAMAN:", 12, True)
     B.para(I.doc, f"1. {s['faculty']} fakulteti {s['course']}-kurs {s['grp']}-guruh talabasi {s['full_name']} (HEMIS ID {s['hemis_id']})ga "
            f"{reason} uchun HAYFSAN e'lon qilinsin.")
-    B.para(I.doc, "2. Tyutor talaba bilan suhbat o'tkazsin va natijasini registrator departamentiga ma'lum qilsin.")
+    B.para(I.doc, "2. Tyutor talaba bilan suhbat o'tkazsin va natijasini Registrator ofisiga ma'lum qilsin.")
     B.para(I.doc, "3. Buyruq ijrosini nazorat qilish o'quv ishlari bo'yicha prorektor zimmasiga yuklansin.")
     B.signature(I.doc, "Rektor", B.INST["rector_short"])
     p_ = I.doc.add_paragraph(); B.run(p_, f"Loyiha kiritdi: {I.ctx.role.title}  _______________", 10.5)
@@ -402,10 +401,10 @@ def g_retake_sheet(I, p):
         ("Avvalgi ball", str(r["score_old"]) if r["score_old"] is not None else "—"),
         ("Topshirish muddati", d_uz(r["due_at"][:10]) + (f", soat {r['due_at'][11:16]}" if len(r["due_at"] or "") > 10 else ""))],
         widths=[4.5, 11.5], size=10)
-    B.para(I.doc, "Varaqa o'qituvchi tomonidan to'ldiriladi va belgilangan muddatda registrator departamentiga qaytariladi. "
+    B.para(I.doc, f"Varaqa o'qituvchi tomonidan to'ldiriladi va belgilangan muddatda Registrator ofisiga ({AR.REGISTRAR_ROOMS_TEXT}) qaytariladi. "
            "Muddat o'tsa, tyutorga ogohlantirish topshirig'i yuboriladi.", size=10.5)
     B.table(I.doc, ["Topshirilgan sana", "Ball (100 ballik)", "O'qituvchi imzosi"], [("«___» ________ 20___", "", "")], widths=[5.5, 5, 5.5], size=11)
-    B.signature(I.doc, "Akademik faoliyat va registrator departamenti")
+    B.signature(I.doc, "Registrator ofisi")
     I.qr()
 
 def g_leave_order(I, p):
@@ -442,15 +441,24 @@ def g_exam_sheet(I, p):
         I.page(f"{g['name']} · {sb}", title=f"Qaydnoma: {g['name']} — {sb}")
         B.title(I.doc, "YAKUNIY NAZORAT QAYDNOMASI", f"{ACAD_YEAR} o'quv yili, kuzgi semestr")
         B.table(I.doc, ["Fakultet", "Guruh", "Fan", "O'qituvchi"], [(g["faculty"], f"{g['name']} ({g['course']}-kurs)", sb, short(tch["full_name"]) if tch else "—")], size=10)
-        data, cnt = [], {5: 0, 4: 0, 3: 0, 2: 0}
+        data, cnt, nadmit = [], {5: 0, 4: 0, 3: 0, 2: 0}, 0
         for i, r in enumerate(rows, 1):
             g5, w = grade5(r["score"]); cnt[g5] += 1
-            data.append((i, r["full_name"], r["hemis_id"], r["score"], letter(r["score"]), f"{g5} ({w})", ""))
-        B.table(I.doc, ["№", "Talaba F.I.Sh.", "HEMIS ID", "Ball", "Harf", "Baho", "Imzo"], data, widths=[0.8, 6.2, 3, 1.3, 1.1, 2.6, 2], size=9)
+            o, y = AR.split_score(r["score"], f"{r['hemis_id']}|{sb}")
+            admitted = o >= AR.ORALIQ_MIN
+            nadmit += not admitted
+            data.append((i, r["full_name"], r["hemis_id"], o, y if admitted else "kiritilmagan", r["score"], letter(r["score"]), f"{g5} ({w})", ""))
+        B.table(I.doc, ["№", "Talaba F.I.Sh.", "HEMIS ID", f"Oraliq ({AR.ORALIQ_MAX})", f"Yakuniy ({AR.YAKUNIY_MAX})", "Jami (100)", "Harf", "Baho", "Imzo"],
+                data, widths=[0.7, 4.8, 2.4, 1.4, 1.6, 1.3, 0.9, 2.3, 1.6], size=8.5)
         n = max(1, len(rows))
-        B.para(I.doc, f"Jami: {len(rows)} nafar. «A'lo» — {cnt[5]}, «yaxshi» — {cnt[4]}, «qoniqarli» — {cnt[3]}, «qoniqarsiz» — {cnt[2]}. "
+        B.para(I.doc, f"Jami: {len(rows)} nafar. «A'lo» — {cnt[5]}, «yaxshi» — {cnt[4]}, «qoniqarli» — {cnt[3]}, «qoniqarsiz» — {cnt[2]}"
+               + (f" (shundan yakuniy nazoratga kiritilmagan — {nadmit})" if nadmit else "") + ". "
                f"O'zlashtirish: {round(100 * (n - cnt[2]) / n, 1)}%, sifat ko'rsatkichi: {round(100 * (cnt[5] + cnt[4]) / n, 1)}%.", indent=False, size=10.5)
-        B.signature(I.doc, "Imtihon oluvchi", short(tch["full_name"]) if tch else "")
+        B.para(I.doc, f"Oraliq nazorat: maksimal {AR.ORALIQ_MAX}, minimal {AR.ORALIQ_MIN} ball; yakuniy nazorat: maksimal {AR.YAKUNIY_MAX}, "
+               f"minimal {AR.YAKUNIY_MIN} ball. Yakuniy nazoratga oraliq nazoratdan kamida {AR.ORALIQ_MIN} ball ({AR.ADMIT_PCT}%) to'plagan talaba kiritiladi; "
+               f"fan kamida {PASS} ball bilan o'zlashtirilgan hisoblanadi. Shkala: {AR.SCALE_TEXT}. Yakuniy nazoratni fan bo'yicha "
+               "mashg'ulot olib bormagan professor-o'qituvchi yoki imtihon bo'limi o'tkazadi.", indent=False, size=9)
+        B.signature(I.doc, "Imtihon oluvchi (imtihon bo'limi)")
         B.signature(I.doc, "Fakultet dekani", short(g["dean"]))
         I.qr()
 
@@ -513,7 +521,7 @@ def g_minutes(I, p):
     B.table(I.doc, ["№", "Topshiriq", "Mas'ul", "Muddat", "Holat"],
             [(i, t["text"], t["assignee"] or "biriktirilmagan", d_uz(t["due"]) if t["due"] else "aytilmagan", t["status"]) for i, t in enumerate(ts, 1)] or [("—", "Topshiriq qayd etilmagan", "", "", "")],
             widths=[0.8, 8, 4, 3, 2], size=9.5)
-    B.para(I.doc, "Topshiriqlar ijrosi JARVIS tizimida nazoratga olindi; muddati o'tganlar haqida mas'ullarga avtomatik eslatma yuboriladi.", indent=False, size=10.5)
+    B.para(I.doc, "Topshiriqlar ijrosi ISFT Core tizimida nazoratga olindi; muddati o'tganlar haqida mas'ullarga avtomatik eslatma yuboriladi.", indent=False, size=10.5)
     B.signature(I.doc, "Majlis raisi")
     B.signature(I.doc, "Kotib")
     I.qr()
@@ -532,7 +540,7 @@ def g_exec_notice(I, p):
         B.para(I.doc, f"«{t['text']}»", bold=True)
         B.para(I.doc, f"Bugungi kunga qadar topshiriq ijrosi bo'yicha ma'lumot taqdim etilmagan (muddatdan {late} kun o'tdi). "
                "Topshiriq ijrosini ta'minlash va kechikish sabablari haqida 3 ish kuni ichida yozma tushuntirish berishingiz so'raladi. "
-               "Ijro holati JARVIS tizimida qayd etib boriladi.")
+               "Ijro holati ISFT Core tizimida qayd etib boriladi.")
         B.signature(I.doc, "Rektor", B.INST["rector_short"])
         I.qr()
 

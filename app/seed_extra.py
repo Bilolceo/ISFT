@@ -12,7 +12,7 @@ Xalqaro iqtisodiyot va moliya fakulteti dekani: Sabablarini o'rganamiz, 15-oktab
 O'quv ishlari bo'yicha prorektor: Akkreditatsiya muddati yaqinlashmoqda. O'quv dasturlarini yangilash rejasini 20-oktabrgacha tasdiqlashga kiritaman.
 Moliya-iqtisod ishlari bo'yicha prorektor: Kontrakt qarzdorligi 16 foiz atrofida. Guruhlar kesimida undirish rejasini 25-oktabrgacha ishlab chiqamiz.
 Kadrlar bo'limi: Ilmiy darajali o'qituvchilar ulushi bo'yicha attestatsiya jadvalini tayyorlaymiz.
-Rektor: Barcha topshiriqlar JARVIS orqali nazoratga olinsin.""",
+Rektor: Barcha topshiriqlar ISFT Core orqali nazoratga olinsin.""",
 2: """Rektorat yig'ilishi, 13.10.2026.
 Rektor: Xalqaro hamkorlik shartnomalarining bir qismi tugayapti. Latviya va Avstriyadagi hamkor OTMlar bilan uzaytirish xati 30-oktabrgacha yuborilsin.
 Xalqaro hamkorlik bo'limi: Tushunarli, xatlar loyihasi tayyor.
@@ -23,7 +23,7 @@ Magistratura bo'limi: Dastlabki himoyalar jadvalini oy oxirigacha e'lon qilamiz.
 Rektor: Kommunal xarajatlar uch oydan beri rejadan oshib ketyapti. Buxgalteriya sababini 12-noyabrgacha tahlil qilsin.
 Buxgalteriya: Hisoblagich ko'rsatkichlari va tariflarni solishtiramiz.
 Qabul komissiyasi: 2027 qabul kampaniyasi uchun marketing rejasini 20-noyabrgacha taqdim etamiz.
-Akademik faoliyat va registrator departamenti: Qarzdor talabalar bilan individual suhbatlarni 15-noyabrgacha tugatamiz.
+Registrator ofisi: Qarzdor talabalar bilan individual suhbatlarni 15-noyabrgacha tugatamiz.
 Kafedra mudiri (Buxgalteriya hisobi): 2-kurs uchun qo'shimcha konsultatsiya jadvali tuzildi.""",
 }
 MORE_MEETINGS = [
@@ -64,7 +64,7 @@ MORE_TASKS = [
     (6, "O'quv ishlari bo'yicha prorektor", "prorektor_oquv", "Qishki sessiya imtihon jadvalini e'lon qilish", "2026-11-18", "jarayonda"),
     (6, "Xalqaro hamkorlik bo'limi", "xalqaro", "Erasmus+ almashinuviga 12 nafar talaba tanlovini o'tkazish", "2026-11-28", "jarayonda"),
     (6, "Yoshlar masalalari bo'yicha birinchi prorektor", "prorektor_yoshlar", "Talabalar uchun ijara uy-joy hamkorlari ro'yxatini tuzish", "2026-11-22", "jarayonda"),
-    (6, "Akademik faoliyat va registrator departamenti", "talabalar", "Grant asosida o'qiyotgan talabalar ro'yxatini HEMIS bilan solishtirish", "2026-11-11", "jarayonda"),
+    (6, "Registrator ofisi", "talabalar", "Grant asosida o'qiyotgan talabalar ro'yxatini HEMIS bilan solishtirish", "2026-11-11", "jarayonda"),
     (6, "Magistratura bo'limi", "magistratura", "Ilmiy rahbarlar yuklamasini qayta taqsimlash", "2026-11-21", "jarayonda"),
     (6, "Kafedra mudiri (Buxgalteriya hisobi)", "kafedra", "Kafedra o'qituvchilarining Scopus rejasi bo'yicha hisobot", "2026-11-30", "jarayonda"),
     (6, "O'qituvchi (Buxgalteriya hisobi kafedrasi)", "oqituvchi", "Qishki sessiya uchun test savollarini yangilash", "2026-11-20", "jarayonda"),
@@ -156,7 +156,7 @@ def run(con, R, TODAY, teachers):
     for s in db.rows(con, "SELECT id, gpa_prev FROM students"):
         for g in db.rows(con, "SELECT subject, teacher_id FROM grades WHERE student_id=? AND semester=1", (s["id"],)):
             c.execute("INSERT INTO grades VALUES(?,?,?,?,?)", (s["id"], g["subject"], g["teacher_id"],
-                      int(max(20, min(100, R.gauss(s["gpa_prev"], 7)))), 0))
+                      int(max(8, min(100, R.gauss(s["gpa_prev"], 7)))), 0))
 
     # 3 haftalik audit tarixi (eng yangisi oxirida bo'lishi uchun vaqt bo'yicha tartiblab yoziladi)
     users = {u["role"]: u for u in db.rows(con, "SELECT id, full_name, role FROM users")}

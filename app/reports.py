@@ -53,7 +53,7 @@ def build(con, ctx: Ctx, kind: str) -> Path:
     p = doc.add_paragraph(); p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     r = p.add_run(title.upper()); r.bold = True; r.font.size = Pt(15)
     p = doc.add_paragraph(); p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    r = p.add_run(f"Sana: {S.TODAY.strftime('%d.%m.%Y')}   ·   Tayyorladi: JARVIS   ·   So'rovchi: {ctx.role.title}   ·   Ko'lam: {ctx.scope_label(con)}")
+    r = p.add_run(f"Sana: {S.TODAY.strftime('%d.%m.%Y')}   ·   Tayyorladi: ISFT Core   ·   So'rovchi: {ctx.role.title}   ·   Ko'lam: {ctx.scope_label(con)}")
     r.font.size = Pt(9); r.italic = True
 
     def safe(fn, *a):
@@ -81,12 +81,14 @@ def build(con, ctx: Ctx, kind: str) -> Path:
                [(r["name"], r["n"], r["gpa"], r["gpa_prev"], r["delta"], f"{r['attendance']}%" if r['attendance'] is not None else "—") for r in a["breakdown"]])
         if a["declining_groups"]:
             _h(doc, "3. O'zlashtirishi keskin pasaygan guruhlar")
-            _table(doc, ["Guruh", "Fakultet", "Kurs", "O'rt. ball", "O'zgarish", "Davomat"],
-                   [(g["name"], g["faculty"], g["course"], g["gpa"], g["delta"], f"{g['attendance']}%" if g['attendance'] is not None else "—") for g in a["declining_groups"]])
+            _bullets(doc, [S.decline_text(c) for c in a["declining_clusters"]])
+            _table(doc, ["Guruh", "Fakultet", "Kurs", "Avvalgi ball", "Hozirgi ball", "O'zgarish", "Davomat"],
+                   [(g["name"], g["faculty"], g["course"], g["gpa_prev"], g["gpa"], S._num(g["delta"]), f"{g['attendance']}%" if g['attendance'] is not None else "—") for g in a["declining_groups"]])
         r = safe(S.at_risk_students, 40)
         if r:
-            _h(doc, "4. Akademik xavf ostidagi talabalar")
-            doc.add_paragraph(f"Jami: {r['count']} nafar ({r['of']} nafardan). Xavf bahosi: past ball, davomat, ballning keskin tushishi va kontrakt qarzi asosida hisoblangan.")
+            _h(doc, "4. O'qishda xavf ostidagi talabalar")
+            doc.add_paragraph(f"Jami: {r['count']} nafar ({r['of']} nafardan). Hisoblash: {S.RISK_DEF}. "
+                              "Talabalar markazidagi holatlar soni (barcha qoidalar, jumladan kontrakt) — alohida ko'rsatkich.")
             if "students" in r:
                 _table(doc, ["F.I.Sh.", "Guruh", "Ball", "Davomat", "Xavf", "Sabab"],
                        [(s["full_name"], s["grp"], s["gpa"], f"{s['attendance']}%" if s['attendance'] is not None else "—", s["risk"], s["reasons"]) for s in r["students"]])
@@ -96,7 +98,7 @@ def build(con, ctx: Ctx, kind: str) -> Path:
         _h(doc, "Tavsiyalar")
         _bullets(doc, ["Pasaygan guruhlar bo'yicha kafedra mudirlari bilan alohida yig'ilish o'tkazish",
                        "Xavf ostidagi talabalarga kurator va qo'shimcha konsultatsiya biriktirish",
-                       "2 haftadan so'ng JARVIS orqali takroriy monitoring"])
+                       "2 haftadan so'ng ISFT Core orqali takroriy monitoring"])
     if kind == "moliya":
         f = S.finance_summary(con, ctx, quiet=True)
         _h(doc, "1. Byudjet ijrosi (yanvar–oktabr)")
@@ -126,9 +128,9 @@ def build(con, ctx: Ctx, kind: str) -> Path:
             _table(doc, ["Loyiha", "Rahbar", "Manba", "Summa", "Holat"], [(g["title"], g["leader"], g["funder"], S.mln(g["amount"]), g["status"]) for g in s["grants"]])
 
     doc.add_paragraph()
-    p = doc.add_paragraph(); r = p.add_run("Ushbu hisobot JARVIS tizimi tomonidan avtomatik tayyorlandi. Ma'lumotlar institut serveridan olingan; "
+    p = doc.add_paragraph(); r = p.add_run("Ushbu hisobot ISFT Core tizimi tomonidan avtomatik tayyorlandi. Ma'lumotlar institut serveridan olingan; "
                                            "so'rov audit jurnalida qayd etilgan. (MVP: demo ma'lumotlar)"); r.italic = True; r.font.size = Pt(8.5)
     OUT.mkdir(exist_ok=True)
-    path = OUT / f"JARVIS_{kind}_{ctx.role.key}_{dt.datetime.now().strftime('%H%M%S')}.docx"
+    path = OUT / f"ISFT_CORE_{kind}_{ctx.role.key}_{dt.datetime.now().strftime('%H%M%S')}.docx"
     doc.save(path)
     return path

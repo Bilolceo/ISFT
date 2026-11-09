@@ -1,4 +1,4 @@
-"""Xizmat markazi — "Offers" hujjatining 1-bosqich modullari:
+"""Murojaatlar va nosozliklar (avval «Xizmat markazi») — "Offers" hujjatining 1-bosqich modullari:
   1) Xonadagi QR orqali nosozlik yuborish (xo'jalik va texnik bo'lim)
   2) Yagona murojaat kartasi: avtomatik tasniflash + bir xil nosozliklarni bitta hodisaga birlashtirish
   3) Tadbirga QR orqali qatnashuvni belgilash (ma'naviyat va yoshlar)
@@ -12,7 +12,7 @@ from pathlib import Path
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel, Field
-from . import db, rbac, brand
+from . import db, rbac, brand, academic_rules as AR
 from .rbac import Ctx, AccessDenied, FACILITIES, REQUESTS, YOUTH
 
 router = APIRouter()
@@ -55,7 +55,7 @@ def _audit_public(con, action, resource, detail=""):
 
 def public_base(request: Request) -> str:
     """QR havolalari telefondan ochilishi uchun: localhost o'rniga kompyuterning lokal tarmoq (Wi-Fi) manzili."""
-    env = os.getenv("JARVIS_PUBLIC_URL")
+    env = os.getenv("ISFT_CORE_PUBLIC_URL")
     if env: return env.rstrip("/") + "/"
     host, port = request.url.hostname, request.url.port or 80
     if host in ("localhost", "127.0.0.1", "::1"):
@@ -148,12 +148,20 @@ def facilities(con, ctx: Ctx, quiet=False):
 # =====================================================================
 CATS = [  # (toifa, mas'ul bo'lim, kalit so'zlar)
     ("LMS / onlayn ta'lim", "Axborot texnologiyalari bo'limi", ["lms", "moodle", "platforma", "onlayn dars", "video dars", "kursga kir"]),
-    ("HEMIS / baholar", "Akademik faoliyat va registrator departamenti", ["hemis", "baho", "reyting", "ball", "qayta topshir", "apellyatsiya"]),
+    # Registrator ofisi e'loni (07.09): baholar, akademik natijalar, hujjatlar, talaba maqomi, akademik ta'til, shartnoma hujjatlari
+    ("HEMIS / baholar", "Registrator ofisi", ["hemis", "baho", "reyting", "ball", "qayta topshir", "apellyatsiya"]),
     ("Wi-Fi / internet", "Axborot texnologiyalari bo'limi", ["wifi", "wi-fi", "internet", "tarmoq"]),
     ("Pochta / akkaunt", "Axborot texnologiyalari bo'limi", ["pochta", "email", "e-mail", "parol", "login", "akkaunt"]),
-    ("Hujjat / ma'lumotnoma", "Akademik faoliyat va registrator departamenti", ["ma'lumotnoma", "malumotnoma", "spravka", "hujjat", "transkript", "diplom", "buyruq"]),
+    ("Hujjat / ma'lumotnoma", "Registrator ofisi", ["ma'lumotnoma", "malumotnoma", "spravka", "hujjat", "transkript", "diplom", "buyruq",
+                                                     "arxiv", "bitiruv marosim", "maqom", "akademik ta'til", "shartnoma",
+                                                     "talabalikdan", "qayta tiklash", "o'qishni ko'chir", "akademik natija"]),
+    ("Sirtqi ta'lim", "Sirtqi bo'lim", ["sirtqi", "chaqiruv xat"]),
+    # akademik qoidalar taqdimoti (app/academic_rules.py DUTIES): akademik taqvim, Enrollment, akademik guruhlar, nazorat jadvali
+    ("Akademik taqvim / fanga yozilish", "Akademik faoliyatni boshqarish bo'limi",
+     ["fanga yozil", "fanlarga yozil", "enrollment", "tanlov fan", "akademik taqvim", "akademik guruh", "imtihon jadval",
+      "nazorat jadval", "yakuniy nazorat", "oraliq nazorat", "sessiya"]),
     ("To'lov / kontrakt", "Buxgalteriya bo'limi", ["to'lov", "tolov", "kontrakt", "chek", "click", "payme", "to'ladim", "toladim"]),
-    ("Dars jadvali", "Akademik faoliyat va registrator departamenti", ["jadval", "auditoriya", "dars vaqti", "dars qayer", "xona o'zgar"]),
+    ("Dars jadvali", "Akademik faoliyatni boshqarish bo'limi", ["jadval", "auditoriya", "dars vaqti", "dars qayer", "xona o'zgar"]),
     ("Turar joy (ijara)", "Ma'naviyat va ma'rifat bo'limi", ["ijara", "turar joy", "yotoqxona", "kvartira"]),
 ]
 TOPICS = {"lms": ["lms", "moodle", "platforma"], "hemis": ["hemis"], "wifi": ["wifi", "wi-fi", "internet"],
@@ -173,7 +181,7 @@ def _norm(t):
 
 def classify(text):
     t = _norm(text)
-    cat, unit = "Boshqa", "Akademik faoliyat va registrator departamenti"
+    cat, unit = "Boshqa", "Registrator ofisi"
     best = 0
     for c, u, kws in CATS:
         s = sum(1 for k in kws if k in t)
@@ -182,6 +190,8 @@ def classify(text):
     if any(f in t for f in FAIL):
         # hodisa mavzusi faqat murojaat toifasiga mos bo'lsa (masalan, "Click orqali to'ladim, HEMISda ko'rinmayapti" — HEMIS uzilishi emas)
         topic = next((k for k, kws in TOPICS.items() if TOPIC_CAT[k] == cat and any(w in t for w in kws)), None)
+    # HEMIS'ning texnik nosozligi (kira olmayapti, ochilmayapti) — IT ishi; baho/natija mazmuni bo'yicha savollar — Registrator ofisida
+    if topic == "hemis": unit = "Axborot texnologiyalari bo'limi"
     return cat, unit, topic
 
 def create_request(con, text, name="", contact="", hemis_id="", channel="veb-forma", when=None):
@@ -330,7 +340,7 @@ def overview(request: Request):
         if c.can(res):
             out[key] = fn(_con, c); out["tabs"].append(key)
     if not out["tabs"]:
-        rbac.audit(_con, c, "xizmat markazi", FACILITIES, False)
+        rbac.audit(_con, c, "murojaatlar va nosozliklar", FACILITIES, False)
     out["base"] = public_base(request)
     return out
 
@@ -537,7 +547,7 @@ def public_request_page():
     <label>Telefon yoki Telegram (ixtiyoriy)<input id="c" maxlength="80"></label>
     <button class="btn primary" id="s" style="width:100%;padding:13px">Yuborish</button><div class="err" id="er"></div></div>"""
     script = """$('#s').onclick=async()=>{$('#s').disabled=true;$('#er').textContent='';try{const j=await post('/api/public/request',{text:$('#t').value,hemis_id:$('#h').value,contact:$('#c').value});
-    $('#f').innerHTML=`<div class="ok"><div class="i">📨</div><h2>Qabul qilindi — ${E(j.number)}</h2><p class="muted">Yo'nalish: <b>${E(j.unit)}</b> (${E(j.category)}).${j.incident?'<br>Bu muammo bo\\'yicha boshqa talabalar ham yozgan — umumiy hodisa sifatida ko\\'rilmoqda, alohida qayta yozish shart emas.':''}</p></div>`}catch(err){$('#er').textContent=err.message;$('#s').disabled=false}}"""
+    $('#f').innerHTML=`<div class="ok"><div class="i">📨</div><h2>Qabul qilindi — ${E(j.number)}</h2><p class="muted">Yo'nalish: <b>${E(j.unit)}</b> (${E(j.category)}).${j.room?'<br>Shaxsan murojaat uchun: '+E(j.room)+'.':''}${j.incident?'<br>Bu muammo bo\\'yicha boshqa talabalar ham yozgan — umumiy hodisa sifatida ko\\'rilmoqda, alohida qayta yozish shart emas.':''}</p></div>`}catch(err){$('#er').textContent=err.message;$('#s').disabled=false}}"""
     return _page("Yagona murojaat oynasi", body, script)
 
 class PubRequest(BaseModel):
@@ -550,7 +560,9 @@ def public_request(body: PubRequest, request: Request):
     _limit(request)
     r = create_request(_con, body.text, contact=body.contact, hemis_id=body.hemis_id)
     _audit_public(_con, "murojaat qabul qilindi", "requests", f"{r['number']} · {r['category']}"); _con.commit()
-    return {k: r[k] for k in ("number", "category", "unit", "incident")}
+    out = {k: r[k] for k in ("number", "category", "unit", "incident")}
+    if r["unit"] == AR.REGISTRAR_UNIT: out["room"] = AR.REGISTRAR_ROOMS_TEXT   # Registrator ofisi e'loni (07.09)
+    return out
 
 @router.get("/t/{code}", response_class=HTMLResponse)
 def public_event(code: str):
