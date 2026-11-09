@@ -253,7 +253,6 @@ def _label(a: Acc, e: dict) -> dict:
 _IMG_LOCK = threading.Lock()
 _JPEG: "OrderedDict[tuple, bytes]" = OrderedDict()
 _BASE: "OrderedDict[int, object]" = OrderedDict()
-_RECTS: dict = {}       # kadr id → namuna rasmdagi yuz ramkalari (voqealar tartibida)
 _AUD: dict = {}
 
 def _base_image(fr: dict, evs: list):
@@ -271,12 +270,7 @@ def _base_image(fr: dict, evs: list):
         d.text((40, 330), "Kamera fon rasmini yubormadi — faqat metama'lumot", font=FR.font("b", 28), fill=(200, 205, 214))
     else:
         faces = tuple((tuple(json.loads(e["rect"])), int(e["look"] or 1), None if e["female"] is None else bool(e["female"])) for e in evs)
-        ph = FR.photo_scene(int(fr["seed"]), fr["ts"], fr["cam_name"], faces)
-        if ph:                                   # lokal namuna rasmlar to'plami bor — haqiqiy suratga o'xshash kadr
-            im, rects = ph
-            with _IMG_LOCK: _RECTS[fr["id"]] = rects
-        else:
-            im = FR.scene_image(int(fr["seed"]), fr["ts"], fr["cam_name"], (fr["cam_bld"] or "A")[0], fr["direction"], faces)
+        im = FR.scene_image(int(fr["seed"]), fr["ts"], fr["cam_name"], (fr["cam_bld"] or "A")[0], fr["direction"], faces)
     with _IMG_LOCK:
         _BASE[fr["id"]] = im
         while len(_BASE) > 12: _BASE.popitem(last=False)
@@ -296,9 +290,6 @@ def frame_jpeg(con, a: Acc, fid: int, width: int = 0) -> bytes:
                           LEFT JOIN face_persons p ON p.id=e.person_id WHERE e.frame_id=? ORDER BY e.id""", (fid,))
     base = _base_image(fr, evs)
     labs = [_label(a, e) for e in evs]
-    over = _RECTS.get(fid)
-    if over and len(over) == len(labs):
-        for lab, rc in zip(labs, over): lab["rect"] = rc
     st = Counter(e["status"] for e in evs if _visible(a, e))
     hid = sum(1 for e in evs if not _visible(a, e))
     parts = [f"{st['tanildi']} tanildi"] if st["tanildi"] else []
