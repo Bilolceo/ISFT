@@ -388,8 +388,13 @@ def scene_image(seed: int, ts: str, cam_name: str, bld: str, direction: str, fac
         cx, cy, hh = rect_geom(rect)
         _person(d, cx, cy, hh, look(lk, fem))
     im = im.resize((W, H), Image.LANCZOS)
+    return camera_look(im, t, cam_name, r, "SINTETIK · demo")
+
+def camera_look(im: Image.Image, t: dt.datetime, cam_name: str, r: random.Random, mark: str, blur: float = 1.25) -> Image.Image:
+    """Kamera effektlari (yumshoq fokus, shovqin, rang, vinyetka; tunda IQ — oq-qora) va Hikvision uslubidagi OSD."""
+    night = not (7 <= t.hour < 19 or (t.hour == 19 and t.minute < 30))
     # --- kamera effektlari: yumshoq fokus, shovqin, rang, vinyetka; tunda IQ (oq-qora)
-    im = im.filter(ImageFilter.GaussianBlur(1.25))
+    im = im.filter(ImageFilter.GaussianBlur(blur))
     light = Image.linear_gradient("L").resize((W, H)).point(lambda v: int(255 - v * .22))
     im = Image.composite(im, Image.new("RGB", im.size, (0, 0, 0)), light)
     im = ImageEnhance.Contrast(im).enhance(.9)
@@ -413,8 +418,51 @@ def scene_image(seed: int, ts: str, cam_name: str, bld: str, direction: str, fac
     tw = od.textlength(cam_name, font=f)
     od.text((W - 24 - tw, H - 46), cam_name, font=f, fill=(255, 255, 255), stroke_width=2, stroke_fill=(0, 0, 0))
     fw = font("b", 13)
-    od.text((24, H - 30), "SINTETIK · demo", font=fw, fill=(255, 255, 255, 140), stroke_width=1, stroke_fill=(40, 40, 40))
+    od.text((24, H - 30), mark, font=fw, fill=(255, 255, 255, 140), stroke_width=1, stroke_fill=(40, 40, 40))
     return im
+
+# ---------------------------------------------------------------------------------------------
+# Namuna rasmlar to'plami (ixtiyoriy, faqat lokal): data/facecam_photos/manifest.json
+#   [{"file": "x.jpg" (1280x720), "faces": [{"r": [x,y,w,h] 0..1, "f": true|false|null}], "src": "...", "lic": "..."}]
+# To'plam git'ga kirmaydi (data/ — .gitignore). Bo'lmasa — sintetik chizma ishlatiladi.
+# ---------------------------------------------------------------------------------------------
+PACK_DIR = Path(__file__).resolve().parent.parent / "data" / "facecam_photos"
+_PACK: dict = {}
+
+def photo_pack() -> list:
+    import json
+    mf = PACK_DIR / "manifest.json"
+    try: mt = mf.stat().st_mtime
+    except OSError: return []
+    if _PACK.get("mt") != mt:
+        try: _PACK.update(mt=mt, items=[x for x in json.loads(mf.read_text()) if (PACK_DIR / x["file"]).exists() and x.get("faces")])
+        except Exception: _PACK.update(mt=mt, items=[])
+    return _PACK["items"]
+
+def photo_scene(seed: int, ts: str, cam_name: str, faces: tuple):
+    """faces: ((rect, look, female|None), ...) — voqealar tartibida. Yuzlari soni mos namuna rasm topilsa:
+    (rasm, [har bir voqea uchun rasmdagi yuz rect]) qaytaradi, aks holda None."""
+    items = [x for x in photo_pack() if len(x["faces"]) == len(faces)]
+    if not items: return None
+    want = [f[2] for f in faces]
+    def score(x):   # jins mosligi (yuzlar tartibini almashtirib ham)
+        import itertools
+        best = max(itertools.permutations(range(len(x["faces"]))),
+                   key=lambda pm: sum(1 for i, j in enumerate(pm) if want[i] is None or x["faces"][j].get("f") is None or x["faces"][j]["f"] == want[i]))
+        return sum(1 for i, j in enumerate(best) if want[i] is None or x["faces"][j].get("f") is None or x["faces"][j]["f"] == want[i]), best
+    r = random.Random(seed)
+    scored = [(score(x), x) for x in items]
+    top = max(s[0][0] for s in scored)
+    (_, perm), x = r.choice([s for s in scored if s[0][0] == top])
+    im = Image.open(PACK_DIR / x["file"]).convert("RGB")
+    if im.size != (W, H): im = ImageOps.fit(im, (W, H), Image.LANCZOS)
+    if r.random() < .5 and not x.get("nomirror"):            # ko'zgu — bir rasm ikki xil ko'rinadi
+        im = ImageOps.mirror(im)
+        rects = [[round(1 - f["r"][0] - f["r"][2], 4), *f["r"][1:]] for f in x["faces"]]
+    else:
+        rects = [list(f["r"]) for f in x["faces"]]
+    t = dt.datetime.fromisoformat(ts)
+    return camera_look(im, t, cam_name, r, "Namuna rasm · demo", blur=.6), [rects[j] for j in perm]
 
 # ---------------------------------------------------------------------------------------------
 # Izoh qatlami
