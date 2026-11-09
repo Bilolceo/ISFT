@@ -16,7 +16,7 @@ UZ_MONTHS = ["yanvar", "fevral", "mart", "aprel", "may", "iyun", "iyul", "avgust
 EN_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
 ACAD_YEAR = "2026-2027"
 PASS = AR.PASS       # o'tish bali (100 ballik) — institut qoidasi: 40 ball = «3»
-CREDITS = 6          # bir fan uchun kredit (demo; taqdimotdagi GPA misolida ham 6 kredit)
+CREDITS = AR.CREDIT_DEFAULT   # fan krediti o'quv dasturida ko'rsatilmagan bo'lsa (academic_rules; reyting moduli bilan bir xil manba)
 LOAD_NORM = 840      # 1 stavka yillik o'quv yuklamasi, soat (institut nizomiga ko'ra sozlanadi)
 
 def d_uz(d): d = dt.date.fromisoformat(d) if isinstance(d, str) else d; return f"{d.year}-yil {d.day}-{UZ_MONTHS[d.month-1]}"
@@ -307,12 +307,13 @@ def g_transcript(I, p):
         rows = db.rows(I.con, "SELECT subject, score FROM grades WHERE student_id=? AND semester=? ORDER BY subject", (s["id"], sem))
         if not rows: continue
         p_ = I.doc.add_paragraph(); B.run(p_, label, 11, True, B.RGB_TEAL_DARK)
-        data = []
+        data, crs = [], AR.subject_credits(I.con)
+        cr = lambda subj: AR.credit_of(crs, subj)
         for i, r in enumerate(rows, 1):
-            g5, word = grade5(r["score"]); data.append((i, r["subject"], CREDITS, r["score"], letter(r["score"]), f"{g5} ({word})"))
+            g5, word = grade5(r["score"]); data.append((i, r["subject"], cr(r["subject"]), r["score"], letter(r["score"]), f"{g5} ({word})"))
         B.table(I.doc, ["№", "Fan", "Kredit", "Ball (100)", "Harf", "Baho (5)"], data, widths=[1, 7, 1.6, 2.2, 1.4, 3.8], size=10)
         if sem == 0:
-            done = (sum(CREDITS for r in rows if r["score"] >= PASS), CREDITS * len(rows), AR.gpa([(CREDITS, grade5(r["score"])[0]) for r in rows]))
+            done = (sum(cr(r["subject"]) for r in rows if r["score"] >= PASS), sum(cr(r["subject"]) for r in rows), AR.gpa([(cr(r["subject"]), grade5(r["score"])[0]) for r in rows]))
     if done:
         B.para(I.doc, f"Yakunlangan semestr bo'yicha o'zlashtirilgan kreditlar: {done[0]} / {done[1]}. GPA (5 ballik): {done[2]:.2f}.", indent=False, size=10.5, bold=True)
     B.para(I.doc, f"Baholash shkalasi (100 ballik → 5 baho → harf): {AR.SCALE_TEXT}. Fan kamida {PASS} ball bilan o'zlashtirilganda "

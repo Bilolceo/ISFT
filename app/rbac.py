@@ -24,12 +24,14 @@ FACILITIES = "facilities"        # xona QR nosozliklari (xo'jalik)
 REQUESTS = "requests"            # yagona murojaat kartasi va hodisalar
 SPACES = "spaces"                # auditoriyalar bandligi (kamera — faqat son)
 OPS = "ops"                      # talabalar bilan ishlash markazi (holatlar, call-markaz, otrabotka)
+RATING = "rating"                # o'zlashtirish reytingi (app/reyting.py) — kirish moduldagi jadval bo'yicha, audit shu resursda
 
 LABELS = {KPI: "Umumiy KPI", ACADEMIC: "O'zlashtirish va davomat", STUDENTS: "Talabalar kartochkasi", CONTRACTS: "Kontrakt to'lovlari",
           FINANCE: "Byudjet va xarajatlar", PAYROLL: "Ish haqi", HR: "Kadrlar shaxsiy ma'lumoti", SCIENCE: "Ilmiy faoliyat",
           INTL: "Xalqaro hamkorlik", ADMISSIONS: "Qabul", YOUTH: "Yoshlar va yotoqxona", MASTERS: "Magistratura",
           TASKS: "Majlis topshiriqlari", AUDIT: "Audit jurnali", REPORTS: "Hisobotlar",
-          FACILITIES: "Xo'jalik nosozliklari", OPS: "Talabalar bilan ishlash markazi", REQUESTS: "Murojaatlar va hodisalar", SPACES: "Auditoriyalar bandligi"}
+          FACILITIES: "Xo'jalik nosozliklari", OPS: "Talabalar bilan ishlash markazi", REQUESTS: "Murojaatlar va hodisalar", SPACES: "Auditoriyalar bandligi",
+          RATING: "O'zlashtirish reytingi"}
 
 @dataclass(frozen=True)
 class Role:

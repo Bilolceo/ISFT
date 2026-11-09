@@ -25,6 +25,7 @@ Bu hujjatdagi qoidalarni `tests/test_ruxsatlar.py` tekshiradi.
 | AT bo'limi boshlig'i | Kameralar salomatligi. Faqat kameraning texnik voqealarini belgilaydi: to'sish, tasvir yo'qolishi, siljish | Kamera tarmog'i va proshivkasi AT bo'limining ishi |
 | Strategik bo'lim, Sifatni ta'minlash, Yuridik bo'lim, Devonxona, Marketing, Xarid | Akkaunt, Portal, majlis topshiriqlari; eng kam ruxsat | 04.09.2024 tasdiqlangan tuzilma |
 | Barcha xodimlar (call-markaz va Kuzatuv kengashidan tashqari) | Xizmat xati | — |
+| Reyting (`app/reyting.py`, [reyting.md](reyting.md)) | To'liq: Registrator ofisi (#17, #43), Akademik bo'lim, rektor, o'quv prorektori, Imtihon va Ma'lumotlar bazasi bo'limlari; Sirtqi bo'lim — faqat sirtqi talabalar; kafedra mudiri — o'z kafedrasi; tyutor — o'z fakulteti; o'qituvchi — o'zi baholagan talabalar; Kuzatuv kengashi, boshqa prorektorlar, Sifat boshqarmasi — faqat jamlangan (ism-sharifsiz); qolganlar (Buxgalteriya) — 403. Qayta hisoblash — Registrator ofisi va Akademik bo'lim. Audit resursi `rating` | Reyting talaba baholarini ochadi — faqat ular bilan ishlaydigan bo'limlarga; rahbariyat kuzatuvi uchun jamlangan ko'rinish |
 
 ## Olib tashlangan ortiqcha ruxsatlar
 - **Kuzatuv kengashi** kamera xavfsizlik voqealari va kameralar ro'yxatini endi ko'rmaydi. Kengash operativ ish bilan shug'ullanmaydi, unga bandlik statistikasi ochiq qoldi. Ijro nazorati xati va xizmat xati ham olib tashlandi.

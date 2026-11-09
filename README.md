@@ -27,6 +27,7 @@ Tarmoqdagi boshqa qurilmadan (masalan, rektorning planshetidan) kirish: `http://
 | Boshqaruv paneli | KPI, proaktiv ogohlantirishlar, rolga mos grafiklar | ✅ |
 | ISFT Core suhbat | "Qaysi yo'nalishda ortda qolyapmiz?" kabi savollar | ✅ mahalliy AI |
 | Talabalar monitoringi | Xavf ostidagi talabalarni oldindan aniqlash | ✅ |
+| Reyting | Talabalar o'zlashtirish reytingi: kredit bilan tortilgan GPA, guruh/kurs/yo'nalish/fakultet/institut o'rni, qaydnoma (.xlsx/.docx), dinamika, a'lochilar, bo'linmalar ([docs/reyting.md](docs/reyting.md)) | ✅ |
 | Majlis nazorati | Bayonnomadan kim/nima/qachon ajratish, muddat nazorati | ✅ |
 | Hisobot generatori | Word (.docx) — brifing, akademik, moliya, ilmiy | ✅ |
 | Tarjima va shartnoma yordamchisi | Xorijiy xat tarjimasi, shartnoma tekshiruvi, javob loyihasi (mahalliy AI kerak) | ✅ |
@@ -41,7 +42,7 @@ Kundalik bo'limlar tepada, kam ishlatiladiganlari yig'iladigan guruhda (`static/
 | Guruh | Bo'limlar |
 |---|---|
 | Asosiy | Boshqaruv paneli · ISFT Core bilan suhbat · AI agentlar · Majlislar va topshiriqlar |
-| Ish jarayonlari | Portal (bo'limlararo xat, fayl, umumiy bazalar) · Hujjatlar markazi (rasmiy hujjat, raqam va QR) · Talabalar markazi (tizim aniqlagan xavf holatlari) · Murojaatlar va nosozliklar (kelib tushgan murojaatlar, QR nosozliklar, tadbir qatnashuvi) · Hisobotlar (tahliliy Word hisobotlar) |
+| Ish jarayonlari | Portal (bo'limlararo xat, fayl, umumiy bazalar) · Hujjatlar markazi (rasmiy hujjat, raqam va QR) · Talabalar markazi (tizim aniqlagan xavf holatlari) · Reyting (o'zlashtirish reytingi, qaydnoma, a'lochilar) · Murojaatlar va nosozliklar (kelib tushgan murojaatlar, QR nosozliklar, tadbir qatnashuvi) · Hisobotlar (tahliliy Word hisobotlar) |
 | Sozlamalar va xavfsizlik (yig'ilgan) | Auditoriyalar · Tarjima va shartnoma · Ruxsat darajalari · Audit jurnali |
 
 - Xo'jalik bo'limida «Auditoriyalar», Xalqaro bo'limda «Tarjima va shartnoma» kundalik ish sifatida «Ish jarayonlari»ga chiqariladi.
@@ -95,6 +96,7 @@ app/portal_backup.py  portal zaxira nusxasi: backup / restore / verify
 app/services.py  ma'lumot servislari, ogohlantirishlar, KPI
 app/ai.py        mahalliy AI, faktlar, bayonnoma tahlili, tarjima va shartnoma yordamchisi
 app/reports.py   Word hisobotlar
+app/reyting.py   o'zlashtirish reytingi: kesh (RANK oyna funksiyalari), ro'yxat, karta, qaydnoma eksporti (docs/reyting.md)
 app/main.py      veb-server (FastAPI)
 app/bot.py       Telegram bot
 static/          veb-interfeys (internetsiz ishlaydi, CDN yo'q); static/nav.js — yon menyu guruhlari va ixcham rejim
@@ -123,7 +125,7 @@ o'qituvchi — faqat o'z fanlari), har bir amal audit jurnalida. Fayllar: `data/
 («3»), oraliq nazorat 30 (min. 12), yakuniy nazorat 70 (min. 28), shkala 65+ A «5» · 60–64 B «4» · 50–59 C «4» · 45–49 D «3» ·
 40–44 E «3» · 0–39 F «2», GPA = Σ(kredit × baho) / Σ kredit, 1 kredit = 30 soat (12 + 18), dars vaqtlari (`app/occupancy.py` SLOTS).
 
-**Institut tasdiqlashi kerak bo'lgan sozlamalar** (`app/documents.py` boshida): fan krediti (6),
+**Institut tasdiqlashi kerak bo'lgan sozlamalar** (`app/documents.py` boshida): fan krediti (o'quv dasturida bo'lmasa standart 6 — `academic_rules.CREDIT_DEFAULT`; transkript va Reyting bir xil manbadan),
 1 stavka yuklamasi (840 soat), pedagog xodimlar ta'tili (56 kun). Bular institut nizomi bilan solishtirilishi shart.
 
 ## Murojaatlar va nosozliklar (`app/service.py`, avval «Xizmat markazi»)

@@ -48,10 +48,41 @@ BACHELOR_CREDITS, MASTER_CREDITS = 240, 120
 GPA_FORMULA = "GPA = Σ(kredit × baho) / Σ kredit"
 CREDIT_NOTE = f"1 kredit = {CREDIT_HOURS} soat ({CREDIT_AUD} soat auditoriya + {CREDIT_SELF} soat mustaqil ta'lim)"
 
+def ratio2(num, den):
+    """num / den — 2 xonagacha, aniq «yarimdan yuqoriga» (4.625 → 4.63). Butun sonlardan hisoblanadi, shuning uchun
+    Python (transkript, karta) va SQL (reyting keshi, ratio2_sql) bir xil natija beradi — float yaxlitlash farqi yo'q."""
+    if not den: return None
+    from fractions import Fraction
+    return int(Fraction(num) * 100 / Fraction(den) + Fraction(1, 2)) / 100   # num, den ≥ 0
+
+def ratio2_sql(num: str, den: str) -> str:
+    """ratio2 ning SQL ko'rinishi (num, den — butun sonli ifodalar): ((200·num + den) div (2·den)) / 100."""
+    return f"(((200 * ({num}) + ({den})) / (2 * ({den}))) / 100.0)"
+
 def gpa(items):
-    """items: [(kredit, 5 ballik baho)] → Σ(kredit × baho) / Σ kredit."""
+    """items: [(kredit, 5 ballik baho)] → Σ(kredit × baho) / Σ kredit (2 xona, yarimdan yuqoriga)."""
     cr = sum(k for k, _ in items)
-    return round(sum(k * g for k, g in items) / cr, 2) if cr else None
+    return ratio2(sum(k * g for k, g in items), cr) if cr else None
+
+# Fan krediti: o'quv dasturida (syl_items.credits — «O'quv dasturlari» moduli) ko'rsatilgan bo'lsa o'sha, aks holda standart.
+# Standart 6 kredit — taqdimotdagi GPA misolidagi fan krediti (quyida GPA_EXAMPLE); transkript va reyting bir xil manbadan oladi.
+CREDIT_DEFAULT = 6
+CREDIT_SOURCE_SYL, CREDIT_SOURCE_DEFAULT = "o'quv dasturi", "standart"
+
+def subject_credits(con) -> dict:
+    """{fan: kredit} — o'quv dasturlaridan (bir fanga bir nechta kafedra dasturi bo'lsa — eng ko'p uchragan qiymat).
+    Ro'yxatda yo'q fan uchun CREDIT_DEFAULT ishlatiladi (credit_of)."""
+    try:
+        rows = con.execute("""SELECT subject, credits FROM (SELECT subject, credits, COUNT(*) n FROM syl_items
+                              WHERE credits IS NOT NULL AND credits > 0 GROUP BY subject, credits) ORDER BY subject, n DESC, credits DESC""").fetchall()
+    except Exception:   # yangi bazada syl_items hali bo'lmasligi mumkin
+        return {}
+    out = {}
+    for subj, cr in rows: out.setdefault(subj, int(cr))
+    return out
+
+def credit_of(credits: dict, subject: str) -> int:
+    return credits.get(subject, CREDIT_DEFAULT)
 
 # Taqdimotdagi misol: Korporativ boshqaruv yo'nalishi talabasi, 1-semestr
 GPA_EXAMPLE = [("Korporativ boshqaruv", 6, 4), ("Moliyaviy hisobot metodologiyasi", 6, 4),
@@ -141,3 +172,37 @@ LOCAL_DEPTS = {
                                              "Axborot tizimlari va texnologiyalari"],
     "Filologiya va tillarni o'qitish": ["Filologiya va tillarni o'qitish", "Xorijiy til va adabiyoti"],
 }
+
+# ---------------- reyting (app/reyting.py — «Reyting» moduli) ----------------
+RATING_TITLE = ("Oliy ta'lim muassasasi talabalarining o'zlashtirish ko'rsatkichlarini reyting baholash "
+                "avtomatlashtirilgan tizimi")
+# grades.semester: 0 — yakunlangan (o'tgan) semestr, 1 — joriy semestr (app/documents.py transkripti bilan bir xil)
+SEMESTERS = {0: "2025-2026 o'quv yili, bahorgi semestr", 1: "2026-2027 o'quv yili, kuzgi semestr"}
+SEMESTER_SHORT = {0: "2025-26 · bahorgi", 1: "2026-27 · kuzgi"}
+CURRENT_SEMESTER = 1
+# Tartiblash (birinchisi asosiy, keyingilari — teng kelganda): hammasi kamayish tartibida
+RATING_ORDER = [("gpa", "Semestr GPA (5 ballik, kredit bilan tortilgan)", 2),
+                ("avg_score", "O'rtacha ball (100 ballik, fanlar bo'yicha oddiy o'rtacha)", 2),
+                ("attendance", "Davomat, % (joriy semestr; qayd etilmagan — oxirida)", 1)]
+RATING_LEVELS = [("group", "Guruh"), ("course", "Kurs"), ("direction", "Yo'nalish"), ("faculty", "Fakultet"), ("institute", "Institut")]
+RATING_LEVEL_NOTE = {"group": "o'quv guruhi ichida", "course": "bir xil daraja (bakalavr/magistr) va kursdagi barcha talabalar orasida",
+                     "direction": "bir xil yo'nalish va darajadagi barcha kurslar orasida", "faculty": "fakultet bo'yicha",
+                     "institute": "butun institut bo'yicha"}
+RATED_STATUS = "faol"                       # reytingda faqat faol talabalar
+EXCELLENT_MIN = SCALE[0][0]                 # a'lochi: barcha fanlardan «5» (kamida 65 ball)
+TOP_DEFAULTS = {"pct": 10, "min_att": 85.0, "max_f": 0}   # mukofotlar uchun: kurs bo'yicha eng yaxshi N%, qarzsiz, davomat ≥
+UNIT_MIN = {"group": 10, "kafedra": 150, "teacher": 30}    # bo'linmalar reytingi: kamida shuncha (guruh — talaba; kafedra, o'qituvchi — baho)
+UNIT_MIN_NOTE = {"group": "talaba", "kafedra": "baho", "teacher": "baho"}
+
+def grade5_sql(col="score") -> str:
+    """SCALE dan SQL: 100 ballik → 5 baho (keshni hisoblashda; qoidalar bitta joyda qoladi)."""
+    parts = " ".join(f"WHEN {col} >= {lo} THEN {g}" for lo, _, _, g, _ in SCALE if lo > 0)
+    return f"(CASE {parts} ELSE {SCALE[-1][3]} END)"
+
+def percentile(rank: int, n: int) -> int:
+    """Yuqoridan necha foiz ichida: 1/1240 → 1, 620/1240 → 50. (rank/n × 100, yuqoriga yaxlitlanadi)."""
+    if not rank or not n: return None
+    return max(1, min(100, -(-rank * 100 // n)))
+
+RATING_FORMULA = (f"{GPA_FORMULA}; baho — 100 ballik balldan ({SCALE_TEXT}). Kredit — o'quv dasturidan, "
+                  f"ko'rsatilmagan bo'lsa {CREDIT_DEFAULT} kredit.")

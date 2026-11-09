@@ -73,6 +73,8 @@ RULE_PATTERNS = [   # (mavzu, savoldagi belgi — ai.norm qilingan matnda)
     ("sirtqi_bolim", r"sirtqi bo'lim\w*\b.*(?:nima|vazifa|kim|ish qila|funksiya|qanday)|^sirtqi bo'lim\w*\W*$"),
     ("malumotlar_bolim", r"ma'lumotlar bazasi bo'lim\w*\b.*(?:nima|vazifa|kim|ish qila|funksiya|qanday)|^ma'lumotlar bazasi bo'lim\w*\W*$"),
     ("kafedralar", r"(?:xalqaro|mahalliy)\w*\b.*kafedra|kafedra\w*\b.*(?:xalqaro|mahalliy)|kafedralar(?:i)? qaysi|qaysi kafedralar"),
+    # Reyting moduli metodikasi (app/reyting.py) — faqat qoida; shaxsiy o'rinlar agentga chiqmaydi
+    ("reyting", r"reyting\w*\b.*(?:qanday|hisobla|formula|nima\b|tartib|aniqlan|metodika|mezon|tuzil)|(?:qanday|nima asosida)\b.*\breyting|^reyting\W*$|a'lochi\w*\b.*(?:kim|qanday|mezon|shart)"),
 ]
 RULE_RX = [(k, re.compile(p)) for k, p in RULE_PATTERNS]
 RULES_ANY = re.compile(r"akademik qoida|o'quv qoida|baholash qoida")
@@ -82,7 +84,8 @@ RULE_ASK = {"baholash": "O'tish bali necha?", "nazorat": "Yakuniy nazoratga kim 
             "kredit": "Kredit nima?", "dars_vaqti": "Dars soat nechida boshlanadi?", "registrator": "Registrator ofisi nima ish qiladi?",
             "registrator_joy": "Registrator ofisi qayerda?", "registrator_murojaat": "Qanday masalada registratorga murojaat qilaman?",
             "akademik_bolim": "Akademik faoliyatni boshqarish bo'limi vazifalari?", "sirtqi_bolim": "Sirtqi bo'lim nima ish qiladi?",
-            "malumotlar_bolim": "Ma'lumotlar bazasi bo'limi vazifalari?", "kafedralar": "Xalqaro kafedralar qaysilar?"}
+            "malumotlar_bolim": "Ma'lumotlar bazasi bo'limi vazifalari?", "kafedralar": "Xalqaro kafedralar qaysilar?",
+            "reyting": "Reyting qanday hisoblanadi?"}
 
 UNIT_TOPIC = {"registrator": AR.REGISTRAR_UNIT, "akademik_bolim": AR.ACADEMIC_UNIT, "sirtqi_bolim": AR.SIRTQI_UNIT,
               "malumotlar_bolim": AR.DB_UNIT}
@@ -169,6 +172,18 @@ def rules_data(con, topics: list[str]) -> dict:
             f = [f"Taqdimotga ko'ra {len(AR.INTL_DEPTS)} ta kafedra xalqaro ta'lim yo'nalishlarini, {len(AR.LOCAL_DEPTS)} tasi mahalliy yo'nalishlarni yuritadi.",
                  "Xalqaro ta'lim yo'nalishlari kafedralari:"] + [line(d, ps) for d, ps in AR.INTL_DEPTS.items()] + \
                 ["Mahalliy ta'lim yo'nalishlari kafedralari:"] + [line(d, ps) for d, ps in AR.LOCAL_DEPTS.items()]
+        elif k == "reyting":
+            T = AR.TOP_DEFAULTS
+            f = [f"Talabalar reytingi semestr GPA bo'yicha tuziladi: {AR.GPA_FORMULA} — 5 ballik baho fan krediti bilan tortiladi "
+                 f"(kredit o'quv dasturidan, ko'rsatilmagan bo'lsa {AR.CREDIT_DEFAULT} kredit).",
+                 "Tartib: " + "; ".join(f"{i}) {l[0].lower() + l[1:]}" for i, (_, l, _) in enumerate(AR.RATING_ORDER, 1)) +
+                 " — keyingi mezon faqat oldingisi teng bo'lganda hisobga olinadi.",
+                 "O'rin besh darajada ko'rsatiladi: " + ", ".join(l.lower() for _, l in AR.RATING_LEVELS) + " — «37 / 1 240» va «yuqori N%» shaklida.",
+                 f"Reytingda faqat faol talabalar. «F» (< {AR.PASS} ball) olgan talaba reytingda qoladi, lekin «akademik qarzdor» deb belgilanadi; "
+                 f"a'lochi — barcha fanlardan «5» ({AR.EXCELLENT_MIN} balldan yuqori).",
+                 f"Mukofot ro'yxati (standart): kurs bo'yicha eng yaxshi {T['pct']}%, «F» yo'q, davomat kamida {T['min_att']:g}%.",
+                 "Batafsil — ISFT Core «Reyting» bo'limidagi «Metodika»: ro'yxat va qaydnomani Registrator ofisi va Akademik bo'lim to'liq ko'radi, "
+                 "rahbariyat kuzatuvi uchun — jamlangan ko'rsatkichlar."]
         else:
             continue
         out[k] = f

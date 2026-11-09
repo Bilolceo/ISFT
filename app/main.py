@@ -410,5 +410,9 @@ from . import orders as ORD   # Buyruqlar: arizadan buyruq, reyestr va muvofiqli
 ORD.init(con)
 ORD.bind(con, ctx)
 app.include_router(ORD.router)
+from . import reyting as RT   # Reyting: talabalar o'zlashtirish reytingi (GPA), qaydnoma, dinamika, a'lochilar, bo'linmalar
+RT.init(con)   # kesh (rating_cache) yo'q yoki manba o'zgargan bo'lsa — mavjud baholardan quriladi; qayta seed shart emas
+RT.bind(con, ctx)
+app.include_router(RT.router)
 
 app.mount("/", StaticFiles(directory=ROOT / "static", html=True), name="static")
