@@ -13,7 +13,7 @@ O'z kriptografiyamizni yozmaymiz.
 import base64, json, os, threading
 from pathlib import Path
 
-DIR = Path(os.getenv("ISFT_CORE_SECRETS_DIR", Path(__file__).resolve().parent.parent / "data" / "secrets"))
+DIR = Path(os.getenv("ISFT_CORE_SECRETS_DIR", Path(os.getenv("ISFT_CORE_DATA_DIR") or Path(__file__).resolve().parent.parent / "data") / "secrets"))
 STORE = DIR / "store.json"
 KEYFILE = DIR / "master.key"
 _lock = threading.Lock()

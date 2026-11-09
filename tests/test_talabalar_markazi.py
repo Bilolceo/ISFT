@@ -1,10 +1,11 @@
+import os
 """Talabalar markazi: API + qoidalar dvigateli testlari (jonli server :8000, sun'iy ma'lumot)."""
 import httpx, sys, sqlite3, datetime as dt, base64, io, json
 from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from app import db as DB, student_ops as OPS
-B = "http://127.0.0.1:8000"; DBP = str(ROOT / "data" / "jarvis.db")
+B = os.environ.get("ISFT_TEST_URL", "http://127.0.0.1:8000"); DBP = str(Path(os.environ.get("ISFT_CORE_DB") or ROOT / "data" / "jarvis.db"))
 def S(uid):
     c = httpx.Client(base_url=B, timeout=120); assert c.post("/api/login", json={"user_id": uid, "password": "Isft2026"}).status_code == 200; return c
 fails = 0

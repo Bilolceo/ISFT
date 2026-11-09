@@ -1,8 +1,10 @@
 """SQLite ulanishi va sxema. Barcha ma'lumot lokal faylda: data/jarvis.db"""
 import sqlite3, threading
+import os
 from pathlib import Path
 
-DB_PATH = Path(__file__).resolve().parent.parent / "data" / "jarvis.db"
+DATA_DIR = Path(os.environ.get("ISFT_CORE_DATA_DIR") or (Path(__file__).resolve().parent.parent / "data"))   # barcha fayllar (doimiy disk shu yerga ulanadi)
+DB_PATH = Path(os.environ.get("ISFT_CORE_DB") or (DATA_DIR / "jarvis.db"))   # ISFT_CORE_DB — test/agent uchun alohida baza
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS faculties(id INTEGER PRIMARY KEY, name TEXT, dean TEXT);

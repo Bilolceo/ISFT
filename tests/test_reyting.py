@@ -1,3 +1,4 @@
+import os
 """Reyting moduli — talabalar o'zlashtirish reytingi: uchidan-uchigacha testlar.
 
 Ishga tushirish (server http://127.0.0.1:8000 da ishlab tursin):  .venv/bin/python tests/test_reyting.py
@@ -20,7 +21,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from app import academic_rules as AR, reyting as RTM   # noqa: E402
 
-B = "http://127.0.0.1:8000"
+B = os.environ.get("ISFT_TEST_URL", "http://127.0.0.1:8000")
 N = [0]
 def ok(cond, msg):
     N[0] += 1
@@ -32,7 +33,7 @@ def S(uid):
     r = c.post("/api/login", json={"user_id": uid, "password": "Isft2026"}); assert r.status_code == 200, (uid, r.text)
     return c
 
-db = sqlite3.connect(ROOT / "data" / "jarvis.db", timeout=30)
+db = sqlite3.connect(Path(os.environ.get("ISFT_CORE_DB") or ROOT / "data" / "jarvis.db"), timeout=30)
 q = lambda sql, a=(): db.execute(sql, a).fetchall()
 q1 = lambda sql, a=(): db.execute(sql, a).fetchone()[0]
 

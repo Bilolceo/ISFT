@@ -1,7 +1,7 @@
 import httpx, sys
 from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
-B = "http://127.0.0.1:8000"
+B = os.environ.get("ISFT_TEST_URL", "http://127.0.0.1:8000")
 def S(uid):
     c = httpx.Client(base_url=B, timeout=300); r = c.post("/api/login", json={"user_id": uid, "password": "Isft2026"}); assert r.status_code == 200; return c
 ok = lambda cond, msg: print(("✓ " if cond else "✗ XATO: ") + msg) or (cond or sys.exit(1))
@@ -25,7 +25,7 @@ ok(e["tasks"][0]["text"].startswith("LMS'ga kirish muammosini tekshirish") and e
 # tasdiq x2
 c1 = kotib.post(f"/api/dec/{d['id']}/confirm").json(); c2 = kotib.post(f"/api/dec/{d['id']}/confirm").json()
 ok(c1["already"] is False and c2["already"] is True, "Qayta tasdiqlash: already=True")
-import sqlite3; n = sqlite3.connect(str(ROOT / "data" / "jarvis.db")).execute("SELECT COUNT(*) FROM tasks WHERE meeting_id=?", (d["id"],)).fetchone()[0]
+import sqlite3; n = sqlite3.connect(str(Path(os.environ.get("ISFT_CORE_DB") or ROOT / "data" / "jarvis.db"))).execute("SELECT COUNT(*) FROM tasks WHERE meeting_id=?", (d["id"],)).fetchone()[0]
 ok(n == 2, f"Bazada dublikat yo'q (2 ta)")
 ok(kotib.put(f"/api/dec/{d['id']}", json={"title": "x", "minutes": "", "tasks": []}).status_code == 409, "Tasdiqlangandan keyin tahrir yo'q (409)")
 # navbat

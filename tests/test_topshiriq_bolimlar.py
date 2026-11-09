@@ -1,3 +1,4 @@
+import os
 """Majlis topshiriqlari — yagona bo'limlar reestri (Portal org_units): Yuridik bo'lim, kafedra, Amaliyot bo'limi, Devonxona.
 
 Ishga tushirish (server http://127.0.0.1:8000 da ishlab turishi kerak):  .venv/bin/python tests/test_topshiriq_bolimlar.py
@@ -9,8 +10,8 @@ from pathlib import Path
 import httpx
 
 ROOT = Path(__file__).resolve().parent.parent
-DB = ROOT / "data" / "jarvis.db"
-B = "http://127.0.0.1:8000"
+DB = Path(os.environ.get("ISFT_CORE_DB") or ROOT / "data" / "jarvis.db")
+B = os.environ.get("ISFT_TEST_URL", "http://127.0.0.1:8000")
 N = [0]
 
 def ok(cond, msg):

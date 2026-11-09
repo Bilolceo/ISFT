@@ -1,3 +1,4 @@
+import os
 """Portal v2: uchidan-uchigacha HTTP testlar (server http://127.0.0.1:8000 da ishlab turishi kerak).
 
 Ishga tushirish:  .venv/bin/python tests/test_portal.py
@@ -11,8 +12,8 @@ from pathlib import Path
 import httpx
 
 ROOT = Path(__file__).resolve().parent.parent
-DB = ROOT / "data" / "jarvis.db"
-B = "http://127.0.0.1:8000"
+DB = Path(os.environ.get("ISFT_CORE_DB") or ROOT / "data" / "jarvis.db")
+B = os.environ.get("ISFT_TEST_URL", "http://127.0.0.1:8000")
 PW = "Isft2026"
 
 N = [0]

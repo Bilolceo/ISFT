@@ -18,7 +18,7 @@ from .rbac import Ctx, AccessDenied, FACILITIES, REQUESTS, YOUTH
 router = APIRouter()
 _con = None
 _ctx = None
-UPLOADS = Path(__file__).resolve().parent.parent / "data" / "uploads"
+UPLOADS = db.DATA_DIR / "uploads"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS rooms(id INTEGER PRIMARY KEY, code TEXT UNIQUE, building TEXT, name TEXT, kind TEXT, equipment TEXT);

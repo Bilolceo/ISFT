@@ -28,7 +28,7 @@ from .rbac import Ctx, AccessDenied
 router = APIRouter()
 _con = None
 _ctx = None
-FILES = Path(__file__).resolve().parent.parent / "data" / "syllabus"
+FILES = db.DATA_DIR / "syllabus"
 MAX_BYTES = 10 * 1024 * 1024
 SEMESTER = "2026-2027 o'quv yili · kuzgi semestr"
 H_PER_CREDIT = 30            # 1 kredit = 30 soat (auditoriya + mustaqil ta'lim)

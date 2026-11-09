@@ -29,7 +29,7 @@ _con = None
 _ctx = None
 RES = "face"
 ROOT = Path(__file__).resolve().parent.parent
-SNAP_DIR = ROOT / "data" / "face_snaps"
+SNAP_DIR = db.DATA_DIR / "face_snaps"
 KEEP_DAYS = int(os.getenv("ISFT_CORE_FACE_KEEP_DAYS", "7"))
 EVENTS_DAYS = int(os.getenv("ISFT_CORE_FACE_EVENTS_DAYS", "90"))
 MATCH_MIN = float(os.getenv("ISFT_CORE_FACE_MATCH_MIN", "0.75"))
@@ -750,7 +750,7 @@ async def sync_cameras(con, ctx: Ctx):
                 if op["op"] == "delete":
                     await cl.fdlib_delete(fdid, [op["fpid"]])
                 else:
-                    img = ROOT / "data" / "face_enroll" / f"{op['fpid']}.jpg"
+                    img = db.DATA_DIR / "face_enroll" / f"{op['fpid']}.jpg"
                     if not img.exists(): errs.append(f"{op['fpid']}: rozilikda olingan yuz rasmi yo'q"); continue
                     await cl.fdlib_add(fdid, op["fpid"], img.read_bytes())
                 done += 1

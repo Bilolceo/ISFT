@@ -1,8 +1,9 @@
+import os
 import httpx, sqlite3, sys, asyncio
 from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-B="http://localhost:8000"; DB=sqlite3.connect(str(ROOT / "data" / "jarvis.db"))
+B = os.environ.get("ISFT_TEST_URL", "http://127.0.0.1:8000"); DB=sqlite3.connect(str(Path(os.environ.get("ISFT_CORE_DB") or ROOT / "data" / "jarvis.db")))
 fails=[]
 def ok(cond, msg):
     print(("  ✓ " if cond else "  ✗ ")+msg)

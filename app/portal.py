@@ -25,7 +25,7 @@ from . import db, rbac, services as S, filecheck as FC
 from .rbac import AccessDenied, Ctx, ROLES
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_FILES = ROOT / "data" / "portal_files"
+DEFAULT_FILES = db.DATA_DIR / "portal_files"
 FILES = Path(os.getenv("ISFT_CORE_FILES_DIR") or DEFAULT_FILES)   # Railway: doimiy volume (masalan, /data/portal_files)
 MAX_BYTES = 20 * 1024 * 1024
 RES = "portal"

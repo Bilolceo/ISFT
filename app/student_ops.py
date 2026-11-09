@@ -24,7 +24,7 @@ _con = None
 _ctx = None
 _lock = threading.Lock()
 OPS = "ops"
-UPLOADS = Path(__file__).resolve().parent.parent / "data" / "uploads" / "retakes"
+UPLOADS = db.DATA_DIR / "uploads" / "retakes"
 
 # ---------------------------------------------------------------------------------------------
 # Qoidalar (standart qiymatlar — tasdiqlanmagan)

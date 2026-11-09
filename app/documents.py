@@ -11,7 +11,7 @@ from .rbac import Ctx, AccessDenied, audit, ROLES
 from .services import TODAY, mln
 from . import academic_rules as AR
 
-OUT = Path(__file__).resolve().parent.parent / "data" / "docs"
+OUT = db.DATA_DIR / "docs"
 UZ_MONTHS = ["yanvar", "fevral", "mart", "aprel", "may", "iyun", "iyul", "avgust", "sentabr", "oktabr", "noyabr", "dekabr"]
 EN_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
 ACAD_YEAR = "2026-2027"

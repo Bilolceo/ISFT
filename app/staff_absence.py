@@ -25,7 +25,7 @@ from . import db, rbac, services as S, filecheck as FC
 from .rbac import AccessDenied, Ctx, ROLES
 
 ROOT = Path(__file__).resolve().parent.parent
-FILES = Path(os.getenv("ISFT_CORE_STAFFABS_DIR") or ROOT / "data" / "staffabs_files")
+FILES = Path(os.getenv("ISFT_CORE_STAFFABS_DIR") or db.DATA_DIR / "staffabs_files")
 MAX_BYTES = 10 * 1024 * 1024
 RES = "staff_absence"
 ALLOWED_EXT = {"pdf", "jpg", "jpeg", "png", "doc", "docx"}

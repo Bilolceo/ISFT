@@ -1,8 +1,9 @@
+import os
 """Lavozimlar bo'yicha ruxsatlar auditi (2026-11): har bir bo'lim o'z vazifasini bajara oladi, ortiqcha ma'lumot ochilmaydi.
 Ishga tushirish (server ishlab turgan bo'lsin): .venv/bin/python tests/test_ruxsatlar.py"""
 import sys, httpx
 
-B = "http://127.0.0.1:8000"
+B = os.environ.get("ISFT_TEST_URL", "http://127.0.0.1:8000")
 N = [0]
 def S(uid):
     c = httpx.Client(base_url=B, timeout=120)
@@ -35,7 +36,7 @@ ok(rules(buxg) <= {"kontrakt"}, "Buxgalteriya: faqat kontrakt")
 ok("kontrakt" in rules(sirtqi), "Sirtqi bo'lim: o'z talabalarining kontrakt holatlari (o'qish — sessiyaga qo'yish va ruxsatnoma uchun)")
 sc = sirtqi.get("/api/ops/cases").json()
 import sqlite3, pathlib
-db = sqlite3.connect(f"file:{pathlib.Path(__file__).resolve().parent.parent / 'data' / 'jarvis.db'}?mode=ro", uri=True)
+db = sqlite3.connect(f"file:{os.environ.get('ISFT_CORE_DB') or pathlib.Path(__file__).resolve().parent.parent / 'data' / 'jarvis.db'}?mode=ro", uri=True)
 forms = {r[0] for r in db.execute(f"SELECT DISTINCT study_form FROM students WHERE id IN ({','.join(str(x['student_id']) for x in sc[:200]) or 0})")}
 ok(sc and forms == {"sirtqi"}, "Sirtqi bo'lim: faqat sirtqi ta'lim talabalari")
 card = sirtqi.get(f"/api/ops/student/{sc[0]['student_id']}").json()

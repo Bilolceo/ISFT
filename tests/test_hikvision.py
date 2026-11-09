@@ -92,7 +92,7 @@ async def main():
 
     # ---------------- C. occupancy integratsiyasi (vaqtinchalik baza) ----------------
     tmpdb = TMP / "jarvis.db"
-    src = sqlite3.connect(ROOT / "data" / "jarvis.db"); dst = sqlite3.connect(tmpdb); src.backup(dst); src.close(); dst.close()
+    src = sqlite3.connect(Path(os.environ.get("ISFT_CORE_DB") or ROOT / "data" / "jarvis.db")); dst = sqlite3.connect(tmpdb); src.backup(dst); src.close(); dst.close()
     db.DB_PATH = tmpdb
     from app import occupancy as OC
     con = db.connect()
