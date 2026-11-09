@@ -21,6 +21,10 @@ Sozlash (muhit o'zgaruvchilari):
     FAKE_HIK_THERMAL      — 1: standart aylanishga fireDetection/smokeDetection/TMA qo'shiladi (standart 0)
     FAKE_HIK_QUEUE        — 1/0: queueManagement/status bormi (0 → 404; standart 1)
     FAKE_HIK_QUEUE_LEN    — navbat uzunligini qat'iy belgilash (test uchun); bo'sh bo'lsa vaqtga qarab
+    Yuz (Kirish nazorati, app/facecam.py): "alarmResult=FPID:o'xshashlik" elementi JSON qism yuboradi (DeepinView yuzni solishtirish),
+                            masalan FAKE_HIK_EVENTS="alarmResult=FP0123456789:0.93,alarmResult=:0" (FPID bo'sh — notanish yuz).
+                            FDLib (yuz kutubxonasi) endpointlari xotirada: GET/POST /ISAPI/Intelligent/FDLib, POST .../FaceDataRecord,
+                            PUT .../FDSearch/Delete; fon rasmi — GET /picture/face/{n}.
 """
 import asyncio, datetime as dt, hashlib, os, random, secrets
 from fastapi import FastAPI, Request
@@ -156,6 +160,49 @@ def _extra(typ: str, val: str) -> str:
         return f'<RegionPeopleCounting><regionPeopleNum>{val or random.randint(5, 40)}</regionPeopleNum></RegionPeopleCounting>'
     return ""
 
+def face_alarm(fpid: str = "", sim: float = 0.0, rect=(0.46, 0.27, 0.07, 0.16), ip="127.0.0.1", n: int = 1) -> dict:
+    """DeepinView `alarmResult` (yuzni kutubxona bilan solishtirish) — JSON. Maydonlar TAXMINIY (proshivkaga qarab farq qiladi)."""
+    t = (dt.datetime.now().astimezone() + dt.timedelta(seconds=CFG["skew"])).replace(microsecond=0).isoformat()
+    face = {"faceId": 1, "faceRect": {"x": rect[0], "y": rect[1], "width": rect[2], "height": rect[3]},
+            "URL": f"http://{ip}/picture/face/{n}?type=face", "age": {"range": 5, "value": 30}, "gender": {"value": "unknown"}, "glass": {"value": "no"}}
+    if fpid:
+        face["identify"] = [{"maxsimilarity": sim, "candidate": [{"blacklist_id": 1, "similarity": sim, "human_id": f"h{n}",
+                                                                  "reserve_field": {"FDID": "1", "FPID": fpid, "name": fpid}}]}]
+    return {"ipAddress": ip, "portNo": 80, "protocol": "HTTP", "macAddress": "44:19:b6:00:00:01", "channelID": 1, "dateTime": t,
+            "activePostCount": 1, "eventType": "alarmResult", "eventState": "active", "eventDescription": "alarmResult",
+            "alarmResult": [{"targetAttrs": {"deviceName": "ISFT-KIRISH", "deviceChannel": 1, "faceTime": t,
+                                             "bkgUrl": f"http://{ip}/picture/face/{n}?type=bkg"}, "faces": [face]}]}
+
+FDLIB = {"libs": {}, "records": {}}
+
+@app.get("/ISAPI/Intelligent/FDLib")
+def fdlib_list():
+    return {"FDLib": [{"FDID": k, "name": v} for k, v in FDLIB["libs"].items()]}
+
+@app.post("/ISAPI/Intelligent/FDLib")
+async def fdlib_create(req: Request):
+    j = await req.json(); k = str(len(FDLIB["libs"]) + 1); FDLIB["libs"][k] = j.get("name", "")
+    return {"FDID": k, "statusCode": 1}
+
+@app.post("/ISAPI/Intelligent/FDLib/FaceDataRecord")
+async def fdlib_add(req: Request):
+    import json as _j, re as _re      # python-multipart talab qilinmasin: FaceDataRecord qismidagi JSON qo'lda ajratiladi
+    body = (await req.body()).decode("utf-8", "replace")
+    m = _re.search(r'name="FaceDataRecord"[^\r\n]*\r\n(?:[^\r\n]+\r\n)*\r\n(\{.*?\})\r\n', body, _re.S)
+    if not m or "img" not in body: return Response(status_code=400)
+    rec = _j.loads(m.group(1)); FDLIB["records"][rec["FPID"]] = rec
+    return {"statusCode": 1, "FPID": rec["FPID"]}
+
+@app.put("/ISAPI/Intelligent/FDLib/FDSearch/Delete")
+async def fdlib_del(req: Request):
+    j = await req.json()
+    for x in j.get("FPID", []): FDLIB["records"].pop(x.get("value"), None)
+    return {"statusCode": 1}
+
+@app.get("/picture/face/{n}")
+def picture(n: int):
+    return Response(b"\xff\xd8\xff\xe0" + os.urandom(4096) + b"\xff\xd9", media_type="image/jpeg")
+
 def _alert(event_type: str, state="active", extra=""):
     t = (dt.datetime.now().astimezone() + dt.timedelta(seconds=CFG["skew"])).replace(microsecond=0).isoformat()
     return (f'<EventNotificationAlert version="2.0" {NS}><ipAddress>127.0.0.1</ipAddress><channelID>1</channelID><dateTime>{t}</dateTime>'
@@ -187,6 +234,13 @@ async def alert_stream():
         n = 0
         while seq:
             typ, st, jpeg, val = _item(seq[n % len(seq)]); n += 1
+            if typ.lower() == "alarmresult":   # yuz: JSON qism (application/json)
+                import json as _j
+                fp, _, sm = val.partition(":")
+                x = _j.dumps(face_alarm(fp, float(sm or 0), n=n)).encode()
+                yield b"--boundary\r\nContent-Type: application/json; charset=\"UTF-8\"\r\nContent-Length: " + str(len(x)).encode() + b"\r\n\r\n" + x + b"\r\n"
+                if CFG["stream_limit"] and n >= CFG["stream_limit"]: return
+                await asyncio.sleep(CFG["event_sec"]); continue
             x = _alert(typ, st, _extra(typ, val)).encode()
             yield b"--boundary\r\nContent-Type: application/xml; charset=\"UTF-8\"\r\nContent-Length: " + str(len(x)).encode() + b"\r\n\r\n" + x + b"\r\n"
             if jpeg:   # haqiqiy kameralar voqea bilan rasm ham yuboradi — ulagich uni saqlamasdan tashlashi kerak
@@ -198,4 +252,4 @@ async def alert_stream():
 
 @app.get("/__stats")   # faqat emulyator: test uchun hisoblagichlar (haqiqiy kamerada yo'q)
 def stats():
-    return {**STATS, "model": CFG["model"], "family": _family(CFG["model"])[0], "events": len(_sequence())}
+    return {**STATS, "model": CFG["model"], "family": _family(CFG["model"])[0], "events": len(_sequence()), "fdlib": len(FDLIB["records"])}

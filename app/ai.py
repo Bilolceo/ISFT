@@ -23,6 +23,8 @@ TOOLS = {
     "tasks": (S.tasks_list, "majlis topshiriqlari va ularning muddati"),
     "cameras": (lambda con, ctx, quiet=False: __import__("app.camsec", fromlist=["agent_tool"]).agent_tool(con, ctx, quiet),
                 "kameralar: bo'sh turgan xonalar, xavfsizlik voqealari, navbat, kamera holati (faqat metama'lumot)"),
+    "facecam": (lambda con, ctx, quiet=False: __import__("app.facecam", fromlist=["agent_tool"]).agent_tool(con, ctx, quiet),
+                "kirish nazorati (Face ID): bugun kim kirdi, kechikkan o'qituvchilar, notanish shaxslar (faqat rozilik bergan shaxslar)"),
 }
 KEYWORDS = {
     "academic": ["o'zlashtir", "baho", "ball", "gpa", "davomat", "akademik", "pasay", "o'quv", "kurs", "guruh"],
@@ -39,6 +41,9 @@ KEYWORDS = {
     "tasks": ["topshiriq", "majlis", "kengash", "muddat", "vazifa", "bajaril"],
     "cameras": ["kamera", "xavfsizlik voqea", "xavfsizlik hodisa", "bo'sh turdi", "bo'sh turgan", "bo'sh qolgan", "xonalar bo'sh", "bo'sh xona",
                 "oshxona", "serverxona", "navbat uzun", "navbatda", "navbat qancha", "oflayn", "tungi kirish", "noto'g'ri signal"],
+    "facecam": ["face id", "kirish nazorat", "yuzni tanish", "o'qituvchilar kechik", "o'qituvchi kechik", "kechikkan o'qituvchi", "darsga kechik",
+                "xodimlar kechik", "kechikkan xodim", "talaba kirdi", "talabalar kirdi", "o'qituvchi kirdi", "xodim kirdi", "binoga kir",
+                "institutga kir", "kim kirdi", "notanish shaxs"],
 }
 STRATEGIC = ["ortda", "muammo", "umumiy holat", "nima qilish", "tavsiya", "xulosa", "qanday holat", "e'tibor", "strateg", "brifing", "bugun"]
 
@@ -258,7 +263,7 @@ async def extract_tasks(transcript: str) -> list[dict]:
             pass
     out = []
     for line in transcript.splitlines():
-        # bir qatorda bir nechta gap: "Rektor: ... jiddiy. Dekan: ... tuzsin, muddat 15.11."
+        # bir qatorda bir nechta gap: "Rektor: ... jiddiy. Registrator ofisi: ... tuzsin, muddat 15.11."
         for sent in re.split(r"(?<=[.!?])\s+(?=[A-ZА-ЯЎҚҒҲ])", line.strip()):
             m = TASK_RE.search(sent)
             if m:

@@ -1,8 +1,10 @@
 """Talabalar markazi: API + qoidalar dvigateli testlari (jonli server :8000, sun'iy ma'lumot)."""
 import httpx, sys, sqlite3, datetime as dt, base64, io, json
-sys.path.insert(0, "/Users/levi/Desktop/isft/jarvis-mvp")
+from pathlib import Path
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 from app import db as DB, student_ops as OPS
-B = "http://127.0.0.1:8000"; DBP = "/Users/levi/Desktop/isft/jarvis-mvp/data/jarvis.db"
+B = "http://127.0.0.1:8000"; DBP = str(ROOT / "data" / "jarvis.db")
 def S(uid):
     c = httpx.Client(base_url=B, timeout=120); assert c.post("/api/login", json={"user_id": uid, "password": "Isft2026"}).status_code == 200; return c
 fails = 0
@@ -10,16 +12,22 @@ def ok(cond, msg):
     global fails
     print(("✓ " if cond else "✗ XATO: ") + msg); fails += (not cond)
 q = lambda sql, a=(): sqlite3.connect(DBP).execute(sql, a).fetchall()
-reg, cc, ty2, ty1, rek, dek, pro, bux = S(17), S(23), S(24), S(25), S(2), S(13), S(3), S(11)
+reg, cc, ty2, ty1, rek, pro, bux = S(17), S(23), S(24), S(25), S(2), S(3), S(11)
+# institutda dekan lavozimi yo'q (Yevropa modeli): sobiq dekan akkaunti (#13) kira olmaydi, fakultet ko'lami — tyutorda, to'liq — Registratorda
+ok(httpx.post(B + "/api/login", json={"user_id": 13, "password": "Isft2026"}).status_code == 403, "Sobiq dekan (#13): kirish rad etildi (lavozim bekor qilingan)")
 
 # --- ruxsatlar ---
 ok(rek.get("/api/ops/summary").status_code == 200, "Rektor: jamlangan holat ochiladi")
 ok(rek.get("/api/ops/cases").status_code == 403, "Rektor: individual ro'yxat yopiq (faqat jamlangan)")
-ok(bux.get("/api/ops/summary").status_code == 403, "Buxgalteriya: markaz yopiq")
+bs = bux.get("/api/ops/summary"); ok(bs.status_code == 200 and {r["rule"] for r in bs.json()["by_rule"]} <= {"kontrakt"}, "Buxgalteriya: faqat kontrakt holatlari")
+bc = bux.get("/api/ops/cases").json(); ok(bc and all(x["rule"] == "kontrakt" for x in bc), "Buxgalteriya: holatlar ro'yxatida faqat kontrakt")
+bk = bux.get(f"/api/ops/student/{bc[0]['student_id']}").json(); ok(not bk["facts"] and not bk["absences"] and all(x["rule"] == "kontrakt" for x in bk["cases"]), "Buxgalteriya: talaba kartasida baho va davomat yo'q")
+ok(bux.get("/api/ops/retakes").status_code == 403, "Buxgalteriya: otrabotkalar yopiq")
 ok(cc.get("/api/ops/cases").status_code == 403, "Call-markaz: holatlar ro'yxati yopiq")
 ct = cc.get("/api/ops/tasks").json(); ok(ct and all(t["kind"] == "qongiroq" for t in ct), f"Call-markaz navbati: faqat qo'ng'iroqlar ({len(ct)})")
 ok(all("*" not in (t["phone"] or "") for t in ct), "Call-markaz telefonni to'liq ko'radi")
-dc = dek.get("/api/ops/cases").json(); ok(dc and all(c["faculty"] == "Xalqaro iqtisodiyot va moliya" for c in dc), f"Dekan: faqat o'z fakulteti ({len(dc)})")
+dc = ty2.get("/api/ops/cases").json(); ok(dc and all(c["faculty"] == "Xalqaro iqtisodiyot va moliya" for c in dc), f"Tyutor: holatlar — faqat o'z fakulteti ({len(dc)})")
+ok(all(reg.get(f"/api/ops/cases?faculty={f}").json() for f in (1, 2, 3)), "Registrator ofisi: uchala fakultet holatlari (fakultet darajasidagi ko'rinish)")
 t2 = ty2.get("/api/ops/tasks").json(); ok(t2 and all(t["faculty"] == "Xalqaro iqtisodiyot va moliya" and t["assignee_role"] == "tyutor" for t in t2), f"Tyutor: o'z fakulteti topshiriqlari ({len(t2)})")
 ok(pro.get("/api/ops/cases").status_code == 200, "O'quv prorektori: to'liq ko'rinish")
 sc = ct[0]["script"]; ok(sc["say"] and "o'ylab topilmaydi" in sc["basis"][0], "Skript: faktlar bor, me'yoriy havola o'ylab topilmagan")

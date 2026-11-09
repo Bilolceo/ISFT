@@ -117,6 +117,34 @@ html.xt-lock{overflow:hidden}
 .xt-pw-note svg{flex:none;margin-top:1px}
 @media (max-width:520px){.xt-pwf{padding:18px 16px}.xt-acts .btn{flex:1;justify-content:center}}
 
+/* shaxsiy ma'lumotlar */
+.xt-pfm .xt-dlg{width:min(540px,100%)}
+.xt-pf{padding:22px}
+.xt-pf-av{width:44px;height:44px}
+.xt-pf section{padding:14px 0;border-top:1px solid var(--line)}
+.xt-pf section:last-child{padding-bottom:0}
+.xt-pf h4{display:flex;align-items:center;gap:7px;margin:0 0 10px;font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+.xt-pf dl{margin:0;display:grid;gap:9px}
+.xt-pf-r{display:grid;grid-template-columns:150px 1fr;gap:12px;align-items:baseline}
+.xt-pf-r dt{font-size:12.5px;color:var(--muted)}
+.xt-pf-r dd{margin:0;font-size:13.5px;min-width:0;overflow-wrap:anywhere}
+.xt-pf-r dd b{font-weight:600}
+.xt-pf-r dd small{display:block;font-size:12px;color:var(--muted);margin-top:1px}
+.xt-pf-r dd .btn{margin-left:6px;vertical-align:middle}
+.xt-pf-tag{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:99px;font-size:11px;font-weight:700;background:var(--brand-soft);color:var(--brand);vertical-align:1px}
+.xt-pf-chips{display:flex;flex-wrap:wrap;gap:6px;margin:0}
+.xt-pf-chips i{font-style:normal;font-size:12px;padding:3px 9px;border-radius:99px;background:var(--surface-2);border:1px solid var(--line);color:var(--ink-2)}
+.xt-pf-ok{display:flex;align-items:center;gap:6px;margin:0;font-size:13px;color:var(--ok)}
+.xt-pf section>p{margin:0;font-size:13px;line-height:1.5}
+.xt-pf p code{font-size:12.5px;padding:1px 6px;border-radius:6px;background:var(--surface-2)}
+.xt-pf-log{list-style:none;margin:12px 0 0;padding:0;display:grid;gap:6px}
+.xt-pf-log li{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink-2)}
+.xt-pf-log li svg{color:var(--ok);flex:none}
+.xt-pf-log li.bad svg,.xt-pf-log li.bad small{color:var(--bad)}
+.xt-pf-log span{font-variant-numeric:tabular-nums;min-width:118px}
+.xt-pf-log small{color:var(--muted);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media (max-width:520px){.xt-pf{padding:18px 16px}.xt-pf-r{grid-template-columns:1fr;gap:2px}.xt-pf-r dd .btn{margin:6px 0 0}}
+
 /* ---------- global qidiruv ---------- */
 .xt-palov{align-items:flex-start;padding-top:min(12vh,110px)}
 .xt-palov .xt-dlg{width:min(680px,100%);overflow:hidden;display:flex;flex-direction:column;max-height:min(640px,calc(100dvh - 2*min(12vh,110px)))}

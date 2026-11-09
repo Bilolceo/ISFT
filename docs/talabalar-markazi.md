@@ -22,22 +22,25 @@ Qaror va imzo — har doim odamda.
    Daraja oshsa — yangi topshiriq; shart yo'qolsa (masalan, to'lov qilindi) — holat avtomatik yopiladi va sababi yoziladi.
 3. **Me'yoriy havolalar o'ylab topilmaydi.** Suhbat skriptidagi huquqiy asos faqat institut kiritgan ro'yxatdan; bo'sh bo'lsa — "kiritilmagan" deb ko'rsatiladi.
 4. **OCR/imzo tekshiruvi va'da qilinmaydi.** Otrabotka varaqasi tizimda QR bilan chiqariladi; yuklangan skan yonida baho qo'lda kiritiladi va tasdiqlanadi.
-   Lokal OCR — keyingi bosqich (serverda o'rnatilmagan).
-5. **Shaxsiy ma'lumot minimal.** Rektor — faqat jamlangan raqamlar; call-markaz — faqat o'z navbatidagi talaba, telefon va skript; tyutor/dekan — o'z fakulteti.
+   Skan o'qiladi (`app/registrar_scan.py`): PDF matn qatlami yoki tesseract OCR (bo'lsa) — ro'yxat raqami, imzo bor/yo'q, ball; OCR bo'lmasa ball qo'lda kiritiladi.
+5. **Shaxsiy ma'lumot minimal.** Rektor — faqat jamlangan raqamlar; call-markaz — faqat o'z navbatidagi talaba, telefon va skript; tyutor — o'z fakulteti (dekan lavozimi yo'q; fakultet darajasidagi ko'rinish — Registrator ofisida).
 6. **"Tizim o'zi o'rganadi" emas.** Yaxshilanish — qoidalar va shablonlarni foydalanuvchi fikri asosida sozlash orqali.
 
-## Qoidalar (standart qiymatlar — TASDIQLANMAGAN)
+## Qoidalar (davomat va o'tish bali — institut me'yori; qolganlari TASDIQLANMAGAN)
 | Kalit | Qiymat | Ma'nosi |
 |---|---|---|
 | `contract_critical_days` | 3 | Navbatdagi to'lov muddatiga ≤3 kun qolgan va yetarli to'lanmagan → kritik |
-| `att_call_hours` | 30 | Sababsiz qoldirilgan soat ≥30 → call-markaz qo'ng'irog'i |
-| `att_letter_hours` | 48 | ≥48 → ogohlantirish xati (registrator) |
-| `att_reprimand_hours` | 72 | ≥72 → hayfsan buyrug'i loyihasi + tyutor suhbati |
+| `att_call_hours` | 30 | Sababsiz qoldirilgan soat ≥30 → call-markaz qo'ng'irog'i — institut me'yori (rektor qarori), tasdiqlangan |
+| `att_letter_hours` | 30 | ≥30 → ogohlantirish xati (registrator; sirtqi talabaga — Sirtqi bo'lim) — tasdiqlangan |
+| `att_reprimand_hours` | 48 | 48 dan OSHSA (49+) → hayfsan buyrug'i loyihasi + tyutor suhbati — tasdiqlangan |
+| `att_expel_hours` | 72 | Hayfsandan keyin ham ≥72 → «chetlashtirishga tayyor» ro'yxati (ish stoli) |
+| `contract_expel_days` | 30 | Kontrakt muddatidan 30+ kun o'tgan va ota-onaga xat yuborilgan → «chetlashtirishga tayyor» |
+| `permit_att_hours` | 48 | Imtihonga ruxsatnoma: sababsiz soatlar shu chegaradan oshmasin |
 | `pass_score` | 40 | Fan bo'yicha o'tish bali (100 ballik, «3») — institut qoidasi (akademik qoidalar taqdimoti), tasdiqlangan |
 | `gpa_min` | 3.0 | JPA minimal (5 ballik) |
 | `fails_warn` | 2 | Shuncha fandan o'tmasa — JPA yetarli bo'lsa ham ogohlantirish |
 | `medical_doc_days` | 3 | Kasallikdan keyin hujjat topshirish muddati (kun) |
-| `leave_warn_days` | 30 | Akademik ta'til tugashiga shuncha kun qolganda ogohlantirish |
+| `leave_warn_days` | 90 | Akademik ta'til tugashiga ~3 oy qolganda call-markaz qo'ng'irog'i (≤7 kun — qaytish buyrug'i loyihasi) |
 | `retake_days` | 3 | Otrabotka varaqasini qaytarish muddati (kun) |
 | `call_max_attempts` | 3 | Javob bermasa — shuncha urinishdan keyin tyutorga o'tadi |
 | `call_daily_capacity` | 60 | Bir operatorning kunlik qo'ng'iroqlari: bugungi ro'yxat = operatorlar × 60; qolganlari jiddiylik tartibida keyingi ish kunlariga rejalashtiriladi (`ops_tasks.planned_on`), hech biri o'chirilmaydi |
@@ -51,7 +54,6 @@ hujjati yo'q bo'lsa — alohida "hujjat so'rash" topshirig'i.
 | Registrator ofisi (Akademik faoliyatni boshqarish bo'limi — ko'rish) | Barcha holatlar | Xat/hayfsan loyihasi, otrabotka tasdiqlash, topshiriqni qayta yo'naltirish |
 | Call-markaz operatori | O'z navbatidagi qo'ng'iroqlar | Natija: gaplashildi / va'da (sana) / javob bermadi / noto'g'ri raqam |
 | Tyutor (fakultet) | O'z fakulteti | Suhbat, hujjat so'rash, otrabotka varaqasi berish |
-| Dekan | O'z fakulteti (o'qish) | — |
 | O'quv ishlari bo'yicha prorektor | Barchasi (o'qish) | — |
 | Rektor | Faqat jamlangan raqamlar | — |
 

@@ -173,8 +173,12 @@ async function boot() {
   document.querySelector('#nav a[data-v="agents"]')?.classList.toggle("hidden", NAV_HIDE_AGENTS);
   const NAV_NEED = {service: ["facilities", "requests", "youth"], spaces: ["spaces"], cams: ["spaces"], audit: ["audit"], ops: ["ops"], tasks: ["tasks"], reports: ["reports"]};
   /* tor vazifali lavozimlar uchun keraksiz bo'limlar yashiriladi (server baribir ruxsatni tekshiradi) */
-  const NAV_HIDE = {call_center: ["chat", "reports", "documents", "docs", "rbac"], tyutor: ["reports", "docs"]};
+  const NAV_HIDE = {call_center: ["chat", "reports", "documents", "docs", "rbac"], tyutor: ["reports", "docs"], kengash: ["cams"]};
   document.querySelectorAll("#nav a").forEach(a => { if (a.dataset.v === "agents") return; const need = NAV_NEED[a.dataset.v]; a.classList.toggle("hidden", (!!need && !need.some(x => ME.allow.includes(x))) || (NAV_HIDE[ME.role_key] || []).includes(a.dataset.v)); });
+  document.querySelector('#nav a[data-v="accounts"]')?.classList.toggle("hidden", !["it_head", "rektor"].includes(ME.role_key));   /* accounts.js: AT boshlig'i (boshqaruv), rektor (ko'rish) */
+  document.querySelector('#nav a[data-v="orders"]')?.classList.toggle("hidden", !["talabalar", "registrator_xodim", "sirtqi", "malumotlar_bazasi", "prorektor_oquv", "rektor"].includes(ME.role_key));   /* orders.js: Buyruqlar */
+  document.querySelector('#nav a[data-v="staffabs"]')?.classList.toggle("hidden", !["kadrlar", "kafedra", "akademik", "rektor", "prorektor_oquv", "oqituvchi"].includes(ME.role_key));   /* staffabs.js: xodimlar ta'tili */
+  document.querySelector('#nav a[data-v="syllabus"]')?.classList.toggle("hidden", !["akademik", "kafedra", "oqituvchi", "prorektor_oquv", "rektor"].includes(ME.role_key));   /* syllabus.js: O'quv dasturlari */
   if (typeof camsNav === "function") camsNav();   /* cams.js: navbat zonasi mas'ullari (qabul, kassa) o'z navbatini ko'radi */
   document.querySelectorAll("#nav .nav-h").forEach(h => { let n = h.nextElementSibling, any = false; while (n && n.tagName === "A") { any ||= !n.classList.contains("hidden"); n = n.nextElementSibling; } h.classList.toggle("hidden", !any); });
   status(); badges();
@@ -195,12 +199,14 @@ async function badges() {
   if (["rektor", "kotib"].includes(ME.role_key) || ME.role_key.startsWith("prorektor_")) try { const a = await J("/api/agents"); set("agents", a.pending.filter(p => p.can_approve).length); } catch (e) {}
   try { const r = await J("/api/docs/registry"); set("documents", r.filter(x => x.status === "loyiha").length); } catch (e) {}
   if (typeof portalBadge === "function") portalBadge(set);   /* portal.js: o'qilmagan xatlar */
-  if (ME.allow.includes("ops") && !["rektor", "kengash"].includes(ME.role_key))
-    try { const o = await J("/api/ops/summary"), mine = (o.tasks.find(t => t.role === (ME.role_key === "dekan" || ME.role_key === "prorektor_oquv" ? "_" : ME.role_key)) || {}); set("ops", mine.late || 0); } catch (e) {}
+  if (typeof myworkBadge === "function") myworkBadge(set);   /* mywork.js: muddati o'tgan + bugungi ishlarim */
+  if (typeof ordersBadge === "function") ordersBadge(set);   /* orders.js: imzo / kelishuv kutayotgan buyruqlar */
+  if (ME.allow.includes("ops") && !["rektor", "kengash", "prorektor_yoshlar"].includes(ME.role_key))
+    try { const o = await J("/api/ops/summary"), mine = (o.tasks.find(t => t.role === (ME.role_key === "prorektor_oquv" ? "_" : ME.role_key)) || {}); set("ops", mine.late || 0); } catch (e) {}
   if (ME.allow.some(a => ["facilities", "requests", "youth"].includes(a)))
     try { const o = await J("/api/svc/overview"); set("service", (o.requests?.incidents || []).filter(i => i.status === "ochiq" && !i.notified_at).length + (o.facilities?.overdue || 0)); } catch (e) {}
 }
-document.querySelectorAll("#nav a").forEach(a => a.onclick = e => { e.preventDefault(); if (a.dataset.v === "tasks") DEC.open = null; go(a.dataset.v); });
+document.querySelectorAll("#nav a").forEach(a => a.onclick = e => { e.preventDefault(); if (a.dataset.v === "tasks") { DEC.open = null; if (typeof DIR !== "undefined") DIR.open = null; } go(a.dataset.v); });
 $("#menuBtn").onclick = () => $("#app").classList.toggle("nav-open");
 $("#scrim").onclick = () => $("#app").classList.remove("nav-open");
 function go(v) {
@@ -211,7 +217,7 @@ function go(v) {
   document.querySelectorAll(".view").forEach(s => s.classList.add("hidden"));
   $("#v-" + v).classList.remove("hidden");
   window.scrollTo({top: 0});
-  const fn = ({panel: renderPanel, chat: renderChat, tasks: renderTasks, reports: renderReports, docs: renderDocs, documents: renderDocuments, service: renderService, ops: renderOps, spaces: renderSpaces, rbac: renderRbac, audit: renderAudit, agents: typeof renderAgents === "function" ? renderAgents : null, portal: typeof renderPortal === "function" ? renderPortal : null, cams: typeof renderCams === "function" ? renderCams : null})[v];
+  const fn = ({panel: renderPanel, chat: renderChat, tasks: renderTasks, reports: renderReports, docs: renderDocs, documents: renderDocuments, service: renderService, ops: renderOps, spaces: renderSpaces, rbac: renderRbac, audit: renderAudit, agents: typeof renderAgents === "function" ? renderAgents : null, portal: typeof renderPortal === "function" ? renderPortal : null, cams: typeof renderCams === "function" ? renderCams : null, mywork: typeof renderMywork === "function" ? renderMywork : null, accounts: typeof renderAccounts === "function" ? renderAccounts : null, syllabus: typeof renderSyllabus === "function" ? renderSyllabus : null, staffabs: typeof renderStaffabs === "function" ? renderStaffabs : null, orders: typeof renderOrders === "function" ? renderOrders : null})[v];
   Promise.resolve().then(fn).catch(e => { if (e?.message === "auth") return; $("#v-" + v).innerHTML = e?.message === "denied" ? locked("Bu bo'lim") : errCard(v); });
 }
 
@@ -421,7 +427,7 @@ async function renderPanel() {
     crit = o.by_rule.filter(r => r.level >= 2).reduce((a, r) => a + r.n, 0);
     const late = o.tasks.reduce((a, t) => a + (t.late || 0), 0), open = o.tasks.reduce((a, t) => a + t.n, 0);
     opsCard = `<div class="card"><div class="head" style="margin-bottom:8px"><h3 style="margin:0" class="pn-h">${pnH("cap", "Talabalar bilan ishlash markazi")}</h3><button class="btn sm" onclick="OPSV.student=null;go('ops')">Ochish →</button></div>
-      <div class="ops-strip" style="margin:0"><span class="chip-s">Kritik/jiddiy holatlar: <b class="bad">${crit}</b></span>${Object.entries(OPS_RULES).map(([k, v]) => by[k] ? `<span class="chip-s">${v}: <b>${by[k]}</b></span>` : "").join("")}
+      <div class="ops-strip" style="margin:0"><span class="chip-s" title="Ochiq holatlar: ${fmt(crit)} ta kritik/jiddiy (bitta talabada bir nechta bo'lishi mumkin)">Jiddiy holatdagi talabalar: <b class="bad">${fmt(o.serious_students ?? crit)}</b></span>${Object.entries(OPS_RULES).map(([k, v]) => by[k] ? `<span class="chip-s">${v}: <b>${by[k]}</b></span>` : "").join("")}
       <span class="chip-s">Ochiq topshiriqlar: <b>${open}</b>${late ? ` · <span class="bad">${late} kechikkan</span>` : ""}</span><span class="chip-s">7 kunda yopildi: <b>${o.closed_7d}</b></span></div>
       ${["rektor", "kengash"].includes(ME.role_key) ? `<p class="tiny muted pn-note">${ico("shield", 14)}<span>Rahbariyat uchun faqat jamlangan raqamlar — talabalar ro'yxati registrator va tyutorlarda.</span></p>` : ""}</div>`;
   }
@@ -441,10 +447,15 @@ async function renderPanel() {
       const openT = P.tasks.tasks.filter(t => t.status !== "bajarildi").length;
       acts.push(`<button class="pn-act${P.tasks.overdue ? " bad" : ""}" onclick="DEC.open=null;go('tasks')">${ico("tasks", 16)}<span>Topshiriqlar</span><b>${openT}</b>${P.tasks.overdue ? `<em>${P.tasks.overdue} muddati o'tgan</em>` : ""}</button>`);
     }
-    if (opsS) acts.push(`<button class="pn-act${crit ? " bad" : ""}" onclick="OPSV.student=null;go('ops')">${ico("cap", 16)}<span title="Talabalar markazi: barcha qoidalar bo'yicha kritik holatlar">Markaz: kritik holatlar</span><b>${fmt(crit)}</b></button>`);
+    /* Talabalar markazi: rahbar uchun signal — ijrochilar muddatida bajarmagan vazifalar (qizil faqat shunda);
+       minglab "kritik" holatlar ro'yxati emas (ular tyutor va registrator ishida) */
+    if (opsS) {
+      const lateT = (opsS.tasks || []).reduce((a, t) => a + (t.late || 0), 0), ser = opsS.serious_students;
+      acts.push(`<button class="pn-act${lateT ? " bad" : ""}" onclick="OPSV.student=null;go('ops')" title="Talabalar markazi: ijrochilar muddatida bajarmagan vazifalar. Jiddiy holatdagi talabalar bilan tyutor va Registrator ofisi ishlamoqda.">${ico("cap", 16)}<span>Talabalar markazi</span><b>${lateT ? fmt(lateT) : "✓"}</b><em class="n">${lateT ? "ta vazifa kechikkan" : "kechikkan vazifa yo'q"}${ser != null ? ` · ${fmt(ser)} talaba jiddiy holatda` : ""}</em></button>`);
+    }
     const camK = ME.allow.includes("spaces") && DASH.kpis.find(k => k.key === "kameralar");   /* cams.js — Kameralar va xavfsizlik */
     if (camK) acts.push(`<button class="pn-act cm-pa${camK.bad ? " bad" : ""}" onclick="go('cams')" title="${esc(camK.sub || "")}">${ico("cctv", 16)}<span>Kameralar: P1/P2 bugun</span><b>${fmt(camK.value)}</b>${(camK.offline ?? +(String(camK.sub).match(/(\d+) kamera oflayn/) || [])[1]) ? `<em>${camK.offline ?? String(camK.sub).match(/(\d+) kamera oflayn/)[1]} kamera oflayn</em>` : ""}</button>`);
-    if (DASH.alerts.length) acts.push(`<button class="pn-act${high ? " bad" : ""}" onclick="const d=document.getElementById('pnAlerts');d.open=true;d.scrollIntoView({behavior:'smooth',block:'start'})">${ico("bolt", 16)}<span>Ogohlantirishlar</span><b>${DASH.alerts.length}</b>${high ? `<em>${high} yuqori</em>` : ""}</button>`);
+    if (DASH.alerts.length) acts.push(`<button class="pn-act${high ? " bad" : ""}" onclick="const d=document.getElementById('pnAlerts');d.open=true;d.scrollIntoView({behavior:'smooth',block:'start'})" title="Yuqori darajadagi ogohlantirishlar; jami ${DASH.alerts.length} ta">${ico("bolt", 16)}<span>${high ? "Muhim ogohlantirishlar" : "Ogohlantirishlar"}</span><b>${high || DASH.alerts.length}</b>${high ? `<em class="n">jami ${DASH.alerts.length}</em>` : ""}</button>`);
     if (acts.length) h += `<div class="pn-acts">${acts.join("")}</div>`;
   }
   h += brief;
@@ -571,7 +582,6 @@ const SUGG = {
   ilmiy_bolim: ["Scopus maqolalar bo'yicha qaysi kafedra ortda?", "2025 yildan beri maqolasi yo'q o'qituvchilar", "Magistratura holati qanday?"],
   prorektor_moliya: ["Qaysi xarajat moddasi rejadan oshgan?", "Kontrakt qarzi eng ko'p guruhlar?", "Talabalar o'zlashtirishi qanday?"],
   prorektor_yoshlar: ["Yotoqxona holati qanday?", "Hal qilinmagan murojaatlar bormi?", "Byudjet qancha?"],
-  dekan: ["Fakultetimda qaysi guruhlar ortda?", "Xavf ostidagi talabalar kimlar?", "Kontrakt qarzdorligi qanday?"],
   kafedra: ["Kafedramda ilmiy faoliyat qanday?", "Qaysi guruhlarda muammo bor?", "Boshqa kafedralar bilan solishtir: moliya"],
   oqituvchi: ["Mening guruhlarimda kim qiynalyapti?", "Kafedra byudjetini ko'rsat"],
   buxgalteriya: ["Kommunal xarajatlar nega oshdi?", "Kontrakt tushumi qanday?"],
@@ -735,20 +745,22 @@ const dtm = s => { if (!s) return ""; if (s.length <= 10) return dmy(s); const d
 const hm = s => { const d = new Date(s); return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; };
 const dueHtml = t => t.due ? `<b class="${t.overdue ? "bad" : ""}">${dtm(t.due)}</b>${t.due_text ? `<span class="said">majlisda: «${esc(t.due_text)}»</span>` : ""}` : `<span class="unsaid">aytilmagan</span>`;
 const whoHtml = t => t.assignee_name ? esc(t.assignee_name) : `<span class="unsaid">${t.status === "qoralama" ? "aytilmagan" : "biriktirilmagan"}</span>`;
-function openDecision(id) { DEC.open = id; DEC.sig = ""; go("tasks"); }
+function openDecision(id) { DEC.open = id; DEC.sig = ""; if (typeof DIR !== "undefined") DIR.open = null; go("tasks"); }
 function closeDecision() { DEC.open = null; clearInterval(DEC.timer); go("tasks"); }
 
 async function renderTasks() {
   clearInterval(DEC.timer);
   if (DEC.open) return renderDecision(DEC.open);
+  if (typeof DIR !== "undefined" && DIR.open) return renderDirective(DIR.open);   /* ierarxik topshiriq (directives.js) */
   const el = $("#v-tasks"); let t, L;
   try { [t, L] = await Promise.all([J("/api/section/tasks"), J("/api/dec/list")]); }
   catch (e) { if (e.message === "denied") { el.innerHTML = locked("Majlis topshiriqlari"); return; } throw e; }
   const isKotib = ME.role_key === "kotib", lead = ["rektor", "kengash"].includes(ME.role_key);
-  const old = t.tasks.filter(x => !x.decision);
+  const old = t.tasks.filter(x => !x.decision && !x.directive);
   let h = `<div class="head"><div><h2>Majlislar va topshiriqlar</h2><span class="muted">${t.tasks.length} ta topshiriq · ${t.done} bajarilgan · ${t.overdue ? `<b class="bad">${t.overdue} muddati o'tgan</b>` : "muddati o'tgan yo'q"}</span></div>
     ${isKotib || ME.role_key === "rektor" ? `<button class="btn ghost sm" id="decReset" title="Demo ssenariysida yaratilgan qarorlarni o'chiradi va LMS hodisasi xabarini bekor qiladi">${ico("refresh", 16)} Demoni qayta boshlash</button>` : ""}</div>`;
   if (isKotib) h += await newMeetingCard();
+  if (typeof dirSection === "function") h += await dirSection();   /* «Men bergan topshiriqlar» */
   if (L.queue) h += queueCard(L.queue);
   const decs = L.decisions;
   if (decs.length || isKotib || lead) h += `<div class="card" style="margin-top:14px"><h3>${ico("tasks")} Majlis qarorlari</h3>` + (decs.length ? `<div class="dec-list">${decs.map(decRow).join("")}</div>` :
@@ -764,6 +776,7 @@ async function renderTasks() {
   bindAssign(el, renderTasks);
   if ($("#decReset")) $("#decReset").onclick = () => busy($("#decReset"), async () => { const r = await J("/api/dec/demo-reset", {method: "POST"}); toast(`Demo qayta boshlandi (${r.removed} ta qaror o'chirildi)`); renderTasks(); badges(); });
   if (isKotib) bindNewMeeting();
+  if (typeof dirBind === "function") dirBind(el);
 }
 
 function decRow(d) {
@@ -779,8 +792,8 @@ function queueCard(q) {
   return `<div class="card" style="margin-top:14px"><h3>${ico(UNIT_ICO[q.unit] || "tasks")} ${q.head ? `${esc(q.unit_name)} navbati` : "Menga biriktirilgan topshiriqlar"} <span class="tag ${open.length ? "mid" : "low"}">${open.length} ochiq</span></h3>
     ${q.head && q.duties && q.duties.length ? `<p class="tiny muted" style="margin:-4px 0 10px">Bo'lim vazifalari (akademik qoidalar taqdimoti): ${esc(q.duties.join("; "))}.</p>` : ""}
     ${q.tasks.length ? `<div class="dec-list">${q.tasks.map(t => `<div class="dec-row"><div class="dec-row-h"><div><b>${esc(t.text)}</b><div class="tiny muted">${esc(t.meeting)} · ${dmy(t.meeting_date)}</div></div>
-      <button class="btn sm primary" data-open="${t.meeting_id}">Ochish →</button></div>
-      <div class="kv"><span>Muddat</span><span>${dueHtml(t)}</span><span>Holat</span><span>${dstTag(t)}${t.blocked ? ` <span class="tiny muted">· ${esc(t.dep.unit_name)} natijasi kutilmoqda</span>` : ""}</span>
+      <button class="btn sm primary" ${t.directive ? `data-dopen="${t.id}"` : `data-open="${t.meeting_id}"`}>Ochish →</button></div>
+      <div class="kv"><span>Muddat</span><span>${dueHtml(t)}</span><span>Holat</span><span>${t.directive && typeof dirTag === "function" ? dirTag(t) + (t.progress && t.progress.total ? ` <span class="tiny muted">· taqsimlangan: ${t.progress.done}/${t.progress.total} bajarildi</span>` : "") : dstTag(t)}${t.blocked ? ` <span class="tiny muted">· ${esc(t.dep.unit_name)} natijasi kutilmoqda</span>` : ""}</span>
       <span>Ijrochi</span><span>${t.can_assign ? assignSel(t, q.staff) : whoHtml(t)}</span></div></div>`).join("")}</div>` : `<p class="muted">Navbat bo'sh.</p>`}</div>`;
 }
 const assignSel = (t, staff) => `<select class="sel-sm" data-assign="${t.id}"><option value="">— biriktirilmagan —</option>${staff.map(s => `<option value="${s.id}" ${s.id === t.assignee_user ? "selected" : ""}>${esc(s.name)} (${esc(s.role)})</option>`).join("")}</select>`;
@@ -843,7 +856,10 @@ const backBtn = () => `<button class="btn ghost sm" onclick="closeDecision()" st
 const srcBadge = d => d.source === "demo" ? `<span class="tag mid" title="Namunaviy matn, ovozdan olinmagan">Manba: demo transkript</span>` : `<span class="tag gray">Manba: qo'lda kiritilgan matn</span>`;
 
 function draftHtml(d) {
-  const opts = (sel) => `<option value="">— aytilmagan —</option>` + d.units.map(u => `<option value="${u.key}" ${u.key === sel ? "selected" : ""}>${esc(u.name)}</option>`).join("");
+  /* bo'limlar — Portal org_units bilan bitta reestr (server tartibida), guruhlab: Rahbariyat / Bo'limlar / Fakultet tyutorlari / Kafedralar */
+  const grpd = d.units.reduce((a, u) => { const g = u.group_name || "Bo'limlar"; (a[g] = a[g] || []).push(u); return a; }, {});
+  const opts = (sel) => `<option value="">— aytilmagan —</option>` + Object.entries(grpd).map(([g, us]) => `<optgroup label="${esc(g)}">` +
+    us.map(u => `<option value="${esc(u.key)}" ${u.key === sel ? "selected" : ""}>${esc(u.name)}</option>`).join("") + `</optgroup>`).join("");
   return backBtn() + `<div class="head"><div><h2>${esc(d.title)}</h2><span class="muted">${dmy(d.date)} · <span class="tag mid">Qoralama — tasdiqlanmagan</span> ${srcBadge(d)}</span></div></div>
   <div class="src-note">${ico("info", 15)} <span><b>ISFT Core qoralamasi — tekshiring.</b> ${esc(d.extract_note || "")}. Majlisda aytilmagan maydonlar bo'sh qoldirildi.</span></div>
   ${d.incident ? `<div class="src-note" style="margin-top:8px">${ico("wrench", 15)} <span>Bog'liq hodisa (Murojaatlar va nosozliklar): <b>${esc(d.incident.title)}</b> · ${d.incident.n} ta murojaat${d.incident.notified_at ? "" : " · talabalarga hali xabar berilmagan"}</span></div>` : ""}
@@ -955,15 +971,15 @@ const OPS_RULES = {kontrakt: "Kontrakt", davomat: "Davomat", akademik: "O'zlasht
 const OPS_LVL = {1: ["Diqqat", "mid"], 2: ["Kritik", "high"], 3: ["Jiddiy", "high"]};
 const OPS_KIND = {qongiroq: "Qo'ng'iroq", suhbat: "Suhbat", hujjat: "Hujjat so'rash", xat: "Ogohlantirish xati", buyruq: "Buyruq loyihasi"};
 const OPS_KIND_ICO = {qongiroq: "phone", suhbat: "chat", hujjat: "file", xat: "mail", buyruq: "report"};
-const OPS_ROLE = {call_center: "Call-markaz", tyutor: "Tyutor", talabalar: "Registrator ofisi"};
+const OPS_ROLE = {call_center: "Call-markaz", tyutor: "Tyutor", talabalar: "Registrator ofisi", sirtqi: "Sirtqi bo'lim"};
 const OPS_REASON = {sababsiz: "Sababsiz", kasallik: "Kasallik", komandirovka: "Komandirovka", mehnat_tatili: "Mehnat ta'tili", oilaviy: "Oilaviy"};
 const OPS_DOC = {tasdiqlangan: ["tasdiqlangan", "low"], kutilmoqda: ["kutilmoqda", "mid"], yoq: ["yo'q", "high"]};
 const som = x => fmt(Math.round(x)) + " so'm";
 const lvlTag = l => `<span class="tag ${OPS_LVL[l][1]}">${OPS_LVL[l][0]}</span>`;
-const isAgg = () => ["rektor", "kengash"].includes(ME.role_key);
+const isAgg = () => ["rektor", "kengash", "prorektor_yoshlar"].includes(ME.role_key);
 function factText(rule, f) {
   if (rule === "kontrakt") return `${esc(f.installment)} (${f.pct}%): ${som(f.need_now)} yetishmaydi · ${f.days < 0 ? `<b class="bad">${-f.days} kun o'tdi</b>` : `<b class="bad">${f.days} kun qoldi</b>`}`;
-  if (rule === "davomat") return `${f.hours} soat sababsiz${f.next ? ` · keyingi bosqich ${f.next} soatda` : ""}`;
+  if (rule === "davomat") return `${f.hours} soat sababsiz${f.next ? ` · ${f.next} soatdan oshsa — hayfsan` : " · hayfsan chegarasidan oshgan"}`;
   if (rule === "akademik") return `JPA ${f.gpa5}${f.gpa_ok ? " (yetarli)" : ""} · ${f.fails.length} ta fandan o'tmagan: ${esc(f.fails.map(x => x.subject).join(", "))}`;
   if (rule === "hujjat") return `${f.items.length} ta sababli qoldirish hujjati kutilmoqda${f.items.some(i => i.late) ? ` · <b class="bad">muddat o'tdi</b>` : ""}`;
   if (rule === "tatil") return `Ta'til ${dmy(f.end)}da tugaydi · ${f.days < 0 ? `<b class="bad">${-f.days} kun o'tdi</b>` : f.days + " kun qoldi"}`;
@@ -975,13 +991,17 @@ async function renderOps() {
   const el = $("#v-ops");
   el.innerHTML = `<p class="muted">Yuklanmoqda…</p>`;
   OPSV.sum = await J("/api/ops/summary");
-  const tabs = isAgg() ? [] : ME.role_key === "call_center" ? ["navbat"] : ME.role_key === "tyutor" ? ["navbat", "holatlar", "otrabotka", "qoidalar"] : ["holatlar", "navbat", "otrabotka", "qoidalar"];
+  /* kafedra, buxgalteriya, imtihon — faqat o'qish (o'z ko'lami/qoidalari); buxgalteriyaga otrabotka yo'q.
+     Registrator ofisi va Sirtqi bo'lim (sirtqi talabalar uchun registrator) — ish stoli va imtihonga ruxsatnoma (static/registrar.js) */
+  const tabs = isAgg() ? [] : ME.role_key === "call_center" ? ["navbat"] : ME.role_key === "tyutor" ? ["navbat", "holatlar", "otrabotka", "qoidalar"]
+    : ME.role_key === "buxgalteriya" ? ["holatlar", "navbat"] : ["talabalar", "registrator_xodim", "sirtqi"].includes(ME.role_key) && window.RG ? ["stol", "holatlar", "navbat", "otrabotka", "ruxsatnoma", "qoidalar"]
+    : ["holatlar", "navbat", "otrabotka", "qoidalar"];
   if (!tabs.includes(OPSV.tab)) OPSV.tab = tabs[0] || null;
-  const T = {holatlar: "Holatlar", navbat: ME.role_key === "call_center" ? "Qo'ng'iroqlar navbati" : "Mening navbatim", otrabotka: "Otrabotka", qoidalar: "Qoidalar"};
+  const T = {stol: "Ish stoli", holatlar: "Holatlar", navbat: ME.role_key === "call_center" ? "Qo'ng'iroqlar navbati" : "Mening navbatim", otrabotka: "Otrabotka", ruxsatnoma: "Ruxsatnoma", qoidalar: "Qoidalar"};
   const canRun = ["talabalar", "prorektor_oquv"].includes(ME.role_key);
   el.innerHTML = `<div class="head"><div><h2>Talabalar bilan ishlash markazi</h2><span class="muted">Tizim o'zi aniqlagan xavf holatlari (davomat, baho, kontrakt, hujjat) — mas'ul bo'lim navbatiga topshiriq bo'lib tushadi. Talaba yozgan murojaatlar — «Murojaatlar va nosozliklar»da.</span>${pgSrc(`Manba: HEMIS (baho, davomat, buyruqlar) va buxgalteriya (kontrakt) — sinov ma'lumotlari · qoidalar har 10 daqiqada tekshiriladi${OPSV.sum.last_run ? `, oxirgisi: <b>${whenTxt(OPSV.sum.last_run)}</b>` : ""}`)}</div>
     <div class="row-actions">${canRun ? `<button class="btn sm" id="opsRun">${ico("refresh", 16)} Hozir tekshirish</button>` : ""}${tabs.map(t => `<button class="btn ${t === OPSV.tab ? "primary" : ""}" data-ot="${t}">${T[t]}</button>`).join("")}</div></div>
-    <div class="src-note demo" style="margin-bottom:14px">${ico("info", 15)}<span>Chegaralar (30/48/72 soat, JPA 3.0, 2 ta fan, 3 kun…) — <b>institut tomonidan hali tasdiqlanmagan</b> namunaviy qiymatlar. Ma'lumotlar sun'iy.</span></div>
+    <div class="src-note demo" style="margin-bottom:14px">${ico("info", 15)}<span>Davomat chegaralari — institut me'yori: 30 soat sababsiz → qo'ng'iroq va ogohlantirish xati, 48 soatdan oshsa → hayfsan. Qolganlari (JPA 3.0, 2 ta fan, 3 kun…) — <b>institut tomonidan hali tasdiqlanmagan</b> namunaviy qiymatlar. Ma'lumotlar sun'iy.</span></div>
     ${opsSummary(OPSV.sum)}<div id="opsBody" style="margin-top:14px"></div>`;
   el.querySelectorAll("[data-ot]").forEach(b => b.onclick = () => { OPSV.tab = b.dataset.ot; OPSV.student = null; OPSV.page = 30; renderOps(); });
   el.querySelectorAll("[data-sr]").forEach(b => b.onclick = () => { if (isAgg()) return; OPSV.rule = b.dataset.sr; OPSV.level = 0; OPSV.tab = ME.role_key === "call_center" ? "navbat" : "holatlar"; OPSV.student = null; renderOps(); });
@@ -995,7 +1015,7 @@ async function renderOps() {
       <p style="margin:0 0 8px;font-size:14px;color:var(--ink-2)">Rang: <b class="bad">qizil</b> — jiddiy holatlar bor, <b class="warn-t">sariq</b> — kritik, <b>qora</b> — faqat «diqqat» darajasi, <b class="good">yashil</b> — ochiq holat yo'q.</p>
       <p class="tiny muted" style="margin:0">${ico("shield", 14)} Rahbariyat uchun faqat jamlangan raqamlar. Talabalar ro'yxati, telefonlar va suhbat skriptlari — Registrator ofisi, tyutorlar va call-markazda. Har bir harakat audit jurnalida.</p></div>`; return; }
   if (OPSV.student) return opsStudent(OPSV.student);
-  ({holatlar: opsCases, navbat: opsTasks, otrabotka: opsRetakes, qoidalar: opsPolicy})[OPSV.tab]();
+  ({stol: () => RG.desk(), holatlar: opsCases, navbat: opsTasks, otrabotka: opsRetakes, ruxsatnoma: () => RG.permits(), qoidalar: opsPolicy})[OPSV.tab]();
 }
 function opsSummary(s) {
   const by = {}; s.by_rule.forEach(r => { (by[r.rule] ||= {1: 0, 2: 0, 3: 0, n: 0}); by[r.rule][r.level] = r.n; by[r.rule].n += r.n; });
@@ -1111,7 +1131,7 @@ async function opsStudent(sid) {
           ${d.tasks.some(t => t.status !== "yangi") ? `<details style="margin-top:10px"><summary class="tiny muted">Yopilgan topshiriqlar (${d.tasks.filter(t => t.status !== "yangi").length})</summary>${tbl(["Topshiriq", "Natija", "Sana"], d.tasks.filter(t => t.status !== "yangi").map(t => [esc(t.title), esc((t.outcome || "") + (t.note ? " — " + t.note : "") + (t.doc_reg ? " · " + t.doc_reg : "")), dtm(t.done_at)]))}</details>` : ""}</div>
         <div class="card"><h3>O'zlashtirish (joriy semestr)</h3>${tbl(["Fan", "#Ball", ""], f.grades.map(g => [esc(g.subject), `<b class="${g.score < 40 ? "bad" : ""}">${g.score}</b>`,
           g.score < 40 && d.can_retake && !d.retakes.some(r => r.subject === g.subject && ["berildi", "topshirildi"].includes(r.status)) ? `<button class="btn sm" data-rt="${esc(g.subject)}">Otrabotka varaqasi</button>` :
-          (d.retakes.find(r => r.subject === g.subject) ? `<span class="tiny muted">otrabotka: ${esc(d.retakes.find(r => r.subject === g.subject).status)}</span>` : "")]))}</div>
+          (d.retakes.find(r => r.subject === g.subject) ? (rt => rt.status === "berildi" && window.RG ? RG.cd(rt) : `<span class="tiny muted">otrabotka: ${esc(rt.status)}</span>`)(d.retakes.find(r => r.subject === g.subject)) : "")]))}</div>
         <div class="card"><h3>Dars qoldirishlar</h3>${tbl(["Sana", "#Soat", "Sabab", "Hujjat"], d.absences.map(a => [`${dmy(a.start)}${a.end !== a.start ? "–" + dmy(a.end) : ""}`, a.hours, OPS_REASON[a.reason] || a.reason,
           a.doc_status ? `<span class="tag ${OPS_DOC[a.doc_status][1]}">${OPS_DOC[a.doc_status][0]}</span>` : "—"]))}</div>
       </div>
@@ -1123,6 +1143,7 @@ async function opsStudent(sid) {
     const r = await J("/api/ops/retakes", {method: "POST", body: JSON.stringify({student_id: sid, subject: x.dataset.rt})});
     toast(`Varaqa berildi: ${r.reg_no} · muddat ${dtm(r.due_at)}`); opsStudent(sid);
   }));
+  if (window.RG) RG.cardExtras(b, d, sid);   /* ruxsatnoma, shaxsiy grafik, kontrakt muddatini uzaytirish, otrabotka muddatlari */
   hydrateIcons(b);
 }
 
@@ -1131,42 +1152,25 @@ async function opsRetakes() {
   const b = $("#opsBody");
   const rows = await J("/api/ops/retakes");
   const ST = {berildi: ["Varaqa berildi", "mid"], topshirildi: ["Tekshiruvda", "gray"], tasdiqlandi: ["Tasdiqlandi", "low"]};
-  b.innerHTML = `<div class="src-note">${ico("info", 15)}<span>Varaqa tizimda QR va ro'yxat raqami bilan chiqadi. O'qituvchi imzolagan skan yuklanadi va registrator bahoni skan bilan <b>yonma-yon</b> tekshirib tasdiqlaydi.
-      Skanni avtomatik o'qish (OCR) — keyingi bosqich: serverda lokal OCR hali o'rnatilmagan.</span></div>
-    <div class="card" style="margin-top:12px">${tbl(["Talaba", "Fan", "Varaqa", "Muddat", "Holat", ""], rows.map(r => [`<b>${esc(r.full_name)}</b><div class="tiny muted">${esc(r.grp)}</div>`, esc(r.subject),
-      esc(r.reg_no || "—"), r.status === "berildi" ? `${dtm(r.due_at)}<div class="tiny ${r.hours_left < 24 ? "bad" : "muted"}">${r.hours_left < 0 ? `${-Math.round(r.hours_left)} soat o'tdi` : `${Math.round(r.hours_left)} soat qoldi`}</div>` : dtm(r.due_at),
-      `<span class="tag ${(ST[r.status] || ["", "gray"])[1]}">${(ST[r.status] || [r.status])[0]}</span>${r.status === "tasdiqlandi" ? `<div class="tiny muted">${r.score_old} → <b>${r.score_new}</b></div>` : ""}`,
-      r.status === "berildi" && ["talabalar", "tyutor"].includes(ME.role_key) ? `<label class="btn sm">Skan yuklash<input type="file" accept="application/pdf,image/jpeg,image/png" data-up="${r.id}" hidden></label>` :
+  const up = ["talabalar", "registrator_xodim", "tyutor", "sirtqi"].includes(ME.role_key);   /* varaqa va skan: Registrator ofisi, tyutor, Sirtqi bo'lim (Imtihon bo'limi — faqat ko'radi) */
+  b.innerHTML = `<div class="src-note">${ico("info", 15)}<span>Varaqa QR va ro'yxat raqami bilan 3 kunga beriladi: <span class="tag low">yashil</span> → 2 kun qolganda <span class="tag mid">sariq</span> → 1 kun qolganda va muddat o'tganda <span class="tag high">qizil</span> (tyutor va call-markazga topshiriq).
+      Yuklangan skan o'qiladi: ro'yxat raqami → otrabotka, o'qituvchi imzosi, ball; registrator skan bilan <b>yonma-yon</b> tekshirib tasdiqlaydi.</span></div>
+    ${up ? `<div class="rg-auto"><label class="btn sm">${ico("file", 15)} Skanni yuklash — raqam bo'yicha avtomatik<input type="file" id="rgAuto" accept="application/pdf,image/jpeg,image/png" hidden></label><span class="tiny muted">yoki ro'yxatdagi otrabotka qatoridan yuklang</span></div>` : ""}
+    <div class="card" style="margin-top:12px">${tbl(["Talaba", "Fan", "Varaqa", "Muddat", "Holat", ""], rows.map(r => [`<b>${esc(r.full_name)}</b><div class="tiny muted">${esc(r.grp)}${r.study_form === "sirtqi" ? " · sirtqi" : ""}</div>`, esc(r.subject),
+      esc(r.reg_no || "—"), r.status === "berildi" ? `${dtm(r.due_at)}<div>${window.RG ? RG.cd(r) : ""}</div>` : dtm(r.due_at),
+      `<span class="tag ${(ST[r.status] || ["", "gray"])[1]}">${(ST[r.status] || [r.status])[0]}</span>${r.status === "tasdiqlandi" ? `<div class="tiny muted">${r.score_old} → <b>${r.score_new}</b></div>` : ""}${r.status === "topshirildi" && window.RG ? RG.scanFlags(r) : ""}`,
+      r.status === "berildi" && up ? `<label class="btn sm">Skan yuklash<input type="file" accept="application/pdf,image/jpeg,image/png" data-up="${r.id}" hidden></label>${window.RG ? RG.retakeTools(r) : ""}` :
       r.status === "topshirildi" ? `<button class="btn sm primary" data-rv="${r.id}">Tekshirish</button>` : ""]))}</div><div id="rtReview"></div>`;
   b.querySelectorAll("[data-up]").forEach(inp => inp.onchange = async () => {
     const file = inp.files[0]; if (!file) return;
     if (file.size > 10e6) return toast("Fayl 10 MB dan katta");
     const data = await new Promise((ok, no) => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.onerror = no; fr.readAsDataURL(file); });
-    try { await J(`/api/ops/retakes/${inp.dataset.up}/upload`, {method: "POST", body: JSON.stringify({data_url: data})}); toast("Skan yuklandi — registrator tekshiradi"); opsRetakes(); refreshOpsSummary(); } catch (e) {}
+    try { const r = await J(`/api/ops/retakes/${inp.dataset.up}/upload`, {method: "POST", body: JSON.stringify({data_url: data})}); toast(r.scan?.signed === false ? "Skan yuklandi — imzo aniqlanmadi, tekshiring" : "Skan yuklandi va o'qildi — registrator tekshiradi"); opsRetakes(); refreshOpsSummary(); } catch (e) {}
   });
-  b.querySelectorAll("[data-rv]").forEach(x => x.onclick = () => opsReview(rows.find(r => r.id === +x.dataset.rv)));
+  const after = () => { opsRetakes(); refreshOpsSummary(); };
+  b.querySelectorAll("[data-rv]").forEach(x => x.onclick = () => RG.review(rows.find(r => r.id === +x.dataset.rv), after));
+  if (window.RG) RG.bindRetakes(b, after);
   hydrateIcons(b);
-}
-function opsReview(r) {
-  const box = $("#rtReview"), canApprove = ME.role_key === "talabalar";
-  box.innerHTML = `<div class="card review" style="margin-top:14px"><h3>Tekshirish: ${esc(r.full_name)} · ${esc(r.subject)} · ${esc(r.reg_no || "")}</h3>
-    <div class="rv-grid"><div class="rv-scan">${/\.pdf$/.test(r.file) ? `<iframe src="/api/ops/retakes/${r.id}/file" title="Skan" sandbox></iframe>` : `<img src="/api/ops/retakes/${r.id}/file" alt="Yuklangan varaqa skani">`}</div>
-    <div class="rv-form"><div class="kv"><span>Avvalgi ball</span><b>${r.score_old ?? "—"}</b><span>O'qituvchi</span><span>${esc(r.teacher || "—")}</span><span>Yuklangan</span><span>${dtm(r.submitted_at)}</span></div>
-      ${canApprove ? `<label class="tiny" style="display:block;margin-top:12px">Varaqadagi ball (skanga qarab kiriting)<input id="rvScore" type="number" min="0" max="100" style="width:100%;margin-top:4px"></label>
-      <p class="tiny muted">Tekshiring: o'qituvchi imzosi bor, ball va sana to'ldirilgan, ro'yxat raqami mos (${esc(r.reg_no || "")}).</p>
-      <div class="row-actions"><button class="btn primary" id="rvOk">${ico("check", 16)} Tasdiqlang — baho o'tadi</button></div>
-      <input id="rvNote" type="text" placeholder="Qaytarish sababi (masalan: imzo yo'q)" style="width:100%;margin-top:10px" aria-label="Qaytarish sababi"><button class="btn sm" id="rvBack" style="margin-top:6px">Qaytarish</button>`
-      : `<p class="tiny muted">Bahoni Registrator ofisi tasdiqlaydi.</p>`}</div></div></div>`;
-  hydrateIcons(box); box.scrollIntoView({behavior: "smooth", block: "start"});
-  if (!canApprove) return;
-  $("#rvOk").onclick = () => busy($("#rvOk"), async () => {
-    const v = $("#rvScore").value; if (v === "" || +v < 0 || +v > 100) return toast("Ballni 0–100 oralig'ida kiriting");
-    await J(`/api/ops/retakes/${r.id}/approve`, {method: "POST", body: JSON.stringify({score: +v})}); toast(`Tasdiqlandi: ${r.subject} ${r.score_old} → ${v}`); opsRetakes(); refreshOpsSummary();
-  });
-  $("#rvBack").onclick = () => busy($("#rvBack"), async () => {
-    const n = $("#rvNote").value.trim(); if (n.length < 3) return toast("Qaytarish sababini yozing");
-    await J(`/api/ops/retakes/${r.id}/return`, {method: "POST", body: JSON.stringify({note: n})}); toast("Varaqa qaytarildi — yangi muddat berildi"); opsRetakes();
-  });
 }
 
 /* --- qoidalar --- */
@@ -1211,9 +1215,9 @@ function renderDocs() {
 
 /* ---------- rbac ---------- */
 async function renderRbac() {
-  const {roles, labels} = await J("/api/rbac");
+  const {roles, labels, full} = await J("/api/rbac");
   const keys = Object.keys(labels);
-  $("#v-rbac").innerHTML = `<div class="head"><div><h2>Ruxsat darajalari (RBAC)</h2><span class="muted">Har bir so'rov bajarilishidan oldin shu jadval bo'yicha tekshiriladi. Siz: <b>${esc(ME.role)}</b></span></div></div>
+  $("#v-rbac").innerHTML = `<div class="head"><div><h2>Ruxsat darajalari (RBAC)</h2><span class="muted">Har bir so'rov bajarilishidan oldin shu jadval bo'yicha tekshiriladi. Siz: <b>${esc(ME.role)}</b>${full ? "" : " — quyida faqat sizning lavozimingiz ruxsatlari (to'liq jadval rahbariyat va tizim ma'murida)"}</span></div></div>
   <div class="card"><div class="tw"><table class="rbac"><thead><tr><th>Lavozim</th>${keys.map(k => `<th title="${esc(labels[k])}">${esc(labels[k])}</th>`).join("")}<th>Ko'lam</th></tr></thead><tbody>
   ${roles.map(r => `<tr class="${r.key === ME.role_key ? "me" : ""}"><td><b>${esc(r.title)}</b>${r.local_only ? `<br><span class="tag gray">faqat mahalliy</span>` : ""}</td>${keys.map(k =>
     r.allow.includes(k) ? (r.aggregate_only.includes(k) ? `<td class="a" title="Faqat jamlangan">Σ</td>` : `<td class="y">${ico("check", 16)}</td>`) : `<td class="x">—</td>`).join("")}<td class="tiny">${esc(r.scope)}</td></tr>`).join("")}

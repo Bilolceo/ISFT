@@ -26,6 +26,15 @@ if db.one(con, "SELECT 1 x FROM users"):
                     (f"{d['name']} kafedrasi mudiri: {d['head']}", "kafedra", d["faculty_id"], d["id"], f"KAF{d['id']}", rbac.hash_password(rbac.DEMO_PASSWORD)))
     con.commit()
 
+# Tashkiliy tuzilmadagi (04.09.2024) qolgan bo'limlar: Portal orqali xat oladigan akkauntlar (id'lar oxiriga qo'shiladi)
+if db.one(con, "SELECT 1 x FROM users"):
+    for _nm, _role, _code in [("Strategik bo'lim", "strategik", "STRATEG"), ("Sifatni ta'minlash boshqarmasi", "sifat", "SIFAT"),
+                              ("Yuridik bo'lim", "yuridik", "YURIST"), ("Devonxona", "devonxona", "DEVON"),
+                              ("Marketing bo'limi", "marketing", "MARKETING"), ("Xarid bo'limi", "xarid", "XARID")]:
+        if not db.one(con, "SELECT 1 x FROM users WHERE role=?", (_role,)):
+            con.execute("INSERT INTO users(full_name,role,link_code,pin) VALUES(?,?,?,?)", (_nm, _role, _code, rbac.hash_password(rbac.DEMO_PASSWORD)))
+    con.commit()
+
 # Rahbarlar rasmlari (isft.uz saytidan): static/brand/people/index.json — {ism: /brand/people/av/…jpg}
 import json as _json, re as _re
 def _pkey(n):
@@ -54,9 +63,12 @@ def ctx(request: Request) -> rbac.Ctx:
     if not uid:
         raise HTTPException(401, "Kirish talab qilinadi")
     try:
-        return rbac.ctx_for(con, uid)
+        c = rbac.ctx_for(con, uid)
     except AccessDenied as e:
         raise HTTPException(401, str(e))
+    if c.user.get("active") == 0 or c.role.legacy:   # accounts.py: faolsizlantirilgan / bekor qilingan lavozimdagi akkaunt sessiyasi ishlamaydi
+        raise HTTPException(401, "Akkaunt faol emas")
+    return c
 
 @app.exception_handler(AccessDenied)
 async def denied(_, e: AccessDenied):
@@ -70,9 +82,10 @@ class Login(BaseModel):
 @app.get("/api/users")
 def users():
     us = db.rows(con, "SELECT * FROM users ORDER BY id")
-    # "Kafedralar" bo'limida faqat kafedra mudirlari (kafedralar tartibida); dekan/tyutor/o'qituvchi demo akkauntlari
+    # "Kafedralar" bo'limida faqat kafedra mudirlari (kafedralar tartibida); tyutor/o'qituvchi demo akkauntlari
     # kirish ro'yxatida ko'rsatilmaydi (API orqali ishlashda davom etadi)
     us = [u for u in us if rbac.ROLES[u["role"]].level != 4 or u["role"] == "kafedra"]
+    us = [u for u in us if u.get("active") != 0 and not rbac.ROLES[u["role"]].legacy]   # faolsizlantirilgan / bekor qilingan lavozim — ro'yxatda yo'q
     us.sort(key=lambda u: (rbac.ROLES[u["role"]].level, u.get("department_id") or 0, u["id"]))
     return [{"id": u["id"], "name": u["full_name"], "role": rbac.user_title(u), "level": rbac.ROLES[u["role"]].level, "photo": photo_of(u)} for u in us]
 
@@ -92,6 +105,9 @@ def login(body: Login, request: Request, response: Response):
         if u:
             rbac.audit(con, rbac.Ctx(u, rbac.ROLES[u["role"]]), "tizimga kirish", "auth", False, f"noto'g'ri parol · IP {ip}")
         raise HTTPException(401, "Parol noto'g'ri" + (f" · yana {left} ta urinish qoldi" if 0 < left < 3 else ""))
+    if u.get("active") == 0 or rbac.ROLES[u["role"]].legacy:   # faolsizlantirilgan akkaunt yoki bekor qilingan lavozim (sobiq dekan #13)
+        rbac.audit(con, rbac.Ctx(u, rbac.ROLES[u["role"]]), "tizimga kirish", "auth", False, f"akkaunt faol emas · IP {ip}")
+        raise HTTPException(403, "Akkaunt faolsizlantirilgan. AT bo'limiga murojaat qiling.")
     SS.LOGIN_USER.reset(body.user_id)
     if not str(u["pin"]).startswith("pbkdf2$"):   # eski ochiq yozuvni xeshga o'tkazamiz
         u = dict(u); u["pin"] = rbac.hash_password(pw)
@@ -179,9 +195,10 @@ class Meeting(BaseModel):
     transcript: str
     tasks: list[dict]
 
-# Mas'ul lavozimni aniqlash. Tartib muhim: "Xalqaro iqtisodiyot va moliya fakulteti dekani" — dekan, prorektor emas;
-# prorektor yo'nalishlari faqat matnda "prorektor" so'zi bo'lsa tekshiriladi.
-ROLE_FIRST = [("dekan", "dekan"), ("kafedra", "kafedra"), ("o'qituvchi", "oqituvchi")]
+# Mas'ul lavozimni aniqlash. Tartib muhim: "Moliya fakulteti dekani" — prorektor emas. Institutda dekan lavozimi yo'q (Yevropa
+# modeli): eski matnlardagi "dekan/dekanat" fakultet darajasidagi vazifa sifatida Registrator ofisiga ("talabalar") yo'naltiriladi.
+# Prorektor yo'nalishlari faqat matnda "prorektor" so'zi bo'lsa tekshiriladi.
+ROLE_FIRST = [("dekan", "talabalar"), ("kafedra", "kafedra"), ("o'qituvchi", "oqituvchi")]
 ROLE_PROREKTOR = [("o'quv", "prorektor_oquv"), ("ilmiy", "prorektor_ilmiy"), ("moliya", "prorektor_moliya"), ("yoshlar", "prorektor_yoshlar")]
 ROLE_UNITS = [("qabul", "qabul"), ("xalqaro", "xalqaro"), ("registrator", "talabalar"), ("axborot texnologiyalari", "it_head"), ("buxgalter", "buxgalteriya"), ("kadr", "kadrlar"), ("talabalar bilan", "talabalar"),
               ("magistr", "magistratura"), ("ilmiy tadqiqot", "ilmiy_bolim"), ("xo'jalik", "xojalik"),
@@ -228,7 +245,7 @@ def task_status(tid: int, body: Status, request: Request):
     if not t: raise HTTPException(404)
     if t.get("unit"):   # majlis qarori oqimidagi topshiriq — holatni faqat ijrochi o'z oynasidan yangilaydi
         raise AccessDenied("⛔ Bu topshiriq holatini bo'lim rahbari yoki biriktirilgan xodim yangilaydi.")
-    if c.role.key not in ("rektor", "kengash") and t["assignee_role"] != c.role.key:
+    if c.role.key not in ("rektor", "kengash") and not DEC.legacy_mine(c, t):   # rol + (kafedrada) o'z bo'limi
         raise AccessDenied("⛔ Bu topshiriq sizga tegishli emas.")
     if body.status not in ("bajarildi", "jarayonda", "bajarilmagan"): raise HTTPException(400, "Noto'g'ri holat")
     con.execute("UPDATE tasks SET status=? WHERE id=?", (body.status, tid)); con.commit()
@@ -242,14 +259,19 @@ class Doc(BaseModel):
 async def doc(body: Doc, request: Request):
     c = ctx(request)
     if body.mode not in ("translate", "contract", "reply"): raise HTTPException(400)
-    if c.role.level > 3 and c.role.key != "dekan":
+    if c.role.level > 3:
         raise AccessDenied("⛔ Tarjima va shartnoma yordamchisi rahbariyat va bo'limlar uchun.")
     rbac.audit(con, c, f"tarjima va shartnoma yordamchisi: {body.mode}", "docs", True, body.text[:80])
     return {"result": await ai.doc_assist(body.text, body.mode)}
 
+RBAC_FULL_VIEW = ("rektor", "kengash", "it_head")   # to'liq jadval: rahbariyat va tizim ma'muri; boshqalar — faqat o'z lavozimi
+
 @app.get("/api/rbac")
-def rbac_matrix():
-    return {"roles": rbac.matrix(), "labels": rbac.LABELS}
+def rbac_matrix(request: Request):
+    c = ctx(request)
+    rows = rbac.matrix()
+    full = c.role.key in RBAC_FULL_VIEW
+    return {"roles": rows if full else [r for r in rows if r["key"] == c.role.key], "labels": rbac.LABELS, "full": full}
 
 @app.get("/api/status")
 async def status():
@@ -314,7 +336,8 @@ def verify_page(code: str):
         body = f"""<div class="badge {cls}">{_e(label)}</div><table>
           <tr><th>Ro'yxat raqami</th><td>{_e(d['reg_no'])}</td></tr><tr><th>Hujjat</th><td>{_e(d['title'])}</td></tr>
           <tr><th>Kimga / kim haqida</th><td>{_e(d['holder'] or '')}</td></tr><tr><th>Berilgan sana</th><td>{_e(d['created_at'][:10])}</td></tr>
-          {f"<tr><th>Imzolangan</th><td>{_e(d['signed_at'][:10])}</td></tr>" if d.get('signed_at') else ''}</table>"""
+          {f"<tr><th>Imzolangan</th><td>{_e(d['signed_at'][:10])}</td></tr>" if d.get('signed_at') else ''}
+          {f"<tr><th>Bergan bo'lim</th><td>{_e(d['issuer'])}</td></tr><tr><th>Xodim</th><td>{_e(d['issued_by'])}</td></tr><tr><th>Berilgan vaqt</th><td>{_e(d['issued_at'])}</td></tr>" if d.get('issuer') else ''}</table>"""
     else:
         body = '<div class="badge bad">Hujjat topilmadi</div><p>Bu kod ISFT reyestrida yo\'q. Hujjat soxta bo\'lishi mumkin.</p>'
     return f"""<!doctype html><html lang="uz"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -338,21 +361,54 @@ app.include_router(OC.router)
 from . import camsec as CS   # kameralar: xavfsizlik voqealari, salomatlik, navbat, haftalik hisobot
 CS.bind(con, ctx)
 app.include_router(CS.router)
+from . import facecam as FC   # Kirish nazorati (Face ID): rozilik reyestri, kirish kameralari, sintetik demo kadrlar
+FC.init(con)
+FC.bind(con, ctx)
+app.include_router(FC.router)
 DEC.bind(con, ctx)
 app.include_router(DEC.router)
 OPSM.bind(con, ctx)
 app.include_router(OPSM.router)
+from . import registrar as RGM   # Registrator ofisi: ish stoli, imtihonga ruxsatnoma, shaxsiy grafik, otrabotka skanini o'qish
+RGM.init(con)
+RGM.bind(con, ctx)
+app.include_router(RGM.router)
 from . import agent_hub as AH
 AH.init(con)
 AH.bind(con, ctx)
 app.include_router(AH.router)
 from . import portal as PT   # bo'limlararo portal: yozishmalar, fayllar, umumiy bazalar
 PT.init(con)
+try: AH.scan(con)   # yangi bazada AH.init paytida org_units hali yo'q edi (brief/ijro skanerlari) — endi bor, qayta skan (idempotent)
+except Exception as e: print("agent_hub.scan (portal'dan keyin):", e)
 PT.bind(con, ctx)
 app.include_router(PT.router)
 from . import extras as XT   # parolni o'zgartirish, global qidiruv, bildirishnomalar, kalendar
 XT.init(con)
 XT.bind(con, ctx)
 app.include_router(XT.router)
+from . import mywork as MW   # «Mening vazifalarim»: majlis, portal, markaz, imzo va AI takliflari — bitta ro'yxat
+MW.bind(con, ctx)
+app.include_router(MW.router)
+from . import accounts as AC   # akkauntlar boshqaruvi (AT bo'limi boshlig'i): yaratish, parol tiklash, faolsizlantirish
+AC.init(con)
+AC.bind(con, ctx)
+app.include_router(AC.router)
+from . import directives as DIR   # ierarxik topshiriqlar (majlisdan tashqari): vakolat, taqsimlash, qabul/qaytarish; demo xodim va zanjirlar
+DIR.init(con)
+DIR.bind(con, ctx)
+app.include_router(DIR.router)
+from . import syllabus as SY   # O'quv dasturlari: sillabus oqimi, tayanch OTM solishtiruvi, yuklama kalkulyatori, kafedralarga so'rovlar
+SY.init(con)
+SY.bind(con, ctx)
+app.include_router(SY.router)
+from . import staff_absence as SA   # Xodimlar ta'tili: safar, mehnat ta'tili, kasallik varaqasi → dars jadvaliga ta'siri, o'rinbosarlar, tahlil
+SA.init(con)
+SA.bind(con, ctx)
+app.include_router(SA.router)
+from . import orders as ORD   # Buyruqlar: arizadan buyruq, reyestr va muvofiqlik auditi, ro'yxat versiyalari, rektor imzosi → bazaga ta'sir
+ORD.init(con)
+ORD.bind(con, ctx)
+app.include_router(ORD.router)
 
 app.mount("/", StaticFiles(directory=ROOT / "static", html=True), name="static")

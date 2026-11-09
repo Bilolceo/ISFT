@@ -251,7 +251,7 @@ def requests_overview(con, ctx: Ctx, quiet=False):
 def notice_template(inc, n):
     return (f"Hurmatli talabalar! {inc['title']} bo'yicha {n} ta murojaat qabul qilindi. "
             f"Muammo umumiy bo'lib, Axborot texnologiyalari bo'limi tomonidan bartaraf etilmoqda. Har biringiz alohida murojaat yuborishingiz shart emas — "
-            f"tizim tiklangach shu kanal orqali xabar beramiz. Shoshilinch holatda: dekanatga murojaat qiling.")
+            f"tizim tiklangach shu kanal orqali xabar beramiz. Shoshilinch holatda: Registrator ofisiga murojaat qiling.")
 
 # =====================================================================
 # 3) TADBIRLAR: QR orqali qatnashuv

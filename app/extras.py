@@ -122,6 +122,54 @@ def change_password(body: PasswordIn, request: Request):
     return {"ok": True, "message": "Parol o'zgartirildi. Boshqa qurilmalardagi sessiyalar yopildi."}
 
 # =============================================================================================
+# 2b. Shaxsiy ma'lumotlar: lavozim, bo'lim, rahbar/kurator, ruxsatlar, Telegram, kirishlar tarixi
+#     Faqat o'zi haqidagi ma'lumot — boshqa foydalanuvchining profili bu yerdan ochilmaydi.
+# =============================================================================================
+def _person(u) -> dict | None:
+    if not u: return None
+    return {"name": _short(u["full_name"]) or u["full_name"], "position": _pos(u["full_name"]) or rbac.user_title(u)}
+
+@router.get("/api/me/profile")
+def my_profile(request: Request):
+    c = C(request); u = c.user; uid = u["id"]
+    from . import portal as P
+    unit_key = P.my_unit(c)
+    ou = db.one(_con, "SELECT * FROM org_units WHERE key=?", (unit_key,)) or {}
+    head = db.one(_con, "SELECT * FROM users WHERE id=?", (ou.get("head_user"),)) if ou.get("head_user") and ou.get("head_user") != uid else None
+    cur = None
+    if ou.get("curator") and ou.get("curator") != c.role.key:
+        cur = db.one(_con, "SELECT * FROM users WHERE role=? AND COALESCE(active,1)=1 ORDER BY id LIMIT 1", (ou["curator"],))
+    staff = db.one(_con, "SELECT COUNT(*) n FROM users WHERE unit=? AND COALESCE(active,1)=1", (unit_key,))["n"] if unit_key else 0
+    curated = [r["name"] for r in db.rows(_con, "SELECT name FROM org_units WHERE curator=? ORDER BY grp, ord", (c.role.key,))] if c.role.key.startswith("prorektor_") else []
+    tok = request.cookies.get("sid")
+    try:
+        sess = [{"created": _iso(dt.datetime.fromtimestamp(s["created"])), "ip": s["ip"] or "—", "current": s["token"] == SS._h(tok or "")}
+                for s in db.rows(_con, "SELECT token, created, ip FROM sessions WHERE user_id=? AND expires>? ORDER BY created DESC", (uid, time.time()))]
+    except Exception:
+        sess = []
+    logins = [{"ts": r["ts"], "ok": bool(r["allowed"]), "detail": r["detail"] or "", "channel": r["channel"]}
+              for r in db.rows(_con, "SELECT ts, allowed, detail, channel FROM audit_log WHERE user_id=? AND action='tizimga kirish' ORDER BY id DESC LIMIT 6", (uid,))]
+    pw = db.one(_con, "SELECT ts FROM audit_log WHERE user_id=? AND action='parol o''zgartirildi' ORDER BY id DESC LIMIT 1", (uid,))
+    try: scope = c.scope_label(_con)
+    except Exception: scope = ""
+    return {
+        "name": _short(u["full_name"]) or u["full_name"], "position": c.title, "role_key": c.role.key,
+        "unit": {"key": unit_key, "name": ou.get("name") or unit_key, "staff": staff, "am_head": ou.get("head_user") == uid},
+        "head": _person(head), "curator": _person(cur), "curated": curated, "scope": scope,
+        "allow": [rbac.LABELS.get(a, a) for a in sorted(c.role.allow)],
+        "telegram": {"linked": bool(u.get("telegram_id")), "code": u.get("link_code") or ""},
+        "sessions": sess, "logins": logins, "password_changed": pw["ts"] if pw else None,
+        "since": u.get("created_at"),
+    }
+
+@router.post("/api/me/sessions/close-others")
+def close_other_sessions(request: Request):
+    c = C(request)
+    n = SS.revoke_user(_con, c.user["id"], keep_tok=request.cookies.get("sid"))
+    rbac.audit(_con, c, "sessiyalar yopildi", "auth", True, f"boshqa qurilmalar: {n}")
+    return {"ok": True, "closed": n}
+
+# =============================================================================================
 # 3. Global qidiruv
 # =============================================================================================
 LIM = 6
@@ -225,6 +273,7 @@ def _visible_tasks(c: Ctx) -> list[dict]:
         return []
 
 def _task_link(t):
+    if t.get("origin") == "topshiriq": return {"view": "tasks", "directive": t["id"]}   # app/directives.py
     return {"view": "tasks", "meeting": t["meeting_id"]} if t.get("source") else {"view": "tasks"}
 
 def _search_tasks(c: Ctx, q: str) -> list[dict]:
@@ -308,6 +357,15 @@ def notifications(c: Ctx) -> list[dict]:
                       "title": ("Rezolyutsiya: " if res else "Javob keldi: " if reply else "Yangi xat: ") + f"«{r['subject']}»",
                       "sub": " · ".join(x for x in [PT._uname(um, r["last_unit"]), r["ref_no"], "shoshilinch" if r["priority"] == "shoshilinch" else ""] if x),
                       "ts": _ts(r["last_at"]), "link": {"view": "portal", "thread": r["id"]}})
+    # ko'p xat bo'lsa — qo'ng'iroqchani to'ldirmaslik uchun oddiylari bitta jamlangan yozuvga (rezolyutsiya va shoshilinchlar alohida qoladi)
+    letters = [i for i in items if i["kind"] == "xat"]
+    plain = [i for i in letters if i["level"] == "info"]
+    if len(letters) > 3 and len(plain) > 1:
+        items = [i for i in items if i not in plain]
+        subj = [re.sub(r"^(Yangi xat|Javob keldi): ", "", i["title"]) for i in plain[:2]]
+        items.append({"id": "ptall", "kind": "xat", "icon": "mail", "level": "info", "title": f"Portal: {len(plain)} ta o'qilmagan xat va javob",
+                      "sub": " · ".join(subj) + (f" va yana {len(plain) - 2} ta" if len(plain) > 2 else ""),
+                      "ts": max(i["ts"] for i in plain), "link": {"view": "portal", "flt": "unread"}})
     # --- portal: muddat eslatmalari (menga biriktirilgan / bo'limimga / javob kelmagan / rezolyutsiya ijrosi) ---
     for it in PT.reminders_for(_con, c.user):
         d = _due_date(it["due"])
@@ -348,6 +406,12 @@ def notifications(c: Ctx) -> list[dict]:
                               "title": f"Institut bo'yicha {len(over)} ta topshiriq muddati o'tgan",
                               "sub": " · ".join(sorted({str(t.get('assignee') or '') for t in over if t.get('assignee')})[:4]),
                               "ts": _day_ts(last + dt.timedelta(days=1)), "link": {"view": "tasks"}})
+    # --- ierarxik topshiriqlar: yangi, qaytarildi, qabulimni kutmoqda (app/directives.py) ---
+    try:
+        from . import directives as DIR
+        items += DIR.notifications(c)
+    except Exception as e:
+        print("notifications.directives:", repr(e))
     # --- AI agentlar takliflari (faqat rahbariyat, tasdiqlash huquqi bo'lsa) ---
     if AH.can_view_page(c) and c.role.key != "kengash":
         props = [r for r in db.rows(_con, "SELECT id, agent, title, created_at FROM agent_actions WHERE status='taklif' ORDER BY id DESC")
@@ -361,6 +425,11 @@ def notifications(c: Ctx) -> list[dict]:
             items.append({"id": "agall", "kind": "agent", "icon": "spark", "level": "info",
                           "title": f"AI agentlar: {len(props)} ta taklif tasdiqingizni kutmoqda", "sub": " · ".join(names[:3]) + (f" va yana {len(names) - 3}" if len(names) > 3 else ""),
                           "ts": max(_ts(r["created_at"]) for r in props), "link": {"view": "agents"}})
+    # --- O'quv dasturlari (app/syllabus.py): biriktirish, qaytarish, eslatma, tekshiruv va tasdiq kutayotganlar ---
+    try:
+        from . import syllabus as SY
+        items += SY.notif_items(c)
+    except Exception as e: print("notifications.syllabus:", repr(e))
     # --- hujjatlar: imzo kutayotgan buyruq loyihalari (faqat rektor imzolaydi) ---
     if c.role.key == "rektor":
         for r in db.rows(_con, "SELECT id, reg_no, title, holder, created_at FROM documents WHERE status='loyiha' ORDER BY id DESC LIMIT 10"):

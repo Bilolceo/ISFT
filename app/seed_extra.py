@@ -8,7 +8,7 @@ from .rbac import ROLES
 TRANSCRIPTS = {
 1: """Institut Kengashi yig'ilishi №3, 28.09.2026. Raislik: rektor.
 Rektor: Yangi o'quv yili boshlandi, birinchi oy natijalarini ko'rib chiqamiz. Xalqaro iqtisodiyot va moliya fakulteti 2-kursida oraliq nazorat natijalari past chiqdi.
-Xalqaro iqtisodiyot va moliya fakulteti dekani: Sabablarini o'rganamiz, 15-oktabrgacha tahliliy ma'lumotnoma tayyorlab beraman.
+Registrator ofisi: Fakultet tyutorlari bilan sabablarini o'rganamiz, 15-oktabrgacha tahliliy ma'lumotnoma tayyorlab beramiz.
 O'quv ishlari bo'yicha prorektor: Akkreditatsiya muddati yaqinlashmoqda. O'quv dasturlarini yangilash rejasini 20-oktabrgacha tasdiqlashga kiritaman.
 Moliya-iqtisod ishlari bo'yicha prorektor: Kontrakt qarzdorligi 16 foiz atrofida. Guruhlar kesimida undirish rejasini 25-oktabrgacha ishlab chiqamiz.
 Kadrlar bo'limi: Ilmiy darajali o'qituvchilar ulushi bo'yicha attestatsiya jadvalini tayyorlaymiz.
@@ -28,10 +28,10 @@ Kafedra mudiri (Buxgalteriya hisobi): 2-kurs uchun qo'shimcha konsultatsiya jadv
 }
 MORE_MEETINGS = [
     ("Xalqaro iqtisodiyot va moliya fakulteti kengashi", "2026-10-06", "Fakultet kengashi",
-     """Fakultet kengashi, 06.10.2026. Dekan: 2-kurs guruhlarida davomat 80 foizdan tushib ketgan.
+     """Fakultet kengashi, 06.10.2026. Registrator ofisi boshlig'i: 2-kurs guruhlarida davomat 80 foizdan tushib ketgan.
 Kafedra mudiri: Korporativ moliya va Moliyaviy matematika fanlaridan qo'shimcha darslar tashkil qilamiz.
 O'qituvchi: Oraliq nazoratdan o'ta olmaganlar uchun qayta topshirish jadvalini 1-noyabrgacha beraman.
-Dekan: Ota-onalar bilan uchrashuv 8-noyabrda o'tkazilsin."""),
+Registrator ofisi boshlig'i: Fakultet tyutori bilan birga ota-onalar bilan uchrashuv 8-noyabrda o'tkazilsin."""),
     ("Institut Kengashi yig'ilishi №4", "2026-10-30", "Kengash",
      """Institut Kengashi yig'ilishi №4, 30.10.2026.
 Rektor: Birinchi chorak yakunlari. Topshiriqlarning bir qismi muddatida bajarilmagan, mas'ullar yozma tushuntirish bersin.
@@ -41,7 +41,7 @@ Kadrlar bo'limi: O'qituvchilar malaka oshirish rejasi 1-dekabrgacha tasdiqlanadi
     ("Rektorat yig'ilishi", "2026-11-03", "Rektorat",
      """Rektorat yig'ilishi, 03.11.2026.
 Rektor: Qishki sessiyaga tayyorgarlik. Imtihon jadvali 18-noyabrgacha e'lon qilinsin.
-O'quv ishlari bo'yicha prorektor: Jadval loyihasi tayyor, dekanatlar bilan kelishamiz.
+O'quv ishlari bo'yicha prorektor: Jadval loyihasi tayyor, Registrator ofisi va kafedralar bilan kelishamiz.
 Xalqaro hamkorlik bo'limi: Erasmus+ almashinuv dasturiga 12 nafar talaba tanlovini 28-noyabrgacha o'tkazamiz.
 Yoshlar masalalari bo'yicha birinchi prorektor: Institutda yotoqxona yo'q — talabalarga ijara uy topishda yordam (hamkor uy-joy ro'yxati) masalasini o'rganamiz."""),
 ]
@@ -56,7 +56,7 @@ MORE_TASKS = [
     (4, "Kafedra mudiri (Buxgalteriya hisobi)", "kafedra", "Korporativ moliya va Moliyaviy matematika fanlaridan qo'shimcha darslar tashkil qilish", "2026-10-20", "bajarildi"),
     (4, "O'qituvchi (Buxgalteriya hisobi kafedrasi)", "oqituvchi", "Oraliq nazoratdan o'tmaganlar uchun qayta topshirish jadvalini berish", "2026-11-01", "bajarildi"),
     (4, "O'qituvchi (Buxgalteriya hisobi kafedrasi)", "oqituvchi", "Xavf ostidagi talabalar bilan individual konsultatsiya o'tkazish", "2026-11-13", "jarayonda"),
-    (4, "Xalqaro iqtisodiyot va moliya fakulteti dekani", "dekan", "2-kurs talabalarining ota-onalari bilan uchrashuv o'tkazish", "2026-11-08", "jarayonda"),
+    (4, "Registrator ofisi", "talabalar", "2-kurs talabalarining ota-onalari bilan uchrashuv o'tkazish (fakultet tyutori bilan)", "2026-11-08", "jarayonda"),
     (5, "Devonxona", "kengash", "Kuzatuv kengashi uchun choraklik KPI hisobotini tayyorlash", "2026-11-25", "jarayonda"),
     (5, "Ilmiy ishlar va innovatsiyalar bo'yicha prorektor", "prorektor_ilmiy", "Innovatsion rivojlanish agentligiga 2 ta grant arizasini topshirish", "2026-10-29", "bajarildi"),
     (5, "Kadrlar bo'limi", "kadrlar", "O'qituvchilar malaka oshirish rejasini tasdiqlash", "2026-12-01", "jarayonda"),
@@ -114,15 +114,17 @@ QUESTIONS = {
     "qabul": ["Qabul konversiyasi yo'nalishlar bo'yicha"], "talabalar": ["Qarzdor talabalar soni"],
     "magistratura": ["Dissertatsiya bosqichlari"], "xalqaro": ["Tugayotgan shartnomalar"],
     "buxgalteriya": ["Ish haqi fondi", "Kommunal xarajatlar"], "kadrlar": ["Yangi ishga olinganlar"],
-    "dekan": ["Fakultetimda xavf ostidagi talabalar"], "kafedra": ["Kafedra o'qituvchilari yuklamasi"], "oqituvchi": ["Mening guruhlarim natijasi"],
+    "tyutor": ["Fakultetimda xavf ostidagi talabalar"], "kafedra": ["Kafedra o'qituvchilari yuklamasi"], "oqituvchi": ["Mening guruhlarim natijasi"],
 }
+# faqat tasodifiy ketma-ketlik uchun (bekor qilingan lavozim — yozuvlari audit tarixiga tushmaydi, pastda tashlanadi)
+_RNG_ONLY = {"dekan": ["—"]}
 VIEWS = {"academic": "o'zlashtirish ko'rsatkichlari", "students": "xavf ostidagi talabalar", "contracts": "kontrakt to'lovlari",
          "finance": "byudjet bajarilishi", "payroll": "ish haqi fondi", "hr": "xodimlar ro'yxati", "science": "ilmiy faoliyat",
          "international": "xalqaro hamkorlik", "admissions": "qabul kampaniyasi", "youth": "yoshlar ishlari", "masters": "magistratura",
          "tasks": "majlis topshiriqlari", "audit": "audit jurnali"}
 # rad etiladigan urinishlar (RBAC'ni ko'rsatish uchun)
 DENIED = [("oqituvchi", "finance"), ("oqituvchi", "hr"), ("qabul", "payroll"), ("kafedra", "contracts"), ("talabalar", "hr"),
-          ("dekan", "payroll"), ("prorektor_yoshlar", "finance"), ("xalqaro", "students"), ("kengash", "hr"), ("magistratura", "finance")]
+          ("akademik", "payroll"), ("prorektor_yoshlar", "finance"), ("xalqaro", "students"), ("kengash", "hr"), ("magistratura", "finance")]
 
 
 def run(con, R, TODAY, teachers):
@@ -165,7 +167,7 @@ def run(con, R, TODAY, teachers):
         d = TODAY - dt.timedelta(days=day)
         if d.weekday() == 6: continue
         for role, u in users.items():
-            if R.random() > (0.95 if role in ("rektor", "prorektor_oquv", "prorektor_moliya", "dekan") else 0.55): continue
+            if R.random() > (0.95 if role in ("rektor", "prorektor_oquv", "prorektor_moliya", "dekan") else 0.55): continue   # "dekan" — faqat RNG ketma-ketligi uchun (pastga qarang)
             title = ROLES[role].title
             tg = role not in ("buxgalteriya", "kadrlar") and R.random() < 0.25
             ch = "telegram" if tg else "web"
@@ -177,8 +179,9 @@ def run(con, R, TODAY, teachers):
                 if allow:
                     r = R.choice(allow)
                     log.append((t0 + dt.timedelta(minutes=3 + k * 4), u, title, ch, VIEWS[r], r, 1, ""))
-            if role in QUESTIONS and R.random() < 0.6:
-                log.append((t0 + dt.timedelta(minutes=20), u, title, ch, "savol", "chat", 1, R.choice(QUESTIONS[role])))
+            qs = QUESTIONS.get(role) or _RNG_ONLY.get(role)
+            if qs and R.random() < 0.6:
+                log.append((t0 + dt.timedelta(minutes=20), u, title, ch, "savol", "chat", 1, R.choice(qs)))
             if role in ("rektor", "kengash", "prorektor_oquv", "prorektor_moliya") and R.random() < 0.2:
                 log.append((t0 + dt.timedelta(minutes=30), u, title, "web", "hisobot: Rahbariyat uchun haftalik brifing", "reports", 1, ""))
     for i, (role, res) in enumerate(DENIED):
@@ -188,6 +191,9 @@ def run(con, R, TODAY, teachers):
     # Telegram orqali maxfiy ma'lumot so'rash urinishi (kanal cheklovi)
     u = users["rektor"]
     log.append((dt.datetime.combine(TODAY - dt.timedelta(days=2), dt.time(21, 14)), u, ROLES["rektor"].title, "telegram", "ish haqi fondi", "payroll", 0, "telegram kanali"))
+    # bekor qilingan lavozim (dekan, #13) audit tarixida ko'rinmaydi; tasodifiy ketma-ketlik (keyingi seed ma'lumotlari) o'zgarmasligi
+    # uchun yuqoridagi tsikl uni ham "o'ynaydi", yozuvlar shu yerda tashlanadi
+    log = [x for x in log if not ROLES[x[1]["role"]].legacy]
     log.sort(key=lambda x: x[0])
     for ts, u, title, ch, act, res, ok, det in log:
         c.execute("INSERT INTO audit_log(ts,user_id,user_name,role,channel,action,resource,allowed,detail) VALUES(?,?,?,?,?,?,?,?,?)",

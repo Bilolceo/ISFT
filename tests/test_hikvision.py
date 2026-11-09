@@ -159,8 +159,10 @@ async def main():
     ok(not bad, f"{len(NEW)} ta eventType normallashtirildi" + (f" — XATO: {bad}" if bad else ""))
     ok(all(k in CS.POLICY for k in set(NEW.values())), "Har bir tur uchun ustuvorlik siyosati bor (P1–P4, kimga)")
     ok(HK.normalize({"type": "VMD"}, keep_vmd=True)["kind"] == "harakat", "VMD faqat qo'riqlanadigan hududda saqlanadi")
-    ok(HK.normalize({"type": "faceSnap"}) is None and HK.normalize({"type": "ANPR"}) is None and not CS.FEATURE_FACE and not CS.FEATURE_ANPR,
-       "Yuzni tanish va avtoraqam — standart holatda O'CHIQ (voqea umuman qayta ishlanmaydi)")
+    ok(HK.normalize({"type": "faceSnap"}) is None and HK.normalize({"type": "ANPR"}) is None and not CS.FEATURE_ANPR,
+       "Yuzni tanish va avtoraqam — bayroqsiz (face/anpr=False) voqea umuman qayta ishlanmaydi; avtoraqam standart holatda O'CHIQ")
+    ok((HK.normalize({"type": "alarmResult", "fpid": "FP1"}, face=True) or {}).get("kind") == "yuz",
+       "Yuz (FEATURE_FACE=1, demo): faqat kirish kameralari va rozilik reyestri orqali — app/facecam.py, tests/test_facecam.py")
     q = HK.parse_alert('<EventNotificationAlert><eventType>personQueueDetection</eventType><queueLength>27</queueLength><waitingTime>840</waitingTime></EventNotificationAlert>')
     ok(q["count"] == 27 and q["wait_s"] == 840, "Navbat voqeasi: uzunlik va kutish vaqti o'qildi")
     ok(len(HK.warnings({"clock_skew_s": 75, "counting": True, "events": True, "device": {}})) == 1, "Soat farqi > 60 s — ogohlantirish")
@@ -184,9 +186,9 @@ async def main():
 
     # RBAC: kamerani sozlash va voqeani belgilash — faqat rektor va xo'jalik
     def uid(role): return db.one(con, "SELECT id FROM users WHERE role=? ORDER BY id LIMIT 1", (role,))["id"]
-    pro, dek, xoj = rbac.ctx_for(con, uid("prorektor_oquv")), rbac.ctx_for(con, uid("dekan")), rbac.ctx_for(con, uid("xojalik"))
+    pro, dek, xoj = rbac.ctx_for(con, uid("prorektor_oquv")), rbac.ctx_for(con, uid("tyutor")), rbac.ctx_for(con, uid("xojalik"))
     OC._con = con
-    for c_, nm in ((pro, "O'quv prorektori"), (dek, "Dekan")):
+    for c_, nm in ((pro, "O'quv prorektori"), (dek, "Tyutor")):
         try: OC._manage(c_, "kamera sozlamasi"); ok(False, f"{nm} kamerani sozlay olmasligi kerak")
         except AccessDenied: ok(True, f"{nm} kamerani sozlay olmaydi (403)")
         try: CS.event_action(con, c_, e1["id"], "notogri"); ok(False, f"{nm} voqeani belgilay olmasligi kerak")

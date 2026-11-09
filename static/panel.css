@@ -98,6 +98,7 @@
 .pn-act .i{color:var(--muted);flex:none}
 .pn-act b{font-variant-numeric:tabular-nums;font-size:13.5px}
 .pn-act em{font-style:normal;font-size:11.5px;font-weight:700;padding:2px 8px;border-radius:99px;background:var(--bad-soft);color:var(--bad);white-space:nowrap}
+.pn-act em.n{background:var(--surface-2);color:var(--muted);font-weight:600}
 .pn-act.warn b{color:var(--warn)}.pn-act.warn .i{color:var(--warn)}
 .pn-act.bad b{color:var(--bad)}
 .pn-act:hover{border-color:var(--teal)}

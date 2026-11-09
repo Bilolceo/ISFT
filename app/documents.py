@@ -7,7 +7,7 @@ from pathlib import Path
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from . import db, brand as B
-from .rbac import Ctx, AccessDenied, audit
+from .rbac import Ctx, AccessDenied, audit, ROLES
 from .services import TODAY, mln
 from . import academic_rules as AR
 
@@ -27,9 +27,11 @@ def short(full):
 grade5, letter = AR.grade5, AR.letter   # 65–100 «5» A · 60–64 «4» B · 50–59 «4» C · 45–49 «3» D · 40–44 «3» E · 0–39 «2» F
 
 # ---------------- katalog ----------------
-DEAN_SIDE = {"dekan", "talabalar", "prorektor_oquv"}
+# Talaba hujjatlari tomoni. Institutda dekan lavozimi yo'q (Yevropa modeli): fakultet darajasidagi hujjatlarni Registrator ofisi beradi.
+REGISTRAR_SIDE = {"talabalar", "prorektor_oquv"}
 LEAD = {"rektor", "kengash", "prorektor_oquv", "prorektor_ilmiy", "prorektor_moliya", "prorektor_yoshlar"}
-EVERYONE_STAFF = LEAD | {"qabul", "talabalar", "magistratura", "xalqaro", "buxgalteriya", "kadrlar", "dekan", "kafedra"}
+# Xizmat xati — barcha xodim lavozimlari (Kuzatuv kengashi operativ yozishma yuritmaydi; call-markaz operatori — faqat qo'ng'iroqlar)
+EVERYONE_STAFF = frozenset(k for k, r in ROLES.items() if k not in ("kengash", "call_center") and not r.legacy)
 
 STUDENT_ACTIONS = {
     "akademik_tatil": "akademik ta'til berish",
@@ -42,50 +44,63 @@ PURPOSES = ["talab qilingan joyga", "harbiy komissariatga", "soliq inspeksiyasig
 
 CATALOG = [
     # key, kategoriya, nomi, tavsif, ruxsat etilgan lavozimlar, parametrlar, prefiks, imzo kerakmi
-    dict(key="study_cert", cat="Talabalar va dekanat", title="O'qish joyidan ma'lumotnoma", prefix="MT",
+    dict(key="study_cert", cat="Talabalar va Registrator ofisi", title="O'qish joyidan ma'lumotnoma", prefix="MT",
          desc="Talaba haqiqatan o'qishini tasdiqlovchi ma'lumotnoma (o'zbek/ingliz). Guruh bo'yicha ommaviy chiqarish mumkin.",
-         roles=DEAN_SIDE, params=[("target", "student_or_group"), ("purpose", "select:" + "|".join(PURPOSES)), ("lang", "select:uz|en")]),
-    dict(key="transcript", cat="Talabalar va dekanat", title="Akademik ma'lumotnoma (transkript)", prefix="AM",
+         roles=REGISTRAR_SIDE | {"sirtqi", "registrator_xodim"}, params=[("target", "student_or_group"), ("purpose", "select:" + "|".join(PURPOSES)), ("lang", "select:uz|en")]),
+    dict(key="transcript", cat="Talabalar va Registrator ofisi", title="Akademik ma'lumotnoma (transkript)", prefix="AM",
          desc="Fanlar, kreditlar, 100 ballik, harfli va 5 ballik baholar, GPA (kreditga vaznli) — HEMIS baholaridan avtomatik.",
-         roles=DEAN_SIDE, params=[("target", "student")]),
-    dict(key="debt_letter", cat="Talabalar va dekanat", title="Kontrakt qarzdorligi: ota-onaga xat", prefix="QX",
+         roles=REGISTRAR_SIDE | {"sirtqi", "registrator_xodim"}, params=[("target", "student")]),
+    dict(key="debt_letter", cat="Talabalar va Registrator ofisi", title="Kontrakt qarzdorligi: ota-onaga xat", prefix="QX",
          desc="Qarzdor talabalar ota-onasiga rasmiy ogohlantirish. Guruh yoki fakultet bo'yicha bir tugmada barcha qarzdorlarga.",
-         roles={"prorektor_moliya", "buxgalteriya", "talabalar", "dekan"}, params=[("target", "student_or_group_or_faculty"), ("deadline", "date")]),
-    dict(key="practice", cat="Talabalar va dekanat", title="Amaliyot yo'llanmasi", prefix="AY",
+         roles={"prorektor_moliya", "buxgalteriya", "talabalar", "registrator_xodim"}, params=[("target", "student_or_group_or_faculty"), ("deadline", "date")]),
+    dict(key="practice", cat="Talabalar va Registrator ofisi", title="Amaliyot yo'llanmasi", prefix="AY",
          desc="Talabani malakaviy amaliyotga yo'llash xati (tashkilot, muddat).",
-         roles={"dekan", "kafedra", "talabalar"}, params=[("target", "student_or_group"), ("org", "text"), ("start", "date"), ("end", "date")]),
+         roles={"amaliyot", "kafedra", "talabalar"}, params=[("target", "student_or_group"), ("org", "text"), ("start", "date"), ("end", "date")]),
+    dict(key="call_letter", cat="Talabalar va Registrator ofisi", title="Sirtqi: o'quv-imtihon sessiyasiga chaqiruv xati", prefix="CHX",
+         desc="Sirtqi ta'lim talabasini sessiyaga chaqirish — ish joyiga taqdim etish uchun (Mehnat kodeksi bo'yicha o'quv ta'tiliga asos). "
+              "Guruh bo'yicha ommaviy; kontrakt qarzdorlari alohida belgilanadi.",
+         roles={"sirtqi", "talabalar"}, params=[("target", "student_or_group"), ("start", "date"), ("end", "date")]),
     dict(key="order_student", cat="Buyruqlar", title="Buyruq loyihasi: talabalar harakati", prefix="TH",
-         desc="Akademik ta'til, ko'chirish, chetlashtirish, qayta tiklash. Rektor imzosidan keyin kuchga kiradi.",
-         roles={"dekan", "prorektor_oquv", "talabalar"}, sign=True,
+         desc="Bitta talaba: akademik ta'til, ko'chirish, chetlashtirish, qayta tiklash. Rektor imzosidan keyin kuchga kiradi. "
+              "Arizadan buyruq, ko'p talabali ro'yxatlar va bazaga avtomatik ta'sir — «Buyruqlar» bo'limida.",
+         roles={"prorektor_oquv", "talabalar"}, sign=True,
          params=[("target", "student"), ("action", "select:" + "|".join(STUDENT_ACTIONS)), ("reason", "text"), ("from_date", "date")]),
-    dict(key="warn_letter", cat="Talabalar va dekanat", title="Ogohlantirish xati (davomat / o'zlashtirish)", prefix="OX",
+    dict(key="warn_letter", cat="Talabalar va Registrator ofisi", title="Ogohlantirish xati (davomat / o'zlashtirish)", prefix="OX",
          desc="Sababsiz dars qoldirgan yoki fanlardan o'zlashtira olmayotgan talabaga rasmiy ogohlantirish. Faktlar bazadan avtomatik.",
-         roles={"talabalar", "dekan", "prorektor_oquv"}, params=[("target", "student"), ("basis", "select:davomat|akademik")]),
+         roles={"talabalar", "registrator_xodim", "prorektor_oquv", "sirtqi"}, params=[("target", "student"), ("basis", "select:davomat|akademik")]),
     dict(key="reprimand", cat="Buyruqlar", title="Buyruq loyihasi: hayfsan e'lon qilish", prefix="HB",
          desc="Sababsiz dars qoldirish chegarasidan oshgan talabaga hayfsan. Rektor imzosidan keyin kuchga kiradi.",
          roles={"talabalar", "prorektor_oquv"}, sign=True, params=[("target", "student"), ("reason", "text")]),
     dict(key="retake_sheet", cat="O'quv jarayoni", title="Otrabotka (qayta topshirish) varaqasi", prefix="OV", hidden=True,
          desc="Talabalar markazidan beriladi: fan, o'qituvchi, muddat, baho va imzo uchun joy, QR.",
-         roles={"talabalar", "tyutor", "dekan"}, params=[("retake", "retake")]),
+         roles={"talabalar", "registrator_xodim", "tyutor", "sirtqi"}, params=[("retake", "retake")]),   # Imtihon bo'limi varaqa bermaydi (Registrator ofisi ishi)
+    # Registrator ofisi (sirtqi talabalarga — Sirtqi bo'lim): app/registrar.py
+    dict(key="exam_permit", cat="Talabalar va Registrator ofisi", title="Imtihonga kirish ruxsatnomasi", prefix="IR",
+         desc="Faktlardan tekshiriladi: ochiq otrabotka va akademik qarz yo'q, sababsiz soatlar chegaradan oshmagan, kontrakt jadval bo'yicha "
+              "to'langan (yoki muddat uzaytirilgan). Guruh bo'yicha — faqat ruxsat olganlarga; qolganlari sabablari bilan ro'yxatda.",
+         roles={"talabalar", "registrator_xodim", "sirtqi"}, params=[("target", "student_or_group"), ("subject_name", "text")]),
+    dict(key="personal_schedule", cat="Talabalar va Registrator ofisi", title="Shaxsiy grafik (qarzlarni yopish rejasi)", prefix="SG",
+         desc="Talabaning barcha qarzlari (otrabotka, akademik qarz, kontrakt, hujjat) bo'yicha muddatli reja. QR orqali kim, qachon berganini tekshirish mumkin.",
+         roles={"talabalar", "registrator_xodim", "sirtqi"}, params=[("target", "student"), ("deadline", "date"), ("note", "text")]),
     dict(key="leave_order", cat="Buyruqlar", title="Mehnat ta'tili berish to'g'risida buyruq", prefix="ShT",
          desc="Xodimga yillik mehnat ta'tili. Kadrlar loyihalaydi, rektor imzolaydi.",
          roles={"kadrlar"}, sign=True, params=[("staff", "staff"), ("start", "date"), ("days", "number")]),
     dict(key="exam_sheet", cat="O'quv jarayoni", title="Yakuniy nazorat qaydnomasi", prefix="QN",
          desc="Guruh + fan bo'yicha qaydnoma: oraliq (30) + yakuniy (70) = jami ball, harf va 5 ballik baho, o'zlashtirish foizi. 'Barcha fanlar' — butun guruh paketi.",
          # yakuniy nazoratni imtihon bo'limi o'tkazadi, Akademik faoliyatni boshqarish bo'limi tashkil qiladi (akademik qoidalar)
-         roles={"dekan", "kafedra", "oqituvchi", "prorektor_oquv", "imtihon", "akademik"}, params=[("group", "group"), ("subject", "subject")]),
+         roles={"talabalar", "kafedra", "oqituvchi", "prorektor_oquv", "imtihon", "akademik"}, params=[("group", "group"), ("subject", "subject")]),
     dict(key="debtors_list", cat="O'quv jarayoni", title="Akademik qarzdorlar ro'yxati", prefix="AQ",
          desc=f"{AR.PASS} balldan past (o'zlashtirilmagan) fanlari bor talabalar, fanlar kesimida, qayta topshirish muddati bilan.",
-         roles={"dekan", "kafedra", "prorektor_oquv"}, params=[("deadline", "date")]),
+         roles={"talabalar", "kafedra", "prorektor_oquv", "imtihon", "akademik"}, params=[("deadline", "date")]),
     dict(key="load", cat="O'quv jarayoni", title="O'quv yuklama taqsimoti", prefix="OY",
          desc="Kafedra o'qituvchilari yuklamasi, stavka, fanlar va guruhlar — ortiqcha/kam yuklama belgilanadi.",
-         roles={"kafedra", "dekan", "prorektor_oquv"}, params=[("department", "department")]),
+         roles={"kafedra", "prorektor_oquv", "akademik"}, params=[("department", "department")]),
     dict(key="minutes", cat="Rektorat va ijro nazorati", title="Majlis bayonnomasi", prefix="MB",
          desc="Majlis yozuvidan rasmiy bayonnoma: eshitildi, qaror qilindi, mas'ullar va muddatlar.",
-         roles=LEAD, params=[("meeting", "meeting")]),
+         roles=LEAD | {"kotib"}, params=[("meeting", "meeting")]),
     dict(key="exec_notice", cat="Rektorat va ijro nazorati", title="Ijro nazorati: muddati o'tgan topshiriq", prefix="IN",
          desc="Muddati o'tgan topshiriq bo'yicha mas'ulga rasmiy xat. 'Barchasi' — hamma qarzdor ijrochilarga birdan.",
-         roles={"rektor", "kengash"}, params=[("task", "task")]),
+         roles={"rektor", "kotib"}, params=[("task", "task")]),
     dict(key="memo", cat="Rektorat va ijro nazorati", title="Xizmat xati", prefix="XX",
          desc="Qabul qiluvchi, mavzu va asosiy fikrlarni yozing — ISFT Core rasmiy uslubda matnni tuzadi (mahalliy AI).",
          roles=EVERYONE_STAFF, params=[("recipient", "text"), ("subject_line", "text"), ("points", "textarea"), ("use_ai", "check")]),
@@ -94,7 +109,7 @@ CATALOG = [
          roles={"kadrlar"}, params=[("staff", "staff"), ("with_salary", "check"), ("purpose", "select:" + "|".join(PURPOSES))]),
     dict(key="invitation", cat="Xalqaro aloqalar", title="Invitation letter (viza uchun taklifnoma)", prefix="INV",
          desc="Xorijiy mehmon/professor uchun ingliz tilidagi rasmiy taklifnoma.",
-         roles={"xalqaro", "rektor"}, params=[("guest", "text"), ("guest_org", "text"), ("country", "text"), ("purpose_en", "text"),
+         roles={"xalqaro", "rektor", "prorektor_ilmiy"}, params=[("guest", "text"), ("guest_org", "text"), ("country", "text"), ("purpose_en", "text"),
                                               ("passport", "text"), ("start", "date"), ("end", "date"), ("expenses", "select:ISFT|guest")]),
 ]
 CAT = {t["key"]: t for t in CATALOG}
@@ -104,7 +119,7 @@ LABELS = {"target": "Talaba / guruh", "purpose": "Qayerga taqdim etish uchun", "
           "staff": "Xodim", "days": "Kunlar soni", "group": "Guruh", "subject": "Fan", "department": "Kafedra", "meeting": "Majlis",
           "task": "Topshiriq", "recipient": "Kimga", "subject_line": "Mavzu", "points": "Asosiy fikrlar", "use_ai": "Matnni ISFT Core tuzsin (AI)",
           "with_salary": "O'rtacha oylikni ko'rsatish", "guest": "Mehmon F.I.Sh.", "guest_org": "Mehmon tashkiloti", "country": "Davlat",
-          "purpose_en": "Tashrif maqsadi (inglizcha)", "basis": "Asos", "retake": "Otrabotka", "passport": "Pasport raqami (ixtiyoriy)", "expenses": "Xarajatlarni kim qoplaydi"}
+          "purpose_en": "Tashrif maqsadi (inglizcha)", "basis": "Asos", "retake": "Otrabotka", "subject_name": "Fan (ixtiyoriy; bo'sh — butun sessiya)", "note": "Izoh (ixtiyoriy)", "passport": "Pasport raqami (ixtiyoriy)", "expenses": "Xarajatlarni kim qoplaydi"}
 DEFAULTS = {"deadline": (TODAY + dt.timedelta(days=21)).isoformat(), "start": (TODAY + dt.timedelta(days=14)).isoformat(),
             "end": (TODAY + dt.timedelta(days=42)).isoformat(), "from_date": TODAY.isoformat(), "days": "", "lang": "uz"}
 
@@ -118,8 +133,14 @@ def catalog_for(ctx: Ctx):
     return out
 
 # ---------------- ko'lam (scope) ----------------
+def _sscope(ctx: Ctx, alias="s"):
+    """Talaba ko'lami: lavozim ko'lami + Sirtqi bo'lim faqat sirtqi ta'lim shaklidagi talabalar bilan ishlaydi."""
+    w = ctx.student_scope(alias)
+    return f"{w} AND {alias}.study_form='sirtqi'" if ctx.role.key == "sirtqi" else w
+
 def _groups_sql(ctx: Ctx):
     sc, u = ctx.role.scope, ctx.user
+    if ctx.role.key == "sirtqi": return "g.id IN (SELECT DISTINCT group_id FROM students WHERE study_form='sirtqi')"
     if sc == "fakultet": return f"g.faculty_id={int(u['faculty_id'])}"
     if sc == "kafedra": return f"g.department_id={int(u['department_id'])}"
     if sc == "o'qituvchi": return f"g.id IN (SELECT group_id FROM teacher_groups WHERE teacher_id={int(u['teacher_id'])})"
@@ -134,7 +155,7 @@ def lookup(con, ctx: Ctx, kind: str, q: str = "", group_id: int = 0):
     q = f"%{q.strip()}%"
     if kind == "student":
         return db.rows(con, f"""SELECT s.id, s.full_name || ' · ' || g.name || ' · ' || s.hemis_id label FROM students s JOIN groups_ g ON g.id=s.group_id
-            WHERE {ctx.student_scope('s')} AND (s.full_name LIKE ? OR s.hemis_id LIKE ? OR g.name LIKE ?) ORDER BY s.full_name LIMIT 15""", (q, q, q))
+            WHERE {_sscope(ctx, 's')} AND (s.full_name LIKE ? OR s.hemis_id LIKE ? OR g.name LIKE ?) ORDER BY s.full_name LIMIT 15""", (q, q, q))
     if kind == "group":
         return db.rows(con, f"SELECT g.id, g.name || ' · ' || g.course || '-kurs · ' || g.direction label FROM groups_ g WHERE {_groups_sql(ctx)} ORDER BY g.name")
     if kind == "faculty":
@@ -156,14 +177,14 @@ def lookup(con, ctx: Ctx, kind: str, q: str = "", group_id: int = 0):
     return []
 
 def _student(con, ctx, sid):
-    s = db.one(con, f"""SELECT s.*, g.name grp, g.course, g.direction, g.level glevel, f.name faculty, f.dean, d.name dept
+    s = db.one(con, f"""SELECT s.*, g.name grp, g.course, g.direction, g.level glevel, f.name faculty, d.name dept
         FROM students s JOIN groups_ g ON g.id=s.group_id JOIN faculties f ON f.id=s.faculty_id JOIN departments d ON d.id=g.department_id
-        WHERE s.id=? AND {ctx.student_scope('s')}""", (int(sid),))
+        WHERE s.id=? AND {_sscope(ctx, 's')}""", (int(sid),))
     if not s: raise AccessDenied("⛔ Bu talaba sizning ko'lamingizda emas yoki topilmadi. So'rov audit jurnaliga yozildi.")
     return s
 
 def _group(con, ctx, gid):
-    g = db.one(con, f"SELECT g.*, f.name faculty, f.dean FROM groups_ g JOIN faculties f ON f.id=g.faculty_id WHERE g.id=? AND {_groups_sql(ctx)}", (int(gid),))
+    g = db.one(con, f"SELECT g.*, f.name faculty FROM groups_ g JOIN faculties f ON f.id=g.faculty_id WHERE g.id=? AND {_groups_sql(ctx)}", (int(gid),))
     if not g: raise AccessDenied("⛔ Bu guruh sizning ko'lamingizda emas. So'rov audit jurnaliga yozildi.")
     return g
 
@@ -172,10 +193,10 @@ def _expand_students(con, ctx, p, debt_only=False):
     tgt = str(p.get("target") or "")
     kind, _, val = tgt.partition(":")
     if kind == "s": ids = [int(val)]
-    elif kind == "g": ids = [r["id"] for r in db.rows(con, "SELECT id FROM students WHERE group_id=? ORDER BY full_name", (_group(con, ctx, val)["id"],))]
+    elif kind == "g": ids = [r["id"] for r in db.rows(con, f"SELECT s.id FROM students s WHERE s.group_id=? AND {_sscope(ctx, 's')} ORDER BY s.full_name", (_group(con, ctx, val)["id"],))]
     elif kind == "f":
         if ctx.role.scope == "fakultet" and int(val) != int(ctx.user["faculty_id"]): raise AccessDenied("⛔ Boshqa fakultet. So'rov audit jurnaliga yozildi.")
-        ids = [r["id"] for r in db.rows(con, "SELECT id FROM students WHERE faculty_id=? ORDER BY group_id, full_name", (int(val),))]
+        ids = [r["id"] for r in db.rows(con, f"SELECT s.id FROM students s WHERE s.faculty_id=? AND {_sscope(ctx, 's')} ORDER BY s.group_id, s.full_name", (int(val),))]
     else: raise ValueError("Talaba yoki guruhni tanlang")
     out = [_student(con, ctx, i) for i in ids]
     if debt_only: out = [s for s in out if s["payment_type"] == "kontrakt" and s["contract_amount"] > s["paid_amount"]]
@@ -223,6 +244,28 @@ class Issuer:
         return {"file": fname, "count": len(self.items), "regs": [i["reg_no"] for i in self.items[:50]], "status": status}
 
 # ---------------- shablonlar ----------------
+FORM_UZ = {"kunduzgi": "kunduzgi", "sirtqi": "sirtqi", "masofaviy": "masofaviy"}
+FORM_EN = {"kunduzgi": "full-time", "sirtqi": "part-time (correspondence)", "masofaviy": "distance"}
+
+def signer(con, ctx: Ctx, lang="uz"):
+    """Talaba hujjatlariga imzo qo'yuvchi. Institutda dekan lavozimi yo'q (Yevropa modeli): fakultet darajasidagi
+    vazifani Registrator ofisi boshlig'i bajaradi; Sirtqi bo'lim bergan hujjatni — Sirtqi bo'lim boshlig'i. Ism org_units dan."""
+    key = "sirtqi" if ctx.role.key == "sirtqi" else "talabalar"
+    u = None
+    try: u = db.one(con, "SELECT head FROM org_units WHERE key=?", (key,))
+    except Exception: pass
+    name = (u or {}).get("head") or ""
+    if not name:
+        r = db.one(con, "SELECT full_name FROM users WHERE role=? ORDER BY id LIMIT 1", (key,))
+        name = (r["full_name"].split(":", 1)[1].strip() if r and ":" in r["full_name"] else "")
+    if lang == "en": return ("Head of the Part-time Studies Office" if key == "sirtqi" else "Head of the Registrar's Office"), short(name)
+    return ("Sirtqi bo'lim boshlig'i" if key == "sirtqi" else "Registrator ofisi boshlig'i"), short(name)
+
+def _registrar_head(con) -> str:
+    """KELISHILDI qatori: "Registrator ofisi boshlig'i (F. I.)" — ism org_units/users dan (signer bilan bir xil manba)."""
+    title, name = signer(con, Ctx({"id": 0, "full_name": ""}, ROLES["talabalar"]))
+    return f"{title} ({name})" if name else title
+
 def _years(s):
     start = 2026 - int(s["course"]) + 1
     return start, start + (2 if s["glevel"] == "magistr" else 4)
@@ -237,19 +280,19 @@ def g_study_cert(I, p):
             B.para(I.doc, f"This is to certify that {s['full_name']} (student ID {s['hemis_id']}) is a full-time "
                    f"{'Master' if s['glevel'] == 'magistr' else 'Bachelor'}'s student in year {s['course']} of the {s['direction']} programme, "
                    f"group {s['grp']}, Faculty of {s['faculty']}, ISFT Institute, for the {ACAD_YEAR} academic year.")
-            B.para(I.doc, f"Period of study: September {y0} – June {y1}. Mode of study: full-time. "
+            B.para(I.doc, f"Period of study: September {y0} – June {y1}. Mode of study: {FORM_EN.get(s.get('study_form'), 'full-time')}. "
                    f"Basis of study: {'state grant' if s['payment_type'] == 'grant' else 'tuition contract'}.")
             B.para(I.doc, "This certificate is issued upon the student's request for submission to the relevant authority.")
-            B.signature(I.doc, "Dean of the Faculty", short(s["dean"]), "en")
+            B.signature(I.doc, *signer(I.con, I.ctx, "en"), "en")
         else:
             B.title(I.doc, "MA'LUMOTNOMA")
             B.para(I.doc, f"Ushbu ma'lumotnoma {s['full_name']}ga (HEMIS ID: {s['hemis_id']}) shu haqda berildiki, u haqiqatan ham "
                    f"ISFT institutining {s['faculty']} fakulteti «{s['direction']}» {'magistratura mutaxassisligi' if s['glevel'] == 'magistr' else 'bakalavriat ta`lim yo`nalishi'.replace('`', chr(39))} "
-                   f"{s['course']}-kurs {s['grp']}-guruh talabasi bo'lib, kunduzgi ta'lim shaklida "
+                   f"{s['course']}-kurs {s['grp']}-guruh talabasi bo'lib, {FORM_UZ.get(s.get('study_form'), 'kunduzgi')} ta'lim shaklida "
                    f"{'davlat granti' if s['payment_type'] == 'grant' else 'to`lov-kontrakt'.replace('`', chr(39))} asosida tahsil olmoqda.")
             B.para(I.doc, f"O'qish muddati: {y0}-yil sentabr — {y1}-yil iyun. Joriy o'quv yili: {ACAD_YEAR}.")
             B.para(I.doc, f"Ma'lumotnoma {purpose} taqdim etish uchun berildi.")
-            B.signature(I.doc, "Fakultet dekani", short(s["dean"]))
+            B.signature(I.doc, *signer(I.con, I.ctx))
         I.qr(lang)
 
 def g_transcript(I, p):
@@ -257,7 +300,7 @@ def g_transcript(I, p):
     I.page(s["full_name"])
     B.title(I.doc, "AKADEMIK MA'LUMOTNOMA", "(transkript)")
     t = [("F.I.Sh.", s["full_name"]), ("HEMIS ID", s["hemis_id"]), ("Fakultet", s["faculty"]), ("Yo'nalish", s["direction"]),
-         ("Kurs / guruh", f"{s['course']}-kurs, {s['grp']}"), ("Ta'lim shakli / asosi", f"kunduzgi, {s['payment_type']}")]
+         ("Kurs / guruh", f"{s['course']}-kurs, {s['grp']}"), ("Ta'lim shakli / asosi", f"{FORM_UZ.get(s.get('study_form'), 'kunduzgi')}, {s['payment_type']}")]
     B.table(I.doc, ["Ma'lumot", ""], t, widths=[5, 12], size=10.5)
     done = None   # yakunlangan semestr: (o'zlashtirilgan kredit, jami kredit, GPA)
     for sem, label in [(0, "2025-2026 o'quv yili, bahorgi semestr (yakuniy)"), (1, f"{ACAD_YEAR} o'quv yili, kuzgi semestr (joriy natija)")]:
@@ -275,7 +318,7 @@ def g_transcript(I, p):
     B.para(I.doc, f"Baholash shkalasi (100 ballik → 5 baho → harf): {AR.SCALE_TEXT}. Fan kamida {PASS} ball bilan o'zlashtirilganda "
            "uning krediti to'liq hisoblanadi.", indent=False, size=9.5)
     B.para(I.doc, f"{AR.GPA_FORMULA}; {AR.CREDIT_NOTE}.", indent=False, size=9.5)
-    B.signature(I.doc, "Fakultet dekani", short(s["dean"]))
+    B.signature(I.doc, *signer(I.con, I.ctx))
     I.qr()
 
 def g_debt_letter(I, p):
@@ -308,10 +351,35 @@ def g_practice(I, p):
                f"{s['full_name']} o'quv rejasiga muvofiq {d_uz(p.get('start') or DEFAULTS['start'])}dan {d_uz(p.get('end') or DEFAULTS['end'])}gacha "
                f"malakaviy amaliyot o'tash uchun Sizning tashkilotingizga yuboriladi.")
         B.para(I.doc, "Talabaga amaliyot rahbari biriktirilishini, amaliyot yakunida esa tavsifnoma va amaliyot kundaligi tasdiqlab berilishini so'raymiz.")
-        B.signature(I.doc, "Fakultet dekani", short(s["dean"]))
+        B.signature(I.doc, *signer(I.con, I.ctx))
         p_ = I.doc.add_paragraph(); B.run(p_, "✂ - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -", 9, False, B.RGB_GREY)
         p_ = I.doc.add_paragraph(); B.run(p_, "QAYTARMA QISM. ", 10.5, True); B.run(p_, f"Talaba {short(s['full_name'])} amaliyotga {d_uz(p.get('start') or DEFAULTS['start'])}da "
             "qabul qilindi. Amaliyot rahbari: ______________________  Imzo: ________  M.O.", 10.5)
+        I.qr()
+
+def g_call_letter(I, p):
+    start, end = p.get("start") or DEFAULTS["start"], p.get("end") or DEFAULTS["end"]
+    if end < start: raise ValueError("Sessiya tugash sanasi boshlanishidan oldin bo'lishi mumkin emas")
+    sts = _expand_students(I.con, I.ctx, p)
+    form = {r["id"]: r for r in db.rows(I.con, f"SELECT id, study_form, payment_type, contract_amount, paid_amount FROM students WHERE id IN ({','.join(str(int(s['id'])) for s in sts)})")}
+    sts = [s for s in sts if (form.get(s["id"]) or {}).get("study_form") == "sirtqi"]
+    if not sts: raise ValueError("Tanlanganlar orasida sirtqi ta'lim shaklidagi talaba yo'q")
+    days = (dt.date.fromisoformat(end) - dt.date.fromisoformat(start)).days + 1
+    for s in sts:
+        f = form[s["id"]]
+        I.page(s["full_name"])
+        p_ = I.doc.add_paragraph(); p_.alignment = WD_ALIGN_PARAGRAPH.RIGHT; B.run(p_, "Ish beruvchi tashkilot\nrahbariyatiga", 12, True)
+        B.title(I.doc, "CHAQIRUV XATI", "O'quv-imtihon sessiyasiga")
+        B.para(I.doc, f"ISFT instituti {s['faculty']} fakulteti «{s['direction']}» yo'nalishi sirtqi ta'lim shakli {s['course']}-kurs {s['grp']}-guruh talabasi "
+               f"{s['full_name']} {d_uz(start)}dan {d_uz(end)}gacha ({days} kalendar kun) o'quv-imtihon sessiyasiga chaqiriladi.")
+        B.para(I.doc, "O'zbekiston Respublikasi Mehnat kodeksiga muvofiq, ishni o'qish bilan birga olib borayotgan xodimga sessiya davri uchun "
+                      "o'quv ta'tili berilishini so'raymiz.")
+        if f["payment_type"] == "kontrakt" and (f["contract_amount"] or 0) > (f["paid_amount"] or 0):
+            B.para(I.doc, "Eslatma: talabaning kontrakt to'lovi bo'yicha qarzdorligi mavjud — sessiyaga qarzdorlik bartaraf etilgach qo'yiladi.")
+        B.signature(I.doc, "Sirtqi bo'lim boshlig'i", "")
+        p_ = I.doc.add_paragraph(); B.run(p_, "✂ - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -", 9, False, B.RGB_GREY)
+        p_ = I.doc.add_paragraph(); B.run(p_, "MA'LUMOTNOMA-CHAQIRUV (qaytarma qism). ", 10.5, True)
+        B.run(p_, f"Talaba {short(s['full_name'])} sessiyada {d_uz(start)} — {d_uz(end)} kunlari qatnashdi. Sirtqi bo'lim: ____________  M.O.", 10.5)
         I.qr()
 
 def _agree(doc, who):
@@ -328,8 +396,8 @@ def g_order_student(I, p):
     B.title(I.doc, "BUYRUQ (LOYIHA)", "Talabalar harakati to'g'risida")
     basis = {"akademik_tatil": "talabaning arizasi va tibbiy/oilaviy holatni tasdiqlovchi hujjat",
              "kochirish": "talabaning arizasi va qabul qiluvchi OTMning roziligi",
-             "chetlashtirish_tolov": "buxgalteriyaning qarzdorlik to'g'risidagi ma'lumotnomasi va fakultet dekanining bildirgisi",
-             "chetlashtirish_xohish": "talabaning arizasi", "tiklash": "talabaning arizasi va fakultet dekanining taqdimnomasi"}[act]
+             "chetlashtirish_tolov": "buxgalteriyaning qarzdorlik to'g'risidagi ma'lumotnomasi va Registrator ofisining bildirgisi",
+             "chetlashtirish_xohish": "talabaning arizasi", "tiklash": "talabaning arizasi va Registrator ofisining taqdimnomasi"}[act]
     B.para(I.doc, f"«Oliy ta'lim to'g'risida»gi qonunchilik, institut Ustavi va ichki nizomlariga muvofiq, {basis} asosida")
     p_ = I.doc.add_paragraph(); p_.alignment = WD_ALIGN_PARAGRAPH.CENTER; B.run(p_, "BUYURAMAN:", 12, True)
     debt = s["contract_amount"] - s["paid_amount"]
@@ -337,12 +405,12 @@ def g_order_student(I, p):
            f"(HEMIS ID {s['hemis_id']}) ga {d_uz(p.get('from_date') or TODAY)}dan boshlab {STUDENT_ACTIONS[act]}." + (f" Sabab: {reason}." if reason else ""))
     if act == "chetlashtirish_tolov":
         B.para(I.doc, f"2. Buxgalteriya: talabaning {debt:,} so'm qarzdorligini hisob-kitobda qayd etsin.".replace(",", " "))
-    B.para(I.doc, f"{'3' if act == 'chetlashtirish_tolov' else '2'}. Fakultet dekanati ushbu o'zgarishni HEMIS tizimida 3 ish kuni ichida aks ettirsin.")
+    B.para(I.doc, f"{'3' if act == 'chetlashtirish_tolov' else '2'}. Registrator ofisi ushbu o'zgarishni HEMIS tizimida 3 ish kuni ichida aks ettirsin.")
     B.para(I.doc, f"{'4' if act == 'chetlashtirish_tolov' else '3'}. Buyruq ijrosini nazorat qilish o'quv ishlari bo'yicha prorektor zimmasiga yuklansin.")
     p_ = I.doc.add_paragraph(); B.run(p_, f"Asos: {basis}.", 11, False, italic=True)
     B.signature(I.doc, "Rektor", B.INST["rector_short"])
     p_ = I.doc.add_paragraph(); B.run(p_, f"Loyiha kiritdi: {I.ctx.role.title}  _______________", 10.5)
-    _agree(I.doc, ["O'quv ishlari bo'yicha prorektor", "Yuriskonsult", f"Fakultet dekani ({short(s['dean'])})"])
+    _agree(I.doc, ["O'quv ishlari bo'yicha prorektor", "Yuriskonsult", _registrar_head(I.con)])
     I.qr()
 
 def g_warn_letter(I, p):
@@ -366,7 +434,7 @@ def g_warn_letter(I, p):
         B.para(I.doc, "Hatto umumiy ko'rsatkich yetarli bo'lsa ham, o'zlashtirilmagan fanlar akademik qarzdorlikka va keyingi kursga o'tkazilmaslikka olib kelishi mumkin. "
                f"Qayta topshirish (otrabotka) tartibi bo'yicha tyutoringiz yoki Registrator ofisiga ({AR.REGISTRAR_ROOMS_TEXT}) murojaat qiling.")
     B.para(I.doc, "Ushbu ogohlantirish bilan tanishganingizni imzongiz bilan tasdiqlang.")
-    B.signature(I.doc, "Registrator ofisi boshlig'i")
+    B.signature(I.doc, *signer(I.con, I.ctx))
     p_ = I.doc.add_paragraph(); B.run(p_, "Tanishdim: ____________________  (talaba imzosi)        Sana: «___» __________ 20___ y.", 10.5)
     I.qr()
 
@@ -385,7 +453,7 @@ def g_reprimand(I, p):
     B.para(I.doc, "3. Buyruq ijrosini nazorat qilish o'quv ishlari bo'yicha prorektor zimmasiga yuklansin.")
     B.signature(I.doc, "Rektor", B.INST["rector_short"])
     p_ = I.doc.add_paragraph(); B.run(p_, f"Loyiha kiritdi: {I.ctx.role.title}  _______________", 10.5)
-    _agree(I.doc, ["O'quv ishlari bo'yicha prorektor", "Yuridik bo'lim", f"Fakultet dekani ({short(s['dean'])})"])
+    _agree(I.doc, ["O'quv ishlari bo'yicha prorektor", "Yuridik bo'lim", _registrar_head(I.con)])
     I.qr()
 
 def g_retake_sheet(I, p):
@@ -404,7 +472,7 @@ def g_retake_sheet(I, p):
     B.para(I.doc, f"Varaqa o'qituvchi tomonidan to'ldiriladi va belgilangan muddatda Registrator ofisiga ({AR.REGISTRAR_ROOMS_TEXT}) qaytariladi. "
            "Muddat o'tsa, tyutorga ogohlantirish topshirig'i yuboriladi.", size=10.5)
     B.table(I.doc, ["Topshirilgan sana", "Ball (100 ballik)", "O'qituvchi imzosi"], [("«___» ________ 20___", "", "")], widths=[5.5, 5, 5.5], size=11)
-    B.signature(I.doc, "Registrator ofisi")
+    B.signature(I.doc, *signer(I.con, I.ctx))
     I.qr()
 
 def g_leave_order(I, p):
@@ -459,7 +527,7 @@ def g_exam_sheet(I, p):
                f"fan kamida {PASS} ball bilan o'zlashtirilgan hisoblanadi. Shkala: {AR.SCALE_TEXT}. Yakuniy nazoratni fan bo'yicha "
                "mashg'ulot olib bormagan professor-o'qituvchi yoki imtihon bo'limi o'tkazadi.", indent=False, size=9)
         B.signature(I.doc, "Imtihon oluvchi (imtihon bo'limi)")
-        B.signature(I.doc, "Fakultet dekani", short(g["dean"]))
+        B.signature(I.doc, *signer(I.con, I.ctx))
         I.qr()
 
 def g_debtors_list(I, p):
@@ -472,8 +540,8 @@ def g_debtors_list(I, p):
     B.table(I.doc, ["№", "Guruh", "Talaba", "HEMIS ID", "Qarzdor fanlar (ball)", "Soni"],
             [(i, r["grp"], r["full_name"], r["hemis_id"], r["subj"], r["n"]) for i, r in enumerate(rows, 1)], widths=[0.8, 2.2, 4.8, 2.8, 5.6, 1], size=8.5)
     B.para(I.doc, f"Jami {len(rows)} nafar talaba, {sum(r['n'] for r in rows)} ta fan bo'yicha qarzdor. Qayta topshirish muddati: {d_uz(deadline)}gacha. "
-           "Kafedralar qayta topshirish jadvalini 3 ish kuni ichida dekanatga taqdim etsin.", indent=False, size=10.5)
-    B.signature(I.doc, "Fakultet dekani" if I.ctx.role.scope == "fakultet" else I.ctx.role.title)
+           "Kafedralar qayta topshirish jadvalini 3 ish kuni ichida Registrator ofisiga taqdim etsin.", indent=False, size=10.5)
+    B.signature(I.doc, *signer(I.con, I.ctx)) if I.ctx.role.key in ("talabalar", "registrator_xodim", "sirtqi") else B.signature(I.doc, I.ctx.role.title)
     I.qr()
 
 def g_load(I, p):
@@ -495,6 +563,8 @@ def g_load(I, p):
     tot = sum(t["load_hours"] for t in ts)
     B.para(I.doc, f"Kafedra bo'yicha jami yuklama: {tot} soat ({round(tot / LOAD_NORM, 2)} stavka, me'yor: 1 stavka = {LOAD_NORM} soat). "
            f"Ortiqcha yuklama: {sum(1 for r in data if r[8] == 'ortiqcha')} nafar, kam yuklama: {sum(1 for r in data if r[8] == 'kam')} nafar.", indent=False, size=10.5)
+    if p.get("_calc"):   # syllabus.py yuklama kalkulyatoridan: o'quv reja me'yori bo'yicha hisob-kitob bo'limi
+        from . import syllabus as SY; SY.docx_calc_section(I, p["_calc"])
     B.signature(I.doc, "Kafedra mudiri", short(d["head"]))
     I.qr()
 
@@ -596,7 +666,13 @@ def g_invitation(I, p):
     B.signature(I.doc, "Rector", "", "en")
     I.qr("en")
 
-GEN = {"warn_letter": g_warn_letter, "reprimand": g_reprimand, "retake_sheet": g_retake_sheet, "study_cert": g_study_cert, "transcript": g_transcript, "debt_letter": g_debt_letter, "practice": g_practice,
+def g_exam_permit(I, p):
+    from . import registrar as RG; RG.gen_exam_permit(I, p)
+
+def g_personal_schedule(I, p):
+    from . import registrar as RG; RG.gen_personal_schedule(I, p)
+
+GEN = {"exam_permit": g_exam_permit, "personal_schedule": g_personal_schedule, "warn_letter": g_warn_letter, "reprimand": g_reprimand, "retake_sheet": g_retake_sheet, "study_cert": g_study_cert, "transcript": g_transcript, "debt_letter": g_debt_letter, "practice": g_practice, "call_letter": g_call_letter,
        "order_student": g_order_student, "leave_order": g_leave_order, "exam_sheet": g_exam_sheet, "debtors_list": g_debtors_list,
        "load": g_load, "minutes": g_minutes, "exec_notice": g_exec_notice, "memo": g_memo, "work_cert": g_work_cert, "invitation": g_invitation}
 
@@ -637,10 +713,17 @@ def can_download(con, ctx: Ctx, fname: str):
     if ctx.role.key in ("rektor",): return True
     return bool(db.one(con, "SELECT 1 FROM documents WHERE file=? AND created_by=?", (fname, ctx.user["id"])))
 
+SHOW_ISSUER = {"exam_permit", "personal_schedule", "retake_sheet"}   # tekshiruv sahifasida kim, qachon bergani ko'rsatiladi
+
 def verify(con, code: str):
-    d = db.one(con, "SELECT reg_no, title, holder, created_at, status, signed_at, kind FROM documents WHERE verify_code=?", (code.upper(),))
+    d = db.one(con, "SELECT reg_no, title, holder, created_at, status, signed_at, kind, created_by, creator_role FROM documents WHERE verify_code=?", (code.upper(),))
+    if d and d["kind"] in SHOW_ISSUER:
+        u = db.one(con, "SELECT full_name FROM users WHERE id=?", (d["created_by"],))
+        nm = (u["full_name"].split(":", 1)[-1].strip() if u else "")
+        d["issuer"], d["issued_by"], d["issued_at"] = d["creator_role"], short(nm), d["created_at"].replace("T", " ")[:16]
+    if d: d.pop("created_by", None); d.pop("creator_role", None)
     if d and d["status"] == "imzolangan": d["title"] = d["title"].replace("Buyruq loyihasi", "Buyruq")
     if d:  # shaxsiy ma'lumotni yashirish: faqat familiya va initsial
         parts = (d["holder"] or "").split()
-        d["holder"] = (parts[0] + " " + " ".join(x[0] + "." for x in parts[1:3])) if parts and CAT.get(d["kind"], {}).get("cat") in ("Talabalar va dekanat", "Kadrlar", "Buyruqlar") else d["holder"]
+        d["holder"] = (parts[0] + " " + " ".join(x[0] + "." for x in parts[1:3])) if parts and CAT.get(d["kind"], {}).get("cat") in ("Talabalar va Registrator ofisi", "Kadrlar", "Buyruqlar") else d["holder"]
     return d

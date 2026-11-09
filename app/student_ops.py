@@ -31,21 +31,26 @@ UPLOADS = Path(__file__).resolve().parent.parent / "data" / "uploads" / "retakes
 # ---------------------------------------------------------------------------------------------
 POLICY_DEFAULTS = [
     ("contract_critical_days", 3, "Navbatdagi kontrakt to'lovi muddatiga shuncha kun qolsa — kritik"),
-    ("att_call_hours", 30, "Sababsiz qoldirilgan soat: call-markaz qo'ng'irog'i"),
-    ("att_letter_hours", 48, "Sababsiz qoldirilgan soat: ogohlantirish xati"),
-    ("att_reprimand_hours", 72, "Sababsiz qoldirilgan soat: hayfsan buyrug'i loyihasi + tyutor suhbati"),
+    # institut me'yori (rektor qarori, 2026-11): 30 soat — call-markaz + ogohlantirish xati; 48 soatdan OSHSA (49+) — hayfsan
+    ("att_call_hours", 30, "Sababsiz qoldirilgan soat: 30 soat va undan ko'p — call-markaz qo'ng'irog'i"),
+    ("att_letter_hours", 30, "Sababsiz qoldirilgan soat: 30 soat va undan ko'p — ogohlantirish xati"),
+    ("att_reprimand_hours", 48, "Sababsiz qoldirilgan soat: 48 soatdan oshsa — hayfsan buyrug'i loyihasi + tyutor suhbati"),
     ("hours_to_date", 180, "Semestr boshidan o'tilgan auditoriya soatlari (namuna)"),
     ("pass_score", AR.PASS, "Fan bo'yicha o'tish bali (100 ballik, «3» baho) — akademik qoidalar taqdimoti"),
     ("gpa_min", 3.0, "Minimal JPA (5 ballik)"),
     ("fails_warn", 2, "Shuncha fandan o'tmasa — JPA yetarli bo'lsa ham ogohlantirish"),
     ("medical_doc_days", 3, "Kasallik/komandirovkadan keyin hujjat topshirish muddati, kun"),
-    ("leave_warn_days", 30, "Akademik ta'til tugashiga shuncha kun qolganda ogohlantirish"),
+    ("leave_warn_days", 90, "Akademik ta'til tugashiga shuncha kun (~3 oy) qolganda ogohlantirish: call-markaz qo'ng'irog'i"),
     ("retake_days", 3, "Otrabotka varaqasini qaytarish muddati, kun"),
     ("call_max_attempts", 3, "Javob bermasa — shuncha urinishdan keyin tyutorga o'tadi"),
     # DEMO TAXMIN: institut call-markaz me'yorini bermagan — 1 operator kuniga ~60 ta qo'ng'iroq (o'rtacha 5–6 daqiqa + yozuv)
     ("call_daily_capacity", 60, "Call-markaz: bir operator bir ish kunida qiladigan qo'ng'iroqlar (navbat shu bo'yicha kunlarga taqsimlanadi)"),
+    # Registrator ofisi (M. Baratov): zinapoyaning oxirgi bosqichi va imtihonga ruxsatnoma — tasdiqlanmagan namunaviy qiymatlar
+    ("att_expel_hours", 72, "Sababsiz qoldirilgan soat: hayfsandan keyin ham davom etsa — «chetlashtirishga tayyor» ro'yxati"),
+    ("contract_expel_days", 30, "Kontrakt muddatidan shuncha kun o'tgan va ota-onaga xat yuborilgan bo'lsa — «chetlashtirishga tayyor»"),
+    ("permit_att_hours", 48, "Imtihonga ruxsatnoma: sababsiz qoldirilgan soatlar shu chegaradan oshmasligi kerak (hayfsan chegarasi)"),
 ]
-VERIFIED = {"pass_score"}   # institut qoidasi (akademik qoidalar taqdimoti) — qolganlari hali tasdiqlanmagan
+VERIFIED = {"pass_score", "att_call_hours", "att_letter_hours", "att_reprimand_hours"}   # institut qoidasi (akademik qoidalar; davomat — rektor qarori) — qolganlari hali tasdiqlanmagan
 REASONS = {"sababsiz": "Sababsiz", "kasallik": "Kasallik", "komandirovka": "Xizmat safari (komandirovka)",
            "mehnat_tatili": "Mehnat ta'tili", "oilaviy": "Oilaviy sabab"}
 EXCUSABLE = ("kasallik", "komandirovka", "mehnat_tatili", "oilaviy")
@@ -55,9 +60,10 @@ LEVELS = {1: "Diqqat", 2: "Kritik", 3: "Jiddiy"}
 KINDS = {"qongiroq": "Qo'ng'iroq", "suhbat": "Suhbat", "hujjat": "Hujjat so'rash", "xat": "Ogohlantirish xati", "buyruq": "Buyruq loyihasi"}
 
 # Ko'rish: to'liq / fakultet / faqat jamlangan
-FULL_VIEW = ("talabalar", "akademik", "prorektor_oquv")
-FAC_VIEW = ("dekan", "tyutor")
-AGG_VIEW = ("rektor", "kengash")
+FULL_VIEW = ("talabalar", "registrator_xodim", "akademik", "prorektor_oquv")
+REG_STAFF = "registrator_xodim"   # Registrator ofisi xodimi: boshliq navbatidagi ishlar (varaqa, skan, xat, qo'ng'iroq natijasi); bahoni tasdiqlash va buyruq loyihasi — boshliqda
+FAC_VIEW = ("tyutor",)   # institutda dekan lavozimi yo'q — fakultet darajasidagi ko'rinish Registrator ofisida (FULL_VIEW)
+AGG_VIEW = ("rektor", "kengash", "prorektor_yoshlar")
 SUPERVISOR = "talabalar"
 
 DEMO_USERS = [  # sun'iy ism-shariflar; parol rbac.DEMO_PASSWORD
@@ -104,6 +110,10 @@ def init(con):
         con.execute("ALTER TABLE students ADD COLUMN phone TEXT")
     if "planned_on" not in {r[1] for r in con.execute("PRAGMA table_info(ops_tasks)").fetchall()}:   # call-markaz: rejalashtirilgan kun
         con.execute("ALTER TABLE ops_tasks ADD COLUMN planned_on TEXT")
+    if "scan_meta" not in {r[1] for r in con.execute("PRAGMA table_info(retakes)").fetchall()}:   # skanni o'qish natijasi (registrar_scan)
+        con.execute("ALTER TABLE retakes ADD COLUMN scan_meta TEXT")
+    # akademik ta'til: ogohlantirish oynasi 30 kundan ~3 oyga (Registrator ofisi) — faqat tasdiqlanmagan eski standart qiymat yangilanadi
+    con.execute("UPDATE ops_policy SET value=90, label=? WHERE key='leave_warn_days' AND value=30 AND verified=0", (POLICY_DEFAULTS[9][2],))
     for k, v, label in POLICY_DEFAULTS:
         con.execute("INSERT OR IGNORE INTO ops_policy(key,value,label,verified) VALUES(?,?,?,?)", (k, v, label, int(k in VERIFIED)))
         if k in VERIFIED:   # tasdiqlangan institut qoidasi eski bazadagi standart qiymatdan ustun (masalan, pass_score 56 → 40)
@@ -120,6 +130,11 @@ def init(con):
     reg = con.execute("SELECT id FROM users WHERE role='talabalar'").fetchone()
     if reg and not con.execute("SELECT COUNT(*) FROM retakes").fetchone()[0] and con.execute("SELECT COUNT(*) FROM contract_plan").fetchone()[0]:
         seed_retakes(con, rbac.ctx_for(con, reg[0]), "http://localhost:8000/")
+    # Sirtqi bo'lim — sirtqi talabalar uchun registrator: ogohlantirish xatlari uning navbatiga (bir martalik ko'chirish, idempotent)
+    con.execute(f"""UPDATE ops_tasks SET assignee_role='sirtqi' WHERE status='yangi' AND assignee_role='talabalar'
+                    AND kind='xat' AND case_id IN (SELECT id FROM ops_cases WHERE rule IN ({','.join(repr(r) for r, _ in SIRTQI_ROUTE)}))
+                    AND student_id IN (SELECT id FROM students WHERE study_form='sirtqi')""")
+    con.commit()
     with _lock:   # call-markaz navbati darhol kunlarga taqsimlansin (agentlar skaneri va panel birinchi so'rovdayoq to'g'ri raqam ko'radi)
         schedule_calls(con); con.commit()
 
@@ -238,11 +253,11 @@ def _signals(con, today):
                         "need_now": need - s["paid_amount"], "debt_total": s["contract_amount"] - s["paid_amount"], "days": days})
                 break
     unx = _unexcused_sql(P, today)
-    th = [(3, P["att_reprimand_hours"]), (2, P["att_letter_hours"]), (1, P["att_call_hours"])]
+    rep_h = P["att_reprimand_hours"]
     for r in db.rows(con, f"""SELECT a.student_id, SUM(a.hours) h FROM absences a JOIN students s ON s.id=a.student_id
                               WHERE s.status='faol' AND {unx} GROUP BY a.student_id"""):
-        lvl = next((l for l, t in th if r["h"] >= t), 0)
-        if lvl: out[f"{r['student_id']}:davomat"] = (r["student_id"], "davomat", lvl, {"hours": r["h"], "next": next((t for l, t in sorted(th) if t > r["h"]), None)})
+        lvl = davomat_level(r["h"], P)
+        if lvl: out[f"{r['student_id']}:davomat"] = (r["student_id"], "davomat", lvl, {"hours": r["h"], "next": None if lvl >= 3 else rep_h})
     cut = today - dt.timedelta(days=int(P["medical_doc_days"]))
     for r in db.rows(con, """SELECT a.student_id, a.id, a.reason, a.end, a.hours FROM absences a JOIN students s ON s.id=a.student_id
                              WHERE s.status='faol' AND a.doc_status='kutilmoqda' ORDER BY a.end"""):
@@ -277,12 +292,19 @@ def _signals(con, today):
                                                            {"retake_id": r["id"], "subject": r["subject"], "due_at": r["due_at"], "hours_left": round(hrs, 1)})
     return out
 
+def davomat_level(h, P) -> int:
+    """Sababsiz soatlar zinapoyasi: hayfsan — chegaradan OSHSA (48 → 49+), xat va qo'ng'iroq — chegaraga yetsa (30+)."""
+    if h > P["att_reprimand_hours"]: return 3
+    if h >= P["att_letter_hours"]: return 2
+    if h >= P["att_call_hours"]: return 1
+    return 0
+
 # qoida + daraja -> topshiriqlar: (tur, rol, muddat soatda)
 PLAN = {
     ("kontrakt", 2): [("qongiroq", "call_center", 8)],
     ("kontrakt", 3): [("qongiroq", "call_center", 8), ("xat", "talabalar", 48)],
     ("davomat", 1): [("qongiroq", "call_center", 24)],
-    ("davomat", 2): [("xat", "talabalar", 48)],
+    ("davomat", 2): [("qongiroq", "call_center", 24), ("xat", "talabalar", 48)],   # 30 soat: qo'ng'iroq + ogohlantirish xati
     ("davomat", 3): [("buyruq", "talabalar", 72), ("suhbat", "tyutor", 48)],
     ("hujjat", 1): [("hujjat", "tyutor", 24)],
     ("hujjat", 2): [("hujjat", "tyutor", 8)],
@@ -292,8 +314,11 @@ PLAN = {
     ("tatil", 2): [("buyruq", "talabalar", 72)],
     ("tatil", 3): [("buyruq", "talabalar", 24)],
     ("otrabotka", 1): [("qongiroq", "call_center", 4)],
-    ("otrabotka", 2): [("suhbat", "tyutor", 24)],
+    ("otrabotka", 2): [("suhbat", "tyutor", 24), ("qongiroq", "call_center", 8)],   # muddat o'tdi: tyutor ogohlantiradi, call-markaz qo'ng'iroq qiladi
 }
+# Sirtqi ta'lim talabalari bo'yicha Registrator ofisi topshiriqlaridan Sirtqi bo'limga o'tadiganlari (qoida, tur).
+# Kontrakt xati (moliya), hayfsan va talabalar harakati buyruqlari loyihasi — institut darajasida, Registrator ofisida qoladi.
+SIRTQI_ROUTE = {("akademik", "xat"), ("davomat", "xat")}
 TITLE = {
     ("kontrakt", "qongiroq"): "Kontrakt to'lovi bo'yicha qo'ng'iroq", ("kontrakt", "xat"): "Ota-onaga qarzdorlik xati",
     ("davomat", "qongiroq"): "Davomat bo'yicha qo'ng'iroq", ("davomat", "xat"): "Davomat bo'yicha ogohlantirish xati",
@@ -301,7 +326,7 @@ TITLE = {
     ("hujjat", "hujjat"): "Sababli qoldirish hujjatini so'rash", ("akademik", "suhbat"): "Tyutor suhbati: o'zlashtirish",
     ("akademik", "xat"): "O'zlashtirish bo'yicha ogohlantirish xati", ("akademik", "qongiroq"): "O'zlashtirish bo'yicha qo'ng'iroq",
     ("tatil", "qongiroq"): "Akademik ta'til tugashi haqida eslatma", ("tatil", "buyruq"): "Ta'tildan qaytish buyrug'i loyihasi",
-    ("otrabotka", "qongiroq"): "Otrabotka muddati eslatmasi", ("otrabotka", "suhbat"): "Otrabotka muddati o'tdi: tyutor",
+    ("otrabotka", "qongiroq"): "Otrabotka muddati eslatmasi", ("otrabotka", "suhbat"): "Otrabotka muddati o'tdi: tyutor ogohlantirsin",
 }
 
 def _dmy(d): return f"{d[8:10]}.{d[5:7]}.{d[:4]}" if d and len(d) >= 10 else d
@@ -322,7 +347,7 @@ def script(rule, kind, facts, s, P):
                "Sana aytilsa — «Va'da berdi» natijasini o'sha sana bilan belgilang: tizim muddat o'tganda o'zi qayta eslatadi."]
     elif rule == "davomat":
         say = [f"Assalomu alaykum, {name}. ISFT institutining Registrator ofisidan qo'ng'iroq qilyapmiz.",
-               f"Joriy semestrda {facts['hours']} soat dars sababsiz qoldirilgan." + (f" {int(facts['next'])} soatga yetsa, keyingi bosqich choralari qo'llaniladi." if facts.get("next") else ""),
+               f"Joriy semestrda {facts['hours']} soat dars sababsiz qoldirilgan." + (f" {int(facts['next'])} soatdan oshsa, hayfsan e'lon qilish masalasi ko'riladi." if facts.get("next") else " Hayfsan chegarasidan oshgan."),
                "Sababini so'rang. Kasallik yoki xizmat safari bo'lsa — hujjatni 3 kun ichida tyutorga topshirish kerakligini ayting.",
                "Muammo bo'lsa (ish, oilaviy holat) — tyutor bilan uchrashuv belgilang."]
     elif rule == "akademik":
@@ -337,14 +362,36 @@ def script(rule, kind, facts, s, P):
                "Hujjat kelsa — «Hujjat keldi», kelmasa — «Hujjat yo'q» deb belgilang."]
     elif rule == "tatil":
         say = [f"Akademik ta'til ({facts['order_no']}) {facts['end']}da tugaydi" + (" — muddat o'tgan." if facts["days"] < 0 else f" ({facts['days']} kun qoldi)."),
-               "O'qishga qaytish arizasi va kerakli hujjatlarni (tibbiy xulosa va h.k.) eslating; talaba ikki tomonga borib yurmasligi uchun ro'yxatni aniq ayting."]
+               "O'qishga qaytish arizasi va kerakli hujjatlarni (tibbiy xulosa va h.k.) eslating; talaba ikki tomonga borib yurmasligi uchun ro'yxatni aniq ayting.",
+               "Qaytish kursi, guruh va o'quv rejalaridagi farq (akademik farq fanlari) bo'yicha Registrator ofisiga oldindan kelishini so'rang.",
+               "Kontrakt asosida o'qisa — qaytish semestri uchun to'lov jadvalini buxgalteriyadan aniqlab olishini eslating."]
+        if kind == "buyruq":
+            say.append("Ariza kelgach «Ta'tildan qaytish» buyrug'i loyihasini tayyorlang (Hujjatlar markazi → talabalar harakati: qayta tiklash). "
+                       "Ariza → buyruq oqimi buyruqlar modulida yuritilsa — shu topshiriq o'sha arizaga bog'lanadi.")
     elif rule == "otrabotka":
-        say = [f"«{facts['subject']}» fanidan otrabotka varaqasi muddati: {_dmy(facts['due_at'])}, soat {facts['due_at'][11:16]}.",
+        late = (facts.get("hours_left") or 0) < 0
+        say = [f"«{facts['subject']}» fanidan otrabotka varaqasi muddati: {_dmy(facts['due_at'])}, soat {facts['due_at'][11:16]}"
+               + (" — MUDDAT O'TDI, varaqa hali qaytarilmagan." if late else "."),
                f"Varaqani o'qituvchiga imzolatib, Registrator ofisiga ({AR.REGISTRAR_ROOMS_TEXT}) topshirishni eslating."]
+        if late:
+            say.append("Sababini so'rang: o'qituvchi topilmadimi, talaba kelmadimi? Kerak bo'lsa yangi varaqa (yangi muddat) Registrator ofisida beriladi.")
     tone = ["Hurmat bilan gapiring, ayblamang; avval sababini so'rang.", "Aniq sana va keyingi qadamni kelishing; va'dani tizimga kiriting.",
             "Shaxsiy ma'lumotni faqat talabaning o'zi yoki tasdiqlangan qonuniy vakili bilan muhokama qiling."]
     # Me'yoriy hujjatlar ro'yxatini institut kiritadi; u bo'lmaguncha havola O'YLAB TOPILMAYDI.
-    return {"say": say, "tone": tone, "basis": ["Me'yoriy hujjat havolasi institut tomonidan hali kiritilmagan — o'ylab topilmaydi."]}
+    return {"say": say, "tone": tone, "basis": ["Me'yoriy hujjat havolasi institut tomonidan hali kiritilmagan — o'ylab topilmaydi."] + BASIS.get(rule, [])}
+
+# Umumiy huquqiy asos — aniq qaror raqamlari O'YLAB TOPILMAYDI; institut yuristi tasdiqlaguncha «manba aniqlashtiriladi».
+BASIS = {
+    "kontrakt": ["To'lov-kontrakt shartnomasi shartlari (manba aniqlashtiriladi)",
+                 "Oliy ta'lim muassasalarida to'lov-kontrakt asosida o'qitish tartibi bo'yicha Vazirlar Mahkamasi qarori (manba aniqlashtiriladi)"],
+    "davomat": ["Institut ichki tartib qoidalari va talabalar odob-axloq qoidalari (manba aniqlashtiriladi)",
+                "Oliy ta'lim muassasalarida o'quv jarayonini tashkil etish va talabalar intizomi bo'yicha Vazirlar Mahkamasi qarori (manba aniqlashtiriladi)"],
+    "akademik": ["Talabalar bilimini nazorat qilish va baholash tartibi to'g'risidagi nizom (manba aniqlashtiriladi)",
+                 f"Institut akademik qoidalari: o'tish bali {AR.PASS} (akademik qoidalar taqdimoti)"],
+    "hujjat": ["Institut ichki tartib qoidalari: sababli qoldirishni tasdiqlovchi hujjat muddati (manba aniqlashtiriladi)"],
+    "tatil": ["Talabalarga akademik ta'til berish va o'qishga qayta tiklash tartibi bo'yicha Vazirlar Mahkamasi qarori (manba aniqlashtiriladi)"],
+    "otrabotka": ["Institut akademik qoidalari: qayta topshirish (otrabotka) tartibi (manba aniqlashtiriladi)"],
+}
 
 def _log(con, case_id, task_id, sid, ctx, action, detail=""):
     con.execute("INSERT INTO ops_log(case_id,task_id,student_id,ts,user_id,user_name,action,detail) VALUES(?,?,?,?,?,?,?,?)",
@@ -354,6 +401,8 @@ def _log(con, case_id, task_id, sid, ctx, action, detail=""):
 def _make_tasks(con, case_id, sid, fac, rule, level, facts, s, P, now):
     made = 0
     for kind, role, hrs in PLAN.get((rule, level), []):
+        if role == SUPERVISOR and (rule, kind) in SIRTQI_ROUTE and s.get("study_form") == "sirtqi":
+            role = "sirtqi"   # sirtqi talaba: ogohlantirish xatini Sirtqi bo'lim tayyorlaydi
         if con.execute("SELECT 1 FROM ops_tasks WHERE case_id=? AND kind=? AND status='yangi'", (case_id, kind)).fetchone():
             continue   # shu holat bo'yicha ochiq topshiriq bor — dublikat yo'q
         sc = script(rule, kind, facts, s, P)
@@ -364,7 +413,7 @@ def _make_tasks(con, case_id, sid, fac, rule, level, facts, s, P, now):
         made += 1
     return made
 
-ROLE_T = {"call_center": "Call-markaz", "tyutor": "Tyutor", "talabalar": "Registrator ofisi"}
+ROLE_T = {"call_center": "Call-markaz", "tyutor": "Tyutor", "talabalar": "Registrator ofisi", "sirtqi": "Sirtqi bo'lim"}
 
 def evaluate(con, today=None) -> dict:
     """Qoidalarni ishga tushiradi. Idempotent: necha marta chaqirilsa ham bitta holat = bitta ochiq yozuv."""
@@ -372,7 +421,7 @@ def evaluate(con, today=None) -> dict:
         today = today or _today(); now = _now(); P = policy(con)
         sig = _signals(con, today)
         open_ = {c["key"]: c for c in db.rows(con, "SELECT * FROM ops_cases WHERE status='ochiq'")}
-        studs = {s["id"]: s for s in db.rows(con, "SELECT id, full_name, faculty_id FROM students")}
+        studs = {s["id"]: s for s in db.rows(con, "SELECT id, full_name, faculty_id, study_form FROM students")}
         st = {"opened": 0, "escalated": 0, "closed": 0, "tasks": 0, "followups": 0}
         for key, (sid, rule, lvl, facts) in sig.items():
             s = studs[sid]; fj = json.dumps(facts, ensure_ascii=False)
@@ -500,29 +549,61 @@ async def poller():
 def _guard(c: Ctx, action, detail=""):
     rbac.require(_con, c, OPS, action, detail)
 
+# Ko'lami va qoidalari cheklangan lavozimlar:
+#   Sirtqi bo'lim — sirtqi ta'lim talabalari uchun REGISTRATOR (Baratov): otrabotka varaqasi, bahoni tasdiqlash/qaytarish, topshiriqlar
+#     (kontrakt va buyruq loyihalaridan tashqari), ma'lumotnoma/transkript/ogohlantirish/chaqiruv xati/ruxsatnoma — faqat sirtqi talabalarga.
+#     Kontrakt holatlarini faqat O'QIYDI: sessiyaga qo'yish va imtihonga ruxsatnoma to'lov holatiga bog'liq. Institut bo'yicha
+#     kontrakt jamlanmasi (rbac CONTRACTS) ochilmaydi — faqat o'z ko'lamidagi talabaning to'lov holati.
+#   Kafedra mudiri — o'z kafedrasi guruhlari, o'quv qoidalari (o'qish); Buxgalteriya — faqat kontrakt qoidasi (o'qish);
+#   Imtihon bo'limi — o'zlashtirish va otrabotka holatlarini faqat ko'radi (varaqa bermaydi — bu Registrator ofisi ishi).
+SCOPED_VIEW = ("sirtqi", "kafedra", "buxgalteriya", "imtihon")
+RETAKE_ISSUERS = (SUPERVISOR, REG_STAFF, "tyutor", "sirtqi")   # otrabotka varaqasini beradi va skanni yuklaydi (sirtqi — faqat sirtqi talabalarga)
+RETAKE_APPROVERS = (SUPERVISOR, "sirtqi")            # bahoni tasdiqlaydi / varaqani qaytaradi (sirtqi — o'z ko'lamida)
+RETAKE_DENY = "⛔ Otrabotka varaqasini Registrator ofisi, tyutor yoki (sirtqi talabalarga) Sirtqi bo'lim beradi. Imtihon bo'limi faqat ko'radi."
+RULE_SCOPE = {"kafedra": ("akademik", "otrabotka", "davomat"), "buxgalteriya": ("kontrakt",),
+              "sirtqi": ("kontrakt", "akademik", "davomat", "hujjat", "tatil", "otrabotka"), "imtihon": ("akademik", "otrabotka")}
+
 def _scope_sql(c: Ctx, alias="s"):
-    if c.role.key in FULL_VIEW: return "1=1"
-    if c.role.key in FAC_VIEW: return f"{alias}.faculty_id={int(c.user['faculty_id'] or 0)}"
+    k = c.role.key
+    if k in FULL_VIEW: return "1=1"
+    if k in FAC_VIEW: return f"{alias}.faculty_id={int(c.user['faculty_id'] or 0)}"
+    if k == "sirtqi": return f"{alias}.study_form='sirtqi'"
+    if k == "kafedra": return f"{alias}.group_id IN (SELECT id FROM groups_ WHERE department_id={int(c.user['department_id'] or 0)})"
+    if k == "buxgalteriya": return f"{alias}.payment_type='kontrakt'"
+    if k == "imtihon": return "1=1"
     return "0=1"
+
+def _rule_sql(c: Ctx, col="oc.rule"):
+    rs = RULE_SCOPE.get(c.role.key)
+    return "1=1" if not rs else f"{col} IN ({','.join(repr(r) for r in rs)})"
+
+def _rule_ok(c: Ctx, rule) -> bool:
+    rs = RULE_SCOPE.get(c.role.key)
+    return not rs or rule in rs
 
 def _task_scope_sql(c: Ctx):
     k = c.role.key
     if k in FULL_VIEW: return "1=1"
     if k == "call_center": return "t.assignee_role='call_center'"
     if k == "tyutor": return f"t.assignee_role='tyutor' AND t.faculty_id={int(c.user['faculty_id'] or 0)}"
-    if k == "dekan": return f"t.faculty_id={int(c.user['faculty_id'] or 0)}"
+    if k in SCOPED_VIEW: return f"{_scope_sql(c, 's')} AND t.case_id IN (SELECT id FROM ops_cases oc2 WHERE {_rule_sql(c, 'oc2.rule')})"
     return "0=1"
 
 def _can_act(c: Ctx, t) -> bool:
     if t["status"] != "yangi": return False
     if c.role.key == SUPERVISOR: return True
+    if c.role.key == REG_STAFF: return t["assignee_role"] in (SUPERVISOR, "call_center", "tyutor") and t["kind"] != "buyruq"
     if c.role.key == "call_center": return t["assignee_role"] == "call_center"
     if c.role.key == "tyutor": return t["assignee_role"] == "tyutor" and t["faculty_id"] == c.user["faculty_id"]
+    if c.role.key == "sirtqi":   # sirtqi talabalar bo'yicha registrator: kontrakt va buyruq loyihasidan tashqari hammasi
+        if t["kind"] == "buyruq": return False
+        r = _con.execute("""SELECT oc.rule, s.study_form FROM ops_cases oc JOIN students s ON s.id=oc.student_id WHERE oc.id=?""", (t["case_id"],)).fetchone()
+        return bool(r) and r[1] == "sirtqi" and r[0] != "kontrakt"
     return False
 
 def _mask(phone, c: Ctx):
     if not phone: return None
-    return phone if c.role.key in ("call_center", "tyutor", SUPERVISOR) else phone[:8] + " *** ** " + phone[-2:]
+    return phone if c.role.key in ("call_center", "tyutor", SUPERVISOR, REG_STAFF) else phone[:8] + " *** ** " + phone[-2:]
 
 # ---------------------------------------------------------------------------------------------
 # O'qish
@@ -538,14 +619,18 @@ def summary(c: Ctx):
         return {"by_rule": by, "tasks": tasks, "closed_7d": 0, "done_today": done, "rules": RULES, "levels": LEVELS, "last_run": None,
                 "calls": calls_summary(_con)}
     w = "1=1" if c.role.key in FULL_VIEW + AGG_VIEW else _scope_sql(c)
+    rw = _rule_sql(c)
     by = db.rows(_con, f"""SELECT oc.rule, oc.level, COUNT(*) n FROM ops_cases oc JOIN students s ON s.id=oc.student_id
-                              WHERE oc.status='ochiq' AND {w} GROUP BY oc.rule, oc.level""")
+                              WHERE oc.status='ochiq' AND {w} AND {rw} GROUP BY oc.rule, oc.level""")
     tasks = db.rows(_con, f"""SELECT t.assignee_role role, COUNT(*) n, SUM(t.due_at < ?) late FROM ops_tasks t JOIN students s ON s.id=t.student_id
-                                WHERE t.status='yangi' AND {w} GROUP BY t.assignee_role""", (_iso(_now()),))
+                                WHERE t.status='yangi' AND {w} AND t.case_id IN (SELECT id FROM ops_cases oc WHERE {rw})
+                                GROUP BY t.assignee_role""", (_iso(_now()),))
     closed7 = _con.execute(f"""SELECT COUNT(*) FROM ops_cases oc JOIN students s ON s.id=oc.student_id WHERE oc.status='yopildi'
-                                 AND oc.closed_at>=? AND {w}""", (_iso(_now() - dt.timedelta(days=7)),)).fetchone()[0]
+                                 AND oc.closed_at>=? AND {w} AND {rw}""", (_iso(_now() - dt.timedelta(days=7)),)).fetchone()[0]
     last = _con.execute("SELECT value FROM ops_policy WHERE key='_last_run'").fetchone()
-    return {"by_rule": by, "tasks": tasks, "closed_7d": closed7, "rules": RULES, "levels": LEVELS,
+    serious = _con.execute(f"""SELECT COUNT(DISTINCT oc.student_id) FROM ops_cases oc JOIN students s ON s.id=oc.student_id
+                                 WHERE oc.status='ochiq' AND oc.level>=3 AND {w} AND {rw}""").fetchone()[0]
+    return {"by_rule": by, "tasks": tasks, "closed_7d": closed7, "rules": RULES, "levels": LEVELS, "serious_students": serious,
             "last_run": dt.datetime.fromtimestamp(last[0]).isoformat(timespec="seconds") if last else None,
             "calls": calls_summary(_con, w)}
 
@@ -558,7 +643,7 @@ def _student_row(c: Ctx, sid):
     return s
 
 def cases(c: Ctx, rule="", level=0, q="", faculty=0, limit=300):
-    w = [_scope_sql(c), "oc.status='ochiq'"]; a = []
+    w = [_scope_sql(c), "oc.status='ochiq'", _rule_sql(c)]; a = []
     if rule in RULES: w.append("oc.rule=?"); a.append(rule)
     if level: w.append("oc.level>=?"); a.append(int(level))
     if faculty: w.append("s.faculty_id=?"); a.append(int(faculty))
@@ -590,18 +675,27 @@ def tasks(c: Ctx, status="yangi", limit=200, rule="", kind=""):
 def student_card(c: Ctx, sid):
     s = _student_row(c, sid)
     f = student_facts(_con, sid)
-    cs = db.rows(_con, "SELECT * FROM ops_cases WHERE student_id=? ORDER BY status, level DESC, id DESC", (sid,))
+    cs = [x for x in db.rows(_con, "SELECT * FROM ops_cases WHERE student_id=? ORDER BY status, level DESC, id DESC", (sid,)) if _rule_ok(c, x["rule"])]
     for x in cs: x["facts"] = json.loads(x["facts"] or "{}")
-    ts = db.rows(_con, f"SELECT t.* FROM ops_tasks t WHERE t.student_id=? ORDER BY t.id DESC", (sid,))
+    ok_case = {x["id"] for x in cs}
+    ts = [x for x in db.rows(_con, f"SELECT t.* FROM ops_tasks t WHERE t.student_id=? ORDER BY t.id DESC", (sid,)) if c.role.key not in RULE_SCOPE or x["case_id"] in ok_case]
     for x in ts: x["script"] = json.loads(x["script"] or "{}"); x["can_act"] = _can_act(c, x)
     ab = db.rows(_con, "SELECT * FROM absences WHERE student_id=? ORDER BY start DESC", (sid,))
     log = db.rows(_con, "SELECT * FROM ops_log WHERE student_id=? ORDER BY id DESC LIMIT 60", (sid,))
+    if c.role.key == "buxgalteriya":   # faqat kontrakt: baholar, davomat va boshqa holatlar jurnali ko'rsatilmaydi
+        f = {}; ab = []; log = [x for x in log if x.get("case_id") in ok_case]
     for x in log: x["user_short"] = _short(x["user_name"])
-    rt = db.rows(_con, "SELECT * FROM retakes WHERE student_id=? ORDER BY id DESC", (sid,))
+    rt = [] if c.role.key == "buxgalteriya" else db.rows(_con, "SELECT * FROM retakes WHERE student_id=? ORDER BY id DESC", (sid,))
     lv = db.rows(_con, "SELECT * FROM student_leaves WHERE student_id=?", (sid,))
     debt = (s["contract_amount"] or 0) - (s["paid_amount"] or 0)
+    if c.role.key == "kafedra":   # kontrakt ruxsati yo'q — moliyaviy maydonlar ko'rsatilmaydi (sirtqi bo'lim o'z talabalarining to'lov holatini ko'radi)
+        debt = None; s = {k: v for k, v in s.items() if k not in ("contract_amount", "paid_amount")}
+    now = _now()
+    for r in rt: _retake_view(r, now)
+    reg = c.role.key in RETAKE_APPROVERS + (REG_STAFF,)
     return {"student": s, "facts": f, "debt": debt, "cases": cs, "tasks": ts, "absences": ab, "log": log, "retakes": rt, "leaves": lv,
-            "reasons": REASONS, "can_doc": c.role.key in (SUPERVISOR, "tyutor"), "can_retake": c.role.key in (SUPERVISOR, "tyutor")}
+            "reasons": REASONS, "can_doc": c.role.key in (SUPERVISOR, REG_STAFF, "tyutor", "sirtqi"), "can_retake": c.role.key in RETAKE_ISSUERS,
+            "can_permit": reg, "can_schedule": reg, "can_defer": c.role.key == SUPERVISOR}
 
 # ---------------------------------------------------------------------------------------------
 # Otrabotka
@@ -613,14 +707,28 @@ def _issue_sheet(con, ctx, rid, base_url):
     return r
 
 def retakes_list(c: Ctx):
-    rows = db.rows(_con, f"""SELECT r.*, s.full_name, g.name grp, f.name faculty, t.full_name teacher FROM retakes r
+    rows = db.rows(_con, f"""SELECT r.*, s.full_name, s.study_form, g.name grp, f.name faculty, t.full_name teacher,
+                              (SELECT gg.score FROM grades gg WHERE gg.student_id=r.student_id AND gg.subject=r.subject AND gg.semester=1) hemis_score FROM retakes r
                               JOIN students s ON s.id=r.student_id JOIN groups_ g ON g.id=s.group_id JOIN faculties f ON f.id=s.faculty_id
                               LEFT JOIN teachers t ON t.id=r.teacher_id WHERE {_scope_sql(c)}
                               ORDER BY CASE r.status WHEN 'topshirildi' THEN 0 WHEN 'berildi' THEN 1 ELSE 2 END, r.due_at""")
     now = _now()
-    for r in rows:
-        r["hours_left"] = round((dt.datetime.fromisoformat(r["due_at"]) - now).total_seconds() / 3600, 1) if r["status"] == "berildi" else None
+    for r in rows: _retake_view(r, now)
     return rows
+
+def retake_tone(hours_left):
+    """Otrabotka muddati rangi (Baratov): yashil → 2 kun qolganda sariq → 1 kun va kam / o'tgan — qizil."""
+    if hours_left is None: return None
+    return "red" if hours_left <= 24 else "amber" if hours_left <= 48 else "green"
+
+def _retake_view(r, now):
+    r["hours_left"] = round((dt.datetime.fromisoformat(r["due_at"]) - now).total_seconds() / 3600, 1) if r["status"] == "berildi" and r.get("due_at") else None
+    r["tone"] = retake_tone(r["hours_left"])
+    r["overdue"] = r["hours_left"] is not None and r["hours_left"] < 0
+    try: r["scan"] = json.loads(r.get("scan_meta") or "null")
+    except ValueError: r["scan"] = None
+    r.pop("scan_meta", None)
+    return r
 
 # ---------------------------------------------------------------------------------------------
 # HTTP
@@ -769,7 +877,7 @@ def api_policy(request: Request):
 @router.get("/api/ops/retakes")
 def api_retakes(request: Request):
     c = C(request); _view_guard(c, "talabalar markazi: otrabotkalar")
-    if c.role.key == "call_center": raise AccessDenied("⛔ Call-markaz uchun emas.")
+    if c.role.key in ("call_center", "buxgalteriya"): raise AccessDenied("⛔ Otrabotkalar bu lavozim uchun emas.")
     return retakes_list(c)
 
 class RetakeIn(BaseModel):
@@ -779,7 +887,7 @@ class RetakeIn(BaseModel):
 @router.post("/api/ops/retakes")
 def api_retake_new(body: RetakeIn, request: Request):
     c = C(request); _guard(c, "otrabotka varaqasi berish", f"#{body.student_id} {body.subject}")
-    if c.role.key not in (SUPERVISOR, "tyutor"): raise AccessDenied("⛔ Otrabotka varaqasini registrator yoki tyutor beradi.")
+    if c.role.key not in RETAKE_ISSUERS: raise AccessDenied(RETAKE_DENY)
     _student_row(c, body.student_id)
     g = db.one(_con, "SELECT subject, score, teacher_id FROM grades WHERE student_id=? AND subject=? AND semester=1", (body.student_id, body.subject))
     if not g: raise HTTPException(400, "Talabada bu fan yo'q")
@@ -802,12 +910,15 @@ class Upload(BaseModel):
 @router.post("/api/ops/retakes/{rid}/upload")
 def api_retake_upload(rid: int, body: Upload, request: Request):
     c = C(request); _guard(c, "otrabotka: skan yuklash", f"#{rid}")
-    if c.role.key not in (SUPERVISOR, "tyutor"): raise AccessDenied("⛔ Skanni registrator yoki tyutor yuklaydi.")
+    if c.role.key not in RETAKE_ISSUERS: raise AccessDenied("⛔ Skanni Registrator ofisi, tyutor yoki (sirtqi talabalarniki) Sirtqi bo'lim yuklaydi.")
     r = db.one(_con, "SELECT * FROM retakes WHERE id=?", (rid,))
     if not r: raise HTTPException(404)
     _student_row(c, r["student_id"])
-    if r["status"] not in ("berildi", "qaytarildi"): raise HTTPException(409, "Bu holatda yuklab bo'lmaydi")
-    m = re.match(r"^data:(application/pdf|image/jpeg|image/png);base64,(.+)$", body.data_url, re.S)
+    raw, ext = decode_upload(body.data_url)
+    return store_scan(c, r, raw, ext)
+
+def decode_upload(data_url: str):
+    m = re.match(r"^data:(application/pdf|image/jpeg|image/png);base64,(.+)$", data_url, re.S)
     if not m: raise HTTPException(400, "Faqat PDF, JPG yoki PNG")
     try: raw = base64.b64decode(m.group(2), validate=True)
     except binascii.Error: raise HTTPException(400, "Fayl buzilgan")
@@ -815,14 +926,30 @@ def api_retake_upload(rid: int, body: Upload, request: Request):
     ext = {"application/pdf": ".pdf", "image/jpeg": ".jpg", "image/png": ".png"}[m.group(1)]
     magic = {".pdf": b"%PDF", ".jpg": b"\xff\xd8", ".png": b"\x89PNG"}[ext]
     if not raw.startswith(magic): raise HTTPException(400, "Fayl turi mazmuniga mos emas")
+    return raw, ext
+
+def store_scan(c: Ctx, r, raw: bytes, ext: str, con=None):
+    """Skanni saqlaydi va o'qiydi (registrar_scan): ro'yxat raqami, imzo, ball. Natija retakes.scan_meta da."""
+    con = con or _con
+    if r["status"] not in ("berildi", "qaytarildi"): raise HTTPException(409, "Bu holatda yuklab bo'lmaydi")
+    from . import registrar_scan as RS
     UPLOADS.mkdir(parents=True, exist_ok=True)
-    name = f"{rid}-{secrets.token_hex(6)}{ext}"
+    name = f"{r['id']}-{secrets.token_hex(6)}{ext}"
     (UPLOADS / name).write_bytes(raw)
-    _con.execute("UPDATE retakes SET status='topshirildi', file=?, submitted_at=? WHERE id=?", (name, _iso(_now()), rid))
-    _log(_con, None, None, r["student_id"], c, "otrabotka varaqasi yuklandi", f"{r['subject']} · {len(raw) // 1024} KB")
-    _con.commit()
-    evaluate(_con)
-    return {"ok": True}
+    try:
+        meta = RS.read_scan(raw, ext)
+    except Exception as e:   # o'qish muvaffaqiyatsiz bo'lsa ham skan qabul qilinadi — registrator ko'z bilan tekshiradi
+        meta = {"method": "qo'lda", "reg_no": None, "signed": None, "score": None, "warnings": [f"Skanni o'qib bo'lmadi: {type(e).__name__}"]}
+    meta["match"] = (meta["reg_no"] == r["reg_no"]) if meta.get("reg_no") and r["reg_no"] else None
+    if meta["match"] is False: meta["warnings"].insert(0, f"Varaqadagi raqam {meta['reg_no']} — bu otrabotka {r['reg_no']} emas")
+    con.execute("UPDATE retakes SET status='topshirildi', file=?, submitted_at=?, scan_meta=? WHERE id=?",
+                (name, _iso(_now()), json.dumps(meta, ensure_ascii=False), r["id"]))
+    flags = "; ".join(meta.get("warnings") or []) or "imzo va ball aniqlandi"
+    _log(con, None, None, r["student_id"], c, "otrabotka varaqasi yuklandi",
+         f"{r['subject']} · {len(raw) // 1024} KB · o'qildi: {meta['method']}" + (f", ball {meta['score']}" if meta.get("score") is not None else "") + f" · {flags}")
+    con.commit()
+    evaluate(con)
+    return {"ok": True, "scan": meta}
 
 @router.get("/api/ops/retakes/{rid}/file")
 def api_retake_file(rid: int, request: Request):
@@ -838,20 +965,33 @@ def api_retake_file(rid: int, request: Request):
 class Approve(BaseModel):
     score: int = Field(..., ge=0, le=100)
     note: str = Field("", max_length=500)
+    force: bool = False          # skanda imzo aniqlanmagan, lekin registrator ko'z bilan tekshirdi (izoh majburiy)
+
+def _approver(c: Ctx, r):
+    if c.role.key not in RETAKE_APPROVERS: raise AccessDenied("⛔ Bahoni Registrator ofisi (sirtqi talabalarniki — Sirtqi bo'lim) tasdiqlaydi.")
+    _student_row(c, r["student_id"])   # sirtqi — faqat sirtqi talaba
 
 @router.post("/api/ops/retakes/{rid}/approve")
 def api_retake_approve(rid: int, body: Approve, request: Request):
     c = C(request); _guard(c, "otrabotka: bahoni tasdiqlash", f"#{rid} → {body.score}")
-    if c.role.key != SUPERVISOR: raise AccessDenied("⛔ Bahoni Registrator ofisi tasdiqlaydi.")
+    if c.role.key not in RETAKE_APPROVERS: raise AccessDenied("⛔ Bahoni Registrator ofisi (sirtqi talabalarniki — Sirtqi bo'lim) tasdiqlaydi.")
     with _lock:
         r = db.one(_con, "SELECT * FROM retakes WHERE id=?", (rid,))
         if not r: raise HTTPException(404)
+        _approver(c, r)
         if r["status"] != "topshirildi" or not r["file"]: raise HTTPException(409, "Avval imzolangan varaqa skanini yuklang")
+        sm = json.loads(r.get("scan_meta") or "{}")
+        if sm.get("match") is False and not body.force: raise HTTPException(409, f"Skandagi ro'yxat raqami ({sm.get('reg_no')}) bu otrabotkaga mos emas")
+        if sm.get("signed") is False and not body.force:
+            raise HTTPException(409, "Skanda o'qituvchi imzosi aniqlanmadi. Varaqani qaytaring yoki imzoni ko'z bilan tekshirib, izoh bilan tasdiqlang")
+        if body.force and len(body.note.strip()) < 3: raise HTTPException(400, "Qo'lda tasdiqlash sababini yozing")
         cur = _con.execute("UPDATE retakes SET status='tasdiqlandi', score_new=?, approved_at=?, approved_by=?, note=? WHERE id=? AND status='topshirildi'",
                            (body.score, _iso(_now()), c.user["id"], body.note.strip(), rid))
         if cur.rowcount != 1: raise HTTPException(409, "Allaqachon tasdiqlangan")
         _con.execute("UPDATE grades SET score=? WHERE student_id=? AND subject=? AND semester=1", (body.score, r["student_id"], r["subject"]))
-        _log(_con, None, None, r["student_id"], c, "otrabotka bahosi tasdiqlandi", f"{r['subject']}: {r['score_old']} → {body.score} (varaqa {r['reg_no']})")
+        _log(_con, None, None, r["student_id"], c, "otrabotka bahosi tasdiqlandi", f"{r['subject']}: {r['score_old']} → {body.score} (varaqa {r['reg_no']})"
+             + (f" · skandan o'qilgan ball: {sm['score']}" if sm.get("score") is not None else "")
+             + (f" · qo'lda tasdiqlandi: {body.note.strip()}" if body.force else ""))
         _con.commit()
     rbac.audit(_con, c, "baho o'zgartirildi (otrabotka)", OPS, True, f"talaba #{r['student_id']} {r['subject']}: {r['score_old']}→{body.score}")
     return {"ok": True, "engine": evaluate(_con)}
@@ -862,9 +1002,10 @@ class Return(BaseModel):
 @router.post("/api/ops/retakes/{rid}/return")
 def api_retake_return(rid: int, body: Return, request: Request):
     c = C(request); _guard(c, "otrabotka: qaytarish", f"#{rid}")
-    if c.role.key != SUPERVISOR: raise AccessDenied("⛔ Qaytarishni Registrator ofisi qiladi.")
+    if c.role.key not in RETAKE_APPROVERS: raise AccessDenied("⛔ Qaytarishni Registrator ofisi (sirtqi talabalarniki — Sirtqi bo'lim) qiladi.")
     r = db.one(_con, "SELECT * FROM retakes WHERE id=?", (rid,))
     if not r or r["status"] != "topshirildi": raise HTTPException(409, "Faqat topshirilgan varaqa qaytariladi")
+    _approver(c, r)
     due = _now() + dt.timedelta(days=int(policy(_con)["retake_days"]))
     _con.execute("UPDATE retakes SET status='berildi', note=?, due_at=? WHERE id=?", (body.note.strip(), _iso(due), rid))
     _log(_con, None, None, r["student_id"], c, "otrabotka varaqasi qaytarildi", body.note.strip())

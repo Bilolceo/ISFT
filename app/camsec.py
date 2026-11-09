@@ -2,7 +2,8 @@
 
 Tamoyillar (buzilmaydi):
   * Privacy-by-design: rasm/kadr saqlanmaydi — faqat voqea metama'lumoti (vaqt, kamera, tur, son, holat).
-  * Yuzni tanish va avtoraqam — bayroq ortida, standart holatda O'CHIQ (ZRU-547: alohida yozma rozilik va huquqiy asos).
+  * Yuzni tanish va avtoraqam — bayroq ortida (ZRU-547: alohida yozma rozilik va huquqiy asos). Yuz: faqat kirish kameralari,
+    faqat yozma roziligi bor shaxslar (app/facecam.py — "Kirish nazorati (Face ID)"); demo uchun bayroq yoqilgan, tasvirlar sintetik.
   * Talaba yoki xodim ismi kamera voqeasiga bog'lanmaydi: hisobotlar xona/bino/qavat bo'yicha, jamlangan holda.
   * Kamera boshqaruvi va voqealarni belgilash — faqat rektor va xo'jalik bo'limi; har amal audit jurnaliga yoziladi.
   * Voqea vaqti — server vaqti (Asia/Tashkent), kamera soati emas; soat farqi > 60 s — ogohlantirish.
@@ -19,7 +20,7 @@ router = APIRouter()
 _con = None
 _ctx = None
 
-FEATURE_FACE = os.getenv("ISFT_CORE_FEATURE_FACE", "0") == "1"    # demo va seed'da ishlatilmaydi
+FEATURE_FACE = os.getenv("ISFT_CORE_FEATURE_FACE", "1") == "1"    # Kirish nazorati (Face ID): app/facecam.py — faqat rozilik bergan shaxslar
 FEATURE_ANPR = os.getenv("ISFT_CORE_FEATURE_ANPR", "0") == "1"
 DEDUP_SEC = int(os.getenv("ISFT_CORE_CAM_DEDUP_SEC", "300"))      # bir xil voqea 5 daqiqa ichida — bitta yozuv (dup+1)
 DEDUP_LONG_SEC = 3600                                              # navbat / sig'im — soatiga bitta yozuv
@@ -28,6 +29,8 @@ OFFLINE_MIN = 10            # kamera shuncha daqiqa javob bermasa — avtomatik 
 OVER_PCT = 1.10             # sig'imning 110% dan oshsa — xo'jalik bo'limiga ogohlantirish
 UNSCHED_MIN = 20            # dars yo'q, xonada 20+ kishi
 MANAGERS = ("rektor", "xojalik")
+CAMERA_ADMINS = ("it_head",)          # AT bo'limi: faqat kamera texnik holati (oflayn, to'sish, fokus, proshivka) — xavfsizlik voqealari emas
+NO_SECURITY_VIEW = ("kengash",)       # Kuzatuv kengashi: bandlik/olomon statistikasi — ha; xavfsizlik voqealari va kameralar ro'yxati — yo'q
 
 # ---------------------------------------------------------------------------------------------
 # Voqealar siyosati: tur → (yorliq, kun ustuvorligi, tun ustuvorligi, kimga, guruh)
@@ -45,9 +48,9 @@ POLICY = {
     "qarovsiz_buyum": (2, 2, ("xojalik", "rektor"), "xavfsizlik"),
     "buyum_olindi": (3, 2, ("xojalik",), "xavfsizlik"),
     "harakat": (4, 3, ("xojalik",), "xavfsizlik"),
-    "kamera_yopildi": (2, 2, ("xojalik",), "kamera"),
-    "video_yoqoldi": (3, 3, ("xojalik",), "kamera"),
-    "kamera_siljidi": (3, 3, ("xojalik",), "kamera"),
+    "kamera_yopildi": (2, 2, ("xojalik", "it_head"), "kamera"),
+    "video_yoqoldi": (3, 3, ("xojalik", "it_head"), "kamera"),
+    "kamera_siljidi": (3, 3, ("xojalik", "it_head"), "kamera"),
     "olomon": (3, 3, ("xojalik",), "olomon"),
     "navbat": (3, 3, (), "olomon"),
     "sigim_oshdi": (3, 3, ("xojalik",), "olomon"),
@@ -83,6 +86,9 @@ MODELS = {
                                                      "fielddetection", "regionEntrance", "regionExiting", "loitering", "peopleGathering", "running",
                                                      "unattendedBaggage", "attendedBaggage", "objectRemoval", "personQueueDetection",
                                                      "peopleCounting", "regionPeopleCounting"], "counting": "bor (to'g'ridan-to'g'ri)"},
+    "iDS-2CD7146G0-IZS": {"family": "DeepinView (yuz)", "caps": ["VMD", "videoloss", "shelteralarm", "defocus", "linedetection", "fielddetection",
+                                                             "faceCapture", "faceContrast", "FDLib", "peopleCounting"],
+                          "counting": "bor (kirish chizig'i)"},
     "DS-2TD2617": {"family": "Termal", "caps": ["fireDetection", "smokeDetection", "TMA", "linedetection", "fielddetection", "VMD", "videoloss",
                                                "shelteralarm"], "counting": "yo'q"},
 }
@@ -91,7 +97,8 @@ CAP_LABEL = {"VMD": "harakat", "videoloss": "tasvir yo'qolishi", "shelteralarm":
              "regionEntrance": "hududga kirish/chiqish", "regionExiting": "hududdan chiqish", "loitering": "uzoq turib qolish",
              "peopleGathering": "to'planish", "running": "yugurish", "unattendedBaggage": "qarovsiz buyum", "attendedBaggage": "buyum olib ketish",
              "objectRemoval": "buyum olib ketish", "personQueueDetection": "navbat", "peopleCounting": "odam sanash",
-             "regionPeopleCounting": "hududda odam sanash", "fireDetection": "yong'in", "smokeDetection": "tutun", "TMA": "harorat"}
+             "regionPeopleCounting": "hududda odam sanash", "faceCapture": "yuzni ajratish", "faceContrast": "yuzni solishtirish (rozilik bilan)",
+             "FDLib": "yuz kutubxonasi", "fireDetection": "yong'in", "smokeDetection": "tutun", "TMA": "harorat"}
 
 def model_of(m: str) -> dict:
     for k, v in MODELS.items():
@@ -177,6 +184,10 @@ def process_event(con, cam: dict, raw: dict, t: dt.datetime | None = None):
     ev = HK.normalize(raw, keep_vmd=bool(room.get("guard")), face=FEATURE_FACE, anpr=FEATURE_ANPR)
     if not ev:
         con.commit(); return None
+    if ev["kind"] == "yuz":            # yuzni solishtirish (FPID) — Kirish nazorati moduli: rozilik, ko'lam, rasm muddati o'sha yerda
+        from . import facecam
+        r = facecam.ingest(con, cam, ev, t)
+        con.commit(); return r
     if ev["kind"] == "xodim_keldi":    # faqat yozma rozilik bergan xodim (ro'yxatda) — aks holda hech narsa saqlanmaydi
         ok = ev.get("subject") and db.one(con, "SELECT 1 x FROM face_consent WHERE employee_no=? AND revoked_at IS NULL", (ev["subject"],))
         if not ok:
@@ -337,11 +348,17 @@ def _view(con, ctx: Ctx, action, quiet=False):
     else:
         rbac.require(con, ctx, SPACES, action)
 
+def _security_view(con, ctx: Ctx, action, quiet=False):
+    _view(con, ctx, action, quiet)
+    if ctx.role.key in NO_SECURITY_VIEW:
+        rbac.audit(con, ctx, action, SPACES, False, "xavfsizlik voqealari — operativ ma'lumot")
+        raise AccessDenied("⛔ Kamera voqealari va holati — operativ ma'lumot (xo'jalik bo'limi, AT bo'limi va rektor). Kuzatuv kengashiga jamlangan bandlik statistikasi ochiq.")
+
 def _manage(con, ctx: Ctx, action, detail=""):
     rbac.require(con, ctx, SPACES, action, detail)
-    if ctx.role.key not in MANAGERS:
-        rbac.audit(con, ctx, action, SPACES, False, "faqat xo'jalik bo'limi va rektor")
-        raise AccessDenied("⛔ Kameralar va voqealarni faqat xo'jalik bo'limi va rektor boshqaradi. So'rov audit jurnaliga yozildi.")
+    if ctx.role.key not in MANAGERS + CAMERA_ADMINS:
+        rbac.audit(con, ctx, action, SPACES, False, "faqat xo'jalik bo'limi, AT bo'limi va rektor")
+        raise AccessDenied("⛔ Kameralar va voqealarni faqat xo'jalik bo'limi va rektor boshqaradi (kamera texnik holati — AT bo'limi). So'rov audit jurnaliga yozildi.")
 
 # ---------------------------------------------------------------------------------------------
 # D. Kamera salomatligi
@@ -397,7 +414,7 @@ def camera_health(con, t=None) -> list:
     return out
 
 def health(con, ctx: Ctx, quiet=False):
-    _view(con, ctx, "kameralar holati", quiet)
+    _security_view(con, ctx, "kameralar holati", quiet)
     t = now(); cams = camera_health(con, t)
     by_b = defaultdict(lambda: defaultdict(list))
     for c in cams: by_b[c["building"]][c["floor"] if c["floor"] is not None else -1].append(c)
@@ -417,14 +434,14 @@ def health(con, ctx: Ctx, quiet=False):
             "buildings": buildings, "problems": sorted([c for c in cams if c["level"] != "yashil"], key=lambda c: (c["level"] != "qizil", c["room"])),
             "models": [{"model": k, **{x: model_of(k)[x] for x in ("family", "counting")}, "n": v,
                         "caps": list(dict.fromkeys(CAP_LABEL.get(x, x) for x in model_of(k)["caps"]))} for k, v in models.most_common()],
-            "offline_after_min": OFFLINE_MIN, "can_manage": ctx.role.key in MANAGERS,
+            "offline_after_min": OFFLINE_MIN, "can_manage": ctx.role.key in MANAGERS + CAMERA_ADMINS,
             "flags": {"face": FEATURE_FACE, "anpr": FEATURE_ANPR}}
 
 # ---------------------------------------------------------------------------------------------
 # B. Xavfsizlik voqealari
 # ---------------------------------------------------------------------------------------------
 def events(con, ctx: Ctx, days=7, prio=0, status="", group="", limit=150, quiet=False):
-    _view(con, ctx, "kamera voqealari", quiet)
+    _security_view(con, ctx, "kamera voqealari", quiet)
     t = now(); since = iso(t - dt.timedelta(days=max(1, min(int(days), 31))))
     w, a = ["e.ts>=?"], [since]
     if prio: w.append("e.priority<=?"); a.append(int(prio))
@@ -440,7 +457,8 @@ def events(con, ctx: Ctx, days=7, prio=0, status="", group="", limit=150, quiet=
         r["priority"] = r["priority"] or 4
     if group: rows = [r for r in rows if r["group"] == group]
     st = _stats(rows)
-    return {"days": days, "events": rows[:limit], "stats": st, "can_manage": ctx.role.key in MANAGERS,
+    return {"days": days, "events": rows[:limit], "stats": st, "can_manage": ctx.role.key in MANAGERS + CAMERA_ADMINS,
+            "manage_groups": ["kamera"] if ctx.role.key in CAMERA_ADMINS else None,
             "status_label": STATUS_LABEL, "prio_label": PRIO_LABEL, "group_label": GROUP_LABEL, "dedup_sec": DEDUP_SEC}
 
 def _stats(rows):
@@ -462,6 +480,9 @@ def event_action(con, ctx: Ctx, eid: int, action: str, note: str = ""):
     _manage(con, ctx, f"kamera voqeasi: {ACTIONS[action]}", f"#{eid}")
     e = db.one(con, "SELECT e.*, r.name room, r.zone, r.id rid FROM cam_events e JOIN rooms r ON r.id=e.room_id WHERE e.id=?", (eid,))
     if not e: raise HTTPException(404, "Voqea topilmadi")
+    if ctx.role.key in CAMERA_ADMINS and (POLICY.get(e["kind"]) or (0, 0, (), ""))[3] != "kamera":
+        rbac.audit(con, ctx, f"kamera voqeasi: {ACTIONS[action]}", SPACES, False, f"#{eid} {e['kind']} — AT bo'limi faqat kamera texnik holati")
+        raise AccessDenied("⛔ AT bo'limi faqat kamera texnik holati voqealarini (to'sish, tasvir yo'qolishi, siljish) boshqaradi. So'rov audit jurnaliga yozildi.")
     t = now(); who = ctx.title
     if action == "tiket":
         if e.get("ticket_id"):

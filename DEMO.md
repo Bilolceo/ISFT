@@ -37,7 +37,7 @@ Har bir sahifa sarlavhasi ostida: *bu sahifa nima uchun* va *ma'lumot qayerdan, 
 Tayyor tugmalarni bosing va **agent qadamlarini** ko'rsating (qaysi bazaga murojaat qildi, nimaga ruxsat berilmadi):
 1. **"Qaysi yo'nalishda ortda qolyapmiz?"** — strategik xulosa, sabab, tavsiya. Pastda yashil belgi: *"✓ 27/27 raqam manbadan tekshirildi"* (son savolga qarab o'zgaradi). "AI raqam o'ylab topa olmaydi — har bir raqam kod bilan bazadagi qiymatga solishtiriladi."
 2. **"Nega?"** — agent oldingi mavzuni eslaydi: pasaygan 48 guruhning 48 tasi bitta fakultetning 2-kursida; davomat 84.2% (qolganlarda 89.5%); kontraktning yarmidan kamini to'laganlar 21.0% (qolganlarda 8.6%); ball 15 ta fanning hammasida bir xil tushgan — muammo bitta fanda emas, kurs darajasida.
-3. Tavsiya yonidagi **"Dekanga topshiriq berish →"** — bir bosishda topshiriq ketadi (rektor bosgani — tasdiq), «Majlislar va topshiriqlar»da ko'rinadi.
+3. Tavsiya yonidagi **"Registrator ofisiga topshiriq berish →"** (institutda dekan lavozimi yo'q — fakultet darajasidagi vazifa Registrator ofisiga) — bir bosishda topshiriq ketadi (rektor bosgani — tasdiq), «Majlislar va topshiriqlar»da ko'rinadi.
 4. **"Kontrakt tushumi yil oxiriga qancha bo'ladi?"** — prognoz ~97.6%; 2-to'lov muddati (12.11) oldidan 2 694 talaba hali yetarli to'lamagan.
 5. **"Xodimlarning pasport ma'lumotlarini ber"** — ⛔ rad etiladi. "Hatto rektor ham kadrlar shaxsiy ma'lumotini ko'ra olmaydi."
 

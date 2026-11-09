@@ -66,7 +66,7 @@ Kundalik bo'limlar tepada, kam ishlatiladiganlari yig'iladigan guruhda (`static/
 
 1. Telegram'da @BotFather → `/newbot` → token oling.
 2. `TELEGRAM_BOT_TOKEN=<token> ./run.sh`
-3. Botga yozing: `REKTOR Isft2026` (boshqa kodlar: OQUV, ILMIY, MOLIYA, YOSHLAR, DEKAN, KAFEDRA, USTOZ, QABUL, XALQARO…).
+3. Botga yozing: `REKTOR Isft2026` (boshqa kodlar: OQUV, ILMIY, MOLIYA, YOSHLAR, REGOFIS, KAFEDRA, USTOZ, QABUL, XALQARO…).
 4. Buyruqlar: `/bugun` (kunlik brifing), `/brifing` (Word hisobot), `/topshiriqlar`, `/xatlar` (portal: muddati yaqin xatlar), `/chiqish`.
    Portal muddat eslatmalari ish kunlari **09:00** da keladi (`ISFT_CORE_PORTAL_REMIND`). Eslatma ijrochiga, ijrochi bo'lmasa bo'lim rahbariga, yuboruvchiga va rezolyutsiya muallifiga yuboriladi.
 5. Rektor yordamchisi agenti har kuni **08:00** da ulangan rahbarlarga (rektor, kengash, prorektorlar) kunlik brifing yuboradi. Vaqtni o'zgartirish: `ISFT_CORE_BRIEF_TIME=07:30`. Savollarga javob — veb-suhbatdagi agent bilan bir xil (raqamlar tekshiriladi).
@@ -106,14 +106,14 @@ Menyu: **Ish jarayonlari → Hujjatlar markazi** (rasmiy hujjat chiqarish; tahli
 
 | Bo'lim | Hujjatlar |
 |---|---|
-| Talabalar va dekanat | O'qish joyidan ma'lumotnoma (uz/en, guruh bo'yicha ommaviy), akademik ma'lumotnoma (transkript), kontrakt qarzdorligi bo'yicha ota-onaga xat (guruh/fakultet bo'yicha paket), amaliyot yo'llanmasi (qaytarma qismi bilan) |
+| Talabalar va Registrator ofisi | O'qish joyidan ma'lumotnoma (uz/en, guruh bo'yicha ommaviy), akademik ma'lumotnoma (transkript), kontrakt qarzdorligi bo'yicha ota-onaga xat (guruh/fakultet bo'yicha paket), amaliyot yo'llanmasi (qaytarma qismi bilan) |
 | Buyruqlar | Talabalar harakati (akademik ta'til, ko'chirish, chetlashtirish, tiklash), mehnat ta'tili — **rektor imzosidan keyin kuchga kiradi** |
 | O'quv jarayoni | Yakuniy nazorat qaydnomasi (fan yoki butun guruh paketi), akademik qarzdorlar ro'yxati, o'quv yuklama taqsimoti |
 | Rektorat va ijro nazorati | Majlis bayonnomasi, muddati o'tgan topshiriqlar bo'yicha ijro xatlari (paket), xizmat xati (mahalliy AI matn tuzadi) |
 | Kadrlar / Xalqaro | Ish joyidan ma'lumotnoma, invitation letter (viza uchun) |
 
 Har bir hujjatda: ISFT rasmiy blanki (isft.uz ranglari), ro'yxat raqami (`MT-26/0001`), QR-kod → `/verify/KOD` sahifasi
-(haqiqiy / imzolangan / bekor qilingan; shaxsiy ma'lumot qisqartirilgan). Lavozim va ko'lam bo'yicha ruxsat (dekan — faqat o'z fakulteti,
+(haqiqiy / imzolangan / bekor qilingan; shaxsiy ma'lumot qisqartirilgan). Lavozim va ko'lam bo'yicha ruxsat (tyutor — faqat o'z fakulteti,
 o'qituvchi — faqat o'z fanlari), har bir amal audit jurnalida. Fayllar: `data/docs/`.
 
 **Rasmiy logo:** `static/brand/logo.png` ga qo'yilsa, barcha hujjatlar va tekshiruv sahifasida avtomatik ishlatiladi
@@ -130,7 +130,7 @@ o'qituvchi — faqat o'z fanlari), har bir amal audit jurnalida. Fayllar: `data/
 | Modul | Xodim | Ommaviy sahifa (login'siz) |
 |---|---|---|
 | Xona QR nosozliklari | Xo'jalik va texnik bo'lim, rektor, yoshlar prorektori | `/q/<xona-kodi>` — muammo turi, izoh, rasm (EXIF tozalanadi) |
-| Yagona murojaat + hodisalar | Talabalar bo'limi, o'quv prorektori, dekan (o'z fakulteti), rektor | `/m` — erkin matn → toifa + mas'ul bo'lim avtomatik |
+| Yagona murojaat + hodisalar | Registrator ofisi, o'quv prorektori, rektor | `/m` — erkin matn → toifa + mas'ul bo'lim avtomatik |
 | Tadbir QR qatnashuvi | Yoshlar prorektori, talabalar bo'limi, rektor | `/t/<tadbir-kodi>` — HEMIS ID bilan belgilash (ro'yxat ochiq bo'lsa) |
 
 - Tasniflash — kalit so'zlarga asoslangan qoidalar (tez, tushuntirib bo'ladigan). Bir xil tizim nosozligi bo'yicha 6 soat ichida ≥3 murojaat → bitta hodisa.
@@ -146,7 +146,7 @@ o'qituvchi — faqat o'z fanlari), har bir amal audit jurnalida. Fayllar: `data/
 - ⚠️ Haqiqiy kamerada sinalmagan: XML element nomlari (`enterCount`/`exitCount`) forum va hujjat asosida; birinchi ulanishda "Tekshirish" tugmasi bilan tasdiqlang.
 
 ## Kod tekshiruvi (2026-11-05)
-Backend va frontend mustaqil ko'rib chiqildi; tuzatildi: hujjat qidiruvida rol tekshiruvi yo'qligi (talaba HEMIS ID sizishi), buzuq sana butun panelni yiqitishi, "Moliya fakulteti dekani" → moliya prorektoriga ketishi, dekanning umumiy hodisani boshqa fakultetlar nomidan yopishi, imzolangan buyruqni muallif bekor qilishi, AI o'chiq paytda bayonnoma tahlili, ikki marta bosish, "Yuklanmoqda…" da qotib qolish, qorong'i rejim kontrasti, blur sabab sekinlik. Regressiya: `scratchpad/regress.py` — 28/28.
+Backend va frontend mustaqil ko'rib chiqildi; tuzatildi: hujjat qidiruvida rol tekshiruvi yo'qligi (talaba HEMIS ID sizishi), buzuq sana butun panelni yiqitishi, "Moliya fakulteti dekani" → moliya prorektoriga ketishi (endi — Registrator ofisiga), fakultet ko'lamidagi lavozimning umumiy hodisani boshqa fakultetlar nomidan yopishi, imzolangan buyruqni muallif bekor qilishi, AI o'chiq paytda bayonnoma tahlili, ikki marta bosish, "Yuklanmoqda…" da qotib qolish, qorong'i rejim kontrasti, blur sabab sekinlik. Regressiya: `scratchpad/regress.py` — 28/28.
 
 ## Sanalar
 Yagona sana manbai — `services.TODAY = date.today()`. Seed hikoyasi 2026-11-04 ga nisbatan yozilgan; `app/dateshift.py` seed oxirida barcha sanalarni (majlis matnlaridagi "13.10.2026", "15-noyabrgacha" ham) bugungi kunga suradi. Har kuni ertalab `python -m app.seed` — hikoya (3 ta muddati o'tgan topshiriq, 23/47 kunda tugaydigan shartnomalar) o'sha kunga moslashadi.

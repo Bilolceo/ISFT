@@ -1,0 +1,201 @@
+/* «Buyruqlar» (orders.js). Faqat umumiy tokenlar (style.css) — qorong'i rejim avtomatik. */
+#v-orders{min-width:0}
+#v-orders h4{margin:0 0 10px;font-size:14.5px;font-weight:750;color:var(--ink);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+#v-orders h4 .muted{font-weight:600;font-size:12.5px}
+#v-orders .bad{color:var(--bad)}
+.or-card{padding:16px 18px;margin-bottom:14px}
+.or-mt{margin-top:16px!important}
+
+/* yorliqlar */
+.or-tabs{display:flex;gap:4px;padding:4px;border-radius:14px;background:var(--surface-2);border:1px solid var(--line);margin-bottom:14px;overflow-x:auto;scrollbar-width:none}
+.or-tabs::-webkit-scrollbar{display:none}
+.or-tabs button{flex:0 0 auto;display:inline-flex;align-items:center;gap:6px;border:0;background:transparent;color:var(--muted);font:inherit;font-size:13px;font-weight:700;padding:8px 12px;border-radius:10px;cursor:pointer;white-space:nowrap}
+.or-tabs button:hover{color:var(--ink)}
+.or-tabs button.on{background:var(--seg-on);color:var(--ink);box-shadow:0 1px 3px rgba(16,24,40,.12)}
+.or-tabs button:focus-visible{outline:2px solid var(--teal);outline-offset:1px}
+
+.or-pend{display:flex;align-items:center;gap:12px;width:100%;text-align:left;padding:12px 16px;margin-bottom:14px;border-radius:var(--r);border:1px solid transparent;
+  background:var(--brand-soft);color:var(--brand);font:inherit;cursor:pointer}
+.or-pend span{flex:1;display:flex;flex-direction:column;min-width:0}.or-pend b{font-weight:750;color:var(--ink)}.or-pend small{color:var(--ink-2);font-size:12px}
+.or-pend:hover{border-color:var(--brand)}.or-pend:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+
+/* saralash */
+.or-filters{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:6px}
+.or-filters select{flex:0 1 200px;padding:9px 12px;border:1px solid var(--line-2);border-radius:12px;background:var(--surface);font-size:13.5px;min-width:0;max-width:100%}
+.or-search{flex:1 1 240px;display:flex;align-items:center;gap:8px;padding:0 12px;border:1px solid var(--line-2);border-radius:12px;background:var(--surface);color:var(--muted);min-width:0}
+.or-search:focus-within{border-color:var(--teal)}
+.or-search input{flex:1;min-width:0;border:0!important;background:transparent!important;padding:9px 0!important;font-size:13.5px;outline:none;box-shadow:none!important}
+.or-cnt{margin:6px 2px 8px}
+
+/* reyestr qatorlari */
+.or-list{display:flex;flex-direction:column}
+.or-row{display:grid;grid-template-columns:150px minmax(0,1fr) 70px 150px;gap:12px;align-items:center;text-align:left;padding:11px 8px;border:0;border-bottom:1px solid var(--line);
+  background:transparent;color:inherit;font:inherit;cursor:pointer;border-radius:10px;width:100%}
+.or-row:hover{background:var(--hover)}.or-row:focus-visible{outline:2px solid var(--teal);outline-offset:-2px}
+.or-row>span{display:flex;flex-direction:column;min-width:0}
+.or-row b{font-weight:700;color:var(--ink);overflow-wrap:anywhere}
+.or-row small{font-size:12px;color:var(--muted);line-height:1.4}
+.or-rn{text-align:right}.or-rn b{font-variant-numeric:tabular-nums}
+.or-rs{align-items:flex-end}
+.or-kind{display:inline-block;font-size:11px;font-weight:700;padding:1px 8px;border-radius:99px;background:var(--teal-soft);color:var(--teal);line-height:1.6;width:max-content;max-width:100%}
+.or-ret{color:var(--warn);font-style:normal;font-weight:700}
+.or-st{display:inline-flex;align-items:center;font-size:12px;font-weight:700;padding:3px 10px;border-radius:99px;white-space:nowrap;background:var(--surface-2);color:var(--ink-2)}
+.or-st.draft{background:var(--surface-2);color:var(--ink-2);border:1px solid var(--line-2)}
+.or-st.wait{background:var(--warn-soft);color:var(--warn)}
+.or-st.ok{background:var(--ok-soft);color:var(--ok)}
+.or-st.bad{background:var(--bad-soft);color:var(--bad)}
+.or-st.off{background:var(--surface-2);color:var(--muted);text-decoration:line-through}
+.or-empty{display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center;padding:28px 12px;color:var(--muted)}
+.or-empty b{color:var(--ink);font-weight:700}
+
+/* buyruq sahifasi */
+.or-dhead{margin-bottom:10px}
+.or-top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap}
+.or-ttl{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1}
+.or-ttl h3{margin:0;font-size:18px;line-height:1.3;overflow-wrap:anywhere}
+.or-steps{list-style:none;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:16px 0 4px;padding:0}
+.or-steps li{display:flex;flex-direction:column;gap:2px;padding-top:10px;border-top:3px solid var(--line-2);min-width:0}
+.or-steps li.done{border-top-color:var(--teal)}
+.or-steps i{display:none}
+.or-steps b{font-size:12.5px;font-weight:700;color:var(--ink-2)}.or-steps li.done b{color:var(--ink)}
+.or-steps small{font-size:11.5px;color:var(--muted);overflow-wrap:anywhere}
+.or-note{display:flex;gap:8px;align-items:flex-start;font-size:13px;line-height:1.5;padding:9px 12px;border-radius:12px;background:var(--surface-2);color:var(--ink-2);margin-top:10px}
+.or-note svg{flex:none;margin-top:2px}
+.or-note.warn{background:var(--warn-soft);color:var(--ink)}.or-note.warn svg{color:var(--warn)}
+.or-note.bad{background:var(--bad-soft);color:var(--ink)}.or-note.bad svg{color:var(--bad)}
+.or-note.ok{background:var(--ok-soft);color:var(--ink)}.or-note.ok svg{color:var(--ok)}
+.or-note a{color:var(--teal);font-weight:650}
+.or-acts{margin-top:14px}
+.or-acts a.btn{text-decoration:none}
+.or-confirm{margin-top:12px;padding:12px 14px;border-radius:14px;border:1px solid var(--brand);background:var(--brand-soft);display:flex;flex-direction:column;gap:10px;color:var(--ink);font-size:13.5px}
+
+.or-grid{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:14px;align-items:start}
+.or-grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;align-items:start}
+.or-h{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.or-h h4{margin:0}
+
+.or-form{display:flex;flex-direction:column;gap:10px}
+.or-l{display:flex;flex-direction:column;gap:5px;font-size:12.5px;font-weight:650;color:var(--ink-2);min-width:0}
+.or-l input,.or-l select,.or-l textarea{width:100%;font-size:14px;padding:9px 11px;border:1px solid var(--line-2);border-radius:10px;background:var(--surface);color:var(--ink);min-width:0;box-sizing:border-box}
+.or-l textarea{min-height:0;resize:vertical}
+.or-l input:focus-visible,.or-l select:focus-visible,.or-l textarea:focus-visible{outline:2px solid var(--teal);outline-offset:1px}
+.or-dl{display:grid;grid-template-columns:auto minmax(0,1fr);gap:6px 12px;margin:0;font-size:13px}
+.or-dl dt{color:var(--muted);font-weight:600}.or-dl dd{margin:0;color:var(--ink);overflow-wrap:anywhere}
+
+/* talabalar */
+.or-items{display:flex;flex-direction:column}
+.or-it{display:flex;gap:10px;align-items:flex-start;padding:10px 6px;border-bottom:1px solid var(--line);border-radius:8px}
+.or-it.sel{background:var(--sel)}
+.or-it.unm{background:var(--bad-soft)}
+.or-cb{margin-top:4px;width:16px;height:16px;flex:none;accent-color:var(--teal)}
+.or-itm{flex:1;display:flex;flex-direction:column;gap:2px;min-width:0}
+.or-itm b{font-weight:650;color:var(--ink);overflow-wrap:anywhere}
+.or-itm small{font-size:12px;color:var(--muted)}
+.or-itm small em{font-style:normal;color:var(--warn);font-weight:700}
+.or-now{color:var(--teal)!important}
+.or-why{display:inline-flex;gap:4px;align-items:center;color:var(--bad)!important}.or-why.ok{color:var(--ok)!important}
+.or-fvs{display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:2px}
+.or-fv{font-size:12.5px;color:var(--ink-2);overflow-wrap:anywhere}.or-fv i{font-style:normal;color:var(--muted)}
+.or-eff{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:12.5px;margin-top:3px;color:var(--ink-2)}
+.or-eff s{color:var(--muted)}.or-eff b{color:var(--ok)}
+.or-ib{width:32px;height:32px;flex:none}
+.or-iedit{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:8px;padding:10px;border-radius:12px;background:var(--surface-2)}
+.or-iedit .row-actions{grid-column:1/-1}
+.or-pager{display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-top:10px;flex-wrap:wrap}
+.or-addbox{margin:4px 0 12px}
+.or-addr{display:flex;flex-direction:column;gap:4px;margin-top:6px;max-height:280px;overflow:auto}
+.or-pick{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:8px;align-items:center;text-align:left;padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:inherit;font:inherit;cursor:pointer}
+.or-pick:hover{border-color:var(--teal)}.or-pick b{font-weight:650;color:var(--ink);font-size:13.5px;overflow-wrap:anywhere}
+.or-pick small{grid-column:1;font-size:12px;color:var(--muted)}.or-pick svg{grid-row:1/3;grid-column:2;color:var(--teal)}
+
+/* versiyalar */
+.or-drop{display:flex;gap:10px;align-items:center;padding:12px 14px;border:1.5px dashed var(--line-2);border-radius:14px;cursor:pointer;color:var(--teal);margin-bottom:12px;background:var(--surface-3)}
+.or-drop span{display:flex;flex-direction:column;min-width:0}.or-drop b{color:var(--ink);font-size:13.5px;overflow-wrap:anywhere}.or-drop small{color:var(--muted);font-size:12px}
+.or-drop:hover,.or-drop:focus-within{border-color:var(--teal)}
+.or-drop.big{padding:22px 16px}
+.or-drop.sm{padding:9px 12px;margin:8px 0 0}
+.or-drop.busy{opacity:.6;pointer-events:none}
+.or-drop.busy b::after{content:" — yuklanmoqda…"}
+.or-vers{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.or-vers>li{padding:10px 12px;border-radius:12px;border:1px solid var(--line);display:flex;flex-direction:column;gap:3px;min-width:0}
+.or-vers>li.cur{border-color:var(--teal);box-shadow:0 0 0 1px var(--teal) inset}
+.or-vers>li>small{font-size:12px;color:var(--muted);overflow-wrap:anywhere}
+.or-vh{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.or-vh b{font-weight:750;color:var(--ink)}
+.or-cur{font-size:11px;font-weight:700;padding:1px 8px;border-radius:99px;background:var(--teal-soft);color:var(--teal)}
+.or-vd{margin-left:auto;display:flex;gap:6px;font-size:12px;font-weight:700;font-variant-numeric:tabular-nums}
+.or-vd i{font-style:normal;color:var(--ink-2)}.or-vd i.add,.or-dcol .add{color:var(--ok)}.or-vd i.rem,.or-dcol .rem{color:var(--bad)}
+.or-vers .row-actions{margin-top:4px}.or-vers .row-actions .btn{padding:4px 10px}
+.or-diff{margin-top:8px;padding:10px;border-radius:10px;background:var(--surface-2);display:flex;flex-direction:column;gap:8px}
+.or-dcol ul{list-style:none;margin:4px 0 0;padding:0;max-height:220px;overflow:auto;font-size:12.5px}
+.or-dcol li{padding:3px 0;border-bottom:1px solid var(--line);color:var(--ink)}.or-dcol li small{color:var(--muted)}
+.or-dcol li.add::before{content:"+ ";color:var(--ok);font-weight:800}.or-dcol li.rem::before{content:"− ";color:var(--bad);font-weight:800}
+.or-files,.or-log{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.or-files li,.or-log li{display:flex;flex-direction:column;gap:1px;font-size:13px;min-width:0}
+.or-files a{display:inline-flex;gap:6px;align-items:center;color:var(--teal);font-weight:650;overflow-wrap:anywhere}
+.or-files small,.or-log small{font-size:11.5px;color:var(--muted)}
+.or-log{max-height:360px;overflow:auto}
+.or-log li{padding-left:12px;border-left:2px solid var(--line-2)}
+.or-log b{font-weight:650;color:var(--ink)}.or-log span{color:var(--ink-2);font-size:12.5px;overflow-wrap:anywhere}
+
+/* ariza */
+.or-or{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12px;margin:4px 0 10px}
+.or-or::before,.or-or::after{content:"";flex:1;height:1px;background:var(--line)}
+.or-smp{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.or-smp li{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--line);border-radius:12px;flex-wrap:wrap}
+.or-smp li>span:first-child{display:flex;flex-direction:column;min-width:0;flex:1 1 180px}
+.or-smp b{font-size:13px;font-weight:650;color:var(--ink)}.or-smp small{font-size:12px;color:var(--muted)}
+.or-badges{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}
+.or-tag{display:inline-flex;font-size:11.5px;font-weight:700;padding:2px 9px;border-radius:99px;background:var(--surface-2);color:var(--ink-2);white-space:nowrap}
+.or-tag.ok{background:var(--ok-soft);color:var(--ok)}.or-tag.warn{background:var(--warn-soft);color:var(--warn)}
+.or-txt{margin:8px 0 12px}
+.or-txt summary{cursor:pointer;font-size:12.5px;color:var(--teal);font-weight:650}
+.or-txt textarea{width:100%;box-sizing:border-box;margin:8px 0;font-size:12.5px;line-height:1.5;padding:9px 11px;border:1px solid var(--line-2);border-radius:10px;background:var(--surface);color:var(--ink);min-height:120px}
+.or-cands{display:flex;flex-direction:column;gap:6px;margin-bottom:8px}
+.or-cand{display:flex;gap:10px;align-items:flex-start;padding:9px 11px;border:1px solid var(--line);border-radius:12px;cursor:pointer}
+.or-cand:has(input:checked){border-color:var(--teal);background:var(--teal-soft)}
+.or-cand input{margin-top:3px;accent-color:var(--teal)}
+.or-cand .or-why{color:var(--warn)!important}.or-cand .or-why.ok{color:var(--ok)!important}
+.or-cand span{display:flex;flex-direction:column;min-width:0}.or-cand b{font-size:13.5px;color:var(--ink);overflow-wrap:anywhere}.or-cand small{font-size:12px;color:var(--muted)}
+#orRGo{margin-top:12px}
+
+/* muvofiqlik auditi */
+.or-src{margin-bottom:12px}
+.or-tiles{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin-bottom:14px}
+.or-tile{display:flex;flex-direction:column;gap:2px;text-align:left;padding:12px 14px;border-radius:var(--r);background:var(--surface);border:1px solid var(--card-brd);box-shadow:var(--card-hi);font:inherit;color:inherit;cursor:pointer;min-width:0}
+.or-tile b{font-size:22px;font-weight:800;color:var(--bad);font-variant-numeric:tabular-nums;line-height:1.15}
+.or-tile span{font-size:12.5px;color:var(--ink-2);font-weight:600;line-height:1.3}
+.or-tile.zero b{color:var(--muted)}
+.or-tile.on{border-color:var(--teal);box-shadow:0 0 0 1px var(--teal) inset}
+.or-tile:hover{border-color:var(--line-2)}.or-tile:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+.or-issues{display:flex;flex-direction:column}
+.or-iss{border-bottom:1px solid var(--line);padding:10px 4px}
+.or-iss.open{background:var(--surface-3);border-radius:12px}
+.or-issh{display:flex;gap:12px;align-items:flex-start}
+.or-ik{flex:none;width:150px;font-size:11.5px;font-weight:700;padding:3px 9px;border-radius:99px;background:var(--bad-soft);color:var(--bad);line-height:1.4;text-align:center}
+.or-ik.no_transfer,.or-ik.leave_no_order{background:var(--warn-soft);color:var(--warn)}
+.or-ik.group_mismatch{background:var(--teal-soft);color:var(--teal)}
+.or-idet{font-size:13px;color:var(--ink-2);overflow-wrap:anywhere}
+.or-irefs{display:flex;flex-wrap:wrap;gap:4px 10px;font-size:12px}.or-irefs a{color:var(--teal);font-weight:650}
+.or-fix{margin:10px 0 2px 162px;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px}
+.or-fstep{display:flex;flex-direction:column;gap:8px;min-width:0}
+.or-fstep>b{font-size:13px;color:var(--ink)}
+
+/* jurnal */
+.or-tbl td{font-size:13px}.or-tbl td small{font-size:11.5px}
+.or-tbl s{color:var(--muted)}
+.or-tbl a{color:var(--teal);font-weight:650}
+.or-tbl tr.or-rev td{opacity:.65}
+
+@media (max-width:1180px){.or-tiles{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:1000px){.or-grid,.or-grid2{grid-template-columns:minmax(0,1fr)}.or-fix{margin-left:0}}
+@media (max-width:640px){
+  .or-row{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"no st" "t t" "n n";row-gap:4px}
+  .or-rno{grid-area:no}.or-rs{grid-area:st}.or-rt{grid-area:t}.or-rn{grid-area:n;flex-direction:row!important;gap:4px;text-align:left;align-items:baseline}
+  .or-tiles{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .or-steps{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .or-issh{flex-wrap:wrap}.or-ik{width:auto}.or-issh .or-itm{flex-basis:100%}
+  .or-fix{grid-template-columns:minmax(0,1fr)}
+  .or-iedit{grid-template-columns:minmax(0,1fr)}
+  .or-card{padding:14px}
+  .or-filters select{flex:1 1 100%}
+}

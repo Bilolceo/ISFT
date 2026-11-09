@@ -43,7 +43,96 @@ UNITS = {
     "kadrlar":      ("Kadrlar bo'limi", "kadrlar", [r"(?i)kadrlar bo'lim"]),
     "magistratura": ("Magistratura bo'limi", "magistratura", [r"(?i)magistratura bo'lim"]),
 }
-UNIT_OF_ROLE = {"it_staff": "it", **{v[1]: k for k, v in UNITS.items()}}
+UNIT_OF_ROLE = {"it_staff": "it", **{v[1]: k for k, v in UNITS.items()}}   # eski (rolga asoslangan) xarita — faqat agent_hub uchun qoldirildi
+
+# ---------------------------------------------------------------------------------------------
+# Yagona bo'limlar reestri: topshiriq navbatlari = Portal `org_units` (app/portal.py) — HAMMASI (rahbariyat, bo'limlar,
+# fakultet tyutorlari, kafedralar). Rahbar — org_units.head_user, xodimlar — users.unit (portal.members), kurator — org_units.curator.
+# Saqlash kaliti (tasks.unit): yuqoridagi 12 ta tarixiy bo'lim uchun ESKI kalit saqlanadi, qolganlari — org_units kaliti.
+#   Yagona farq: "registrator" (topshiriqlar) ↔ "talabalar" (Portal, Registrator ofisi). Bazadagi eski yozuvlar, UI
+#   (t.unit === "registrator") va testlar shu kalitga tayanadi — shuning uchun qiymatlar ko'chirilmaydi: rahbar/xodim/kuratorni
+#   aniqlashda chegarada org_key() bilan Portal kalitiga o'giriladi, Portal kalitidan task_key() bilan qaytariladi.
+# ---------------------------------------------------------------------------------------------
+ORG_ALIAS = {"registrator": "talabalar"}              # topshiriq kaliti → org_units kaliti
+TASK_ALIAS = {v: k for k, v in ORG_ALIAS.items()}     # org_units kaliti → topshiriq kaliti
+def org_key(unit): return ORG_ALIAS.get(unit, unit) if unit else None
+def task_key(org): return TASK_ALIAS.get(org, org) if org else None
+
+# Majlisdagi qisqa og'zaki shakllar (nomdan avtomatik yasaladiganlariga qo'shimcha). Kalit — org_units kaliti; katta-kichik harf farqsiz.
+SHORT_FORMS = {
+    "ilmiy_bolim": [r"ilmiy (?:tadqiqotlar )?bo'lim"],
+    "devonxona": [r"\bdevonxona"],
+    "marketing": [r"\bmarketing"],
+    "xarid": [r"\bxarid(?:lar)? bo'lim"],
+    "amaliyot": [r"\bamaliyot bo'lim"],
+    "sifat": [r"sifatni ta'minlash"],
+    "strategik": [r"\bstrategik (?:rivojlanish )?bo'lim"],
+    "yuridik": [r"\byuridik bo'lim"],
+    # institutda dekan lavozimi yo'q (Yevropa modeli): eski matnlardagi "dekan/dekanat" — fakultet darajasidagi vazifa → Registrator ofisi
+    "talabalar": [r"\bdekan\w*"],
+    "prorektor_oquv": [r"o'quv ishlari(?: bo'yicha)? prorektor"],
+    "prorektor_ilmiy": [r"ilmiy ishlar(?: va innovatsiyalar)?(?: bo'yicha)? prorektor"],
+    "prorektor_moliya": [r"moliya(?:[- ]iqtisod(?:iy)?)?(?: ishlari)?(?: bo'yicha)? prorektor"],
+    "prorektor_yoshlar": [r"yoshlar(?: masalalari)?(?: va ma'naviy-ma'rifiy ishlar)?(?: bo'yicha)?(?: birinchi)? prorektor"],
+}
+# matndan avtomatik tanilmaydi ("rektoratga hisobot bersin" — ijrochi rektorat emas); kerak bo'lsa kotib tahrirda tanlaydi
+NO_AUTO = {"rektorat", "kengash"}
+
+def _name_pats(u) -> list[str]:
+    """Bo'lim nomidan tanish belgilari: to'liq nom; "<kafedra> kafedrasi"; "<fakultet> (fakulteti) tyutor(lar)i"; "<nom> bo'limi"."""
+    n = _n(u["name"]).strip()
+    esc = lambda s: re.escape(s).replace(r"\ ", r"\s+")
+    pats = [esc(n)]
+    if u["group"] == "kafedra" and n.lower().endswith(" kafedrasi"):
+        pats.append(esc(n[:-len(" kafedrasi")]) + r"\s+kafedra")
+    elif u["group"] == "fakultet":
+        core = re.sub(r"\s+fakulteti(?:\s+tyutorlari)?$", "", n, flags=re.I)
+        pats += [esc(core) + r"(?:\s+fakulteti?)?\s+tyutor"]
+    elif u["group"] == "bolim":
+        m = re.match(r"(.+?)\s+bo'limi?$", n, re.I)
+        if m: pats.append(esc(m.group(1)) + r"\s+bo'lim")
+    return ["(?i)" + p for p in pats]
+
+_REG = {"sig": None, "val": None}
+def registry() -> dict:
+    """topshiriq kaliti → {key, org, name, group, curator, pats}; tartib — Portal tartibi (Rahbariyat, Bo'limlar, Fakultet tyutorlari, Kafedralar)."""
+    from . import portal as PT
+    us = PT.units(_con)
+    if _REG["sig"] is us: return _REG["val"]     # portal.units() 60 s keshlaydi — o'sha ro'yxat bo'lsa qayta yasalmaydi
+    out = {}
+    for u in us:
+        k = task_key(u["key"])
+        leg = UNITS.get(k)
+        pats = list(leg[2]) if leg else []       # eski belgilar (academic_rules va h.k.) saqlanadi
+        if u["key"] not in NO_AUTO:
+            pats += _name_pats(u) + ["(?i)" + p for p in SHORT_FORMS.get(u["key"], [])]
+        out[k] = {"key": k, "org": u["key"], "name": u["name"], "group": u["group"], "curator": u.get("curator"),
+                  "pats": [re.compile(p) for p in pats]}
+    for k, (name, _, pats) in UNITS.items():     # org_units da hali bo'lmasa ham eski kalitlar ishlayveradi
+        out.setdefault(k, {"key": k, "org": org_key(k), "name": name, "group": "bolim", "curator": None, "pats": [re.compile(p) for p in pats]})
+    _REG.update(sig=us, val=out)
+    return out
+
+def unit_name(k):
+    x = registry().get(k) if k else None
+    return x["name"] if x else None
+
+def unit_list():
+    """Tanlash ro'yxatlari uchun: Portal tartibida, guruh bilan (rahbariyat / bolim / fakultet / kafedra)."""
+    from . import portal as PT
+    gname = dict(PT.GROUPS)
+    return [{"key": k, "org": x["org"], "name": x["name"], "group": x["group"], "group_name": gname.get(x["group"], x["group"])}
+            for k, x in registry().items()]
+
+def _head_role(k):
+    """tasks.assignee_role — faqat ma'lumot uchun (ruxsatlar bo'lim va org_units.head_user bo'yicha tekshiriladi)."""
+    if not k: return None
+    if k in UNITS: return UNITS[k][1]
+    from . import portal as PT
+    h = PT.head_user(_con, org_key(k))
+    r = db.one(_con, "SELECT role FROM users WHERE id=?", (h,)) if h else None
+    return r["role"] if r else None
+
 LEADERS = ("rektor", "kengash")            # qarorlarni to'liq ko'radi (o'qish)
 SECRETARY = "kotib"
 
@@ -91,8 +180,43 @@ def bind(con, ctx_fn):
 # ---------------------------------------------------------------------------------------------
 # Ruxsatlar
 # ---------------------------------------------------------------------------------------------
-def unit_of(c: Ctx): return UNIT_OF_ROLE.get(c.role.key)
-def is_head(c: Ctx, unit): return bool(unit) and UNITS.get(unit, ("", ""))[1] == c.role.key
+def unit_of(c: Ctx):
+    """Foydalanuvchining bo'limi (Portal: users.unit) — topshiriq kaliti ko'rinishida."""
+    from . import portal as PT
+    return task_key(PT.my_unit(c))
+
+def is_head(c: Ctx, unit):
+    from . import portal as PT
+    return bool(unit) and PT.head_user(_con, org_key(unit)) == c.user["id"]
+
+def curated_units(c: Ctx) -> set:
+    """Prorektor kuratorlik qiladigan bo'limlar (org_units.curator) — ularning topshiriqlarini faqat o'qiydi."""
+    if not c.role.key.startswith("prorektor_"): return set()
+    return {k for k, x in registry().items() if x["curator"] == c.role.key}
+
+# Eski (bo'limsiz, unit IS NULL) topshiriqlar rol bo'yicha yozilgan; bir xil rol bir nechta kafedra/fakultetda bor —
+# bunday topshiriqning bo'limi mas'ul matnidagi kafedra/fakultet nomidan aniqlanadi ("Kafedra mudiri (Buxgalteriya hisobi)").
+MULTI_UNIT_ROLES = {"kafedra": "kafedra", "oqituvchi": "kafedra", "tyutor": "fakultet"}
+
+def _core(name: str) -> str:
+    n = _n(name or "").strip()
+    return re.sub(r"\s+(?:kafedrasi|fakulteti(?:\s+tyutorlari)?)$", "", n, flags=re.I)
+
+def legacy_unit(t) -> str | None:
+    """Bo'limsiz eski topshiriq ko'p bo'limli rolga yozilgan bo'lsa — mas'ul matnidan bo'lim (org kaliti); aniqlanmasa None."""
+    grp = MULTI_UNIT_ROLES.get(t.get("assignee_role") or "")
+    if not grp or t.get("unit"): return None
+    hay = _n(t.get("assignee") or "").lower()
+    hits = [x["org"] for x in registry().values() if x["group"] == grp and _core(x["name"]).lower() in hay]
+    return hits[0] if len(hits) == 1 else None
+
+def legacy_mine(c: Ctx, t) -> bool:
+    """Bo'limsiz eski topshiriq shu foydalanuvchiga tegishlimi: rol mos va (bo'limi aniqlansa) bo'lim ham mos."""
+    if t.get("unit") or t.get("assignee_role") != c.role.key: return False
+    lu = legacy_unit(t)
+    if not lu: return True
+    from . import portal as PT
+    return PT.my_unit(c) == lu
 
 def _linked_ids(t) -> set:
     """Topshiriq va unga bog'langan (oldingi/keyingi) topshiriqlar."""
@@ -106,13 +230,14 @@ def can_view(c: Ctx, t) -> bool:
     if c.role.key in LEADERS or c.role.key == SECRETARY: return True
     u = unit_of(c)
     if t.get("assignee_user") == c.user["id"]: return True
-    if u and t.get("unit") == u: return True
+    if u and t.get("unit") == u: return True          # bo'lim xodimlari o'z bo'limi topshiriqlarini ko'radi
+    if t.get("unit") and t["unit"] in curated_units(c): return True   # kurator prorektor — faqat o'qish
     # bog'langan topshiriq (masalan, Registrator IT natijasini ko'radi)
     if u:
         for i in _linked_ids(t):
             o = db.one(_con, "SELECT unit FROM tasks WHERE id=?", (i,))
             if o and o["unit"] == u: return True
-    return t.get("assignee_role") == c.role.key
+    return legacy_mine(c, t)     # bo'limli topshiriq rol bo'yicha ko'rinmaydi (bir xil rol — turli kafedralarda)
 
 def can_act(c: Ctx, t) -> bool:
     """Holat/natija kiritish: bo'lim rahbari yoki biriktirilgan xodim."""
@@ -200,13 +325,20 @@ def _parse_due(s: str, today: dt.date):
     return None, None
 
 def _units_in(s: str):
-    """Gapda tilga olingan bo'limlar, paydo bo'lish tartibida."""
-    hits = []
-    for k, (_, _, pats) in UNITS.items():
-        for p in pats:
-            m = re.search(p, _n(s))
-            if m: hits.append((m.start(), k)); break
-    return [k for _, k in sorted(hits)]
+    """Gapda tilga olingan bo'limlar, paydo bo'lish tartibida. Bir joyda bir nechta belgi mos kelsa — eng uzuni
+    ("Buxgalteriya hisobi kafedrasi" → kafedra, "buxgalteriya" emas); ustma-ust tushgan qisqaroq moslik tashlanadi."""
+    t = _n(s)
+    spans = []
+    for k, x in registry().items():
+        for p in x["pats"]:
+            for m in p.finditer(t):
+                if m.end() > m.start(): spans.append((m.start(), -(m.end() - m.start()), m.end(), k))
+    taken, order = [], []
+    for st, _, en, k in sorted(spans):
+        if any(st < e and en > b for b, e in taken): continue
+        taken.append((st, en))
+        if k not in order: order.append(k)
+    return order
 
 def _clean(sent: str) -> str:
     s = SPEAKER.sub("", sent.strip(), count=1)
@@ -328,12 +460,12 @@ def task_view(c: Ctx, t, by_id=None):
             pass
     dep = by_id.get(t["depends_on"]) if (by_id and t.get("depends_on")) else (db.one(_con, "SELECT * FROM tasks WHERE id=?", (t["depends_on"],)) if t.get("depends_on") else None)
     v = {k: t.get(k) for k in ("id", "meeting_id", "text", "unit", "status", "due_at", "due_text", "dep_text", "evidence", "result", "result_at", "updated_at", "pos")}
-    v.update({"due": due, "unit_name": UNITS[t["unit"]][0] if t.get("unit") in UNITS else None,
+    v.update({"due": due, "unit_name": unit_name(t.get("unit")),
               "assignee_user": t.get("assignee_user"), "assignee_name": _short(_uname(t.get("assignee_user"))) or (t.get("assignee") or None),
               "assignee_stated": t.get("assignee") or None,
               "result_by": _short(_uname(t.get("result_by"))), "overdue": overdue,
               "depends_on": t.get("depends_on"),
-              "dep": {"id": dep["id"], "pos": dep.get("pos"), "unit_name": UNITS.get(dep.get("unit"), ("",))[0], "status": dep["status"],
+              "dep": {"id": dep["id"], "pos": dep.get("pos"), "unit_name": unit_name(dep.get("unit")) or "", "status": dep["status"],
                       "result": dep.get("result") if can_view(c, dep) else None} if dep else None,
               "blocked": bool(dep and dep["status"] != "bajarildi"),
               "can_act": can_act(c, t), "can_assign": is_head(c, t.get("unit")) and t["status"] not in ("qoralama", "bajarildi"),
@@ -364,15 +496,18 @@ def decision(c: Ctx, mid: int, audit=True):
             "created_at": m.get("created_at"), "confirmed_at": m.get("confirmed_at"), "confirmed_by": _short(_uname(m.get("confirmed_by"))),
             "incident": inc, "tasks": tasks, "msgs": msgs, "log": log,
             "can_edit": c.role.key == SECRETARY and m["status"] == "qoralama",
-            "units": [{"key": k, "name": v[0]} for k, v in UNITS.items()],
+            "units": unit_list(),
             "staff": _staff_for(c)}
 
 def _staff_for(c: Ctx):
+    """Rahbar biriktira oladigan xodimlar — Portal bo'yicha shu bo'lim a'zolari (portal.members)."""
+    from . import portal as PT
     u = unit_of(c)
     if not u or not is_head(c, u): return []
-    roles = [r for r, uu in UNIT_OF_ROLE.items() if uu == u]
-    return [{"id": x["id"], "name": _short(x["full_name"]), "role": rbac.ROLES[x["role"]].title}
-            for x in db.rows(_con, f"SELECT id, full_name, role FROM users WHERE role IN ({','.join('?' * len(roles))}) ORDER BY id", roles)]
+    ok = org_key(u)
+    roles = {r["id"]: r["role"] for r in db.rows(_con, "SELECT id, role FROM users WHERE unit=?", (ok,))}
+    return [{"id": x["id"], "name": x["name"], "role": x["position"] or (rbac.ROLES[roles[x["id"]]].title if roles.get(x["id"]) in rbac.ROLES else "")}
+            for x in PT.members(_con, ok)]
 
 def summary_list(c: Ctx):
     """Qarorlar ro'yxati (rektor paneli va topshiriqlar bo'limi uchun)."""
@@ -392,19 +527,26 @@ def summary_list(c: Ctx):
 def queue(c: Ctx):
     """Bo'lim navbati: o'z bo'limi topshiriqlari (rahbar) yoki o'ziga biriktirilganlar (xodim)."""
     u = unit_of(c)
-    if not u: return None
-    if is_head(c, u):
+    if not u or u not in registry(): return None
+    head = is_head(c, u)
+    if head:
         ts = db.rows(_con, "SELECT * FROM tasks WHERE unit=? AND status!='qoralama' ORDER BY CASE status WHEN 'bajarildi' THEN 1 ELSE 0 END, id DESC", (u,))
     else:
-        ts = db.rows(_con, "SELECT * FROM tasks WHERE assignee_user=? AND status!='qoralama' ORDER BY CASE status WHEN 'bajarildi' THEN 1 ELSE 0 END, id DESC", (c.user["id"],))
+        ts = db.rows(_con, "SELECT * FROM tasks WHERE assignee_user=? AND unit IS NOT NULL AND status!='qoralama' ORDER BY CASE status WHEN 'bajarildi' THEN 1 ELSE 0 END, id DESC", (c.user["id"],))
+    # rahbariyat va kotib: bo'sh navbat kartasi ko'rsatilmaydi (ular qarorlarni umumiy ro'yxatda ko'radi)
+    if not ts and (c.role.key in LEADERS or c.role.key == SECRETARY or c.role.key.startswith("prorektor_")): return None
     out = []
     for t in ts:
         v = task_view(c, t)
         m = db.one(_con, "SELECT title, date FROM meetings WHERE id=?", (t["meeting_id"],))
         v["meeting"] = m["title"] if m else ""; v["meeting_date"] = m["date"] if m else ""
+        if t.get("origin") == "topshiriq":     # majlisdan tashqari topshiriq (app/directives.py): kim bergani, taqsimlash holati
+            from . import directives as DIR
+            v.update(DIR.queue_extra(c, t))
         out.append(v)
-    return {"unit": u, "unit_name": UNITS[u][0], "head": is_head(c, u), "tasks": out, "staff": _staff_for(c),
-            "duties": [d for d in AR.UNIT_DUTIES.get(UNITS[u][0], []) if not d.startswith("talabalar murojaatlari:")]}
+    name = unit_name(u)
+    return {"unit": u, "unit_name": name, "head": head, "tasks": out, "staff": _staff_for(c),
+            "duties": [d for d in AR.UNIT_DUTIES.get(UNITS[u][0] if u in UNITS else name, []) if not d.startswith("talabalar murojaatlari:")]}
 
 # ---------------------------------------------------------------------------------------------
 # HTTP
@@ -422,6 +564,13 @@ def capabilities(request: Request):
             "audio_note": "Ovozdan matnga o'tkazish (lokal STT, masalan whisper.cpp) bu serverda o'rnatilmagan. "
                           "Demo uchun namunaviy transkript ishlatiladi; ovoz tashqi servisga yuborilmaydi.",
             "sample": demo_transcript(dt.date.today())}
+
+@router.get("/api/dec/units")
+def units_(request: Request):
+    """Topshiriq bo'limlari — Portal org_units bilan bitta reestr (guruhlangan: Rahbariyat / Bo'limlar / Fakultet tyutorlari / Kafedralar)."""
+    c = C(request); _guard(c, "topshiriq bo'limlari ro'yxati")
+    from . import portal as PT
+    return {"units": unit_list(), "groups": [{"key": k, "name": n} for k, n in PT.GROUPS]}
 
 class DraftIn(BaseModel):
     title: str = Field(..., max_length=200)
@@ -448,7 +597,7 @@ async def create_draft(body: DraftIn, request: Request):
     for i, t in enumerate(tasks):
         r = _con.execute("""INSERT INTO tasks(meeting_id,assignee,assignee_role,text,due,due_at,due_text,status,unit,depends_on,dep_text,evidence,pos,updated_at)
                             VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                         (mid, t["assignee"] or "", UNITS[t["unit"]][1] if t["unit"] else None, t["text"][:500],
+                         (mid, t["assignee"] or "", _head_role(t["unit"]), t["text"][:500],
                           (t["due_at"] or "")[:10] or None, t["due_at"], t["due_text"], "qoralama", t["unit"], None, t["dep_text"], t["evidence"][:500], i + 1, now))
         ids.append(r.lastrowid)
     for i, t in enumerate(tasks):
@@ -495,9 +644,11 @@ def edit_draft(mid: int, body: DraftEdit, request: Request):
     if not m or not m.get("source"): raise HTTPException(404)
     if m["status"] != "qoralama": raise HTTPException(409, "Qaror allaqachon tasdiqlangan — tahrirlab bo'lmaydi")
     own = {r["id"] for r in db.rows(_con, "SELECT id FROM tasks WHERE meeting_id=?", (mid,))}
+    reg = registry()
     for t in body.tasks:
         if t.id not in own: raise HTTPException(400, "Topshiriq bu qarorga tegishli emas")
-        if t.unit and t.unit not in UNITS: raise HTTPException(400, "Noma'lum bo'lim")
+        if t.unit: t.unit = task_key(t.unit)       # Portal kaliti ("talabalar") ham qabul qilinadi → "registrator"
+        if t.unit and t.unit not in reg: raise HTTPException(400, "Noma'lum bo'lim")
         if t.depends_on and (t.depends_on not in own or t.depends_on == t.id): raise HTTPException(400, "Bog'liqlik noto'g'ri")
     now = _iso(_now())
     for rid in body.remove:
@@ -510,7 +661,7 @@ def edit_draft(mid: int, body: DraftEdit, request: Request):
         _con.execute("""UPDATE tasks SET text=?, unit=?, assignee_role=?, assignee=?, due_at=?, due=?, depends_on=?, updated_at=?,
                         due_text=CASE WHEN COALESCE(due_at,'')=COALESCE(?,'') THEN due_text ELSE NULL END
                         WHERE id=? AND status='qoralama'""",
-                     (t.text.strip(), t.unit, UNITS[t.unit][1] if t.unit else None, (t.assignee or "").strip(), due, (due or "")[:10] or None,
+                     (t.text.strip(), t.unit, _head_role(t.unit), (t.assignee or "").strip(), due, (due or "")[:10] or None,
                       t.depends_on, now, due, t.id))
     _con.execute("UPDATE meetings SET title=?, minutes=? WHERE id=? AND status='qoralama'", (body.title.strip(), body.minutes, mid))
     _con.commit()
@@ -533,7 +684,7 @@ def confirm(mid: int, request: Request):
         return {"ok": True, "already": True, "decision": decision(c, mid, audit=False)}
     for t in db.rows(_con, "SELECT id, unit FROM tasks WHERE meeting_id=? AND status='qoralama'", (mid,)):
         _con.execute("UPDATE tasks SET status='yangi', updated_at=? WHERE id=?", (now, t["id"]))
-        _log(t["id"], c, "tasdiqlandi", f"{UNITS[t['unit']][0]} navbatiga yuborildi")
+        _log(t["id"], c, "tasdiqlandi", f"{unit_name(t['unit']) or t['unit']} navbatiga yuborildi")
     _con.commit()
     return {"ok": True, "already": False, "decision": decision(c, mid, audit=False)}
 
@@ -561,8 +712,9 @@ def assign(tid: int, body: Assign, request: Request):
     t = _task(tid)
     if not is_head(c, t["unit"]): raise AccessDenied("⛔ Topshiriqni faqat shu bo'lim rahbari biriktiradi.")
     if t["status"] in ("qoralama", "bajarildi"): raise HTTPException(409, "Bu holatda biriktirib bo'lmaydi")
-    u = db.one(_con, "SELECT id, full_name, role FROM users WHERE id=?", (body.user_id,))
-    if not u or UNIT_OF_ROLE.get(u["role"]) != t["unit"]: raise HTTPException(400, "Xodim bu bo'limda emas")
+    from . import portal as PT
+    u = db.one(_con, "SELECT * FROM users WHERE id=?", (body.user_id,))
+    if not u or PT.unit_key(u) != org_key(t["unit"]): raise HTTPException(400, "Xodim bu bo'limda emas")   # faqat shu bo'lim a'zosi (users.unit)
     if t.get("assignee_user") == u["id"]: return {"ok": True, "same": True}
     _con.execute("UPDATE tasks SET assignee_user=?, assignee=?, updated_at=? WHERE id=?", (u["id"], _short(u["full_name"]), _iso(_now()), tid))
     _log(tid, c, "biriktirildi", _short(u["full_name"]))
@@ -577,6 +729,9 @@ class Update(BaseModel):
 def update(tid: int, body: Update, request: Request):
     c = C(request); _guard(c, "topshiriq holatini yangilash", f"#{tid} → {body.status}")
     t = _task(tid)
+    if t.get("origin") == "topshiriq":         # ierarxik topshiriq — qabul/qaytarish oqimi bilan (app/directives.py)
+        from . import directives as DIR
+        return DIR.set_status(c, tid, DIR.StatusIn(status=body.status, result=body.result))
     if not can_act(c, t): raise AccessDenied("⛔ Holatni faqat bo'lim rahbari yoki biriktirilgan xodim yangilaydi.")
     if body.status not in ("jarayonda", "bajarildi"): raise HTTPException(400, "Noto'g'ri holat")
     if t["status"] == "bajarildi": raise HTTPException(409, "Topshiriq allaqachon yakunlangan")
@@ -590,7 +745,7 @@ def update(tid: int, body: Update, request: Request):
         if t.get("depends_on"):
             d = db.one(_con, "SELECT status, unit FROM tasks WHERE id=?", (t["depends_on"],))
             if d and d["status"] != "bajarildi":
-                raise HTTPException(409, f"Avval bog'liq topshiriq ({UNITS.get(d['unit'], ('oldingi',))[0]}) natijasi kiritilishi kerak")
+                raise HTTPException(409, f"Avval bog'liq topshiriq ({unit_name(d['unit']) or 'oldingi'}) natijasi kiritilishi kerak")
         _con.execute("UPDATE tasks SET status='bajarildi', result=?, result_at=?, result_by=?, updated_at=? WHERE id=? AND status!='bajarildi'",
                      (res, now, c.user["id"], now, tid))
         _log(tid, c, "yakunlandi", res[:200])

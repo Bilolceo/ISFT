@@ -1,6 +1,7 @@
 # AI Hikvision kameralar — modul qo'llanmasi (v0.2, 2026-11-09)
 
 > Hamma narsa **metama'lumot** asosida: vaqt, kamera, voqea turi, son, holat. Video, kadr, yuz tasviri **olinmaydi va saqlanmaydi**.
+> Yagona istisno — **Kirish nazorati (Face ID)**, 13-bo'lim: faqat bino kirishlari, faqat yozma roziligi bor shaxslar, kadr ≤ 7 kun.
 
 ## 1. Tamoyillar
 
@@ -8,9 +9,10 @@
   xotirada o'qiladi-yu, diskka yozilmasdan tashlab yuboriladi (`AlertStreamParser.dropped_bytes`).
 - **Shaxs bog'lanmaydi.** Kamera voqeasi hech qaysi talaba yoki xodim ismiga bog'lanmaydi. Hisobotlar faqat xona / bino / qavat
   kesimida va jamlangan holda chiqadi.
-- **Biometrika o'chiq.** Yuz aniqlash O'RQ-547 «Shaxsga doir ma'lumotlar to'g'risida» qonuniga ko'ra alohida yozma rozilik va
-  huquqiy asos talab qiladi. Kod `ISFT_CORE_FEATURE_FACE=0` bayrog'i ortida; ANPR (davlat raqami) — `ISFT_CORE_FEATURE_ANPR=0`,
-  faqat xodimlar avtomobillari ro'yxati uchun. Seed/demo'da ikkalasi ham **o'chiq**. Bayroq o'chiq bo'lsa, bu voqealar qayta ishlanmaydi.
+- **Biometrika — faqat rozilik bilan.** Yuz aniqlash O'RQ-547 «Shaxsga doir ma'lumotlar to'g'risida» qonuniga ko'ra alohida yozma
+  rozilik va huquqiy asos talab qiladi. Kod `ISFT_CORE_FEATURE_FACE` bayrog'i ortida (demo uchun `1`, tasvirlar sintetik — 13-bo'lim);
+  ANPR (davlat raqami) — `ISFT_CORE_FEATURE_ANPR=0`, faqat xodimlar avtomobillari ro'yxati uchun. Bayroq o'chiq bo'lsa, bu voqealar
+  umuman qayta ishlanmaydi. Haqiqiy kameralarda yoqishdan oldin — yurist xulosasi va yozma rozilik shakli (13.6).
 - **Boshqaruv huquqi.** Kamera qo'shish, sozlash, parol kiritish — faqat `rektor` va `xojalik` (Xo'jalik va texnik bo'lim) rollari.
   Har bir amal audit jurnaliga yoziladi.
 - **Server vaqti.** Voqea vaqti kamera soati bo'yicha emas, **server vaqti** bo'yicha qo'yiladi (`ISFT_CORE_TZ`, standart
@@ -150,7 +152,13 @@ Bulut (Railway) va demo rejimida — **sintetik** ma'lumot. Kameralar ulanganda 
 | `ISFT_CORE_CAM_QUEUE_PATH` | `/ISAPI/Intelligent/channels/{ch}/queueManagement/status` | Navbat holati endpointi |
 | `ISFT_CORE_CAM_DEDUP_SEC` | `300` | Takrorlarni birlashtirish oynasi, s |
 | `ISFT_CORE_TZ` | `Asia/Tashkent` | Voqealar vaqt zonasi (server vaqti) |
-| `ISFT_CORE_FEATURE_FACE` | `0` | Yuz aniqlash (O'RQ-547 — rozilik va huquqiy asossiz yoqilmaydi) |
+| `ISFT_CORE_FEATURE_FACE` | `1` (demo) | Kirish nazorati (Face ID): faqat kirish kameralari va yozma rozilik reyestri (13-bo'lim). Haqiqiy tizimda yurist xulosasigacha `0` |
+| `ISFT_CORE_FACE_MATCH_MIN` | `0.75` | O'xshashlik chegarasi; pastrog'i — «past ishonch» (tasdiqlanmagan, hisobotga kirmaydi) |
+| `ISFT_CORE_FACE_KEEP_DAYS` | `7` | Kirish kadri (fon rasmi) saqlanish muddati, kun (`data/face_snaps/`, server startida tozalanadi) |
+| `ISFT_CORE_FACE_EVENTS_DAYS` | `90` | Kirish voqeasi metama'lumoti saqlanish muddati, kun |
+| `ISFT_CORE_FACE_EXIT_CAMS` | bo'sh | Chiqishga qaragan kameralar id'lari (vergul bilan); qolganlari — kirish |
+| `ISFT_CORE_STAFF_START` | `09:00` | Xodimlar ish boshlanishi (kechikish hisobi) |
+| `ISFT_CORE_FACE_LATE_GRACE_MIN` | `0` | O'qituvchi/talaba kechikishi uchun imtiyoz, daqiqa |
 | `ISFT_CORE_FEATURE_ANPR` | `0` | Davlat raqami aniqlash (faqat xodimlar avtomobillari) |
 | `ISFT_CORE_SECRET_KEY` / `data/secrets/master.key` | — | Kamera parollarini shifrlash kaliti |
 
@@ -169,6 +177,7 @@ Emulyator (`tools/fake_hikvision.py`):
 | `FAKE_HIK_THERMAL` | `0` | 1 — standart aylanishga `fireDetection`, `smokeDetection`, `TMA` qo'shiladi |
 | `FAKE_HIK_QUEUE` | `1` | `queueManagement/status` bormi (0 → 404) |
 | `FAKE_HIK_QUEUE_LEN` | bo'sh | Navbat uzunligini qat'iy belgilash; bo'sh — vaqtga qarab (dushanba 10–12 → 25+, 12–14 → 8–18) |
+| `FAKE_HIK_EVENTS=alarmResult=FPID:0.93` | — | Yuz voqeasi (JSON qism, DeepinView `alarmResult`); FPID bo'sh — notanish yuz. FDLib endpointlari xotirada (13-bo'lim) |
 
 Standart alertStream aylanishi: avval eski 7 ta (`videoloss:inactive`, `linedetection`, `videoloss:inactive`, `fielddetection+jpeg`,
 `VMD`, `shelteralarm`, `videoloss:inactive`), keyin `regionEntrance`, `regionExiting`, `loitering`, `peopleGathering`, `running`,
@@ -208,6 +217,110 @@ Emulyator Hikvision ISAPI hujjatiga **yaqin**, lekin teg nomlari va yo'llar mode
 - [ ] `data/secrets/` zaxira nusxalarga bazadan alohida, cheklangan kirish bilan.
 - [ ] Kameralar proshivkasi 2021-09 dan yangi (CVE-2021-36260); Hik-Connect bulut o'chiq; internetga port ochilmagan.
 - [ ] Kamera akkaunti — faqat o'qish uchun «Operator», admin emas.
-- [ ] Yuz aniqlash va ANPR o'chiq (`ISFT_CORE_FEATURE_FACE=0`, `ISFT_CORE_FEATURE_ANPR=0`); yoqish — faqat yurist xulosasi va O'RQ-547
-      bo'yicha yozma rozilik bilan.
-- [ ] Rasm/kadr diskka yozilmasligi tekshirilgan (testda `*.jpg` yo'qligi).
+- [ ] ANPR o'chiq (`ISFT_CORE_FEATURE_ANPR=0`). Yuz (Face ID) — demo'da yoqilgan (sintetik); haqiqiy kameralarda yoqish — faqat yurist
+      xulosasi va O'RQ-547 bo'yicha yozma rozilik bilan (13.6).
+- [ ] Rasm/kadr diskka yozilmasligi tekshirilgan (testda `*.jpg` yo'qligi). Istisno: Face ID kirish kadri — `data/face_snaps/`, ≤ 7 kun.
+
+## 13. Kirish nazorati (Face ID) — `app/facecam.py`
+
+Rektor topshirig'i: bino kirishlaridagi kameralar kim kirgani/chiqqanini ko'rsatsin — talaba (ism, guruh), o'qituvchi (ism, kafedra),
+xodim (ism, bo'lim) yoki notanish — va qisqa AI hisobot. **Demo'da tasvirlar sintetik** (`app/facecam_render.py`, PIL bilan chiziladi,
+haqiqiy surat ishlatilmaydi), voqealar `app/seed_facecam.py` (14 kun, dars jadvali asosida).
+
+### 13.1. Haqiqiy kameralar bilan qanday ishlaydi (serverda ML model yo'q)
+
+```
+ Yozma rozilik (kadrlar / Registrator)  ISFT Core                          Hikvision DeepinView (kirish)
+ ─────────────────────────────────      ─────────────────────────────      ─────────────────────────────────
+ RZ-2026/1234 + yuz rasmi  ───────────► face_persons: FPID=FP7C1A…  ─────► FDLib (yuz kutubxonasi): FPID + rasm
+                                        (ism faqat bazada)  face_sync        (kamerada ism YO'Q)
+                                                                              │ kamera yuzni O'ZI solishtiradi
+ Kameralar → «Kirish (Face ID)» ◄────── ingest(): FPID → shaxs, rozilik? ◄── alertStream: alarmResult (JSON):
+   kadr + ramka + yorliq                 o'xshashlik ≥ 75%? → tanildi        FPID, similarity, faceRect (0..1), bkgUrl
+```
+
+1. **Kutubxona sinxroni** (`HikClient.fdlib_*`, faqat `mode=isapi` kameralar uchun, «Kutubxonani kameralarga sinxronlash» tugmasi):
+   - `GET/POST /ISAPI/Intelligent/FDLib?format=json` — `ISFT_Kirish` kutubxonasi (FDID);
+   - `POST /ISAPI/Intelligent/FDLib/FaceDataRecord?format=json` — multipart: `FaceDataRecord` (JSON: `faceLibType=blackFD`, `FDID`, `FPID`,
+     `name`=FPID) + `img` (JPEG, `data/face_enroll/{FPID}.jpg` — rozilik olinganda suratga olinadi);
+   - `PUT /ISAPI/Intelligent/FDLib/FDSearch/Delete?format=json&FDID=…&faceLibType=blackFD` — rozilik qaytarib olinganda.
+   Navbat — `face_sync` jadvali (kamera oflayn bo'lsa, keyin yuboriladi).
+2. **Voqea**: kamera `alarmResult` (JSON qism) yuboradi → `AlertStreamParser` (XML va JSON qismlar, JPEG tashlanadi) → `parse_json_alert`
+   (har bir yuz — alohida voqea; eng o'xshash nomzodning `reserve_field.FPID`, `similarity`, `faceRect`, `bkgUrl`) →
+   `normalize(face=True)` → `kind="yuz"` → `camsec.process_event` → `facecam.ingest`. Eski proshivkalardagi XML (`faceContrast`, `FPID`,
+   `similarity` 0..100, `faceRect` 0..1000) ham o'qiladi.
+3. **Qaror (ingest)**: faqat `zone='kirish'` kameralar (bino ichida shaxs kuzatilmaydi). FPID bazada va rozilik faol → o'xshashlik ≥
+   `ISFT_CORE_FACE_MATCH_MIN` bo'lsa «tanildi», past bo'lsa «past ishonch» (tasdiqlanmagan, hisobotlarga kirmaydi); FPID yo'q yoki
+   rozilik qaytarilgan → «notanish» (shaxs va FPID saqlanmaydi). Bir kameradan 60 s ichidagi takroriy moslik yozilmaydi.
+4. **Rasm**: `bkgUrl` faqat shu kameraning o'z manzilidan olinadi (SSRF himoyasi), `data/face_snaps/{kadr}.jpg` ga ≤ `KEEP_DAYS` kun.
+   Ramka va yorliq **har safar ko'ruvchining ko'lamiga qarab** chiziladi (LRU kesh); ko'lamdan tashqari yuz — piksel.
+5. **Demo** (`source='sintetik'`): fon rasmi saqlanmaydi — kadr `seed` va voqea parametrlaridan (ramka, `look`) qayta chiziladi.
+
+### 13.2. Rozilik modeli (ZRU-547)
+
+- `face_persons(kind, ref_id, name, sub, faculty_id, fpid UNIQUE, consent, consent_doc, consent_at, revoked_at, avatar_seed)` —
+  eski `face_consent` jadvalining umumlashtirilgani (talaba / o'qituvchi / xodim). FPID — tasodifiy (`FP` + 10 hex), ism emas.
+- Rozilik berish/qaytarish: rektor va xo'jalik (hammasi), kadrlar bo'limi (o'qituvchi, xodim). Qaytarib olinsa: FPID o'chiriladi,
+  kameradan o'chirish navbatga qo'yiladi, o'tgan voqealar **shaxssizlantiriladi** (`person_id=NULL`, holat «rozilik yo'q»).
+- Rozilik bermagan shaxs kamerada «Aniqlanmadi (rozilik yo'q)» (demo) — haqiqiy kamera uni kutubxonada topmaydi va «notanish» deydi.
+- Demo ro'yxati: ~60 talaba, ~25 o'qituvchi (kafedra mudirlari emas), ~15 xodim (bo'lim boshliqlari emas); ~85% rozilik bergan.
+  Haqiqiy rahbarlar (foydalanuvchilar, kafedra mudirlari, `static/brand/people/index.json`) ro'yxatga olinmaydi va
+  `static/brand/people/` rasmlari ishlatilmaydi.
+
+### 13.3. Kim nimani ko'radi
+
+| Lavozim | Ko'lam |
+|---|---|
+| Rektor, Xo'jalik va texnik bo'lim | Hamma: talaba, o'qituvchi, xodim, notanish, tungi kirishlar; rozilik reyestri |
+| Kadrlar bo'limi | Faqat o'qituvchi va xodimlar (punktuallik); ularning roziligini boshqaradi |
+| Fakultet tyutori | Faqat o'z fakulteti talabalari (institutda dekan lavozimi yo'q) |
+| AT bo'limi boshlig'i | Kamera va yuz kutubxonasi holati — faqat sonlar; kadr va ism yo'q |
+| Kuzatuv kengashi | Jamlangan ko'rsatkichlar va hisobot (ism, rasmsiz); menyuda «Kameralar» yashirin |
+| Boshqalar | 403 (audit jurnaliga yoziladi) |
+
+Har bir kadr/rasm (30 daqiqada bir yozuv), shaxs tarixi, rozilik o'zgarishi va rad etilgan urinish — `audit_log`, `resource='face'`.
+Telegram kanalida — faqat jamlangan ko'rsatkichlar. Rasm javobi `Cache-Control: no-store` (bir kompyuterda boshqa lavozim).
+
+### 13.4. API
+
+| Endpoint | Ma'nosi |
+|---|---|
+| `GET /api/face/summary?date=` | KPI (ko'lam bo'yicha), kameralar, kutubxona holati, 14 kunlik qator |
+| `GET /api/face/frames?date=&camera=&kind=&q=&offset=&limit=` | Kadrlar (yuzlar, yorliqlar ko'lam bo'yicha) |
+| `GET /api/face/frames/{id}` | Kadr tafsiloti |
+| `GET /api/face/events/{id}/image?w=` | Izohlangan JPEG (1280×720 yoki `w` kenglik) |
+| `GET /api/face/persons/{id}/timeline?days=14` | Shaxsning 14 kunlik kirish/chiqishlari, birinchi para, kechikish |
+| `GET /api/face/persons?q=&kind=` · `POST /api/face/persons` · `POST /api/face/persons/{id}/consent` | Rozilik reyestri |
+| `GET /api/face/report?date=&scope=` | `{facts, narrative, narrative_mode, verify}` — faktlar koddan; matn mahalliy LLM (bo'lsa) yoki shablon |
+| `POST /api/face/report/docx` | Word hisobot (blank, QR bilan tekshiriladi, Hujjatlar markazida saqlanadi) |
+| `POST /api/face/sync` | FDLib navbatini haqiqiy kameralarga yuborish |
+
+AI suhbat: «Bugun qaysi o'qituvchilar kechikdi?», «Bugun nechta talaba kirdi?» — `ai.TOOLS["facecam"]` (xuddi shu faktlar, ko'lam bo'yicha).
+
+### 13.5. Hisobot qoidalari
+
+- O'qituvchi kechikdi — shu kuni birinchi tasdiqlangan kirishi dars jadvalidagi **birinchi parasi** boshlanishidan keyin
+  (`ISFT_CORE_FACE_LATE_GRACE_MIN`, standart 0). Talaba — guruhining birinchi parasi. Xodim — `ISFT_CORE_STAFF_START` (09:00).
+- «Past ishonch» va «notanish» kechikish/kelganlar hisobiga kirmaydi. Taqqoslash — oldingi 7 ish kuni (yakshanbasiz) o'rtachasi.
+- Matndagi har bir raqam faktlar bilan solishtiriladi (`verify`); mos kelmasa — AI matni o'rniga shablon.
+
+### 13.6. AT bo'limidan nima so'rash kerak (Face ID)
+
+- [ ] Kirish kameralari modeli **yuz kutubxonasini (Face Picture Library / FDLib) va kamerada solishtirishni** qo'llaydimi
+      (DeepinView `iDS-2CD71xxG0-IZS` / `…-IZHS(Y)` yuz algoritmi bilan; AcuSense `DS-2CD2xxx` odatda faqat «face capture», solishtirmaydi).
+      Muqobil: NVR (DeepinMind `iDS-96xxNXI`) yoki HikCentral Professional + Face Recognition Server.
+- [ ] Proshivka versiyasi va yoqilgan algoritm (bitta DeepinView kamerada «face capture/comparison» va boshqa algoritmlar almashtiriladi).
+- [ ] ISAPI foydalanuvchisi: alertStream o'qish + FDLib yozish huquqi (alohida «Operator» akkaunt; admin emas).
+- [ ] alertStream'da `alarmResult` JSON keladimi yoki XML (`faceContrast`) — namuna yozib olinsin; `bkgUrl` qaysi yo'lda.
+- [ ] Kamera o'rnatilishi: yuz ≥ 60–80 piksel, yorug'lik (kontr-yorug'lik yo'q), kirish va chiqish uchun alohida kamera (`ISFT_CORE_FACE_EXIT_CAMS`).
+- [ ] Kamera soati NTP bilan (voqea vaqti baribir server vaqti).
+- [ ] Yuridik: yozma rozilik shakli (ZRU-547), maqsad (kirish nazorati), saqlash muddatlari, rozilikni qaytarib olish tartibi,
+      shaxsga doir ma'lumotlar bazasi ro'yxatdan o'tkazilishi.
+
+### 13.7. Sinash
+
+```bash
+.venv/bin/python tests/test_facecam.py      # jonli server kerak; emulyator 18094-portda; mantiq — baza nusxasida
+FAKE_HIK_MODEL=iDS-2CD7146G0-IZS FAKE_HIK_EVENTS="alarmResult=FP0123456789:0.93,alarmResult=:0" \
+  .venv/bin/python -m uvicorn tools.fake_hikvision:app --port 18094
+```

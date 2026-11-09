@@ -71,22 +71,26 @@ UNIT_TITLE = {"rektorat": "Rektorat", "it": "Axborot texnologiyalari bo'limi", "
               "prorektor_oquv": "O'quv ishlari prorektori", "prorektor_ilmiy": "Ilmiy ishlar prorektori",
               "prorektor_moliya": "Moliya-iqtisod prorektori", "prorektor_yoshlar": "Yoshlar masalalari prorektori",
               "ilmiy_bolim": "Ilmiy tadqiqotlar bo'limi"}   # qolganlari — rbac.ROLES nomi (masalan, "Akademik faoliyatni boshqarish bo'limi")
-HEAD_ROLES = {"rektor", "kafedra", "dekan", "it_head"}
-GROUPS = [("rahbariyat", "Rahbariyat"), ("bolim", "Bo'limlar"), ("fakultet", "Dekanatlar"), ("kafedra", "Kafedralar")]
+HEAD_ROLES = {"rektor", "kafedra", "it_head"}
+# Institutda dekan lavozimi yo'q (Yevropa modeli): fakultet darajasidagi vazifalarni Registrator ofisi bajaradi. Fakultetlar akademik
+# tuzilma sifatida qoladi — "fak<N>" bo'limlarida faqat fakultet tyutorlari ("<fakultet> fakulteti tyutorlari").
+GROUPS = [("rahbariyat", "Rahbariyat"), ("bolim", "Bo'limlar"), ("fakultet", "Fakultet tyutorlari"), ("kafedra", "Kafedralar")]
 LEAD_ORDER = ["rektorat", "prorektor_oquv", "prorektor_ilmiy", "prorektor_moliya", "prorektor_yoshlar", "kengash"]
 # Prorektorlar kuratorligi — ISFT tashkiliy tuzilmasi (04.09.2024 tasdiqlangan):
 #   O'quv ishlari prorektori: Akademik faoliyat va registrator departamenti (Akademik bo'lim, Registrator ofisi, Ma'lumotlar bazasi),
 #     Sirtqi bo'lim, Amaliyot bo'limi, fakultetlar va kafedralar;
 #   Ilmiy ishlar prorektori: Ilmiy tadqiqotlar bo'limi, Magistratura bo'limi;
-#   Moliya-iqtisod prorektori: Buxgalteriya, Xo'jalik va texnik bo'lim;
+#   Moliya-iqtisod prorektori: Buxgalteriya, Xo'jalik va texnik bo'lim, Marketing bo'limi, Xarid bo'limi;
 #   Yoshlar masalalari birinchi prorektori: Ma'naviyat va ma'rifat bo'limi (tizimda akkaunti yo'q);
-#   Rektorga bevosita: Imtihon bo'limi, Kadrlar bo'limi, Strategik, Yuridik, Sifatni ta'minlash, Devonxona, Arxiv.
+#   Rektorga bevosita: Imtihon bo'limi, Kadrlar bo'limi, Strategik bo'lim, Yuridik bo'lim, Sifatni ta'minlash boshqarmasi, Devonxona, Arxiv.
+#   Bu standart qiymatlar: rektor yoki IT boshlig'i «Bo'limlar» bo'limida kuratorni qo'lda o'zgartirsa (org_units.curator_manual=1),
+#   server qayta ishga tushganda ham qo'lda tayinlangan kurator saqlanadi.
 #   Xalqaro aloqalar va Raqamlashtirish prorektorlari joriy rahbarlar ro'yxatida yo'q: Xalqaro hamkorlik bo'limi — ilmiy ishlar prorektoriga
 #   (RBAC'da ham INTL unda), Axborot texnologiyalari bo'limi — rektorga bevosita. Qabul komissiyasi tuzilmada yo'q — raisi rektor.
 CURATOR = {"akademik": "prorektor_oquv", "talabalar": "prorektor_oquv", "malumotlar_bazasi": "prorektor_oquv", "sirtqi": "prorektor_oquv",
            "amaliyot": "prorektor_oquv",
            "ilmiy_bolim": "prorektor_ilmiy", "magistratura": "prorektor_ilmiy", "xalqaro": "prorektor_ilmiy",
-           "buxgalteriya": "prorektor_moliya", "xojalik": "prorektor_moliya"}
+           "buxgalteriya": "prorektor_moliya", "xojalik": "prorektor_moliya", "marketing": "prorektor_moliya", "xarid": "prorektor_moliya"}
 def _curator_of(k): return CURATOR.get(k) or ("prorektor_oquv" if k.startswith(("fak", "kaf")) else None)
 
 # Alohida bo'limlar (o'z roli bo'lmasa ham lavozim nomidan aniqlanadi; akkaunti bo'lmasa ham qabul qiluvchi sifatida ko'rinadi)
@@ -110,7 +114,7 @@ def derive_unit(u: dict) -> str:
     for n, k in _TITLE_UNIT.items():
         if t.startswith(n): return k
     if r in ("kafedra", "oqituvchi") and u.get("department_id"): return f"kaf{int(u['department_id'])}"
-    if r in ("dekan", "tyutor") and u.get("faculty_id"): return f"fak{int(u['faculty_id'])}"
+    if r == "tyutor" and u.get("faculty_id"): return f"fak{int(u['faculty_id'])}"
     return ROLE_UNIT.get(r, r)
 
 def unit_key(u: dict) -> str:
@@ -131,14 +135,14 @@ def _derive_units(con) -> list[dict]:
     facs = {f["id"]: f for f in db.rows(con, "SELECT * FROM faculties")}
     out = {}
     for u in db.rows(con, "SELECT * FROM users ORDER BY id"):
-        if u["role"] not in ROLES: continue
+        if u["role"] not in ROLES or ROLES[u["role"]].legacy: continue   # sobiq dekan (#13) — hech qaysi bo'limni hosil qilmaydi
         k = unit_key(u)
         if k.startswith("kaf"):
             d = deps.get(int(k[3:])) or {}
             name, grp, order = f"{d.get('name', 'Kafedra')} kafedrasi", "kafedra", int(k[3:])
         elif k.startswith("fak"):
             f = facs.get(int(k[3:])) or {}
-            name, grp, order = f"{f.get('name', 'Fakultet')} fakulteti", "fakultet", int(k[3:])
+            name, grp, order = f"{f.get('name', 'Fakultet')} fakulteti tyutorlari", "fakultet", int(k[3:])
         elif k in LEAD_ORDER:
             name, grp, order = UNIT_TITLE.get(k) or ROLES[u["role"]].title, "rahbariyat", LEAD_ORDER.index(k)
         else:
@@ -156,14 +160,20 @@ def _derive_units(con) -> list[dict]:
     return list(out.values())
 
 def sync_units(con):
-    """users.unit ni to'ldirish (bir marta) va org_units ni yangilash (kurator — tasdiqlangan tuzilmadan; qo'lda tayinlangan rahbar saqlanadi)."""
+    """users.unit ni to'ldirish (bir marta) va org_units ni yangilash. Kurator — tasdiqlangan tuzilmadan (CURATOR), lekin qo'lda
+    o'zgartirilgan bo'lsa (curator_manual=1) saqlanadi; qo'lda tayinlangan rahbar (head_user) ham saqlanadi."""
     for u in db.rows(con, "SELECT * FROM users WHERE unit IS NULL OR unit=''"):
         if u["role"] in ROLES: con.execute("UPDATE users SET unit=? WHERE id=?", (derive_unit(u), u["id"]))
+    # bekor qilingan lavozimdagi akkaunt (sobiq dekan) bo'lim rahbari bo'lib qolmasin (eski bazalarda head_user=13 edi)
+    legacy = [k for k, r in ROLES.items() if r.legacy]
+    if legacy:
+        con.execute(f"UPDATE org_units SET head_user=NULL WHERE head_user IN (SELECT id FROM users WHERE role IN ({','.join('?' * len(legacy))}))", legacy)
     for x in _derive_units(con):
         info = UNIT_INFO.get(x["key"])
         con.execute("""INSERT INTO org_units(key,name,grp,ord,head,head_user,curator,info) VALUES(?,?,?,?,?,?,?,?)
                        ON CONFLICT(key) DO UPDATE SET name=excluded.name, grp=excluded.grp, ord=excluded.ord, head=excluded.head,
-                         head_user=COALESCE(org_units.head_user, excluded.head_user), curator=excluded.curator,
+                         head_user=COALESCE(org_units.head_user, excluded.head_user),
+                         curator=CASE WHEN COALESCE(org_units.curator_manual,0)=1 THEN org_units.curator ELSE excluded.curator END,
                          info=excluded.info""",
                     (x["key"], x["name"], x["grp"], x["ord"], x["head"], x["head_user"], _curator_of(x["key"]), json.dumps(info, ensure_ascii=False) if info else None))
     con.commit()
@@ -175,8 +185,9 @@ def units(con) -> list[dict]:
     if hit and time.time() - hit[0] < 60: return hit[1]
     gi = {g: i for i, (g, _) in enumerate(GROUPS)}
     res = []
-    for r in db.rows(con, "SELECT * FROM org_units"):
-        x = {"key": r["key"], "name": r["name"], "group": r["grp"], "order": r["ord"], "head": r["head"] or "", "curator": r["curator"]}
+    # rahbar ismi — tayinlangan xodimdan (head_user), bo'lmasa sync_units yozgan nomdan
+    for r in db.rows(con, "SELECT o.*, u.full_name hu_name FROM org_units o LEFT JOIN users u ON u.id=o.head_user"):
+        x = {"key": r["key"], "name": r["name"], "group": r["grp"], "order": r["ord"], "head": _short(r["hu_name"]) or r["head"] or "", "curator": r["curator"]}
         if r["info"]: x["info"] = json.loads(r["info"])
         res.append(x)
     res.sort(key=lambda x: (gi.get(x["group"], 9), x["order"], x["name"]))
@@ -196,7 +207,8 @@ def is_head(c: Ctx) -> bool:
 def members(con, unit) -> list[dict]:
     hu = head_user(con, unit)
     return [{"id": u["id"], "name": _short(u["full_name"]) or u["full_name"], "short": _brief(u["full_name"]), "position": _pos(u["full_name"]), "head": u["id"] == hu}
-            for u in db.rows(con, "SELECT id, full_name FROM users WHERE unit=? ORDER BY (id!=?), id", (unit, hu or 0))]
+            for u in db.rows(con, "SELECT * FROM users WHERE unit=? ORDER BY (id!=?), id", (unit, hu or 0))
+            if u.get("active") != 0 and not getattr(ROLES.get(u["role"]), "legacy", False)]
 
 def curated(c: Ctx) -> list[str]:
     if not c.role.key.startswith("prorektor_"): return []
@@ -236,6 +248,14 @@ CREATE INDEX IF NOT EXISTS ix_portal_rcp_unit ON portal_recipients(unit, status)
 CREATE INDEX IF NOT EXISTS ix_portal_thr_from ON portal_threads(from_unit, updated_at);
 CREATE INDEX IF NOT EXISTS ix_portal_thr_upd ON portal_threads(updated_at, id);
 CREATE INDEX IF NOT EXISTS ix_portal_msgs_unit ON portal_msgs(thread_id, unit, id);
+-- v2.2: xatga biriktirilgan talabalar ro'yxati (ijro belgilari bilan) va javoblarni ko'rib chiqish tarixi
+CREATE TABLE IF NOT EXISTS portal_thread_students(thread_id INT, student_id INT, added_by INT, added_at TEXT, note TEXT,
+  exec_status TEXT DEFAULT 'kutilmoqda', exec_note TEXT, exec_unit TEXT, exec_by INT, exec_by_name TEXT, exec_at TEXT,
+  PRIMARY KEY(thread_id, student_id));
+CREATE INDEX IF NOT EXISTS ix_portal_ts_student ON portal_thread_students(student_id);
+CREATE TABLE IF NOT EXISTS portal_reviews(id INTEGER PRIMARY KEY, thread_id INT, unit TEXT, decision TEXT, comment TEXT, due TEXT,
+  by_id INT, by_name TEXT, by_unit TEXT, at TEXT);
+CREATE INDEX IF NOT EXISTS ix_portal_rev_t ON portal_reviews(thread_id, id);
 """
 FTS_OK = [False]
 
@@ -252,6 +272,14 @@ def migrate(con):
                                          ("via", "TEXT DEFAULT 'xat'"), ("lead", "INT DEFAULT 0"), ("forwarded_to", "TEXT"), ("fwd_from", "TEXT")])
     _add_cols(con, "portal_msgs", [("kind", "TEXT DEFAULT 'xat'"), ("meta", "TEXT")])
     _add_cols(con, "portal_files", [("sha256", "TEXT"), ("scan", "TEXT"), ("mime", "TEXT")])
+    # v2.1: rezolyutsiyani tahrirlash/bekor qilish, xatni qaytarib olish, kuratorni qo'lda tayinlash
+    _add_cols(con, "portal_recipients", [("res_id", "INT")])
+    _add_cols(con, "portal_resolutions", [("edited_at", "TEXT"), ("note", "TEXT")])
+    _add_cols(con, "portal_threads", [("recalled", "TEXT")])
+    _add_cols(con, "org_units", [("curator_manual", "INT DEFAULT 0")])
+    # v2.2: javobni ko'rib chiqish (qabul / qayta ishlashga qaytarish), qoralamada talabalar ro'yxati
+    _add_cols(con, "portal_recipients", [("review", "TEXT"), ("review_note", "TEXT"), ("review_at", "TEXT"), ("review_by", "TEXT"), ("returns", "INT DEFAULT 0")])
+    _add_cols(con, "portal_drafts", [("students", "TEXT")])
     con.execute("CREATE INDEX IF NOT EXISTS ix_users_unit ON users(unit)")
     con.execute("UPDATE portal_threads SET status='ochiq' WHERE status IS NULL")
     try:
@@ -308,6 +336,7 @@ def init(con):
     migrate(con)
     try:
         seed(con)
+        seed_demo_v22(con)
     except Exception as e:      # demo: portal namunasi tayyorlanmasa ham server ishlashi kerak
         import traceback; traceback.print_exc()
         print("portal.seed xatosi:", e)
@@ -325,9 +354,9 @@ def _audit(c, action, ok=True, detail=""):
 _EFF_DUE = "COALESCE(NULLIF(r.due,''), NULLIF(t.due,''))"
 
 def _part_sql(a="t") -> str:
-    """Ishtirokchi bo'lim sharti (3 ta ? — bo'lim kaliti)."""
-    return (f"({a}.from_unit=? OR EXISTS(SELECT 1 FROM portal_recipients rp WHERE rp.thread_id={a}.id AND rp.unit=?)"
-            f" OR EXISTS(SELECT 1 FROM portal_watchers wp WHERE wp.thread_id={a}.id AND wp.unit=?))")
+    """Ishtirokchi bo'lim sharti (3 ta ? — bo'lim kaliti). Qaytarib olingan xat faqat yuboruvchi bo'limga tegishli."""
+    return (f"({a}.from_unit=? OR COALESCE({a}.status,'ochiq')!='qaytarilgan' AND (EXISTS(SELECT 1 FROM portal_recipients rp WHERE rp.thread_id={a}.id AND rp.unit=?)"
+            f" OR EXISTS(SELECT 1 FROM portal_watchers wp WHERE wp.thread_id={a}.id AND wp.unit=?)))")
 
 def _unread_sql(a="t") -> str:
     """Xodim uchun o'qilmagan (2 ta ?: bo'lim, xodim). Tizim yozuvlari (tayinlash, yopish) "yangi xat" hisoblanmaydi."""
@@ -345,11 +374,11 @@ def _box_where(c: Ctx, box: str) -> tuple[str, list]:
                                     else "Bu bo'lim faqat rektor va prorektorlarga ko'rinadi.") + " So'rov audit jurnaliga yozildi.")
     if box == "sent": return f"t.from_unit=? AND t.status='ochiq' AND NOT {_hidden_sql()}", [me, uid]
     if box == "all": return "1=1", []
-    if box == "control": return "t.status='ochiq' AND EXISTS(SELECT 1 FROM portal_resolutions z WHERE z.thread_id=t.id AND z.author_unit=?)", [me]
+    if box == "control": return "t.status='ochiq' AND EXISTS(SELECT 1 FROM portal_resolutions z WHERE z.thread_id=t.id AND z.author_unit=? AND z.state!='bekor')", [me]
     if box == "area":
         cu = curated(c); ph = ",".join("?" * len(cu))
-        return f"(t.from_unit IN ({ph}) OR EXISTS(SELECT 1 FROM portal_recipients ra WHERE ra.thread_id=t.id AND ra.unit IN ({ph})))", [*cu, *cu]
-    if box == "archive": return f"{_part_sql()} AND (t.status='yopilgan' OR {_hidden_sql()})", [me, me, me, uid]
+        return f"t.status!='qaytarilgan' AND (t.from_unit IN ({ph}) OR EXISTS(SELECT 1 FROM portal_recipients ra WHERE ra.thread_id=t.id AND ra.unit IN ({ph})))", [*cu, *cu]
+    if box == "archive": return f"{_part_sql()} AND (t.status IN ('yopilgan','qaytarilgan') OR {_hidden_sql()})", [me, me, me, uid]
     return (f"EXISTS(SELECT 1 FROM portal_recipients ri WHERE ri.thread_id=t.id AND ri.unit=?) AND t.status='ochiq' AND NOT {_hidden_sql()}", [me, uid])
 
 def _flt_where(c: Ctx, box: str, flt: str) -> tuple[str, list]:
@@ -365,7 +394,16 @@ def _flt_where(c: Ctx, box: str, flt: str) -> tuple[str, list]:
                 f" AND {_EFF_DUE} < ?)", [*sa, today])
     if flt == "mine":
         return f"EXISTS(SELECT 1 FROM portal_recipients r WHERE r.thread_id=t.id AND r.unit=? AND r.assignee=?)", [me, uid]
+    if flt == "review":      # javob kelgan, lekin men (yuboruvchi yoki rezolyutsiya muallifi) hali ko'rib chiqmaganman
+        return f"t.status='ochiq' AND {_REVIEW_SQL}", [me, me]
+    if flt == "returned":    # bo'limimga qayta ishlashga qaytarilgan va hali qayta javob berilmagan
+        return f"t.status='ochiq' AND EXISTS(SELECT 1 FROM portal_recipients r WHERE r.thread_id=t.id AND r.unit=? AND r.review='qaytarildi' AND r.status IN {_PEND_SQL})", [me]
     return "1=1", []
+
+# ko'rib chiqilishi kerak bo'lgan javob (2 ta ?: bo'lim, bo'lim): yuboruvchi — har bir qabul qiluvchi javobini, rezolyutsiya muallifi — o'z ijrochilarinikini
+_REVIEW_SQL = ("""EXISTS(SELECT 1 FROM portal_recipients rv WHERE rv.thread_id=t.id AND rv.status='javob berilgan' AND rv.review IS NULL
+     AND (t.from_unit=? OR EXISTS(SELECT 1 FROM portal_resolutions zv, json_each(zv.units) jv WHERE zv.thread_id=t.id AND zv.author_unit=?
+                                   AND zv.state='nazoratda' AND jv.value=rv.unit)))""")
 
 def _q_where(q: str) -> tuple[str, list]:
     q = (q or "").strip()[:80]
@@ -406,10 +444,17 @@ def _summaries(con, c: Ctx, ts: list[dict], box: str = "inbox") -> list[dict]:
     watch = {r["thread_id"] for r in db.rows(con, f"SELECT thread_id FROM portal_watchers WHERE unit=? AND thread_id IN ({ids})", (me,))}
     hidden = {r["thread_id"] for r in db.rows(con, f"SELECT thread_id FROM portal_hidden WHERE user_id=? AND thread_id IN ({ids})", (uid,))}
     res_on = {r["thread_id"] for r in db.rows(con, f"SELECT DISTINCT thread_id FROM portal_resolutions WHERE state='nazoratda' AND thread_id IN ({ids})")}
+    stu = {r["thread_id"]: {"total": r["n"], "done": r["d"] or 0, "failed": r["f"] or 0} for r in db.rows(con, f"""SELECT thread_id, COUNT(*) n,
+        SUM(exec_status='bajarildi') d, SUM(exec_status='bajarilmadi') f FROM portal_thread_students WHERE thread_id IN ({ids}) GROUP BY thread_id""")}
+    my_res = {}      # men qo'ygan nazoratdagi rezolyutsiyalar ijrochilari (ko'rib chiqish uchun)
+    for z in db.rows(con, f"SELECT thread_id, units FROM portal_resolutions WHERE state='nazoratda' AND author_unit=? AND thread_id IN ({ids})", (me,)):
+        my_res.setdefault(z["thread_id"], set()).update(json.loads(z["units"] or "[]"))
     today = _today(); out = []
     for t in ts:
         rs = rec.get(t["id"], [])
-        mine = next((r for r in rs if r["unit"] == me), None)
+        recalled = (t.get("status") or "") == "qaytarilgan"
+        if recalled: rs = [{"unit": x["unit"], "status": "qaytarilgan", "due": x.get("due")} for x in _recall_snap(t)["recipients"]]
+        mine = next((r for r in rs if r["unit"] == me), None) if not recalled else None
         role = "from" if t["from_unit"] == me else "to" if mine else "watch" if t["id"] in watch else "observer"
         open_ = (t.get("status") or "ochiq") == "ochiq"
         pending = [r for r in rs if r["status"] in PENDING]
@@ -429,7 +474,11 @@ def _summaries(con, c: Ctx, ts: list[dict], box: str = "inbox") -> list[dict]:
                     "count": cnt.get(t["id"], 0), "files": att.get(t["id"], 0),
                     "assignee_name": _brief(mine["assignee_name"]) if mine and mine.get("assignee_name") else None,
                     "assigned_to_me": bool(mine and mine.get("assignee") == uid),
-                    "resolution": t["id"] in res_on, "archived": t["id"] in hidden})
+                    "resolution": t["id"] in res_on, "archived": t["id"] in hidden, "recalled": recalled,
+                    "students": stu.get(t["id"]),
+                    "review": (mine.get("review") if mine else None), "returns": (mine.get("returns") or 0) if mine else 0,
+                    "to_review": sum(1 for r in rs if r["status"] == "javob berilgan" and not r.get("review")
+                                     and (t["from_unit"] == me or r["unit"] in my_res.get(t["id"], ()))) if open_ and not recalled else 0})
     return out
 
 def counts(con, c: Ctx) -> dict:
@@ -441,8 +490,8 @@ def counts(con, c: Ctx) -> dict:
     row = con.execute(f"""
       WITH p AS (
         SELECT t.id, t.status='ochiq' AS op, t.from_unit=:me AS frm,
-          EXISTS(SELECT 1 FROM portal_recipients r WHERE r.thread_id=t.id AND r.unit=:me) AS rcp,
-          EXISTS(SELECT 1 FROM portal_watchers w WHERE w.thread_id=t.id AND w.unit=:me) AS wch,
+          t.status!='qaytarilgan' AND EXISTS(SELECT 1 FROM portal_recipients r WHERE r.thread_id=t.id AND r.unit=:me) AS rcp,
+          t.status!='qaytarilgan' AND EXISTS(SELECT 1 FROM portal_watchers w WHERE w.thread_id=t.id AND w.unit=:me) AS wch,
           EXISTS(SELECT 1 FROM portal_hidden h WHERE h.thread_id=t.id AND h.user_id=:uid) AS hid,
           (SELECT COALESCE(MAX(m.id),0) FROM portal_msgs m WHERE m.thread_id=t.id AND m.unit!=:me AND COALESCE(m.kind,'xat')!='tizim')
             > COALESCE((SELECT x.last_msg FROM portal_user_reads x WHERE x.thread_id=t.id AND x.user_id=:uid),0) AS unr
@@ -460,7 +509,10 @@ def counts(con, c: Ctx) -> dict:
                            AND NOT EXISTS(SELECT 1 FROM portal_hidden h WHERE h.thread_id=t.id AND h.user_id=:uid)""", p).fetchone()
     d = {"unit": me, "unread": row[0], "inbox_unread": row[1], "sent_unread": row[2], "inbox": row[3], "sent": row[4], "archive": row[5],
          "inbox_pending": rc[0], "my_overdue": rc[1], "assigned_to_me": rc[2], "leader": is_leader(c),
-         "drafts": con.execute("SELECT COUNT(*) FROM portal_drafts WHERE user_id=?", (uid,)).fetchone()[0]}
+         "drafts": con.execute("SELECT COUNT(*) FROM portal_drafts WHERE user_id=?", (uid,)).fetchone()[0],
+         "to_review": con.execute(f"SELECT COUNT(*) FROM portal_threads t WHERE t.status='ochiq' AND {_REVIEW_SQL}", (me, me)).fetchone()[0],
+         "inbox_returned": con.execute(f"""SELECT COUNT(*) FROM portal_recipients r JOIN portal_threads t ON t.id=r.thread_id WHERE r.unit=? AND t.status='ochiq'
+                                           AND r.review='qaytarildi' AND r.status IN {_PEND_SQL}""", (me,)).fetchone()[0]}
     if is_leader(c):
         cr = con.execute(f"""SELECT COUNT(*), COALESCE(SUM(z.due IS NOT NULL AND z.due!='' AND z.due < :today),0) FROM portal_resolutions z
             JOIN portal_threads t ON t.id=z.thread_id
@@ -482,7 +534,7 @@ def counts(con, c: Ctx) -> dict:
     return dict(d)
 
 BOXES = ("inbox", "sent", "control", "area", "all", "archive")
-FLTS = ("all", "unread", "pending", "overdue", "mine")
+FLTS = ("all", "unread", "pending", "overdue", "mine", "review", "returned")
 
 def list_threads(c: Ctx, box="inbox", q="", flt="all", offset=0, limit=PAGE) -> dict:
     if box not in BOXES: raise HTTPException(400, "Noto'g'ri quti")
@@ -508,27 +560,115 @@ def _is_part(con, t, unit) -> bool:
     return t["from_unit"] == unit or bool(con.execute("""SELECT 1 FROM portal_recipients WHERE thread_id=? AND unit=?
         UNION SELECT 1 FROM portal_watchers WHERE thread_id=? AND unit=?""", (t["id"], unit, t["id"], unit)).fetchone())
 
-def _res_view(con, c: Ctx, z: dict, rmap: dict, um: dict) -> dict:
+def _res_view(con, c: Ctx, z: dict, rmap: dict, um: dict, open_: bool = True) -> dict:
     us = json.loads(z["units"] or "[]"); today = _today()
     ex = [{"unit": u, "name": _uname(um, u), "status": (rmap.get(u) or {}).get("status"), "answered_at": (rmap.get(u) or {}).get("answered_at"),
            "lead": u == z["lead_unit"]} for u in us]
     done = all(x["status"] in DONE for x in ex) if ex else True
-    state = "yechilgan" if z["state"] == "yechilgan" else "bajarildi" if done else "nazoratda"
+    state = z["state"] if z["state"] in ("yechilgan", "bekor") else "bajarildi" if done else "nazoratda"
+    author = z["author_unit"] == my_unit(c) and c.role.key in RESOLVERS
+    live = z["state"] == "nazoratda"
     return {"id": z["id"], "author": _short(z["author_name"]) or z["author_name"], "author_position": _pos(z["author_name"]),
             "author_unit_name": _uname(um, z["author_unit"]), "text": z["text"], "due": z["due"], "created_at": z["created_at"], "lead_unit": z["lead_unit"],
             "units": ex, "state": state, "overdue": state == "nazoratda" and bool(z["due"] and z["due"] < today),
-            "can_close": z["state"] != "yechilgan" and (z["author_unit"] == my_unit(c) and c.role.key in RESOLVERS)}
+            "edited_at": z.get("edited_at"), "closed_at": z.get("closed_at"), "note": z.get("note"),
+            "can_close": live and author,
+            "can_edit": live and author and open_, "can_cancel": live and author and open_}
+
+def _recall_snap(t: dict) -> dict:
+    """Qaytarib olingan xatning qabul qiluvchilari va muddati (qaytarish paytidagi holat)."""
+    try: return json.loads(t.get("recalled") or "{}") or {"recipients": []}
+    except ValueError: return {"recipients": []}
+
+def _recall_block(con, t: dict) -> str | None:
+    """Xatni qaytarib olish mumkin bo'lmasa — sababi (matn); mumkin bo'lsa None."""
+    tid = t["id"]
+    if (t["status"] or "ochiq") != "ochiq": return "Yozishma ochiq emas — qaytarib bo'lmaydi"
+    rs = db.rows(con, "SELECT unit, status, assignee FROM portal_recipients WHERE thread_id=?", (tid,))
+    units_ = [r["unit"] for r in rs]
+    read = any(r["status"] != "yangi" or r["assignee"] for r in rs)
+    if not read and units_:
+        ph = ",".join("?" * len(units_))
+        read = bool(con.execute(f"""SELECT 1 FROM portal_user_reads ur JOIN users u ON u.id=ur.user_id
+                                    WHERE ur.thread_id=? AND u.unit IN ({ph}) LIMIT 1""", (tid, *units_)).fetchone())
+    if read: return "Xat o'qilgan — qaytarib bo'lmaydi. Yozishmani yopishingiz mumkin."
+    if con.execute("SELECT 1 FROM portal_msgs WHERE thread_id=? AND unit!=? AND COALESCE(kind,'xat')!='tizim' LIMIT 1", (tid, t["from_unit"])).fetchone():
+        return "Xatga javob yozilgan — qaytarib bo'lmaydi. Yozishmani yopishingiz mumkin."
+    if con.execute("SELECT 1 FROM portal_resolutions WHERE thread_id=? LIMIT 1", (tid,)).fetchone():
+        return "Xatga rezolyutsiya qo'yilgan — qaytarib bo'lmaydi. Yozishmani yopishingiz mumkin."
+    return None
+
+# ---------------------------------------------------------------------------------------------
+# Xatga biriktirilgan talabalar ro'yxati: RBAC (talabalar kartochkasi + ko'lam), ijro belgilari
+# ---------------------------------------------------------------------------------------------
+STU_EXEC = {"kutilmoqda": "Kutilmoqda", "bajarildi": "Bajarildi", "bajarilmadi": "Bajarilmadi"}
+STU_MAX = 500
+
+def stu_full(c: Ctx) -> bool:
+    """Talabalar ro'yxatini (ism, HEMIS) ko'rish huquqi: talabalar kartochkasi ruxsati, jamlangan emas. Ko'lam — c.student_scope()."""
+    return _student_detail(c)
+
+def _executors(con, t: dict, rs: list[dict]) -> set:
+    """Talabalar bo'yicha ijroni belgilaydigan bo'limlar: nazoratdagi rezolyutsiya bo'lsa — uning ijrochilari; aks holda qabul qiluvchilar
+    (yo'naltirib yuborganlardan tashqari)."""
+    live = set()
+    for z in db.rows(con, "SELECT units FROM portal_resolutions WHERE thread_id=? AND state='nazoratda'", (t["id"],)):
+        live.update(json.loads(z["units"] or "[]"))
+    have = {r["unit"]: r for r in rs}
+    if live: return {u for u in live if u in have}
+    return {r["unit"] for r in rs if r["status"] != "yo'naltirilgan"}
+
+def _stu_rows(con, c: Ctx, tid: int) -> list[dict]:
+    vis = c.student_scope("s") if stu_full(c) else "0"
+    return db.rows(con, f"""SELECT ts.student_id id, ts.note, ts.exec_status, ts.exec_note, ts.exec_unit, ts.exec_by_name, ts.exec_at, ts.added_at,
+            s.full_name, s.hemis_id, s.status st_status, s.study_form, g.name grp, g.course, f.name fak, ({vis}) AS vis
+        FROM portal_thread_students ts JOIN students s ON s.id=ts.student_id LEFT JOIN groups_ g ON g.id=s.group_id LEFT JOIN faculties f ON f.id=s.faculty_id
+        WHERE ts.thread_id=? ORDER BY g.name, s.full_name""", (tid,))
+
+def _students_view(con, c: Ctx, t: dict, rs: list[dict], sender: bool, open_: bool) -> dict | None:
+    rows = _stu_rows(con, c, t["id"])
+    if not rows: return None
+    full = stu_full(c); me = my_unit(c); um = unit_map(con)
+    vis = [r for r in rows if r["vis"]] if full else []
+    cnt = {k: sum(1 for r in rows if (r["exec_status"] or "kutilmoqda") == k) for k in STU_EXEC}
+    groups = {}
+    for r in rows: groups[r["grp"] or "—"] = groups.get(r["grp"] or "—", 0) + 1
+    ex = _executors(con, t, rs)
+    return {"total": len(rows), "done": cnt["bajarildi"], "failed": cnt["bajarilmadi"], "pending": cnt["kutilmoqda"],
+            "groups": [{"name": k, "n": v} for k, v in sorted(groups.items())],
+            "can_view": full, "hidden": len(rows) - len(vis),
+            "scope": c.scope_label(con) if full else None,
+            "executors": [{"unit": u, "name": _uname(um, u)} for u in sorted(ex)],
+            "can_mark": open_ and full and me in ex and bool(vis),
+            "can_add": open_ and full and sender,
+            "items": [{"id": r["id"], "name": r["full_name"], "hemis": r["hemis_id"], "group": r["grp"], "course": r["course"], "faculty": r["fak"],
+                       "student_status": r["st_status"], "note": r["note"], "exec": r["exec_status"] or "kutilmoqda", "exec_note": r["exec_note"],
+                       "exec_unit": _uname(um, r["exec_unit"]) if r["exec_unit"] else None, "exec_by": _brief(r["exec_by_name"]) if r["exec_by_name"] else None,
+                       "exec_at": r["exec_at"]} for r in vis]}
+
+def _reviewable(con, t: dict, me: str) -> set:
+    """Qaysi qabul qiluvchilar javobini men ko'rib chiqa olaman: yuboruvchi — hammasini; rezolyutsiya muallifi — o'z ijrochilarini."""
+    if t["from_unit"] == me: return {"*"}
+    out = set()
+    for z in db.rows(con, "SELECT units FROM portal_resolutions WHERE thread_id=? AND author_unit=? AND state='nazoratda'", (t["id"], me)):
+        out.update(json.loads(z["units"] or "[]"))
+    return out
 
 def thread_detail(c: Ctx, tid: int) -> dict:
     t = _thread(_con, tid)
     me, uid = my_unit(c), c.user["id"]; um = unit_map(_con)
+    recalled = t["status"] == "qaytarilgan"
     rs = db.rows(_con, "SELECT * FROM portal_recipients WHERE thread_id=? ORDER BY rowid", (tid,))
     watchers = [r["unit"] for r in db.rows(_con, "SELECT unit FROM portal_watchers WHERE thread_id=? ORDER BY added_at", (tid,))]
+    if recalled: rs, watchers = [], []      # qaytarib olingan xat faqat yuboruvchiga (va rahbariyatga) ko'rinadi
     mine = next((r for r in rs if r["unit"] == me), None)
-    part = t["from_unit"] == me or bool(mine) or me in watchers
+    sender = t["from_unit"] == me or t["from_user"] == uid
+    part = sender or bool(mine) or me in watchers
     ok = part or is_leader(c)
     _audit(c, "portal: yozishmani ochish", ok, f"{t['ref_no']} {t['subject']}")
     if not ok:
+        if recalled and any(x["unit"] == me for x in _recall_snap(t)["recipients"]):
+            raise HTTPException(410, "Bu xat yuboruvchi tomonidan qaytarib olingan.")
         raise AccessDenied("⛔ Bu yozishma sizning bo'limingizga tegishli emas. So'rov audit jurnaliga yozildi.")
     msgs = db.rows(_con, "SELECT * FROM portal_msgs WHERE thread_id=? ORDER BY id", (tid,))
     att = {}
@@ -554,7 +694,7 @@ def thread_detail(c: Ctx, tid: int) -> dict:
         readers.setdefault(r["unit"], []).append({"name": _brief(r["full_name"]), "at": r["read_at"]})
     today = _today(); open_ = (t["status"] or "ochiq") == "ochiq"
     rmap = {r["unit"]: r for r in rs}
-    resolutions = [_res_view(_con, c, z, rmap, um) for z in db.rows(_con, "SELECT * FROM portal_resolutions WHERE thread_id=? ORDER BY id", (tid,))]
+    resolutions = [_res_view(_con, c, z, rmap, um, open_) for z in db.rows(_con, "SELECT * FROM portal_resolutions WHERE thread_id=? ORDER BY id", (tid,))]
     hidden = bool(_con.execute("SELECT 1 FROM portal_hidden WHERE thread_id=? AND user_id=?", (tid, uid)).fetchone())
     head = is_head(c)
     mem_n = _con.execute("SELECT COUNT(*) FROM users WHERE unit=?", (me,)).fetchone()[0]
@@ -565,10 +705,24 @@ def thread_detail(c: Ctx, tid: int) -> dict:
              "can_take": open_ and bool(mine) and not head and not mine.get("assignee") and mine["status"] in PENDING,
              "can_forward": open_ and bool(mine) and mine["status"] in PENDING,
              "can_close": open_ and (t["from_unit"] == me or is_leader(c)),
-             "can_reopen": not open_ and (t["from_unit"] == me or is_leader(c)),
+             "can_reopen": t["status"] == "yopilgan" and (t["from_unit"] == me or is_leader(c)),
+             "can_change_due": open_ and (t["from_unit"] == me or is_leader(c)) and any(r["status"] in PENDING for r in rs),
+             "can_recall": open_ and sender and _recall_block(_con, t) is None,
+             "can_resend": recalled and sender,
              "can_archive": part and not hidden, "archived": hidden}
+    rv = _reviewable(_con, t, me) if open_ and not recalled else set()
+    can_rv = lambda r: r["status"] == "javob berilgan" and ("*" in rv or r["unit"] in rv)
+    perms["can_review"] = any(can_rv(r) for r in rs)
+    reviews = [{"unit": x["unit"], "name": _uname(um, x["unit"]), "decision": x["decision"], "comment": x["comment"], "due": x["due"],
+                "by": _brief(x["by_name"]) or x["by_name"], "by_unit": _uname(um, x["by_unit"]), "at": x["at"]}
+               for x in db.rows(_con, "SELECT * FROM portal_reviews WHERE thread_id=? ORDER BY id", (tid,))]
+    rec_info = None
+    if recalled:
+        sn = _recall_snap(t)
+        rec_info = {"recipients": [{"unit": x["unit"], "name": _uname(um, x["unit"]), "due": x.get("due")} for x in sn["recipients"]],
+                    "due": sn.get("due"), "at": t["closed_at"], "by": t["closed_by"], "note": t["close_note"]}
     return {"id": t["id"], "ref_no": t["ref_no"], "subject": t["subject"], "kind": t["kind"], "priority": t["priority"], "due": t["due"],
-            "status": t["status"] or "ochiq", "closed_at": t["closed_at"], "closed_by": t["closed_by"], "close_note": t["close_note"],
+            "status": t["status"] or "ochiq", "closed_at": t["closed_at"], "closed_by": t["closed_by"], "close_note": t["close_note"], "recalled": rec_info,
             "from_unit": t["from_unit"], "from_unit_name": _uname(um, t["from_unit"]), "from_name": _short(t["from_name"]), "created_at": t["created_at"],
             "recipients": [{"unit": r["unit"], "name": _uname(um, r["unit"]), "status": r["status"], "read_at": r["read_at"],
                             "read_by": _short(r["read_by"]), "answered_at": r["answered_at"], "due": due_of(r),
@@ -577,9 +731,13 @@ def thread_detail(c: Ctx, tid: int) -> dict:
                             "assignee_name": _brief(r["assignee_name"]) if r.get("assignee_name") else None,
                             "forwarded_to": [_uname(um, u) for u in json.loads(r["forwarded_to"] or "[]")] if r.get("forwarded_to") else [],
                             "fwd_from": _uname(um, r["fwd_from"]) if r.get("fwd_from") else None,
-                            "readers": readers.get(r["unit"], [])} for r in rs],
+                            "readers": readers.get(r["unit"], []),
+                            "review": r.get("review"), "review_note": r.get("review_note"), "review_at": r.get("review_at"),
+                            "review_by": _brief(r["review_by"]) if r.get("review_by") else None, "returns": r.get("returns") or 0,
+                            "can_review": can_rv(r)} for r in rs],
             "watchers": [{"unit": u, "name": _uname(um, u)} for u in watchers],
-            "resolutions": resolutions,
+            "resolutions": resolutions, "reviews": reviews,
+            "students": _students_view(_con, c, t, rs, sender, open_),
             "messages": [{"id": m["id"], "kind": m.get("kind") or "xat", "unit": m["unit"], "unit_name": _uname(um, m["unit"]),
                           "name": _short(m["user_name"]) or _uname(um, m["unit"]), "position": _pos(m["user_name"]),
                           "mine": m["unit"] == me, "body": m["body"], "created_at": m["created_at"],
@@ -613,6 +771,27 @@ class ThreadIn(BaseModel):
     due: str | None = None
     file_ids: list[int] = []
     draft_id: int | None = None
+    students: list[int] = []          # biriktirilgan talabalar (students.id) — faqat yuboruvchi ko'lamida
+    student_note: str = ""            # ro'yxat uchun umumiy izoh (har bir talabaga yoziladi)
+
+class StudentsIn(BaseModel):
+    students: list[int]
+    note: str = ""
+
+class MarkIn(BaseModel):
+    ids: list[int]
+    status: str                       # bajarildi | bajarilmadi | kutilmoqda
+    note: str = ""
+
+class ReviewIn(BaseModel):
+    unit: str
+    decision: str                     # accept | return
+    comment: str = ""
+    due: str | None = None            # qaytarishda: yangi muddat (ixtiyoriy)
+
+class LookupIn(BaseModel):
+    ids: list[int] = []
+    hemis: str = ""
 
 class ReplyIn(BaseModel):
     body: str
@@ -666,6 +845,7 @@ def create_thread(con, c: Ctx, body: ThreadIn, ts: str | None = None) -> int:
     if len(to) > 60: raise HTTPException(400, "Qabul qiluvchilar juda ko'p")
     kind = body.kind if body.kind in KINDS else "xat"
     prio = body.priority if body.priority in PRIOS else "oddiy"
+    sids = _check_students(con, c, body.students)
     ts = ts or _now()
     cur = con.execute("INSERT INTO portal_threads(ref_no,subject,kind,priority,due,from_unit,from_user,from_name,created_at,updated_at,status) VALUES(?,?,?,?,?,?,?,?,?,?,'ochiq')",
                       ("", subj, kind, prio, _valid_due(body.due), me, c.user["id"], c.user["full_name"], ts, ts))
@@ -675,12 +855,38 @@ def create_thread(con, c: Ctx, body: ThreadIn, ts: str | None = None) -> int:
         con.execute("INSERT INTO portal_recipients(thread_id,unit,status,via) VALUES(?,?,?,'xat')", (tid, u, "yangi"))
     mid = _msg(con, c, tid, me, text, ts)
     _attach(con, c, mid, body.file_ids, to)
+    _put_students(con, c, tid, sids, body.student_note, ts)
     if body.draft_id: con.execute("DELETE FROM portal_drafts WHERE id=? AND user_id=?", (body.draft_id, c.user["id"]))
     con.commit(); _bump()
     return tid
 
+def _check_students(con, c: Ctx, ids) -> list[int]:
+    """Biriktiriladigan talabalar: yuboruvchida talabalar kartochkasiga to'liq ruxsat bo'lishi va har bir talaba uning ko'lamida bo'lishi shart."""
+    ids = list(dict.fromkeys(int(x) for x in (ids or []) if int(x) > 0))
+    if not ids: return []
+    if not stu_full(c):
+        rbac.audit(con, c, "portal: talabalar ro'yxatini biriktirish", RES, False, f"{len(ids)} ta talaba")
+        raise AccessDenied("⛔ Talabalar ro'yxatini biriktirish uchun talabalar kartochkasiga to'liq ruxsat kerak. So'rov audit jurnaliga yozildi.")
+    if len(ids) > STU_MAX: raise HTTPException(400, f"Bitta xatga ko'pi bilan {STU_MAX} ta talaba biriktiriladi")
+    found = {r[0] for r in con.execute(f"SELECT s.id FROM students s WHERE s.id IN ({','.join(map(str, ids))}) AND {c.student_scope('s')}")}
+    bad = [i for i in ids if i not in found]
+    if bad:
+        rbac.audit(con, c, "portal: talabalar ro'yxatini biriktirish", RES, False, f"ko'lamdan tashqari: {len(bad)} ta")
+        raise HTTPException(400, f"{len(bad)} ta talaba topilmadi yoki ko'lamingizda emas")
+    return ids
+
+def _put_students(con, c: Ctx, tid: int, ids: list[int], note: str, ts: str) -> int:
+    note = (note or "").strip()[:300] or None
+    n = 0
+    for sid in ids:
+        n += con.execute("""INSERT OR IGNORE INTO portal_thread_students(thread_id,student_id,added_by,added_at,note,exec_status)
+                            VALUES(?,?,?,?,?,'kutilmoqda')""", (tid, sid, c.user["id"], ts, note)).rowcount
+    return n
+
 def _need_open(t):
-    if (t["status"] or "ochiq") != "ochiq": raise HTTPException(409, "Yozishma yopilgan — avval qayta oching")
+    st = t["status"] or "ochiq"
+    if st == "qaytarilgan": raise HTTPException(409, "Xat yuboruvchi tomonidan qaytarib olingan")
+    if st != "ochiq": raise HTTPException(409, "Yozishma yopilgan — avval qayta oching")
 
 def reply(con, c: Ctx, tid: int, body: ReplyIn, ts: str | None = None) -> int:
     t = _thread(con, tid)
@@ -693,7 +899,8 @@ def reply(con, c: Ctx, tid: int, body: ReplyIn, ts: str | None = None) -> int:
     if not text: raise HTTPException(400, "Javob matni bo'sh")
     ts = ts or _now()
     mid = _msg(con, c, tid, me, text, ts)
-    con.execute("""UPDATE portal_recipients SET status='javob berilgan', answered_at=?, read_at=COALESCE(read_at,?), read_by=COALESCE(read_by,?)
+    # yangi javob — qayta ko'rib chiqiladi (qaytarilgan bo'lsa ham; tarix portal_reviews'da, qaytarishlar soni — returns)
+    con.execute("""UPDATE portal_recipients SET status='javob berilgan', answered_at=?, read_at=COALESCE(read_at,?), read_by=COALESCE(read_by,?), review=NULL
                    WHERE thread_id=? AND unit=?""", (ts, ts, c.user["full_name"], tid, me))
     others = [u for u in [t["from_unit"]] + [r["unit"] for r in db.rows(con, "SELECT unit FROM portal_recipients WHERE thread_id=?", (tid,))]
               + [r["unit"] for r in db.rows(con, "SELECT unit FROM portal_watchers WHERE thread_id=?", (tid,))] if u != me]
@@ -727,9 +934,15 @@ def resolve(con, c: Ctx, tid: int, body: ResolveIn, ts: str | None = None) -> in
             con.execute("UPDATE portal_recipients SET status=?, answered_at=NULL, due=COALESCE(?, due), lead=? WHERE thread_id=? AND unit=?",
                         (st, due, int(u == lead), tid, u))
         else:
-            con.execute("INSERT INTO portal_recipients(thread_id,unit,status,via,due,lead) VALUES(?,?,'yangi','rezolyutsiya',?,?)", (tid, u, due, int(u == lead)))
+            con.execute("INSERT INTO portal_recipients(thread_id,unit,status,via,due,lead,res_id) VALUES(?,?,'yangi','rezolyutsiya',?,?,?)", (tid, u, due, int(u == lead), rid))
     if not _is_part(con, t, me):
         con.execute("INSERT OR IGNORE INTO portal_watchers(thread_id,unit,added_at) VALUES(?,?,?)", (tid, me, ts))
+    # xat rahbarning o'ziga kelgan bo'lsa: rezolyutsiya — uning ijrosi (ijrochilarga yo'naltirildi), u endi javob kutilayotganlar qatorida emas
+    mine = db.one(con, "SELECT status, forwarded_to FROM portal_recipients WHERE thread_id=? AND unit=?", (tid, me))
+    if mine and mine["status"] in PENDING:
+        fw = list(dict.fromkeys(json.loads(mine["forwarded_to"] or "[]") + us))
+        con.execute("""UPDATE portal_recipients SET status='yo''naltirilgan', answered_at=?, forwarded_to=?, read_at=COALESCE(read_at,?),
+                       read_by=COALESCE(read_by,?) WHERE thread_id=? AND unit=?""", (ts, json.dumps(fw), ts, c.user["full_name"], tid, me))
     names = [_uname(um, u) + (" (mas'ul)" if u == lead and len(us) > 1 else "") for u in us]
     body_txt = f"Ijro uchun: {', '.join(names)}." + (f" Muddat: {dt.date.fromisoformat(due).strftime('%d.%m.%Y')}." if due else "") + f"\n{text}"
     _msg(con, c, tid, me, body_txt, ts, "rezolyutsiya", {"res_id": rid, "units": us, "lead": lead, "due": due})
@@ -742,9 +955,178 @@ def close_resolution(con, c: Ctx, tid: int, rid: int):
     if z["author_unit"] != my_unit(c) or c.role.key not in RESOLVERS:
         rbac.audit(con, c, "portal: rezolyutsiyani nazoratdan yechish", RES, False, str(rid))
         raise AccessDenied("⛔ Rezolyutsiyani faqat uni qo'ygan rahbar nazoratdan yechadi.")
+    if z["state"] != "nazoratda": raise HTTPException(409, "Rezolyutsiya allaqachon nazoratdan yechilgan yoki bekor qilingan")
     ts = _now()
     con.execute("UPDATE portal_resolutions SET state='yechilgan', closed_at=? WHERE id=?", (ts, rid))
     _msg(con, c, tid, my_unit(c), "Rezolyutsiya nazoratdan yechildi", ts, "tizim")
+    con.commit(); _bump()
+
+# ---------------------------------------------------------------------------------------------
+# Rezolyutsiyani tahrirlash va bekor qilish
+# ---------------------------------------------------------------------------------------------
+def _dm(d, full=False):
+    if not d: return "belgilanmagan"
+    return dt.date.fromisoformat(d).strftime("%d.%m.%Y" if full else "%d.%m")
+
+def _own_res(con, c: Ctx, tid: int, rid: int, action: str) -> tuple[dict, dict]:
+    t = _thread(con, tid)
+    z = db.one(con, "SELECT * FROM portal_resolutions WHERE id=? AND thread_id=?", (rid, tid))
+    if not z: raise HTTPException(404, "Rezolyutsiya topilmadi")
+    if z["author_unit"] != my_unit(c) or c.role.key not in RESOLVERS:
+        rbac.audit(con, c, f"portal: rezolyutsiyani {action}", RES, False, f"{t['ref_no']} #{rid}")
+        raise AccessDenied(f"⛔ Rezolyutsiyani faqat uni qo'ygan rahbar {action} mumkin. So'rov audit jurnaliga yozildi.")
+    _need_open(t)
+    if z["state"] != "nazoratda":
+        raise HTTPException(409, "Rezolyutsiya nazoratda emas (yechilgan yoki bekor qilingan) — o'zgartirib bo'lmaydi")
+    return t, z
+
+def _added_by(con, tid: int, unit: str, rid: int, r: dict | None) -> bool:
+    """Qabul qiluvchi aynan shu rezolyutsiya bilan qo'shilganmi (eski yozuvlarda res_id yo'q — shu bo'lim kiritilgan birinchi rezolyutsiya)."""
+    if not r or (r.get("via") or "xat") != "rezolyutsiya": return False
+    if r.get("res_id"): return r["res_id"] == rid
+    first = next((z["id"] for z in db.rows(con, "SELECT id, units FROM portal_resolutions WHERE thread_id=? ORDER BY id", (tid,))
+                  if unit in json.loads(z["units"] or "[]")), None)
+    return first == rid
+
+def _other_live(con, tid: int, unit: str, rid: int) -> dict | None:
+    """Shu bo'lim kiritilgan boshqa (nazoratdagi) rezolyutsiya — eng oxirgisi."""
+    return next((z for z in db.rows(con, "SELECT * FROM portal_resolutions WHERE thread_id=? AND id!=? AND state='nazoratda' ORDER BY id DESC", (tid, rid))
+                 if unit in json.loads(z["units"] or "[]")), None)
+
+def _release(con, tid: int, unit: str, rid: int) -> str:
+    """Bo'lim shu rezolyutsiya ijrochilaridan chiqariladi: shu rezolyutsiya qo'shgan va javob bermagan bo'lsa — qabul qiluvchilardan
+    o'chiriladi ('removed'); aks holda qoladi, faqat mas'ullik va shaxsiy muddat bekor qilinadi ('kept')."""
+    r = db.one(con, "SELECT * FROM portal_recipients WHERE thread_id=? AND unit=?", (tid, unit))
+    if not r: return "none"
+    z2 = _other_live(con, tid, unit, rid)
+    if z2:      # boshqa rezolyutsiya bo'yicha ham ijrochi — o'sha rezolyutsiyaning mas'ulligi va muddati tiklanadi
+        con.execute(f"UPDATE portal_recipients SET lead=?, due=CASE WHEN status IN {_PEND_SQL} THEN ? ELSE due END WHERE thread_id=? AND unit=?",
+                    (int(unit == z2["lead_unit"]), z2["due"], tid, unit))
+        return "kept"
+    if _added_by(con, tid, unit, rid, r) and r["status"] in PENDING:
+        con.execute("DELETE FROM portal_recipients WHERE thread_id=? AND unit=?", (tid, unit))
+        return "removed"
+    con.execute("UPDATE portal_recipients SET lead=0, due=NULL WHERE thread_id=? AND unit=?", (tid, unit))
+    return "kept"
+
+def edit_resolution(con, c: Ctx, tid: int, rid: int, body: ResolveIn) -> dict:
+    t, z = _own_res(con, c, tid, rid, "o'zgartirish")
+    me = my_unit(c); um = unit_map(con)
+    text = (body.text or "").strip()[:2000]
+    us = [u for u in dict.fromkeys(body.units or []) if u in um and u != me]
+    if not text: raise HTTPException(400, "Rezolyutsiya matni bo'sh")
+    if not us: raise HTTPException(400, "Ijrochi bo'lim tanlanmagan")
+    if t["from_unit"] in us: raise HTTPException(400, f"{_uname(um, t['from_unit'])} — xat yuboruvchisi; ijrochi qilib bo'lmaydi")
+    if len(us) > 20: raise HTTPException(400, "Ijrochilar juda ko'p")
+    lead = body.lead if body.lead in us else us[0]
+    old_due = z["due"] or None
+    due = _valid_due(body.due)
+    if due != old_due: due = _valid_due(body.due, future=True)       # yangi muddat o'tgan sana bo'lmasin; o'zgarmagan muddat tekshirilmaydi
+    old = json.loads(z["units"] or "[]")
+    added, removed = [u for u in us if u not in old], [u for u in old if u not in us]
+    changes = []
+    if due != old_due: changes.append(f"muddat {_dm(old_due)} → {_dm(due)}")
+    if added: changes.append("qo'shildi: " + ", ".join(_uname(um, u) for u in added))
+    if removed: changes.append("olib tashlandi: " + ", ".join(_uname(um, u) for u in removed))
+    if lead != z["lead_unit"] and len(us) > 1: changes.append(f"mas'ul ijrochi: {_uname(um, lead)}")
+    if text != z["text"]: changes.append("ko'rsatma yangilandi")
+    if not changes: raise HTTPException(400, "O'zgarish yo'q")
+    ts = _now()
+    kept = []
+    for u in removed:
+        if _release(con, tid, u, rid) == "kept": kept.append(u)
+    for u in added:
+        r = db.one(con, "SELECT * FROM portal_recipients WHERE thread_id=? AND unit=?", (tid, u))
+        if r:   # allaqachon qabul qiluvchi — ijro uchun qayta ochiladi (resolve() bilan bir xil)
+            st = "o'qilgan" if r["status"] in DONE or r["read_at"] else "yangi"
+            con.execute("UPDATE portal_recipients SET status=?, answered_at=NULL, due=COALESCE(?, due) WHERE thread_id=? AND unit=?", (st, due, tid, u))
+        else:
+            con.execute("INSERT INTO portal_recipients(thread_id,unit,status,via,due,res_id) VALUES(?,?,'yangi','rezolyutsiya',?,?)", (tid, u, due, rid))
+    for u in us:
+        con.execute("UPDATE portal_recipients SET lead=? WHERE thread_id=? AND unit=?", (int(u == lead), tid, u))
+    if due != old_due:     # muddat o'zgarsa — javob kutilayotgan ijrochilarga ham
+        ph = ",".join("?" * len(us))
+        con.execute(f"UPDATE portal_recipients SET due=? WHERE thread_id=? AND unit IN ({ph}) AND status IN {_PEND_SQL}", (due, tid, *us))
+    con.execute("UPDATE portal_resolutions SET text=?, units=?, lead_unit=?, due=?, edited_at=? WHERE id=?", (text, json.dumps(us), lead, due, ts, rid))
+    summary = "Rezolyutsiya o'zgartirildi: " + "; ".join(changes) + "."
+    if kept: summary += f"\n{', '.join(_uname(um, u) for u in kept)} — javob bergan yoki boshqa asosda ishtirokchi, yozishmada qoladi."
+    _msg(con, c, tid, me, summary + (f"\n{text}" if text != z["text"] else ""), ts, "rezolyutsiya",
+         {"res_id": rid, "edit": True, "units": us, "lead": lead, "due": due, "added": added, "removed": removed})
+    con.commit(); _bump()
+    return {"added": added, "removed": [u for u in removed if u not in kept], "kept": kept, "changes": changes}
+
+def cancel_resolution(con, c: Ctx, tid: int, rid: int, note: str = "") -> dict:
+    t, z = _own_res(con, c, tid, rid, "bekor qilish")
+    me = my_unit(c); um = unit_map(con)
+    note = (note or "").strip()[:300]; ts = _now()
+    removed = [u for u in json.loads(z["units"] or "[]") if _release(con, tid, u, rid) == "removed"]
+    con.execute("UPDATE portal_resolutions SET state='bekor', closed_at=?, note=? WHERE id=?", (ts, note, rid))
+    _msg(con, c, tid, me, "Rezolyutsiya bekor qilindi" + (f": {note}" if note else "")
+         + (f" · ijrochilardan chiqarildi: {', '.join(_uname(um, u) for u in removed)}" if removed else ""), ts, "tizim", {"res_id": rid, "removed": removed})
+    con.commit(); _bump()
+    return {"removed": removed}
+
+# ---------------------------------------------------------------------------------------------
+# Muddatni o'zgartirish va xatni qaytarib olish
+# ---------------------------------------------------------------------------------------------
+class DueIn(BaseModel):
+    due: str
+    units: list[str] = []
+    note: str = ""
+
+def change_due(con, c: Ctx, tid: int, body: DueIn) -> dict:
+    t = _thread(con, tid); me = my_unit(c); um = unit_map(con)
+    if t["from_unit"] != me and not is_leader(c):
+        rbac.audit(con, c, "portal: muddatni o'zgartirish", RES, False, t["ref_no"])
+        raise AccessDenied("⛔ Muddatni faqat yuboruvchi bo'lim yoki rahbariyat o'zgartiradi. So'rov audit jurnaliga yozildi.")
+    _need_open(t)
+    if not body.due: raise HTTPException(400, "Yangi muddat kiritilmagan")
+    due = _valid_due(body.due, future=True)
+    pend = {r["unit"]: r for r in db.rows(con, f"SELECT * FROM portal_recipients WHERE thread_id=? AND status IN {_PEND_SQL} ORDER BY rowid", (tid,))}
+    if not pend: raise HTTPException(409, "Javob kutilayotgan bo'lim yo'q — muddatni o'zgartirish shart emas")
+    sel = list(dict.fromkeys(body.units or []))
+    bad = [u for u in sel if u not in pend]
+    if bad: raise HTTPException(400, f"{', '.join(_uname(um, u) for u in bad)} — javob kutilayotgan qabul qiluvchi emas")
+    eff = lambda r: (r["due"] or t["due"] or None)
+    targets = sel or list(pend)
+    olds = {eff(pend[u]) for u in targets}
+    old = next(iter(olds)) if len(olds) == 1 else None
+    if olds == {due} and (sel or t["due"] == due): raise HTTPException(400, "Muddat o'zgarmadi — boshqa sana tanlang")
+    if not sel:        # hammasi: yozishma muddati yangilanadi, kutilayotgan bo'limlarning shaxsiy muddati unga tenglashadi
+        con.execute("UPDATE portal_threads SET due=? WHERE id=?", (due, tid))
+        con.execute(f"UPDATE portal_recipients SET due=NULL WHERE thread_id=? AND status IN {_PEND_SQL}", (tid,))
+    else:
+        ph = ",".join("?" * len(sel))
+        con.execute(f"UPDATE portal_recipients SET due=? WHERE thread_id=? AND unit IN ({ph})", (due, tid, *sel))
+    note = (body.note or "").strip()[:300]
+    ts = _now()
+    who = "" if not sel else " (" + ", ".join(_uname(um, u) for u in sel) + ")"
+    txt = f"Muddat o'zgartirildi{who}: {_dm(old, True) if len(olds) == 1 else 'turli muddatlar'} → {_dm(due, True)}" + (f" ({note})" if note else "")
+    _msg(con, c, tid, me, txt, ts, "tizim", {"due": due, "old": old, "units": sel})
+    con.commit(); _bump()
+    return {"due": due, "old": old, "units": targets}
+
+def recall(con, c: Ctx, tid: int, note: str = "") -> None:
+    t = _thread(con, tid); me = my_unit(c)
+    if t["from_unit"] != me and t["from_user"] != c.user["id"]:
+        rbac.audit(con, c, "portal: xatni qaytarib olish", RES, False, t["ref_no"])
+        raise AccessDenied("⛔ Xatni faqat yuboruvchi bo'lim qaytarib oladi. So'rov audit jurnaliga yozildi.")
+    _need_open(t)
+    why = _recall_block(con, t)
+    if why:
+        rbac.audit(con, c, "portal: xatni qaytarib olish", RES, False, f"{t['ref_no']}: {why}")
+        raise HTTPException(409, why)
+    ts = _now(); note = (note or "").strip()[:300]
+    rs = db.rows(con, "SELECT unit, due, via, lead FROM portal_recipients WHERE thread_id=? ORDER BY rowid", (tid,))
+    snap = {"recipients": [{"unit": r["unit"], "due": r["due"], "via": r["via"]} for r in rs], "due": t["due"]}
+    who = f"{_brief(c.user['full_name']) or c.role.title} ({_uname(unit_map(con), me)})"
+    # Qabul qiluvchilar yozuvlari o'chiriladi (qutilar, hisoblagichlar, qidiruv, taqvim va bildirishnomalarda ko'rinmasligi uchun);
+    # ro'yxat va muddat `recalled` ustunida saqlanadi — «Tahrirlab qayta yuborish» uchun.
+    con.execute("DELETE FROM portal_recipients WHERE thread_id=?", (tid,))
+    con.execute("DELETE FROM portal_watchers WHERE thread_id=?", (tid,))
+    con.execute("UPDATE portal_threads SET status='qaytarilgan', due=NULL, recalled=?, closed_at=?, closed_by=?, close_note=? WHERE id=?",
+                (json.dumps(snap, ensure_ascii=False), ts, who, note, tid))
+    _msg(con, c, tid, me, "Xat qaytarib olindi" + (f": {note}" if note else ""), ts, "tizim")
     con.commit(); _bump()
 
 def assign(con, c: Ctx, tid: int, user_id: int | None, ts: str | None = None):
@@ -812,6 +1194,7 @@ def reopen_thread(con, c: Ctx, tid: int):
     if t["from_unit"] != me and not is_leader(c):
         raise AccessDenied("⛔ Yozishmani faqat yuboruvchi bo'lim yoki rahbariyat qayta ochadi.")
     if (t["status"] or "ochiq") == "ochiq": raise HTTPException(409, "Yozishma ochiq")
+    if t["status"] == "qaytarilgan": raise HTTPException(409, "Qaytarib olingan xatni qayta ochib bo'lmaydi — «Tahrirlab qayta yuborish»dan foydalaning")
     con.execute("UPDATE portal_threads SET status='ochiq', closed_at=NULL, closed_by=NULL, close_note=NULL WHERE id=?", (tid,))
     _msg(con, c, tid, me, "Yozishma qayta ochildi", _now(), "tizim")
     con.commit(); _bump()
@@ -822,6 +1205,168 @@ def archive(con, c: Ctx, tid: int, on: bool):
     if on: con.execute("INSERT OR IGNORE INTO portal_hidden(thread_id,user_id,at) VALUES(?,?,?)", (tid, c.user["id"], _now()))
     else: con.execute("DELETE FROM portal_hidden WHERE thread_id=? AND user_id=?", (tid, c.user["id"]))
     con.commit(); _bump()
+
+# ---------------------------------------------------------------------------------------------
+# Talabalar ro'yxati: qo'shish, ijroni belgilash, qidiruv, CSV
+# ---------------------------------------------------------------------------------------------
+def add_students(con, c: Ctx, tid: int, body: StudentsIn) -> int:
+    t = _thread(con, tid); me = my_unit(c)
+    if t["from_unit"] != me:
+        rbac.audit(con, c, "portal: ro'yxatga talaba qo'shish", RES, False, t["ref_no"])
+        raise AccessDenied("⛔ Talabalar ro'yxatini faqat xatni yuborgan bo'lim to'ldiradi. So'rov audit jurnaliga yozildi.")
+    _need_open(t)
+    ids = _check_students(con, c, body.students)
+    if not ids: raise HTTPException(400, "Talaba tanlanmagan")
+    have = con.execute("SELECT COUNT(*) FROM portal_thread_students WHERE thread_id=?", (tid,)).fetchone()[0]
+    ids = [i for i in ids if not con.execute("SELECT 1 FROM portal_thread_students WHERE thread_id=? AND student_id=?", (tid, i)).fetchone()]
+    if not ids: raise HTTPException(409, "Tanlangan talabalar ro'yxatda allaqachon bor")
+    if have + len(ids) > STU_MAX: raise HTTPException(400, f"Bitta xatga ko'pi bilan {STU_MAX} ta talaba biriktiriladi")
+    ts = _now()
+    n = _put_students(con, c, tid, ids, body.note, ts)
+    _msg(con, c, tid, me, f"Talabalar ro'yxatiga {n} ta talaba qo'shildi (jami {have + n} ta)", ts, "tizim", {"students_added": n})
+    con.commit(); _bump()
+    return n
+
+def mark_students(con, c: Ctx, tid: int, body: MarkIn, ts: str | None = None) -> dict:
+    """Ijrochi bo'lim har bir talaba bo'yicha «bajarildi / bajarilmadi (izoh)» belgilaydi. Faqat o'z ko'lamidagi talabalar."""
+    t = _thread(con, tid); me = my_unit(c)
+    rs = db.rows(con, "SELECT * FROM portal_recipients WHERE thread_id=?", (tid,))
+    ex = _executors(con, t, rs)
+    if me not in ex or not stu_full(c):
+        rbac.audit(con, c, "portal: talabalar ijrosini belgilash", RES, False, t["ref_no"])
+        raise AccessDenied("⛔ Talabalar bo'yicha ijroni faqat ijrochi bo'lim (talabalar kartochkasiga ruxsati bilan) belgilaydi. So'rov audit jurnaliga yozildi.")
+    _need_open(t)
+    st = body.status if body.status in STU_EXEC else None
+    if not st: raise HTTPException(400, "Holat noto'g'ri: bajarildi, bajarilmadi yoki kutilmoqda")
+    note = (body.note or "").strip()[:300]
+    if st == "bajarilmadi" and not note: raise HTTPException(400, "«Bajarilmadi» uchun sababini (izoh) yozing")
+    ids = list(dict.fromkeys(int(x) for x in (body.ids or [])))[:STU_MAX]
+    if not ids: raise HTTPException(400, "Talaba tanlanmagan")
+    ok_ids = {r[0] for r in con.execute(f"""SELECT ts.student_id FROM portal_thread_students ts JOIN students s ON s.id=ts.student_id
+        WHERE ts.thread_id=? AND ts.student_id IN ({','.join(map(str, ids))}) AND {c.student_scope('s')}""", (tid,))}
+    bad = [i for i in ids if i not in ok_ids]
+    if bad:
+        rbac.audit(con, c, "portal: talabalar ijrosini belgilash", RES, False, f"{t['ref_no']}: ro'yxatda/ko'lamda yo'q {len(bad)} ta")
+        raise HTTPException(400, f"{len(bad)} ta talaba bu xat ro'yxatida yo'q yoki ko'lamingizda emas")
+    ts = ts or _now()
+    ph = ",".join(map(str, ids))
+    if st == "kutilmoqda":
+        con.execute(f"""UPDATE portal_thread_students SET exec_status='kutilmoqda', exec_note=NULL, exec_unit=NULL, exec_by=NULL, exec_by_name=NULL, exec_at=NULL
+                        WHERE thread_id=? AND student_id IN ({ph})""", (tid,))
+    else:
+        con.execute(f"""UPDATE portal_thread_students SET exec_status=?, exec_note=?, exec_unit=?, exec_by=?, exec_by_name=?, exec_at=?
+                        WHERE thread_id=? AND student_id IN ({ph})""", (st, note or None, me, c.user["id"], c.user["full_name"], ts, tid))
+    agg = con.execute("""SELECT COUNT(*), SUM(exec_status='bajarildi'), SUM(exec_status='bajarilmadi') FROM portal_thread_students WHERE thread_id=?""", (tid,)).fetchone()
+    total, done, failed = agg[0], agg[1] or 0, agg[2] or 0
+    um = unit_map(con)
+    # yozishmada faqat sonlar (ism-sharif — faqat RBAC bo'yicha ko'ra oladiganlarga, ro'yxat blokida)
+    txt = f"Talabalar ijrosi ({_uname(um, me)}): {len(ids)} ta — {STU_EXEC[st].lower()}" + (f" ({note})" if note and st != "kutilmoqda" else "") \
+          + f". Jami: {done}/{total} bajarildi" + (f", {failed} ta bajarilmadi" if failed else "")
+    _msg(con, c, tid, me, txt, ts, "tizim", {"students": len(ids), "status": st})
+    if done + failed == total and st != "kutilmoqda":
+        _msg(con, c, tid, me, f"Talabalar ro'yxati bo'yicha ijro yakunlandi: {done} ta bajarildi" + (f", {failed} ta bajarilmadi" if failed else ""), ts, "tizim")
+    con.commit(); _bump()
+    return {"total": total, "done": done, "failed": failed, "pending": total - done - failed, "marked": len(ids)}
+
+def review_answer(con, c: Ctx, tid: int, body: ReviewIn, ts: str | None = None) -> dict:
+    """Javobni ko'rib chiqish: yuboruvchi bo'lim (yoki shu bo'lim ijrochi bo'lgan nazoratdagi rezolyutsiya muallifi) qabul qiladi yoki izoh bilan
+    qayta ishlashga qaytaradi. Qaytarilganda bo'lim holati «o'qilgan» (javob kutilmoqda) bo'ladi, review='qaytarildi', tarix — portal_reviews.
+    Boshqa modullar (masalan, sillabuslar) ham shu funksiyani chaqiradi."""
+    t = _thread(con, tid); me = my_unit(c); um = unit_map(con)
+    unit = (body.unit or "").strip()
+    r = db.one(con, "SELECT * FROM portal_recipients WHERE thread_id=? AND unit=?", (tid, unit))
+    rv = _reviewable(con, t, me)
+    if not ("*" in rv or unit in rv):
+        rbac.audit(con, c, "portal: javobni ko'rib chiqish", RES, False, f"{t['ref_no']} → {unit}")
+        raise AccessDenied("⛔ Javobni faqat xatni yuborgan bo'lim yoki shu ijro bo'yicha rezolyutsiya qo'ygan rahbar ko'rib chiqadi. So'rov audit jurnaliga yozildi.")
+    _need_open(t)
+    if not r: raise HTTPException(404, "Bu bo'lim yozishmada qabul qiluvchi emas")
+    dec = {"accept": "accept", "qabul": "accept", "return": "return", "qaytarish": "return"}.get((body.decision or "").strip().lower())
+    if not dec: raise HTTPException(400, "Qaror noto'g'ri: accept yoki return")
+    if r["status"] != "javob berilgan":
+        raise HTTPException(409, "Bo'lim hali javob bermagan — ko'rib chiqiladigan javob yo'q" if r["status"] in PENDING else "Bo'lim xatni yo'naltirgan — javob boshqa bo'limdan kutiladi")
+    comment = (body.comment or "").strip()[:1000]
+    ts = ts or _now(); who = c.user["full_name"]
+    if dec == "accept":
+        if r.get("review") == "qabul": raise HTTPException(409, "Javob allaqachon qabul qilingan")
+        con.execute("UPDATE portal_recipients SET review='qabul', review_note=?, review_at=?, review_by=? WHERE thread_id=? AND unit=?",
+                    (comment or None, ts, who, tid, unit))
+        _msg(con, c, tid, me, f"Javob qabul qilindi: {_uname(um, unit)}" + (f" — {comment}" if comment else ""), ts, "tizim", {"review": "accept", "unit": unit})
+        due = None
+    else:
+        if not comment: raise HTTPException(400, "Qaytarish sababini (izoh) yozing")
+        due = _valid_due(body.due, future=True) if body.due else None
+        con.execute(f"""UPDATE portal_recipients SET status='o''qilgan', answered_at=NULL, review='qaytarildi', review_note=?, review_at=?, review_by=?,
+                        returns=COALESCE(returns,0)+1, due=COALESCE(?, due) WHERE thread_id=? AND unit=?""", (comment, ts, who, due, tid, unit))
+        _msg(con, c, tid, me, f"Qayta ishlashga qaytarildi → {_uname(um, unit)}: {comment}" + (f"\nYangi muddat: {_dm(due, True)}" if due else ""),
+             ts, "qaytarish", {"review": "return", "unit": unit, "due": due})
+    con.execute("INSERT INTO portal_reviews(thread_id,unit,decision,comment,due,by_id,by_name,by_unit,at) VALUES(?,?,?,?,?,?,?,?,?)",
+                (tid, unit, dec, comment or None, due, c.user["id"], who, me, ts))
+    con.commit(); _bump()
+    st = db.one(con, "SELECT status, review, returns FROM portal_recipients WHERE thread_id=? AND unit=?", (tid, unit))
+    return {"unit": unit, "decision": dec, "status": st["status"], "review": st["review"], "returns": st["returns"] or 0}
+
+def _need_stu(c: Ctx, what: str):
+    if not stu_full(c):
+        _audit(c, f"portal: {what}", False)
+        raise AccessDenied("⛔ Talabalar ro'yxati lavozimingiz uchun ochiq emas (faqat jamlangan ko'rinish). So'rov audit jurnaliga yozildi.")
+
+def _stu_out(r): return {"id": r["id"], "name": r["full_name"], "hemis": r["hemis_id"], "group": r["grp"], "course": r["course"], "status": r["status"]}
+_STU_SEL = "SELECT s.id, s.full_name, s.hemis_id, s.status, g.name grp, g.course FROM students s LEFT JOIN groups_ g ON g.id=s.group_id"
+
+def stu_search(c: Ctx, q: str = "", group_id: int = 0) -> dict:
+    _need_stu(c, "talaba qidiruvi")
+    q = _norm(q or "").strip()[:60]
+    if group_id:
+        rows = db.rows(_con, f"{_STU_SEL} WHERE s.group_id=? AND {c.student_scope('s')} ORDER BY s.full_name LIMIT ?", (int(group_id), STU_MAX))
+        g = db.one(_con, "SELECT name FROM groups_ WHERE id=?", (int(group_id),)) or {}
+        _audit(c, "portal: guruh talabalari (xat uchun)", True, f"{g.get('name', group_id)}: {len(rows)} ta")
+        return {"items": [_stu_out(r) for r in rows], "groups": []}
+    if len(q) < 2: return {"items": [], "groups": []}
+    like = f"%{q}%"
+    rows = db.rows(_con, f"""{_STU_SEL} WHERE {c.student_scope('s')} AND (s.full_name LIKE ? OR s.hemis_id LIKE ? OR g.name LIKE ?)
+                            ORDER BY (g.name LIKE ?) DESC, s.full_name LIMIT 30""", (like, like, like, like))
+    groups = db.rows(_con, f"""SELECT g.id, g.name, g.course, COUNT(s.id) n FROM groups_ g JOIN students s ON s.group_id=g.id
+                               WHERE g.name LIKE ? AND {c.student_scope('s')} GROUP BY g.id ORDER BY g.name LIMIT 12""", (like,))
+    _audit(c, "portal: talaba qidiruvi (xat uchun)", True, q)
+    return {"items": [_stu_out(r) for r in rows], "groups": groups}
+
+def stu_lookup(c: Ctx, body: LookupIn) -> dict:
+    """Talabalarni id yoki HEMIS ID ro'yxati bo'yicha topish (ko'lam ichida). Topilmaganlar alohida qaytariladi."""
+    _need_stu(c, "talabalarni ro'yxat bo'yicha topish")
+    ids = list(dict.fromkeys(int(x) for x in (body.ids or [])))[:STU_MAX]
+    toks = list(dict.fromkeys(re.findall(r"\d{6,20}", body.hemis or "")))[:STU_MAX]
+    out, missing = [], []
+    if ids:
+        out += db.rows(_con, f"{_STU_SEL} WHERE s.id IN ({','.join(map(str, ids))}) AND {c.student_scope('s')}")
+    if toks:
+        ph = ",".join("?" * len(toks))
+        got = db.rows(_con, f"{_STU_SEL} WHERE s.hemis_id IN ({ph}) AND {c.student_scope('s')}", toks)
+        have = {r["hemis_id"] for r in got}
+        missing = [x for x in toks if x not in have]
+        out += got
+    seen, items = set(), []
+    for r in out:
+        if r["id"] not in seen: seen.add(r["id"]); items.append(_stu_out(r))
+    if toks: _audit(c, "portal: HEMIS ro'yxati bo'yicha qidiruv", True, f"{len(toks)} ta ID, topildi {len(items)}")
+    return {"items": items, "missing": missing}
+
+def students_csv(c: Ctx, tid: int) -> tuple[str, bytes]:
+    t = _thread(_con, tid); me = my_unit(c)
+    ok = (_is_part(_con, t, me) or is_leader(c)) and t["status"] != "qaytarilgan" or t["from_unit"] == me
+    if not ok or not stu_full(c):
+        _audit(c, "portal: talabalar ro'yxati CSV", False, t["ref_no"])
+        raise AccessDenied("⛔ Talabalar ro'yxatini yuklab olish uchun yozishma ishtirokchisi bo'lish va talabalar kartochkasiga ruxsat kerak. So'rov audit jurnaliga yozildi.")
+    rows = [r for r in _stu_rows(_con, c, tid) if r["vis"]]
+    um = unit_map(_con)
+    buf = io.StringIO(); w = csv.writer(buf, delimiter=";")
+    w.writerow(["№", "HEMIS ID", "F.I.Sh.", "Guruh", "Kurs", "Fakultet", "Talaba holati", "Izoh", "Ijro", "Ijro izohi", "Belgiladi", "Bo'lim", "Sana"])
+    for i, r in enumerate(rows, 1):
+        w.writerow([i, r["hemis_id"], r["full_name"], r["grp"], r["course"], r["fak"], r["st_status"], r["note"] or "", STU_EXEC.get(r["exec_status"] or "kutilmoqda"),
+                    r["exec_note"] or "", _brief(r["exec_by_name"]) if r["exec_by_name"] else "", _uname(um, r["exec_unit"]) if r["exec_unit"] else "",
+                    (r["exec_at"] or "")[:16].replace("T", " ")])
+    _audit(c, "portal: talabalar ro'yxati CSV", True, f"{t['ref_no']}: {len(rows)} ta talaba")
+    return f"{(t['ref_no'] or 'xat').replace('/', '-')}_talabalar.csv", ("﻿" + buf.getvalue()).encode("utf-8")
 
 # ---------------------------------------------------------------------------------------------
 # Qoralamalar va shablonlar
@@ -835,6 +1380,7 @@ class DraftIn(BaseModel):
     priority: str = "oddiy"
     due: str | None = None
     file_ids: list[int] = []
+    students: list[int] = []
 
 class TemplateIn(BaseModel):
     title: str
@@ -847,7 +1393,8 @@ class TemplateIn(BaseModel):
 
 def _draft_view(d):
     return {"id": d["id"], "subject": d["subject"] or "", "body": d["body"] or "", "to": json.loads(d["to_units"] or "[]"), "kind": d["kind"] or "xat",
-            "priority": d["priority"] or "oddiy", "due": d["due"], "file_ids": json.loads(d["file_ids"] or "[]"), "updated_at": d["updated_at"]}
+            "priority": d["priority"] or "oddiy", "due": d["due"], "file_ids": json.loads(d["file_ids"] or "[]"), "updated_at": d["updated_at"],
+            "students": json.loads(d.get("students") or "[]")}
 
 def drafts(c: Ctx) -> list[dict]:
     return [_draft_view(d) for d in db.rows(_con, "SELECT * FROM portal_drafts WHERE user_id=? ORDER BY updated_at DESC, id DESC", (c.user["id"],))]
@@ -855,16 +1402,17 @@ def drafts(c: Ctx) -> list[dict]:
 def save_draft(con, c: Ctx, b: DraftIn, ts: str | None = None) -> dict:
     um = unit_map(con); ts = ts or _now()
     vals = (b.subject.strip()[:200], b.body[:8000], json.dumps([u for u in dict.fromkeys(b.to) if u in um][:60]), b.kind if b.kind in KINDS else "xat",
-            b.priority if b.priority in PRIOS else "oddiy", _valid_due(b.due) if b.due else None, json.dumps([int(x) for x in b.file_ids][:10]), ts)
+            b.priority if b.priority in PRIOS else "oddiy", _valid_due(b.due) if b.due else None, json.dumps([int(x) for x in b.file_ids][:10]), ts,
+            json.dumps(list(dict.fromkeys(int(x) for x in b.students))[:STU_MAX]) if b.students and stu_full(c) else None)
     if b.id:
-        n = con.execute("""UPDATE portal_drafts SET subject=?, body=?, to_units=?, kind=?, priority=?, due=?, file_ids=?, updated_at=?
+        n = con.execute("""UPDATE portal_drafts SET subject=?, body=?, to_units=?, kind=?, priority=?, due=?, file_ids=?, updated_at=?, students=?
                            WHERE id=? AND user_id=?""", (*vals, b.id, c.user["id"])).rowcount
         if not n: raise HTTPException(404, "Qoralama topilmadi")
         did = b.id
     else:
         if con.execute("SELECT COUNT(*) FROM portal_drafts WHERE user_id=?", (c.user["id"],)).fetchone()[0] >= 50:
             raise HTTPException(400, "Qoralamalar soni 50 tadan oshdi — keraksizlarini o'chiring")
-        did = con.execute("INSERT INTO portal_drafts(user_id,subject,body,to_units,kind,priority,due,file_ids,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+        did = con.execute("INSERT INTO portal_drafts(user_id,subject,body,to_units,kind,priority,due,file_ids,updated_at,students) VALUES(?,?,?,?,?,?,?,?,?,?)",
                           (c.user["id"], *vals)).lastrowid
     con.commit(); _bump()
     return {"ok": True, "id": did, "updated_at": ts}
@@ -904,8 +1452,8 @@ def reminders_for(con, user: dict, horizon: int = 2) -> list[dict]:
         days = (dt.date.fromisoformat(d) - today).days
         kind = "otgan" if days < 0 else "bugun" if days == 0 else "ertaga" if days == 1 else "yaqin"
         out.append({"thread_id": r["id"], "ref_no": r["ref_no"], "subject": r["subject"], "due": d, "days_left": days, "kind": kind, "who": who,
-                    "from_unit": r.get("from_unit")})
-    for r in db.rows(con, f"""SELECT t.id, t.ref_no, t.subject, t.from_unit, r.assignee, {_EFF_DUE} d FROM portal_recipients r JOIN portal_threads t ON t.id=r.thread_id
+                    "from_unit": r.get("from_unit"), "returned": r.get("review") == "qaytarildi"})
+    for r in db.rows(con, f"""SELECT t.id, t.ref_no, t.subject, t.from_unit, r.assignee, r.review, {_EFF_DUE} d FROM portal_recipients r JOIN portal_threads t ON t.id=r.thread_id
                               WHERE r.unit=? AND t.status='ochiq' AND r.status IN {_PEND_SQL} AND {_EFF_DUE} <= ? ORDER BY d""", (me, lim)):
         if r["assignee"] == uid: add(r, "menga", r["d"])
         elif not r["assignee"] and head: add(r, "bolimga", r["d"])
@@ -941,7 +1489,7 @@ def telegram_digest(con) -> list[tuple[dict, str, list]]:
         lines = ["📬 Portal: muddat eslatmasi"]
         for it, _ in items[:12]:
             mark = "🔴" if it["kind"] == "otgan" else "🟠" if it["kind"] == "bugun" else "🟡"
-            lines.append(f"{mark} {it['ref_no']} «{it['subject'][:90]}» — {REMIND_LABEL[it['kind']]} ({dt.date.fromisoformat(it['due']).strftime('%d.%m')}), {WHO_LABEL[it['who']]}")
+            lines.append(f"{mark} {it['ref_no']} «{it['subject'][:90]}» — {REMIND_LABEL[it['kind']]} ({dt.date.fromisoformat(it['due']).strftime('%d.%m')}), {WHO_LABEL[it['who']]}" + (" · qayta ishlashga qaytarilgan" if it.get("returned") else ""))
         if len(items) > 12: lines.append(f"… va yana {len(items) - 12} ta")
         lines.append("\nBatafsil: ISFT Core → Portal")
         out.append((u, "\n".join(lines), [(it["thread_id"], k) for it, k in items]))
@@ -1140,7 +1688,7 @@ def ds_qabul(con, c: Ctx, q=""):
 DATASETS = [
     {"key": "kontingent", "title": "Talabalar kontingenti", "owner": "talabalar", "icon": "users", "fn": ds_kontingent,
      "desc": "«Registrator» ma'lumotlar bazasidan: guruhlar bo'yicha talabalar soni va holati. Ruxsati bor lavozimlarga — o'z ko'lamidagi ro'yxat.",
-     "access": "Hamma — jamlangan · shaxsiy ro'yxat: Registrator, dekanat, kafedra (o'z ko'lami)"},
+     "access": "Hamma — jamlangan · shaxsiy ro'yxat: Registrator, tyutor, kafedra (o'z ko'lami)"},
     {"key": "jadval", "title": "Dars jadvali", "owner": "akademik", "icon": "calendar", "fn": ds_jadval,
      "desc": "Haftalik dars jadvali: kun, para, guruh, fan, o'qituvchi va auditoriya.", "access": "Barcha bo'limlar"},
     {"key": "oqituvchilar", "title": "O'qituvchilar ro'yxati", "owner": "kadrlar", "icon": "user", "fn": ds_oqituvchilar,
@@ -1218,6 +1766,68 @@ def dataset_csv(c: Ctx, key: str, q="") -> tuple[str, bytes]:
     return f"{key}_{_today()}.csv", ("﻿" + buf.getvalue()).encode("utf-8")
 
 # ---------------------------------------------------------------------------------------------
+# Tashkiliy tuzilma: bo'limlar katalogi (hamma uchun) va rahbar/kuratorni tayinlash (rektor, IT boshlig'i)
+# ---------------------------------------------------------------------------------------------
+ORG_ADMINS = {"rektor", "it_head"}
+CURATORS = [k for k in ROLES if k.startswith("prorektor_")]
+
+class OrgIn(BaseModel):
+    head_user: int | None = None
+    curator: str | None = None
+
+def _curator_title(k): return UNIT_TITLE.get(k) or (ROLES[k].title if k in ROLES else k)
+
+def _curator_people(con) -> dict:
+    return {r["role"]: _short(r["full_name"]) or r["full_name"] for r in db.rows(con, f"SELECT role, full_name FROM users WHERE role IN ({','.join('?' * len(CURATORS))}) ORDER BY id DESC", CURATORS)}
+
+def org_list(c: Ctx) -> dict:
+    con = _con; me = my_unit(c)
+    mem = {}
+    for u in db.rows(con, "SELECT id, full_name, unit FROM users WHERE unit IS NOT NULL AND unit!='' ORDER BY id"):
+        mem.setdefault(u["unit"], []).append(u)
+    raw = {r["key"]: r for r in db.rows(con, "SELECT key, head_user, curator_manual FROM org_units")}
+    people = _curator_people(con)
+    out = []
+    for u in units(con):
+        r = raw.get(u["key"]) or {}; hu = r.get("head_user")
+        ms = [{"id": m["id"], "name": _short(m["full_name"]) or m["full_name"], "position": _pos(m["full_name"]), "head": m["id"] == hu}
+              for m in sorted(mem.get(u["key"], []), key=lambda m: (m["id"] != hu, m["id"]))]
+        cur = u.get("curator")
+        out.append({**u, "head_user": hu, "members": ms, "members_count": len(ms), "me": u["key"] == me,
+                    "curator_name": _curator_title(cur) if cur else None, "curator_person": people.get(cur) if cur else None,
+                    "curator_manual": bool(r.get("curator_manual")), "curator_default": _curator_of(u["key"])})
+    return {"units": out, "groups": [{"key": k, "name": n} for k, n in GROUPS], "me": me, "can_edit": c.role.key in ORG_ADMINS,
+            "curators": [{"key": k, "name": _curator_title(k), "person": people.get(k)} for k in CURATORS]}
+
+def org_update(con, c: Ctx, key: str, body: OrgIn) -> dict:
+    r = db.one(con, "SELECT * FROM org_units WHERE key=?", (key,))
+    if c.role.key not in ORG_ADMINS:
+        rbac.audit(con, c, "portal: tashkiliy tuzilmani o'zgartirish", RES, False, key)
+        raise AccessDenied("⛔ Bo'lim rahbari va kuratorini faqat rektor yoki Axborot texnologiyalari bo'limi boshlig'i o'zgartiradi. So'rov audit jurnaliga yozildi.")
+    if not r: raise HTTPException(404, "Bo'lim topilmadi")
+    fs = body.model_fields_set; um = unit_map(con); changes = []
+    if "head_user" in fs and body.head_user != r["head_user"]:
+        u = db.one(con, "SELECT id, full_name, unit FROM users WHERE id=?", (body.head_user or 0,))
+        if not u or u["unit"] != key: raise HTTPException(400, "Bo'lim rahbari shu bo'lim xodimlaridan tanlanadi")
+        con.execute("UPDATE org_units SET head_user=?, head=? WHERE key=?", (u["id"], _short(u["full_name"]) or u["full_name"], key))
+        changes.append(f"rahbar: {_brief(u['full_name'])}")
+    if "curator" in fs:
+        cur = body.curator or None
+        if cur is not None and cur not in CURATORS: raise HTTPException(400, "Kurator faqat prorektorlardan tanlanadi")
+        if r["grp"] == "rahbariyat" and cur: raise HTTPException(400, "Rahbariyat bo'linmalariga kurator tayinlanmaydi")
+        if cur != r["curator"]:
+            # tasdiqlangan tuzilmadagi qiymat qaytarilsa — "qo'lda" belgisi olib tashlanadi (keyingi sync_units ham shu qiymatni yozadi)
+            con.execute("UPDATE org_units SET curator=?, curator_manual=? WHERE key=?", (cur, int(cur != _curator_of(key)), key))
+            changes.append("kurator: " + (_curator_title(cur) if cur else "rektorga bevosita"))
+        elif bool(r["curator_manual"]) != (cur != _curator_of(key)):
+            con.execute("UPDATE org_units SET curator_manual=? WHERE key=?", (int(cur != _curator_of(key)), key))
+    con.commit()
+    _UNITS_CACHE.clear(); _CNT.clear(); _bump()
+    _audit(c, "portal: tashkiliy tuzilma o'zgartirildi" if changes else "portal: tashkiliy tuzilma (o'zgarishsiz)", True,
+           f"{_uname(um, key)}: {'; '.join(changes) or '—'}")
+    return {"ok": True, "changes": changes}
+
+# ---------------------------------------------------------------------------------------------
 # Rahbariyat paneli uchun qisqa xulosa
 # ---------------------------------------------------------------------------------------------
 def summary(c: Ctx) -> dict:
@@ -1242,6 +1852,7 @@ def api_units(request: Request):
     c = C(request); me = my_unit(c)
     return {"me": me, "groups": [{"key": k, "name": n} for k, n in GROUPS], "units": units(_con), "kinds": KINDS, "prios": PRIOS,
             "leader": is_leader(c), "can_resolve": c.role.key in RESOLVERS, "curated": curated(c), "is_head": is_head(c),
+            "students": stu_full(c), "student_scope": c.scope_label(_con) if stu_full(c) else None,
             "members": [{**m, "me": m["id"] == c.user["id"]} for m in members(_con, me)]}
 
 @router.get("/api/portal/summary")
@@ -1261,7 +1872,7 @@ def api_create(body: ThreadIn, request: Request):
     c = C(request)
     tid = create_thread(_con, c, body)
     t = db.one(_con, "SELECT ref_no, subject FROM portal_threads WHERE id=?", (tid,))
-    _audit(c, "portal: xat yuborildi", True, f"{t['ref_no']} → {', '.join(body.to)[:120]} · {t['subject']}")
+    _audit(c, "portal: xat yuborildi", True, f"{t['ref_no']} → {', '.join(body.to)[:120]} · {t['subject']}" + (f" · talabalar: {len(body.students)} ta" if body.students else ""))
     return {"ok": True, "id": tid, "ref_no": t["ref_no"]}
 
 @router.post("/api/portal/threads/{tid}/reply")
@@ -1284,6 +1895,79 @@ def api_res_close(tid: int, rid: int, request: Request):
     close_resolution(_con, c, tid, rid)
     _audit(c, "portal: rezolyutsiya nazoratdan yechildi", True, f"{_thread(_con, tid)['ref_no']} #{rid}")
     return {"ok": True}
+
+@router.post("/api/portal/threads/{tid}/resolutions/{rid}/edit")
+def api_res_edit(tid: int, rid: int, body: ResolveIn, request: Request):
+    c = C(request)
+    r = edit_resolution(_con, c, tid, rid, body)
+    _audit(c, "portal: rezolyutsiya o'zgartirildi", True, f"{_thread(_con, tid)['ref_no']} #{rid}: {'; '.join(r['changes'])}"[:300])
+    return {"ok": True, **r}
+
+@router.post("/api/portal/threads/{tid}/resolutions/{rid}/cancel")
+def api_res_cancel(tid: int, rid: int, body: NoteIn, request: Request):
+    c = C(request)
+    r = cancel_resolution(_con, c, tid, rid, body.note)
+    _audit(c, "portal: rezolyutsiya bekor qilindi", True, f"{_thread(_con, tid)['ref_no']} #{rid}" + (f" · {body.note[:120]}" if body.note else ""))
+    return {"ok": True, **r}
+
+@router.post("/api/portal/threads/{tid}/due")
+def api_due(tid: int, body: DueIn, request: Request):
+    c = C(request)
+    r = change_due(_con, c, tid, body)
+    _audit(c, "portal: muddat o'zgartirildi", True, f"{_thread(_con, tid)['ref_no']}: {r['old'] or '—'} → {r['due']}" + (f" ({', '.join(body.units)})" if body.units else ""))
+    return {"ok": True, **r}
+
+@router.post("/api/portal/threads/{tid}/recall")
+def api_recall(tid: int, body: NoteIn, request: Request):
+    c = C(request)
+    recall(_con, c, tid, body.note)
+    _audit(c, "portal: xat qaytarib olindi", True, _thread(_con, tid)["ref_no"] + (f" · {body.note[:120]}" if body.note else ""))
+    return {"ok": True, "status": "qaytarilgan"}
+
+@router.post("/api/portal/threads/{tid}/review")
+def api_review(tid: int, body: ReviewIn, request: Request):
+    """Javobni ko'rib chiqish: {unit, decision: "accept"|"return", comment, due?}. Boshqa modullar (sillabuslar) ham ishlatadi."""
+    c = C(request)
+    r = review_answer(_con, c, tid, body)
+    _audit(c, "portal: javob qabul qilindi" if r["decision"] == "accept" else "portal: javob qayta ishlashga qaytarildi", True,
+           f"{_thread(_con, tid)['ref_no']} → {r['unit']}" + (f" · {body.comment[:150]}" if body.comment else ""))
+    return {"ok": True, **r}
+
+@router.post("/api/portal/threads/{tid}/students")
+def api_students_add(tid: int, body: StudentsIn, request: Request):
+    c = C(request)
+    n = add_students(_con, c, tid, body)
+    _audit(c, "portal: ro'yxatga talaba qo'shildi", True, f"{_thread(_con, tid)['ref_no']}: {n} ta")
+    return {"ok": True, "added": n}
+
+@router.post("/api/portal/threads/{tid}/students/mark")
+def api_students_mark(tid: int, body: MarkIn, request: Request):
+    c = C(request)
+    r = mark_students(_con, c, tid, body)
+    _audit(c, "portal: talabalar ijrosi belgilandi", True, f"{_thread(_con, tid)['ref_no']}: {r['marked']} ta — {body.status}" + (f" ({body.note[:100]})" if body.note else ""))
+    return {"ok": True, **r}
+
+@router.get("/api/portal/threads/{tid}/students.csv")
+def api_students_csv(tid: int, request: Request):
+    name, data = students_csv(C(request), tid)
+    return Response(data, media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
+
+@router.get("/api/portal/students")
+def api_stu_search(request: Request, q: str = "", group_id: int = 0):
+    return stu_search(C(request), q, group_id)
+
+@router.post("/api/portal/students/lookup")
+def api_stu_lookup(body: LookupIn, request: Request):
+    return stu_lookup(C(request), body)
+
+@router.get("/api/portal/org")
+def api_org(request: Request):
+    return org_list(C(request))
+
+@router.put("/api/portal/org/{key}")
+def api_org_put(key: str, body: OrgIn, request: Request):
+    return org_update(_con, C(request), key, body)
 
 @router.post("/api/portal/threads/{tid}/assign")
 def api_assign(tid: int, body: AssignIn, request: Request):
@@ -1578,7 +2262,8 @@ def seed(con, force=False):
             con.execute("INSERT OR REPLACE INTO portal_meta(k,v) VALUES('seed',?)", (SEED_TAG,)); con.commit(); return
     if not db.one(con, "SELECT 1 x FROM users"): return     # baza hali seed qilinmagan
     for t in ("portal_threads", "portal_recipients", "portal_msgs", "portal_reads", "portal_attach", "portal_files", "portal_shares", "portal_datasets",
-              "portal_user_reads", "portal_watchers", "portal_hidden", "portal_resolutions", "portal_drafts", "portal_templates", "portal_reminders"):
+              "portal_user_reads", "portal_watchers", "portal_hidden", "portal_resolutions", "portal_drafts", "portal_templates", "portal_reminders",
+              "portal_thread_students", "portal_reviews"):
         con.execute(f"DELETE FROM {t}")
     if FTS_OK[0]: con.execute("DELETE FROM portal_fts")
     if FILES.exists() and FILES.resolve() == DEFAULT_FILES.resolve():
@@ -1590,7 +2275,7 @@ def seed(con, force=False):
     um = unit_map(con)
     users_by_unit = {}
     for u in db.rows(con, "SELECT * FROM users ORDER BY id"):
-        if u["role"] not in ROLES: continue
+        if u["role"] not in ROLES or ROLES[u["role"]].legacy or u.get("active") == 0: continue
         k = unit_key(u)
         cur = users_by_unit.get(k)
         if not cur or (u["role"] in HEAD_ROLES and cur["role"] not in HEAD_ROLES): users_by_unit[k] = u
@@ -1631,7 +2316,7 @@ def seed(con, force=False):
              [f"Jami shartnoma summasi: {_mln(ct['t'])} so'm", f"To'langan: {_mln(ct['p'])} so'm ({100 * ct['p'] / max(ct['t'], 1):.1f}%)",
               f"Qarzdorlik: {_mln(ct['t'] - ct['p'])} so'm · qarzdor talabalar: {ct['d']} nafar", "", "**Fakultetlar kesimida:"] +
              [f"  {r['name']}: {_mln(r['p'])} / {_mln(r['t'])} so'm ({100 * r['p'] / max(r['t'], 1):.1f}%)" for r in cf] +
-             ["", "Izoh: navbatdagi to'lov muddati - 1-dekabr. Qarzdorligi 50% dan oshgan guruhlar ro'yxati dekanatlarga alohida yuboriladi.", "",
+             ["", "Izoh: navbatdagi to'lov muddati - 1-dekabr. Qarzdorligi 50% dan oshgan guruhlar ro'yxati Registrator ofisi va fakultet tyutorlariga alohida yuboriladi.", "",
               "Bosh buxgalter ______________________"]),
         "Moliyaviy", ["rektorat", "prorektor_moliya"], "Ma'lumotnoma, PDF", 27)
     sch = db.rows(con, """SELECT sc.weekday, sc.slot, g.name grp, sc.subject, t.full_name tch, r.name room FROM schedule sc LEFT JOIN groups_ g ON g.id=sc.group_id
@@ -1668,11 +2353,11 @@ def seed(con, force=False):
         "Buyruq va me'yoriy hujjatlar", ["*"], "Rektor buyrug'i bilan tasdiqlangan", 400)
     put("kochir", "talabalar", "Buyruq_loyihasi_talaba_kochirish_namuna.docx",
         _docx("Talabani boshqa ta'lim yo'nalishiga ko'chirish to'g'risida (buyruq loyihasi namunasi)",
-              ["Asos: talabaning arizasi, dekanat taqdimnomasi va akademik farqlar jadvali.", "**BUYURAMAN:",
+              ["Asos: talabaning arizasi, Registrator ofisi taqdimnomasi va akademik farqlar jadvali.", "**BUYURAMAN:",
                "1. ________ guruh talabasi ________ ni 2026-2027 o'quv yilining kuzgi semestridan ________ yo'nalishiga ko'chirilsin.",
                "2. Akademik farqlarni topshirish muddati - 2027-yil 1-fevral.", "3. Buyruq ijrosini nazorat qilish Registrator ofisi zimmasiga yuklansin."],
               sign="Rektor ______________ " + (cx("rektorat") and _short(cx("rektorat").user["full_name"]) or "")),
-        "Shablonlar", faks, "Dekanatlar uchun namuna", 200)
+        "Shablonlar", faks, "Fakultet tyutorlari uchun namuna", 200)
     pr = db.rows(con, "SELECT name, country, kind, expires, students_exchanged FROM partners WHERE status='faol' ORDER BY expires LIMIT 8")
     put("erasmus", "xalqaro", "Erasmus_KA171_nomzodlar_royxati.xlsx",
         _xlsx("Nomzodlar", ["№", "Hamkor OTM", "Davlat", "Dastur", "O'rinlar", "Tanlov holati"],
@@ -1706,7 +2391,7 @@ def seed(con, force=False):
              ["", "**Bo'limlar uchun:", "Talaba bo'yicha rasmiy so'rovlar ISFT Core portali orqali yuboriladi (ro'yxat raqami bilan).",
               "Kontingent bo'yicha statistika portaldagi «Talabalar kontingenti» umumiy bazasida — alohida so'rov shart emas.", "",
               "Registrator ofisi"]),
-        "Buyruq va me'yoriy hujjatlar", ["*"], "Barcha bo'limlar va dekanatlar uchun", 210)
+        "Buyruq va me'yoriy hujjatlar", ["*"], "Barcha bo'limlar, kafedralar va fakultet tyutorlari uchun", 210)
     put("kalendar", "akademik", "Akademik_kalendar_2026-2027.pdf",
         _pdf("2026-2027 o'quv yili akademik kalendari",
              ["**Kuzgi semestr", "  Darslar: 1-sentabr - 20-dekabr", "  Oraliq attestatsiya: 27-oktabr - 8-noyabr",
@@ -1722,14 +2407,14 @@ def seed(con, force=False):
         _xlsx("Yakuniy nazorat", ["Sana", "Vaqt", "Guruh", "Fan", "Nazorat shakli", "Mas'ul o'qituvchi"],
               [[(S.TODAY + dt.timedelta(days=44 + (i % 18))).strftime("%d.%m.%Y"), ["09:00", "11:00", "14:00"][i % 3], r["grp"], r["subject"],
                 ["yozma", "test", "og'zaki"][i % 3], r["tch"] or ""] for i, r in enumerate(yn)]),
-        "O'quv-uslubiy", faks + ["imtihon"], "Loyiha — dekanatlar takliflari bilan yakunlanadi", 48)
+        "O'quv-uslubiy", faks + ["imtihon"], "Loyiha — fakultet tyutorlari takliflari bilan yakunlanadi", 48)
     put("sirtqi", "sirtqi", "Sirtqi_sessiya_chaqiruv_xati_namuna.docx",
         _docx("Sirtqi ta'lim talabasini o'quv-imtihon sessiyasiga chaqiruv xati (namuna)",
               ["Hurmatli ________________________!", "Sizni 2026-2027 o'quv yilining qishki o'quv-imtihon sessiyasiga chaqiramiz.",
                "Sessiya muddati: ______________ dan ______________ gacha.", "Chaqiruv xati ish joyingizga taqdim etish uchun asos bo'ladi (O'zbekiston Respublikasi Mehnat kodeksi).",
                "Kontrakt to'lovi bo'yicha qarzdorligi bor talabalar sessiyaga qarzdorlikni bartaraf etgach qo'yiladi."],
               sign="Sirtqi bo'lim boshlig'i ______________ D. Shayzakova"),
-        "Shablonlar", faks + ["akademik", "talabalar"], "Dekanatlar va Registrator ofisi uchun", 16, who="Shayzakova")
+        "Shablonlar", faks + ["akademik", "talabalar"], "Registrator ofisi va fakultet tyutorlari uchun", 16, who="Shayzakova")
     t4 = db.rows(con, "SELECT full_name, position, load_hours FROM teachers WHERE department_id=4 ORDER BY id LIMIT 10")
     if "kaf4" in um:
         put("yukbh", "kaf4", "Yuklama_Buxgalteriya_hisobi_kafedrasi.xlsx",
@@ -1745,7 +2430,7 @@ def seed(con, force=False):
         "Rejalar", ["rektorat", "buxgalteriya"], "Rektor ko'rib chiqishi uchun", 6)
     put("qarz", "prorektor_moliya", "Kontrakt_qarzdorlik_reja_shakli.xlsx",
         _xlsx("Reja", ["Guruh", "Qarzdorlar soni", "Qarz summasi", "Mas'ul (tyutor)", "Suhbat sanasi", "To'lov va'da sanasi"], [["", 0, 0, "", "", ""] for _ in range(5)]),
-        "Shablonlar", faks + ["buxgalteriya"], "Dekanatlar to'ldiradi", 75)
+        "Shablonlar", faks + ["buxgalteriya"], "Fakultet tyutorlari to'ldiradi", 75)
     put("ishhaqi", "buxgalteriya", "Ish_haqi_fondi_oktabr_jamlanma.xlsx",
         _xlsx("Jamlanma", ["Bo'lim", "Xodimlar", "Ish haqi fondi (so'm)"],
               [[r["unit"], r["n"], r["fund"]] for r in db.rows(con, "SELECT unit, COUNT(*) n, SUM(salary) fund FROM staff GROUP BY unit ORDER BY fund DESC LIMIT 12")]),
@@ -1787,13 +2472,13 @@ def seed(con, force=False):
            "xat", "muhim", None, 29, files=["kont"], read=["prorektor_oquv"])
     letter("buxgalteriya", [R, "prorektor_moliya"], "Kontrakt to'lovlari tushumi: 1-noyabr holati",
            "Kontrakt to'lovlari bo'yicha 1-noyabr holatiga ma'lumotnoma ilova qilindi. Navbatdagi to'lov muddati — 1-dekabr. "
-           "Qarzdorligi yuqori guruhlar bo'yicha dekanatlar bilan ishlash taklif etiladi.", "xabarnoma", "muhim", None, 26, files=["kontr"],
-           replies=[("prorektor_moliya", "Qabul qilindi. Qarzdorligi 50% dan oshgan guruhlar ro'yxatini dekanatlar kesimida alohida tayyorlang, dushanbagacha.", 3)])
-    letter(R, faks, "Qishki imtihon sessiyasiga tayyorgarlik to'g'risida",
-           "Fakultet dekanlariga!\n\nQishki imtihon sessiyasiga tayyorgarlik bo'yicha quyidagilarni ta'minlang:\n1. Yakuniy nazorat jadvalini kafedralar bilan kelishib, Akademik faoliyatni boshqarish bo'limiga taqdim etish.\n"
-           "2. Akademik qarzdor talabalar bilan individual ishlash rejasini tuzish.\n3. Kontrakt qarzdorligi bo'yicha talabalar ota-onalari bilan uchrashuvlar o'tkazish.\n\nNatijalar haqida ma'lumot bering.",
+           "Qarzdorligi yuqori guruhlar bo'yicha Registrator ofisi va fakultet tyutorlari bilan ishlash taklif etiladi.", "xabarnoma", "muhim", None, 26, files=["kontr"],
+           replies=[("prorektor_moliya", "Qabul qilindi. Qarzdorligi 50% dan oshgan guruhlar ro'yxatini fakultetlar kesimida alohida tayyorlang, dushanbagacha.", 3)])
+    letter(R, ["talabalar"] + faks, "Qishki imtihon sessiyasiga tayyorgarlik to'g'risida",
+           "Registrator ofisi va fakultet tyutorlariga!\n\nQishki imtihon sessiyasiga tayyorgarlik bo'yicha quyidagilarni ta'minlang:\n1. Registrator ofisi: imtihonga kirish ruxsatnomalarini va akademik qarzdorlar ro'yxatini fakultetlar kesimida tayyorlash.\n"
+           "2. Tyutorlar: akademik qarzdor talabalar bilan individual ishlash rejasini tuzish.\n3. Kontrakt qarzdorligi bo'yicha talabalar ota-onalari bilan uchrashuvlar o'tkazish.\n\nNatijalar haqida ma'lumot bering.",
            "topshiriq", "muhim", 7, 52, read=[faks[0]] if faks else (),
-           replies=[(faks[1], "Imtihon jadvali loyihasi tayyorlandi va kafedralar bilan kelishildi. Akademik qarzdorlar bilan suhbatlar 15-noyabrgacha yakunlanadi.", 20)] if len(faks) > 1 else (),
+           replies=[(faks[1], "Fakultetimiz guruhlari bo'yicha akademik qarzdorlar bilan individual ishlash rejasi tuzildi. Suhbatlar 15-noyabrgacha yakunlanadi.", 20)] if len(faks) > 1 else (),
            sender_seen=False)
     letter("akademik", kafs, "Bahorgi semestr dars jadvali uchun o'quv yuklamalarini taqdim etish",
            "Kafedra mudirlariga!\n\nBahorgi semestr dars jadvalini shakllantirish uchun kafedrangiz o'quv yuklamasini ilova qilingan shaklda to'ldirib, belgilangan muddatda yuboring. "
@@ -1844,10 +2529,10 @@ def seed(con, force=False):
            "sorov", "oddiy", 4, 60, replies=[("buxgalteriya", "Qayta hisoblandi; 3 nafar talabada farq bor, ularga xabarnoma yuborildi.", 20)])
     if len(faks) > 1:
         letter(faks[1], ["talabalar"], "Ko'chirish (perevod) bo'yicha 3 nafar talaba hujjatlari",
-               "Boshqa OTMdan ko'chirib o'tish istagini bildirgan 3 nafar talabaning hujjatlari dekanatda ko'rib chiqildi. Akademik farqlar jadvali bilan birga buyruq loyihasini tayyorlashingizni so'raymiz.",
+               "Boshqa OTMdan ko'chirib o'tish istagini bildirgan 3 nafar talabaning hujjatlari fakultet tyutori tomonidan qabul qilindi. Akademik farqlar jadvali bilan birga buyruq loyihasini tayyorlashingizni so'raymiz.",
                "xat", "muhim", 2, 4)
     letter("prorektor_moliya", faks + ["buxgalteriya"], "Kontrakt qarzdorligi bo'yicha guruhlar kesimida reja",
-           "Dekanlarga!\n\nKontrakt qarzdorligi bo'yicha guruhlar kesimida reja ishlab chiqing: mas'ul tyutor, talaba bilan suhbat sanasi va to'lov va'da qilingan sana. Shakl ilova qilingan.",
+           "Fakultet tyutorlariga!\n\nKontrakt qarzdorligi bo'yicha guruhlar kesimida reja ishlab chiqing: mas'ul tyutor, talaba bilan suhbat sanasi va to'lov va'da qilingan sana. Shakl ilova qilingan.",
            "topshiriq", "muhim", -1, 80, files=["qarz"], read=faks[2:3] + ["buxgalteriya"],
            replies=[(faks[1], "Reja to'ldirildi: 18 ta guruh, 214 nafar qarzdor. Tyutorlar suhbatlarni boshladi.", 30)] if len(faks) > 1 else (), frm_role="prorektor_moliya")
     letter(R, ["prorektor_oquv", "prorektor_ilmiy", "prorektor_moliya", "prorektor_yoshlar", "akademik", "talabalar", "buxgalteriya"],
@@ -1864,14 +2549,14 @@ def seed(con, force=False):
 
     letter("akademik", faks + kafs, "Bahorgi semestr: fanlarga yozilish (enrollment) va akademik guruhlarni shakllantirish",
            "Hurmatli hamkasblar!\n\nAkademik kalendarga muvofiq bahorgi semestr uchun fanlarga yozilish 1-dekabrdan 15-dekabrgacha o'tkaziladi. Kafedralar tanlov fanlari ro'yxatini, "
-           "dekanatlar esa talabalarni yozilish jarayoni bilan tanishtirishni 28-noyabrgacha ta'minlasin. Akademik guruhlar yozilish natijalari asosida shakllantiriladi.",
+           "fakultet tyutorlari esa talabalarni yozilish jarayoni bilan tanishtirishni 28-noyabrgacha ta'minlasin. Akademik guruhlar yozilish natijalari asosida shakllantiriladi.",
            "xabarnoma", "muhim", 9, 14, files=["kalendar"], read=faks[:2] + kafs[:4])
     letter("akademik", ["imtihon"] + faks, "Qishki sessiya: yakuniy nazorat jadvali loyihasi",
-           "Qishki sessiya yakuniy nazorat jadvali loyihasi ilova qilindi. Dekanatlardan guruhlar kesimidagi takliflarni, Imtihon bo'limidan esa nazorat xonalari va kuzatuvchilar "
+           "Qishki sessiya yakuniy nazorat jadvali loyihasi ilova qilindi. Fakultet tyutorlaridan guruhlar kesimidagi takliflarni, Imtihon bo'limidan esa nazorat xonalari va kuzatuvchilar "
            "taqsimotini kutamiz.", "sorov", "muhim", 4, 47, files=["yanaz"], read=["imtihon"] + faks[2:3],
            replies=[(faks[0], "Jadval bo'yicha takliflarimiz: sirtqi guruhlar uchun nazoratlarni shanba kunlariga ko'chirish so'raladi (6 ta guruh).", 22)] if faks else ())
     letter("sirtqi", faks + ["buxgalteriya", "talabalar"], "Sirtqi ta'lim: qishki sessiyaga chaqiruv xatlari",
-           "Sirtqi ta'lim shaklidagi talabalarga qishki o'quv-imtihon sessiyasi uchun chaqiruv xatlari tayyorlanmoqda. Dekanatlardan sessiyaga qo'yilmaydigan talabalar ro'yxatini, "
+           "Sirtqi ta'lim shaklidagi talabalarga qishki o'quv-imtihon sessiyasi uchun chaqiruv xatlari tayyorlanmoqda. Registrator ofisidan sessiyaga qo'yilmaydigan talabalar ro'yxatini, "
            "Buxgalteriyadan kontrakt qarzdorligi bo'yicha ma'lumotni so'raymiz. Chaqiruv xati namunasi ilova qilingan.",
            "sorov", "oddiy", 5, 15, files=["sirtqi"], read=["buxgalteriya"], who="Shayzakova")
     letter(faks[0] if faks else "fak1", ["talabalar"], "Bitiruvchilar transkriptlari: yakuniy davlat attestatsiyasi oldidan",
@@ -1891,7 +2576,7 @@ def seed(con, force=False):
            "Oxirgi 3 kunda Call-markazga LMS parolini tiklash bo'yicha 140 dan ortiq murojaat tushdi (odatda kuniga 10-15 ta). Talabalar SMS kod kelmayotganini aytmoqda. "
            "Sababini aniqlab, vaqtinchalik yechim berishingizni so'raymiz.", "sorov", "shoshilinch", 2, 7, read=["it"], who="Rahimova")
     letter(faks[1] if len(faks) > 1 else "fak2", ["talabalar"], "Sirtqi guruh talabalari uchun ish joyiga ma'lumotnoma",
-           "Sirtqi ta'lim shaklidagi 18 nafar talaba ish joyiga taqdim etish uchun o'qish joyidan ma'lumotnoma so'ramoqda. Ro'yxat dekanatda. Tayyorlab berishingizni so'raymiz.",
+           "Sirtqi ta'lim shaklidagi 18 nafar talaba ish joyiga taqdim etish uchun o'qish joyidan ma'lumotnoma so'ramoqda. Ro'yxat fakultet tyutorida. Tayyorlab berishingizni so'raymiz.",
            "sorov", "oddiy", 3, 30)
     def T(subj):
         r = db.one(con, "SELECT id FROM portal_threads WHERE subject=? ORDER BY id DESC LIMIT 1", (subj,))
@@ -1934,7 +2619,7 @@ def seed(con, force=False):
         con.execute("UPDATE portal_recipients SET status='o''qilgan', read_at=?, read_by=? WHERE thread_id=? AND unit='talabalar'", (ago(27), rg.user["full_name"], tid))
         safe(forward, con, rg, tid, ForwardIn(units=["sirtqi"], note="Sirtqi ta'lim talabalari masalasi — Sirtqi bo'lim vakolatida. Iltimos, bevosita ko'rib chiqing."), ts=ago(26))
         sq = cx("sirtqi", None, "Shayzakova")
-        if sq: safe(reply, con, sq, tid, ReplyIn(body="Ma'lumotnomalar tayyorlandi: 18 nafar talabaga dekanat orqali ertaga topshiriladi."), ts=ago(8))
+        if sq: safe(reply, con, sq, tid, ReplyIn(body="Ma'lumotnomalar tayyorlandi: 18 nafar talabaga fakultet tyutori orqali ertaga topshiriladi."), ts=ago(8))
     # 6) Yopilgan yozishmalar
     for subj, unit, note, h in [("Akademik ta'tildan qaytgan talabalar kontraktini qayta hisoblash", "talabalar", "Masala hal qilindi", 18),
                                 ("Scopus jurnallarida maqola chop etish rejasi (2027)", "kaf4", "Javob olindi, reja ishga tushirildi", 30)]:
@@ -1980,5 +2665,76 @@ def seed(con, force=False):
     print(f"Portal namunasi: {con.execute('SELECT COUNT(*) FROM portal_threads').fetchone()[0]} ta yozishma, "
           f"{con.execute('SELECT COUNT(*) FROM portal_files').fetchone()[0]} ta fayl")
 
+# ---------------------------------------------------------------------------------------------
+# Demo (v2.2): talabalar ro'yxati biriktirilgan xat va javoblarni ko'rib chiqish. Idempotent — mavjud bazada bir marta
+# (shu mavzudagi yozishma bo'lmasa) yaratiladi; init() va to'liq seed oqimida chaqiriladi.
+# ---------------------------------------------------------------------------------------------
+DEMO_STU_SUBJ = "Harbiy ta'lim fakultetiga o'tayotgan talabalar: yangi guruh ochish"
+DEMO_REV_SUBJ = "Fanlar sillabuslarini bahorgi semestr uchun yangilash"
+
+def seed_demo_v22(con) -> int:
+    if not db.one(con, "SELECT 1 x FROM users") or not db.one(con, "SELECT 1 x FROM students"): return 0
+    made = 0
+    def cx(uid=None, role=None, unit=None):
+        q, a = ("SELECT * FROM users WHERE id=?", (uid,)) if uid else ("SELECT * FROM users WHERE role=? AND (? IS NULL OR unit=?) ORDER BY id LIMIT 1", (role, unit, unit))
+        u = db.one(con, q, a)
+        return Ctx(u, ROLES[u["role"]]) if u and u["role"] in ROLES else None
+    def by_role(role, unit=None): return cx(role=role, unit=unit)
+    now = dt.datetime.now().replace(microsecond=0, second=0)
+    ago = lambda h: (now - dt.timedelta(hours=h)).isoformat(timespec="seconds")
+    day = lambda n: (S.TODAY + dt.timedelta(days=n)).isoformat()
+    def seen(tid, c, h):      # xodim ochdi: o'qilganlik va bo'lim holati (thread_detail bilan bir xil, audit yozmasdan)
+        mx = con.execute("SELECT MAX(id) FROM portal_msgs WHERE thread_id=?", (tid,)).fetchone()[0] or 0
+        con.execute("""INSERT INTO portal_user_reads(thread_id,user_id,last_msg,read_at) VALUES(?,?,?,?)
+                       ON CONFLICT(thread_id,user_id) DO UPDATE SET last_msg=MAX(last_msg, excluded.last_msg), read_at=excluded.read_at""", (tid, c.user["id"], mx, ago(h)))
+        con.execute("UPDATE portal_recipients SET status='o''qilgan', read_at=?, read_by=? WHERE thread_id=? AND unit=? AND status='yangi'",
+                    (ago(h), c.user["full_name"], tid, unit_key(c.user)))
+    um = unit_map(con)
+    reg, pro, aka, mb = by_role("talabalar", "talabalar"), by_role("prorektor_oquv"), by_role("akademik"), by_role("malumotlar_bazasi")
+    # 1) Registrator → O'quv prorektori: 10 talaba, rezolyutsiya → Akademik bo'lim + Ma'lumotlar bazasi (mas'ul), talabalar bo'yicha ijro
+    if reg and pro and aka and mb and "prorektor_oquv" in um and not db.one(con, "SELECT 1 x FROM portal_threads WHERE subject=?", (DEMO_STU_SUBJ,)):
+        sids = [r["id"] for r in db.rows(con, """SELECT s.id FROM students s JOIN groups_ g ON g.id=s.group_id
+                 WHERE s.status='faol' AND s.gender='M' AND s.study_form='kunduzgi' AND g.course=2 ORDER BY g.faculty_id, g.name, s.id""")]
+        pick, per = [], {}
+        for sid in sids:               # bir nechta guruhdan (har biridan ko'pi bilan 3 nafar) — hayotiy ro'yxat
+            g = con.execute("SELECT group_id FROM students WHERE id=?", (sid,)).fetchone()[0]
+            if per.get(g, 0) < 3: per[g] = per.get(g, 0) + 1; pick.append(sid)
+            if len(pick) == 10: break
+        tid = create_thread(con, reg, ThreadIn(subject=DEMO_STU_SUBJ, kind="xat", priority="muhim", due=day(5), to=["prorektor_oquv"],
+            body=("Hurmatli Anvar Amirovich!\n\nQuyidagi 10 nafar 2-kurs talabasi tanlov natijasida 2026/2027 o'quv yilidan harbiy ta'lim fakultetida "
+                  "(harbiy kafedra) tahsil oladi. Harbiy tayyorgarlik kunlari ularning hozirgi guruhlari dars jadvali bilan mos kelmaydi.\n\n"
+                  "Iltimos, ular uchun alohida akademik guruh ochish (vaqtincha nomi HT-2601), talabalarni shu guruhga ko'chirish va "
+                  "«Registrator» bazasi hamda HEMIS'da ma'lumotlarni yangilash bo'yicha ko'rsatma bersangiz.\n\nRo'yxat xatga biriktirildi.\n\nRegistrator ofisi"),
+            students=pick, student_note="Harbiy ta'lim fakultetiga o'tadi — yangi guruhga (HT-2601) ko'chirish"), ts=ago(30))
+        seen(tid, pro, 28)
+        resolve(con, pro, tid, ResolveIn(text="Xurshid Bo'tayevich, Ravshan aka: HT-2601 guruhi ochilsin, talabalar ko'chirilsin va HEMIS'da yangilansin. "
+                                               "Ijro talabalar ro'yxati bo'yicha belgilansin.", units=["akademik", "malumotlar_bazasi"],
+                                          lead="malumotlar_bazasi", due=day(4)), ts=ago(26))
+        seen(tid, aka, 22); seen(tid, mb, 20)
+        assign(con, mb, tid, mb.user["id"], ts=ago(20))
+        reply(con, aka, tid, ReplyIn(body="HT-2601 akademik guruhi ochildi (2-kurs, kunduzgi). Dars jadvali harbiy kafedra jadvali bilan muvofiqlashtirildi, "
+                                          "ko'chirish buyrug'i loyihasi Registrator ofisiga yuborildi."), ts=ago(8))
+        mark_students(con, mb, tid, MarkIn(ids=pick[:6], status="bajarildi", note="HT-2601 guruhiga ko'chirildi, HEMIS yangilandi"), ts=ago(6))
+        mark_students(con, mb, tid, MarkIn(ids=pick[6:7], status="bajarilmadi", note="Kontrakt qarzdorligi bor — Buxgalteriya tasdig'i kutilmoqda"), ts=ago(5))
+        made += 1
+    # 2) Akademik bo'lim → kafedralar: javoblarni ko'rib chiqish (qabul / qayta ishlashga qaytarish)
+    kafs = [k for k in ("kaf1", "kaf2", "kaf3", "kaf4") if k in um]
+    heads = {k: by_role("kafedra", k) for k in kafs}
+    if aka and len(kafs) == 4 and all(heads.values()) and not db.one(con, "SELECT 1 x FROM portal_threads WHERE subject=?", (DEMO_REV_SUBJ,)):
+        tid = create_thread(con, aka, ThreadIn(subject=DEMO_REV_SUBJ, kind="topshiriq", priority="muhim", due=day(6), to=kafs,
+            body=("Kafedra mudirlariga!\n\n2026/2027 o'quv yili bahorgi semestrida o'qitiladigan fanlar sillabuslarini yangilab, "
+                  "belgilangan muddatgacha portal orqali yuboring. Sillabusda baholash mezonlari (joriy 30 / yakuniy 70), haftalik mavzular "
+                  "va so'nggi 5 yildagi adabiyotlar bo'lishi shart.\n\nAkademik faoliyatni boshqarish bo'limi")), ts=ago(72))
+        for k in kafs: seen(tid, heads[k], 70)
+        reply(con, heads["kaf2"], tid, ReplyIn(body="Biznes boshqaruvi kafedrasi: 6 ta fan sillabusi yangilandi, ilova qilindi."), ts=ago(40))
+        review_answer(con, aka, tid, ReviewIn(unit="kaf2", decision="return", due=day(3),
+            comment="Baholash mezonlari 30/70 ko'rinishida emas, adabiyotlar ro'yxati 2019-yildan eski. Tuzatib qayta yuboring."), ts=ago(30))
+        reply(con, heads["kaf4"], tid, ReplyIn(body="Buxgalteriya hisobi kafedrasi: 5 ta fan sillabusi talablar asosida yangilandi."), ts=ago(20))
+        review_answer(con, aka, tid, ReviewIn(unit="kaf4", decision="accept", comment="Talablarga mos. Rahmat."), ts=ago(10))
+        reply(con, heads["kaf1"], tid, ReplyIn(body="Iqtisodiyot va kompyuter injiniringi kafedrasi: 8 ta sillabus tayyor, ilova qilinadi."), ts=ago(5))
+        made += 1
+    if made: con.commit(); _bump(); print(f"Portal demo (v2.2): {made} ta yozishma qo'shildi")
+    return made
+
 if __name__ == "__main__":   # qo'lda qayta tiklash: .venv/bin/python -m app.portal
-    _c = db.connect(); db.init(_c); _c.executescript(SCHEMA); seed(_c, force=True)
+    _c = db.connect(); db.init(_c); _c.executescript(SCHEMA); seed(_c, force=True); migrate(_c); seed_demo_v22(_c)

@@ -83,7 +83,8 @@ FUND_SUBJECTS = {"Makroiqtisodiyot", "Mikroiqtisodiyot", "Ekonometrika", "Statis
 HUM_DEPT, HUM_SUBJECT = "Gumanitar va tabiiy fanlar", "O'zbekiston tarixi"   # fan nomi — TAXMIN (namuna)
 def subjects_for(key, course, level, fi):
     return SUBJECTS[key] + ([HUM_SUBJECT] if course == 1 and level == "bakalavr" and fi != INTL_FACULTY else [])
-# Ism-shariflar — institut ro'yxatidan (tartib: familiya, ism, otasining ismi). Dekanlar ro'yxatda yo'q — ular sun'iy qoladi.
+# Ism-shariflar — institut ro'yxatidan (tartib: familiya, ism, otasining ismi).
+# Institutda dekan lavozimi yo'q (Yevropa modeli): fakultet darajasidagi vazifalarni Registrator ofisi boshlig'i bajaradi.
 LEADERS = {
     "rektor": "G'ulomov Ibroxim Rustam o'g'li",
     "prorektor_yoshlar": "Narkuziyeva Zulxumor Meliboyevna",
@@ -153,9 +154,10 @@ def run():
     # --- tuzilma: fakultet → kafedra → yo'nalish × ta'lim shakli × kurs → guruhlar ---
     P = PROFILE
     dept_rows = []   # (did, fi, [(direction, weight)])
+    former_dean = {}
     for fi, (fname, depts) in enumerate(FACULTIES, 1):
-        dean, _ = person("M" if fi != 3 else "F")
-        c.execute("INSERT INTO faculties VALUES(?,?,?)", (fi, fname, dean))
+        former_dean[fi], _ = person("M" if fi != 3 else "F")   # tasodifiy ketma-ketlik (va id'lar) o'zgarmasligi uchun chaqiriladi
+        c.execute("INSERT INTO faculties VALUES(?,?,?)", (fi, fname, None))   # faculties.dean — bo'sh (dekan lavozimi yo'q)
         for dname, directions in depts:
             head = DEPT_HEADS.get(dname) or person()[0]
             c.execute("INSERT INTO departments(faculty_id,name,head) VALUES(?,?,?)", (fi, dname, head))
@@ -365,9 +367,8 @@ def run():
         ("Rektorat yig'ilishi", "2026-10-13", "Rektorat"),
         ("Rektorat yig'ilishi", "2026-10-27", "Rektorat"),
     ]
-    fac = db.rows(con, "SELECT * FROM faculties")
     task_seed = [
-        (0, "Xalqaro iqtisodiyot va moliya fakulteti dekani", "dekan", "Xalqaro iqtisodiyot va moliya fakulteti 2-kurs talabalari o'zlashtirishi bo'yicha tahliliy ma'lumotnoma tayyorlash", "2026-10-15", "bajarilmagan"),
+        (0, "Registrator ofisi", "talabalar", "Xalqaro iqtisodiyot va moliya fakulteti 2-kurs talabalari o'zlashtirishi bo'yicha tahliliy ma'lumotnoma tayyorlash", "2026-10-15", "bajarilmagan"),
         (0, "O'quv ishlari prorektori", "prorektor_oquv", "Akkreditatsiya uchun o'quv dasturlarini yangilash rejasini tasdiqlash", "2026-10-20", "bajarilmagan"),
         (0, "Moliya-iqtisod prorektori", "prorektor_moliya", "Kontrakt qarzdorligi bo'yicha guruhlar kesimida reja ishlab chiqish", "2026-10-25", "bajarildi"),
         (1, "Xalqaro aloqalar bo'limi", "xalqaro", "Muddati tugayotgan hamkorlik shartnomalarini uzaytirish xatlarini yuborish", "2026-10-30", "bajarilmagan"),
@@ -404,7 +405,9 @@ def run():
         ("Xalqaro hamkorlik bo'limi", "xalqaro", None, None, None, "XALQARO"),
         ("Buxgalteriya bo'limi", "buxgalteriya", None, None, None, "BUXGALTER"),
         ("Kadrlar bo'limi", "kadrlar", None, None, None, "KADR"),
-        (f"Dekan: {fac[1]['dean']}", "dekan", 2, None, None, "DEKAN"),
+        # id 13 — sobiq "Dekan" demo akkaunti: lavozim bekor qilingan, akkaunt faolsizlantirilgan (accounts.retire_legacy);
+        # keyingi id'lar o'zgarmasligi uchun qator saqlanadi
+        (f"Dekan (lavozim bekor qilingan): {former_dean[2]}", "dekan", 2, None, None, "DEKAN"),
         (f"{dept4['name']} kafedrasi mudiri: {dept4['head']}", "kafedra", 2, 4, None, "KAFEDRA"),
         (f"O'qituvchi: {t['full_name']}", "oqituvchi", 2, 4, t["id"], "USTOZ"),
         ("Xo'jalik va texnik bo'lim", "xojalik", None, None, None, "XOJALIK"),
@@ -431,15 +434,15 @@ def run():
     shutil.rmtree(D.OUT, ignore_errors=True)
     base = "http://localhost:8000/"
     def as_(uid): return rbac.ctx_for(con, uid)
-    dean, rect, kadr, xal, mol, kaf = as_(13), as_(2), as_(12), as_(10), as_(5), as_(14)
-    st = D.lookup(con, dean, "student", "")[:4]
-    grp = [g for g in D.lookup(con, dean, "group") if "-24" in g["label"]][0]["id"]
-    for x in st[:3]: D.issue(con, dean, "study_cert", {"target": f"s:{x['id']}", "purpose": R.choice(D.PURPOSES[:5])}, base)
-    D.issue(con, dean, "study_cert", {"target": f"s:{st[3]['id']}", "lang": "en"}, base)
-    D.issue(con, dean, "transcript", {"target": f"s:{st[0]['id']}"}, base)
-    D.issue(con, dean, "exam_sheet", {"group": grp, "subject": "*"}, base)
-    D.issue(con, dean, "debtors_list", {}, base)
-    D.issue(con, dean, "order_student", {"target": f"s:{st[1]['id']}", "action": "akademik_tatil", "reason": "sog'lig'i bo'yicha (tibbiy xulosa ilova qilingan)"}, base)
+    reg, rect, kadr, xal, mol, kaf = as_(17), as_(2), as_(12), as_(10), as_(5), as_(14)   # 17 — Registrator ofisi boshlig'i
+    st = D.lookup(con, reg, "student", "")[:4]
+    grp = [g for g in D.lookup(con, reg, "group") if "-24" in g["label"]][0]["id"]
+    for x in st[:3]: D.issue(con, reg, "study_cert", {"target": f"s:{x['id']}", "purpose": R.choice(D.PURPOSES[:5])}, base)
+    D.issue(con, reg, "study_cert", {"target": f"s:{st[3]['id']}", "lang": "en"}, base)
+    D.issue(con, reg, "transcript", {"target": f"s:{st[0]['id']}"}, base)
+    D.issue(con, reg, "exam_sheet", {"group": grp, "subject": "*"}, base)
+    D.issue(con, reg, "debtors_list", {}, base)
+    D.issue(con, reg, "order_student", {"target": f"s:{st[1]['id']}", "action": "akademik_tatil", "reason": "sog'lig'i bo'yicha (tibbiy xulosa ilova qilingan)"}, base)
     D.issue(con, mol, "debt_letter", {"target": f"g:{grp}"}, base)
     D.issue(con, kaf, "load", {"department": 4}, base)
     D.issue(con, rect, "minutes", {"meeting": 5}, base)
@@ -456,10 +459,20 @@ def run():
     from . import student_ops   # talabalar markazi: telefonlar, to'lov jadvali, dars qoldirishlar, ta'tillar, otrabotkalar (sun'iy)
     student_ops.init(con)
     student_ops.evaluate(con)
+    from . import seed_syllabus   # O'quv dasturlari: tayanch OTM katalogi (namuna); demo holat kafedra akkauntlari paydo bo'lgach (syllabus.init)
+    seed_syllabus.run(con)
     # Sirtqi bo'lim va Ma'lumotlar bazasi bo'limi (taqdimot). Oxirida qo'shiladi — mavjud demo akkauntlar id'si o'zgarmaydi.
     for unit, role in (("Sirtqi bo'lim", "sirtqi"), ("Ma'lumotlar bazasi bo'limi", "malumotlar_bazasi")):
         con.execute("INSERT INTO users(full_name,role,pin) VALUES(?,?,?)", (f"{unit} boshlig'i: {OTHER_UNIT_HEADS[unit]}", role, PW))
     con.commit()
+    from . import registrar   # Registrator ofisi: otrabotka muddatlari (yashil/sariq/qizil), skanlar, kontrakt muddati uzaytirish (sun'iy; idempotent)
+    registrar.init(con)
+    from . import staff_absence   # Xodimlar ta'tili: safar, ta'til, kasallik varaqasi, o'rinbosarlar (joriy va keyingi 2 hafta + o'tgan oylar; idempotent)
+    staff_absence.init(con)
+    from . import orders   # Buyruqlar: reyestr (qabul, kursga o'tkazish, ta'til) + ataylab nomuvofiqliklar, namuna arizalar, demo loyihalar (idempotent)
+    orders.init(con, fresh=True)
+    from . import accounts   # bekor qilingan lavozim (dekan, #13) — akkaunt faolsizlantiriladi (startda ham, idempotent)
+    print("Faolsizlantirildi (bekor qilingan lavozim):", accounts.retire_legacy(con))
     counts = {t: con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in
               ["faculties","departments","groups_","teachers","students","grades","publications","grants","partners","applicants","budget","staff","events","appeals","meetings","tasks","users","documents","audit_log","rooms","tickets","requests","incidents","event_checkin","schedule","cameras","occupancy","cam_events","cam_queue"]}
     print("Seed tayyor:", counts)

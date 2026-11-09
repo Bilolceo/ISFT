@@ -22,6 +22,7 @@ TOOL_LABEL = {
     "science": "Ilmiy nashrlar va grantlar", "international": "Xalqaro shartnomalar", "admissions": "Qabul bazasi",
     "youth": "Murojaatlar va tadbirlar", "masters": "Magistratura", "tasks": "Majlis topshiriqlari ijrosi", "alerts": "Proaktiv ogohlantirishlar",
     "qoidalar": AR.SOURCE, "cameras": "Kameralar (Hikvision, faqat metama'lumot: xona, vaqt, tur, son)",
+    "facecam": "Kirish nazorati (Face ID: faqat yozma rozilik bergan shaxslar, ko'lamingiz bo'yicha)",
 }
 STRATEGIC = ["ortda", "muammo", "umumiy holat", "nima qilish", "tavsiya", "xulosa", "qanday holat", "e'tibor", "strateg", "brifing",
              "bugun nima", "bugungi holat", "holat qanday", "eng muhim", "ustuvor"]
@@ -269,8 +270,9 @@ def an_academic(con, ctx, v, why):
                 else:
                     reasons.append(f"Eng ko'p tushgan fan: {s[0]['subject']} ({s[0]['drop']} ball). Eng kam: {s[-1]['subject']} ({s[-1]['drop']} ball).")
             fac_short = d["top_faculty"] + ("" if "fakultet" in d["top_faculty"].lower() else " fakulteti")
-            recs.append({"text": f"{fac_short} dekaniga: {d['top_course']}-kurs guruhlarida 7 kun ichida davomat tekshiruvi va har bir qiynalayotgan talaba bilan tyutor suhbati.",
-                         "action": task_action("Dekanga topshiriq berish", f"{fac_short} fakulteti dekani", "dekan",
+            # institutda dekan lavozimi yo'q (Yevropa modeli) — fakultet darajasidagi vazifa Registrator ofisiga (fakultet tyutorlari bilan)
+            recs.append({"text": f"Registrator ofisiga: {fac_short} {d['top_course']}-kurs guruhlarida 7 kun ichida davomat tekshiruvi va fakultet tyutorlari bilan har bir qiynalayotgan talaba suhbati.",
+                         "action": task_action("Registrator ofisiga topshiriq berish", "Registrator ofisi", "talabalar",
                                                f"{d['top_course']}-kurs pasaygan guruhlarida ({', '.join(g['name'] for g in dg[:4])}) davomat tekshiruvi va tyutor suhbatlari; natijani rektorga yozma taqdim etish")})
             if c["debt"] is not None and r["debt"] is not None and c["debt"] - r["debt"] >= 2:
                 recs.append({"text": "Shu guruhlardagi kontrakt qarzdorlariga muddatli to'lov jadvali taklif qilish — Talabalar markazi navbatida.",
@@ -386,7 +388,11 @@ def an_cameras(con, ctx, v, why):
     from . import camsec
     return camsec.agent_facts(v)
 
-ANALYZERS = {"cameras": an_cameras, "qoidalar": an_rules, "academic": an_academic, "risk": an_risk, "contracts": an_contracts, "finance": an_finance, "tasks": an_tasks,
+def an_facecam(con, ctx, v, why):
+    from . import facecam
+    return facecam.agent_facts(v)
+
+ANALYZERS = {"facecam": an_facecam, "cameras": an_cameras, "qoidalar": an_rules, "academic": an_academic, "risk": an_risk, "contracts": an_contracts, "finance": an_finance, "tasks": an_tasks,
              "international": an_international, "science": an_science}
 
 def an_generic(name, v):

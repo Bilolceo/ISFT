@@ -41,6 +41,7 @@ class Role:
     aggregate_only: frozenset = frozenset()   # faqat jamlangan ko'rinishda
     local_only: bool = False     # Telegram'ga chiqmaydi
     deny_note: str = ""
+    legacy: bool = False         # bekor qilingan lavozim: hech qanday ruxsat yo'q, faqat eski yozuvlarni ko'rsatish uchun
 
 def R(*a): return frozenset(a)
 
@@ -53,39 +54,61 @@ ROLES = {r.key: r for r in [
          deny_note="Moliyaviy hisobotlar, xodimlar maoshi"),
     Role("prorektor_ilmiy", "Ilmiy ishlar va innovatsiyalar bo'yicha prorektor", 2, R(KPI, SCIENCE, INTL, MASTERS, TASKS, REPORTS),
          deny_note="Talaba baholari, moliyaviy tafsilotlar"),
-    Role("prorektor_moliya", "Moliya-iqtisod ishlari bo'yicha prorektor", 2, R(KPI, FINANCE, CONTRACTS, PAYROLL, TASKS, REPORTS),
+    # tuzilma (04.09.2024): Buxgalteriya, Xarid, Marketing, Xo'jalik va texnik bo'lim — moliya-iqtisod prorektori kuratorligida
+    Role("prorektor_moliya", "Moliya-iqtisod ishlari bo'yicha prorektor", 2, R(KPI, FINANCE, CONTRACTS, PAYROLL, TASKS, REPORTS, FACILITIES, SPACES, ADMISSIONS),
          aggregate_only=R(PAYROLL), deny_note="Talaba baholari, ilmiy faoliyat tafsilotlari"),
-    Role("prorektor_yoshlar", "Yoshlar masalalari va ma'naviy-ma'rifiy ishlar bo'yicha birinchi prorektor", 2, R(KPI, YOUTH, TASKS, FACILITIES),
-         deny_note="Moliyaviy ma'lumot, individual o'quv baholari"),
+    # tadbirlar (Majlislar zali to'lishi — kamera signali shu yerga keladi) va talabalar bilan ishlash — jamlangan ko'rinishda
+    Role("prorektor_yoshlar", "Yoshlar masalalari va ma'naviy-ma'rifiy ishlar bo'yicha birinchi prorektor", 2, R(KPI, YOUTH, TASKS, FACILITIES, SPACES, OPS, REPORTS),
+         aggregate_only=R(OPS), deny_note="Moliyaviy ma'lumot, individual o'quv baholari"),
     Role("qabul", "Qabul komissiyasi", 3, R(ADMISSIONS, CONTRACTS, TASKS), aggregate_only=R(CONTRACTS)),
     Role("talabalar", "Registrator ofisi", 3, R(STUDENTS, CONTRACTS, ACADEMIC, TASKS, REQUESTS, YOUTH, OPS)),
-    Role("akademik", "Akademik faoliyatni boshqarish bo'limi", 3, R(ACADEMIC, STUDENTS, TASKS, REQUESTS, OPS),
+    Role("akademik", "Akademik faoliyatni boshqarish bo'limi", 3, R(ACADEMIC, STUDENTS, TASKS, REQUESTS, OPS, SPACES),   # dars jadvali → auditoriyalar fondi
          deny_note="Moliya va kadrlar ma'lumoti"),
     # Sirtqi bo'lim va Ma'lumotlar bazasi bo'limi — vazifalari app/academic_rules.py (DUTIES) da
-    Role("sirtqi", "Sirtqi bo'lim", 3, R(ACADEMIC, STUDENTS, TASKS, REQUESTS), deny_note="Moliya, kontrakt va kadrlar ma'lumoti"),
+    Role("sirtqi", "Sirtqi bo'lim", 3, R(ACADEMIC, STUDENTS, TASKS, REQUESTS, OPS), deny_note="Moliya va kadrlar ma'lumoti, institut kontrakt jamlanmasi · Talabalar markazi — faqat sirtqi talabalar (registrator vazifalari; kontrakt — o'qish)"),
     Role("malumotlar_bazasi", "Ma'lumotlar bazasi bo'limi", 3, R(KPI, ACADEMIC, STUDENTS, TASKS),
          deny_note="Moliya, kontrakt va kadrlar ma'lumoti"),
-    Role("imtihon", "Imtihon bo'limi", 3, R(ACADEMIC, STUDENTS, TASKS), deny_note="Moliya, kontrakt va kadrlar ma'lumoti"),
+    Role("imtihon", "Imtihon bo'limi", 3, R(ACADEMIC, STUDENTS, TASKS, OPS), deny_note="Moliya, kontrakt va kadrlar ma'lumoti · Talabalar markazi — o'zlashtirish va otrabotka"),
     Role("amaliyot", "Amaliyot bo'limi", 3, R(STUDENTS, TASKS), deny_note="Baholar tafsiloti, moliya va kadrlar ma'lumoti"),
     Role("magistratura", "Magistratura bo'limi", 3, R(MASTERS, TASKS)),
     Role("xalqaro", "Xalqaro hamkorlik bo'limi", 3, R(INTL, TASKS)),
-    Role("buxgalteriya", "Buxgalteriya bo'limi", 3, R(FINANCE, CONTRACTS, PAYROLL, TASKS), local_only=True),
+    Role("buxgalteriya", "Buxgalteriya bo'limi", 3, R(FINANCE, CONTRACTS, PAYROLL, TASKS, OPS), local_only=True,
+         deny_note="Talabalar markazi — faqat kontrakt holatlari (baholar va davomatsiz)"),
     Role("kadrlar", "Kadrlar bo'limi", 3, R(HR, TASKS), local_only=True),
     Role("xojalik", "Xo'jalik va texnik bo'lim", 3, R(FACILITIES, TASKS, SPACES), deny_note="Talabalar, moliya va kadrlar ma'lumoti"),
     Role("ilmiy_bolim", "Ilmiy tadqiqotlar, innovatsiyalar va ilmiy-pedagogik kadrlar tayyorlash bo'limi", 3, R(SCIENCE, MASTERS, TASKS),
          deny_note="Talaba baholari, moliya va kadrlar ma'lumoti"),
     Role("kotib", "Rektorat kotibi", 1, R(TASKS), deny_note="Talabalar, moliya va kadrlar ma'lumoti — kotib faqat majlis materiallari bilan ishlaydi"),
-    Role("it_head", "Axborot texnologiyalari bo'limi boshlig'i", 3, R(TASKS, REQUESTS), deny_note="Talabalar baholari, moliya va kadrlar ma'lumoti"),
+    Role("it_head", "Axborot texnologiyalari bo'limi boshlig'i", 3, R(TASKS, REQUESTS, SPACES), deny_note="Talabalar baholari, moliya va kadrlar ma'lumoti · kameralar — faqat texnik holat"),
     Role("it_staff", "Axborot texnologiyalari bo'limi muhandisi", 3, R(TASKS), deny_note="Faqat o'ziga biriktirilgan topshiriqlar"),
+    # Registrator ofisi oddiy xodimi (bo'lim a'zosi, rahbar emas — app/directives.py demo akkaunti)
+    Role("registrator_xodim", "Registrator ofisi xodimi", 3, R(STUDENTS, ACADEMIC, TASKS, OPS),
+         deny_note="Moliya va kadrlar ma'lumoti · topshiriqlar — faqat o'ziga berilganlari"),
     Role("call_center", "Call-markaz operatori", 3, R(OPS), deny_note="Faqat o'z qo'ng'iroqlar navbati: talaba ismi, telefon va suhbat skripti"),
+    # Tashkiliy tuzilmadagi (04.09.2024) qolgan bo'limlar — asosan Portal (bo'limlararo xat) va majlis topshiriqlari uchun; eng kam ruxsat tamoyili
+    Role("strategik", "Strategik bo'lim", 3, R(KPI, REPORTS, TASKS), deny_note="Shaxsiy ma'lumotlar, moliya va kadrlar tafsiloti"),
+    Role("sifat", "Sifatni ta'minlash boshqarmasi", 3, R(KPI, ACADEMIC, REPORTS, TASKS), aggregate_only=R(ACADEMIC),
+         deny_note="Talabalar shaxsiy ma'lumoti, moliya va kadrlar tafsiloti — faqat jamlangan ko'rsatkichlar"),
+    Role("yuridik", "Yuridik bo'lim", 3, R(TASKS), deny_note="Talabalar, moliya va kadrlar ma'lumoti — hujjatlar Portal orqali so'raladi"),
+    Role("devonxona", "Devonxona", 3, R(TASKS), deny_note="Talabalar, moliya va kadrlar ma'lumoti"),
+    Role("marketing", "Marketing bo'limi", 3, R(ADMISSIONS, TASKS), deny_note="Talabalar shaxsiy ma'lumoti, moliya va kadrlar tafsiloti"),
+    Role("xarid", "Xarid bo'limi", 3, R(TASKS), deny_note="Talabalar va kadrlar ma'lumoti"),
     Role("tyutor", "Tyutor", 4, R(OPS, ACADEMIC, STUDENTS), scope="fakultet", deny_note="Boshqa fakultet, moliya va kadrlar ma'lumoti"),
-    Role("dekan", "Dekan", 4, R(ACADEMIC, STUDENTS, SCIENCE, TASKS, REPORTS, REQUESTS, OPS), scope="fakultet",
-         deny_note="Boshqa fakultet, moliyaviy tafsilotlar"),
-    Role("kafedra", "Kafedra mudiri", 4, R(ACADEMIC, STUDENTS, SCIENCE, TASKS), scope="kafedra",
-         deny_note="Boshqa kafedra, moliya va kadrlar ma'lumoti"),
+    Role("kafedra", "Kafedra mudiri", 4, R(ACADEMIC, STUDENTS, SCIENCE, TASKS, OPS, REPORTS), scope="kafedra",
+         deny_note="Boshqa kafedra, moliya va kadrlar ma'lumoti · Talabalar markazi — o'z kafedrasi, o'quv holatlari (o'qish)"),
     Role("oqituvchi", "O'qituvchi", 4, R(ACADEMIC, STUDENTS, TASKS), scope="o'qituvchi",
          deny_note="Umumiy kafedra statistikasi, boshqa o'qituvchilar"),
 ]}
+
+# Bekor qilingan lavozimlar. Institutda dekan lavozimi yo'q (Yevropa modeli): fakultet darajasidagi vazifalarni Registrator
+# ofisi (rol "talabalar") bajaradi, fakultet tyutorlari qoladi. Kalit faqat eski yozuvlar (audit jurnali, users #13 — faolsizlantirilgan)
+# to'g'ri ko'rinishi uchun saqlanadi: ruxsatlar bo'sh, ruxsatlar jadvalida (matrix), akkaunt yaratishda va kirish ro'yxatida yo'q.
+LEGACY_ROLES = {r.key: r for r in [
+    Role("dekan", "Dekan (lavozim bekor qilingan)", 4, R(), scope="fakultet", legacy=True,
+         deny_note="Lavozim bekor qilingan — fakultet darajasidagi vazifalar Registrator ofisida"),
+]}
+ROLES.update(LEGACY_ROLES)
+ACTIVE_ROLES = {k: r for k, r in ROLES.items() if not r.legacy}
 
 # Telegram orqali hech qachon xom holda chiqmaydigan resurslar
 TELEGRAM_BLOCKED = R(PAYROLL, HR)
@@ -170,7 +193,7 @@ def require(con, ctx: Ctx, resource: str, action: str, detail: str = ""):
 
 def matrix():
     return [{"key": r.key, "title": r.title, "level": r.level, "scope": r.scope, "local_only": r.local_only,
-             "allow": sorted(r.allow), "aggregate_only": sorted(r.aggregate_only), "deny_note": r.deny_note} for r in ROLES.values()]
+             "allow": sorted(r.allow), "aggregate_only": sorted(r.aggregate_only), "deny_note": r.deny_note} for r in ACTIVE_ROLES.values()]
 
 # ---------- Parollar ----------
 DEMO_PASSWORD = os.getenv("ISFT_CORE_DEMO_PASSWORD", "Isft2026")   # sinov rejimi: barcha demo akkauntlar uchun
@@ -206,7 +229,7 @@ def greeting(u: dict) -> str:
     """Panel sarlavhasi: "Rektor Ibroxim Rustamovich"; boshqalar — hurmatli ism; shaxssiz bo'lim akkaunti — lavozim."""
     title, name = user_title(u), polite_name(u.get("full_name") or "")
     if not name: return title
-    return f"{title} {name}" if u.get("role") in ("rektor", "dekan") else name
+    return f"{title} {name}" if u.get("role") == "rektor" else name
 
 def user_title(u: dict) -> str:
     n = u.get("full_name") or ""

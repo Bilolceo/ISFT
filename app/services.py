@@ -253,17 +253,26 @@ def masters_summary(con, ctx: Ctx, quiet=False):
 # ---------- Topshiriqlar ----------
 def tasks_list(con, ctx: Ctx, quiet=False):
     _g(con, ctx, TASKS, "majlis topshiriqlari", quiet)
-    from .decisions import UNIT_OF_ROLE
-    u = UNIT_OF_ROLE.get(ctx.role.key)
-    if ctx.role.key in ("rektor", "kengash", "kotib"): where = "1=1"
+    # Ko'rinish va "mine" — bo'lim bo'yicha (Portal org_units, app/decisions.py reestri): bo'limli topshiriq o'z bo'limi xodimlariga,
+    # biriktirilgan xodimga va kurator prorektorga ko'rinadi; "mine" — biriktirilgan xodim yoki bo'lim rahbari.
+    # Bo'limsiz eski topshiriq — rol bo'yicha, lekin ko'p bo'limli rollarda (kafedra, tyutor...) mas'ul matnidagi bo'lim ham mos bo'lishi shart.
+    from . import decisions as DEC
+    uid, role = int(ctx.user["id"]), ctx.role.key
+    u = DEC.unit_of(ctx)
+    head = bool(u) and DEC.is_head(ctx, u)
+    if role in ("rektor", "kengash", "kotib"): where, args = "1=1", []
     else:
-        where = f"(t.assignee_role='{ctx.role.key}' OR t.assignee_user={int(ctx.user['id'])}" + (f" OR t.unit='{u}'" if u else "") + ")"
+        us = sorted(({u} if u else set()) | DEC.curated_units(ctx))
+        where = "((t.unit IS NULL AND t.assignee_role=?) OR t.assignee_user=?" + (f" OR t.unit IN ({','.join('?' * len(us))})" if us else "") + ")"
+        args = [role, uid, *us]
     rows = db.rows(con, f"""SELECT t.*, m.title meeting, m.date meeting_date, m.source FROM tasks t JOIN meetings m ON m.id=t.meeting_id
-                            WHERE {where} AND t.status!='qoralama' ORDER BY COALESCE(t.due, '9999'), t.id""")
+                            WHERE {where} AND t.status!='qoralama' ORDER BY COALESCE(t.due, '9999'), t.id""", args)
+    if args:   # boshqa kafedra/fakultetning bo'limsiz eski topshiriqlari ko'rinmaydi
+        rows = [r for r in rows if r.get("unit") or r.get("assignee_user") == uid or DEC.legacy_mine(ctx, r)]
     now = dt.datetime.now()
     for r in rows:
         r["decision"] = bool(r.get("source"))
-        r["mine"] = r.get("assignee_user") == ctx.user["id"] or r.get("assignee_role") == ctx.role.key or (bool(u) and r.get("unit") == u)
+        r["mine"] = r.get("assignee_user") == uid or DEC.legacy_mine(ctx, r) or (head and r.get("unit") == u)
         due = r.get("due_at") or r.get("due")
         if not due:                              # muddat majlisda aytilmagan — o'ylab topilmaydi
             r["overdue"], r["days"] = False, None; continue
@@ -273,6 +282,8 @@ def tasks_list(con, ctx: Ctx, quiet=False):
             r["overdue"], r["days"] = False, None; continue   # buzuq sana butun panelni yiqitmasin
         r["overdue"] = r["status"] != "bajarildi" and d < now
         r["days"] = (d.date() - TODAY).days
+    from . import directives as DIR   # majlisdan tashqari topshiriqlar (meeting_id yo'q): ko'rinish, "mine", muddat — app/directives.py
+    rows += DIR.task_rows(ctx)
     return {"tasks": rows, "overdue": sum(r["overdue"] for r in rows), "done": sum(r["status"] == "bajarildi" for r in rows)}
 
 def audit_log(con, ctx: Ctx, limit=50, quiet=False):

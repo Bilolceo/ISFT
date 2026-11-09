@@ -16,7 +16,8 @@ import argparse, base64, datetime as dt, hashlib, json, os, re, sqlite3, sys, te
 from pathlib import Path
 
 TABLES = ["portal_threads", "portal_recipients", "portal_msgs", "portal_reads", "portal_user_reads", "portal_attach", "portal_files",
-          "portal_shares", "portal_resolutions", "portal_watchers", "portal_drafts", "portal_templates", "portal_hidden", "org_units"]
+          "portal_shares", "portal_resolutions", "portal_watchers", "portal_drafts", "portal_templates", "portal_hidden", "org_units",
+          "portal_thread_students", "portal_reviews"]
 FORMAT = "isft-portal-backup"
 SAFE_STORED = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$")
 

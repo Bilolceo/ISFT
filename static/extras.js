@@ -1,6 +1,6 @@
 /* =====================================================================
    ISFT Core — qo'shimchalar (app/extras.py bilan):
-     1) Parolni o'zgartirish — yon menyudagi foydalanuvchi kartasi menyusidan.
+     1) Shaxsiy ma'lumotlar va parolni o'zgartirish — yon menyudagi foydalanuvchi kartasi menyusidan.
      2) Global qidiruv — Ctrl+K / ⌘K yoki tepadagi "Qidirish" tugmasi.
      3) Bildirishnomalar markazi — tepadagi qo'ng'iroqcha, har 60 soniyada (sahifa ko'rinib turganda) yangilanadi.
      4) Majlislar kalendari — "Majlislar va topshiriqlar" sarlavhasidagi "Ro'yxat | Kalendar" almashtirgichi.
@@ -109,7 +109,7 @@
     meCard.setAttribute("role", "button"); meCard.tabIndex = 0;
     meCard.setAttribute("aria-haspopup", "menu"); meCard.setAttribute("aria-expanded", "false");
     meCard.setAttribute("aria-label", "Profil menyusi");
-    meCard.title = "Profil: parolni o'zgartirish";
+    meCard.title = "Profil: shaxsiy ma'lumotlar, parol, chiqish";
     meCard.insertAdjacentHTML("beforeend", `<span class="xt-me-chev" aria-hidden="true">${ico("chevD", 15)}</span>`);
     meCard.addEventListener("click", e => { e.stopPropagation(); toggleMenu(); });
     meCard.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " " || e.key === "ArrowUp") { e.preventDefault(); toggleMenu(true); } });
@@ -121,8 +121,8 @@
     const m = document.createElement("div");
     m.className = "xt-menu"; m.setAttribute("role", "menu"); m.setAttribute("aria-label", "Profil");
     m.innerHTML = `<div class="xt-menu-h"><b>${esc(ME?.role || "")}</b><small>${esc(String(ME?.name || "").split(":").pop().trim())}</small></div>
+      <button type="button" role="menuitem" data-a="profile">${ico("user", 16)}<span>Shaxsiy ma'lumotlar</span></button>
       <button type="button" role="menuitem" data-a="pw">${ico("key", 16)}<span>Parolni o'zgartirish</span></button>
-      <button type="button" role="menuitem" data-a="search">${ico("search", 16)}<span>Global qidiruv</span><kbd>${KBD}</kbd></button>
       <button type="button" role="menuitem" data-a="switch">${ico("logout", 16)}<span>Chiqish</span></button>`;
     document.body.appendChild(m);
     const w = Math.max(232, Math.min(280, r.width));
@@ -135,7 +135,7 @@
       const b = e.target.closest("[data-a]"); if (!b) return;
       closeMenu(false); document.getElementById("app")?.classList.remove("nav-open");
       if (b.dataset.a === "pw") openPassword();
-      else if (b.dataset.a === "search") openPalette();
+      else if (b.dataset.a === "profile") openProfile();
       else doLogout();
     });
     m.addEventListener("keydown", e => {
@@ -155,6 +155,66 @@
     if (refocus) meCard?.focus({preventScroll: true});
   }
   document.addEventListener("mousedown", e => { if (MENU && !MENU.contains(e.target) && !meCard.contains(e.target)) closeMenu(false); });
+
+  /* shaxsiy ma'lumotlar: faqat o'zi haqida (GET /api/me/profile) */
+  const dmyhm = v => { const t = String(v || "").replace(" ", "T"); return t.length >= 16 ? `${t.slice(8, 10)}.${t.slice(5, 7)}.${t.slice(0, 4)} ${t.slice(11, 16)}` : (t ? t.slice(0, 10) : "—"); };
+  async function openProfile() {
+    closePalette(true); closeNp(false);
+    const nm = String(ME?.name || "").split(":").pop().trim();
+    const av = ME?.photo ? `<span class="avatar has-photo xt-pf-av"><img src="${esc(ME.photo)}" alt=""></span>`
+                         : `<span class="xt-dh-ic">${ico("user", 20)}</span>`;
+    const M = openModal({cls: "xt-pfm", labelledby: "xtPfT", html: `
+      <div class="xt-pf">
+        <div class="xt-dh">${av}<div><h3 id="xtPfT">${esc(nm || ME?.role || "")}</h3><p class="muted">${esc(ME?.role || "")}</p></div>
+          <button type="button" class="icon-btn xt-x" data-close aria-label="Yopish">${ico("x", 18)}</button></div>
+        <div id="xtPfBody" class="xt-pf-body"><p class="muted">Yuklanmoqda…</p></div>
+      </div>`});
+    M.dlg.querySelectorAll("[data-close]").forEach(b => b.onclick = () => closeModal());
+    setTimeout(() => M.dlg.querySelector(".xt-x")?.focus(), 30);
+    const body = M.dlg.querySelector("#xtPfBody");
+    let p;
+    try {
+      const r = await fetch("/api/me/profile", {credentials: "same-origin"});
+      if (r.status === 401) { closeModal(); showLogin(); return; }
+      if (!r.ok) throw 0;
+      p = await r.json();
+    } catch (e) { if (body.isConnected) body.innerHTML = `<p class="xt-form-err">Ma'lumotlarni yuklab bo'lmadi — qayta urinib ko'ring</p>`; return; }
+    if (!body.isConnected) return;
+    const row = (k, v) => v ? `<div class="xt-pf-r"><dt>${k}</dt><dd>${v}</dd></div>` : "";
+    const who = x => x ? `<b>${esc(x.name)}</b><small>${esc(x.position)}</small>` : "";
+    const oth = p.sessions.filter(s => !s.current).length;
+    body.innerHTML = `
+      <section><h4>${ico("users", 15)} Lavozim va bo'lim</h4><dl>
+        ${row("Lavozim", esc(p.position))}
+        ${row("Bo'lim", `${esc(p.unit.name)}${p.unit.am_head ? ` <span class="xt-pf-tag">rahbar</span>` : ""}<small>${p.unit.staff} nafar xodim</small>`)}
+        ${row("Bevosita rahbar", who(p.head))}
+        ${row("Kurator prorektor", who(p.curator))}
+        ${row("Ma'lumot ko'lami", esc(p.scope))}
+        ${p.curated.length ? row("Kuratorlikdagi bo'limlar", `<span class="xt-pf-chips">${p.curated.map(n => `<i>${esc(n)}</i>`).join("")}</span>`) : ""}
+      </dl></section>
+      <section><h4>${ico("shield", 15)} Ruxsatlar</h4>
+        <p class="xt-pf-chips">${p.allow.length ? p.allow.map(a => `<i>${esc(a)}</i>`).join("") : `<span class="muted">Faqat umumiy bo'limlar</span>`}</p></section>
+      <section><h4>${ico("send", 15)} Telegram bot</h4>
+        ${p.telegram.linked ? `<p class="xt-pf-ok">${ico("check", 15)} Ulangan — eslatmalar va kunlik xulosa Telegram'ga keladi</p>`
+          : `<p class="muted">Ulanmagan. Botga quyidagini yuboring: <code>${esc(p.telegram.code || "KOD")} &lt;parolingiz&gt;</code></p>`}</section>
+      <section><h4>${ico("lock", 15)} Xavfsizlik</h4><dl>
+        ${row("Parol o'zgartirilgan", p.password_changed ? esc(dmyhm(p.password_changed)) : `<span class="muted">Hali o'zgartirilmagan</span> <button type="button" class="btn sm" data-a="pw">O'zgartirish</button>`)}
+        ${row("Faol sessiyalar", `${p.sessions.length} ta${oth ? ` <button type="button" class="btn sm" id="xtPfClose">Boshqa ${oth} ta qurilmadan chiqish</button>` : ` <small>faqat shu brauzer</small>`}`)}
+      </dl>
+      ${p.logins.length ? `<ul class="xt-pf-log">${p.logins.map(l => `<li class="${l.ok ? "" : "bad"}">${ico(l.ok ? "check" : "x", 13)}<span>${esc(dmyhm(l.ts))}</span><small>${l.ok ? "Muvaffaqiyatli kirish" : esc(l.detail || "Rad etildi")}</small></li>`).join("")}</ul>` : ""}
+      </section>`;
+    body.querySelector("[data-a=pw]")?.addEventListener("click", () => openPassword());
+    const cb = body.querySelector("#xtPfClose");
+    if (cb) cb.onclick = async () => {
+      cb.disabled = true;
+      try {
+        const r = await fetch("/api/me/sessions/close-others", {method: "POST", credentials: "same-origin"});
+        const j = await r.json();
+        if (!r.ok) throw 0;
+        toast(`${j.closed} ta boshqa sessiya yopildi`); openProfile();
+      } catch (e) { cb.disabled = false; toast("Sessiyalarni yopib bo'lmadi"); }
+    };
+  }
 
   /* parol kuchi: 0..4 */
   function pwScore(p) {
@@ -420,17 +480,22 @@
           else if (l.dataset) { PT.tab = "data"; PT.ds = l.dataset; PT.dsq = l.q || ""; PT.dsoff = 0; }
           else if (l.file) { PT.tab = "files"; PT.fq = l.file; PT.fscope = "all"; PT.funit = ""; PT.fcat = ""; }
           else if (l.compose) { PT.tab = "mail"; PT.open = null; PT.compose = true; PT.to = new Set([l.compose]); PT.att = []; }
+          else if (l.flt) { PT.tab = "mail"; PT.box = "inbox"; PT.flt = l.flt; PT.q = ""; PT.open = null; }
           try { localStorage.setItem("jarvis.portalTab", PT.tab); } catch (e) {}
         }
         go("portal"); break;
       case "tasks":
         if (l.meeting && typeof openDecision === "function") openDecision(l.meeting);
-        else { if (typeof DEC !== "undefined") DEC.open = null; go("tasks"); }
+        else if (l.directive && typeof openDirective === "function") openDirective(l.directive);   /* directives.js */
+        else { if (typeof DEC !== "undefined") DEC.open = null; if (typeof DIR !== "undefined") DIR.open = null; go("tasks"); }
         break;
       case "documents":
         go("documents");
         if (l.reg) waitFor(() => [...document.querySelectorAll("#docReg tr")].find(tr => tr.textContent.includes(l.reg))).then(flash);
         break;
+      case "syllabus":   /* syllabus.js: sillabus / holat / so'rov */
+        if (typeof sylLink === "function") sylLink(l);
+        go("syllabus"); break;
       case "panel":
         go("panel");
         if (l.tab && typeof pnTab === "function") waitFor(() => document.querySelector(`#v-panel .pn-tab[data-t="${l.tab}"]`)).then(b => b && pnTab(l.tab));

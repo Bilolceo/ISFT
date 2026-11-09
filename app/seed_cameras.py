@@ -17,6 +17,8 @@ ZONES = [
     ("A", "Kassa · A-bino, 1-qavat", "kassa", 1, 20, 0),
     ("A", "Majlislar zali · A-bino, 2-qavat", "zal", 2, 320, 0),
     ("A", "Bosh kirish · A-bino", "kirish", 1, 0, 0),
+    ("B", "Kirish · B-bino", "kirish", 1, 0, 0),          # Kirish nazorati (Face ID) — app/seed_facecam.py
+    ("E", "Kirish · E-bino", "kirish", 1, 0, 0),
     ("C", "Serverxona · C-bino, 1-qavat", "serverxona", 1, 4, 1),
     ("B", "Texnik xona (elektr shchiti) · B-bino, yerto'la", "texnik", 0, 4, 1),
     ("D", "Tomga chiqish joyi · D-bino, 4-qavat", "tom", 4, 0, 1),
@@ -41,6 +43,7 @@ def prepare(con, R):
 def _model_for(r):
     z, n = r["zone"], r["name"].split(" ·")[0]
     if z in ("serverxona", "texnik", "tom"): return "DS-2TD2617-6/QA"
+    if z == "kirish": return "iDS-2CD7146G0-IZS"          # DeepinView, yuzni solishtirish (FDLib) — Kirish nazorati (Face ID)
     if z in ("qabul", "kassa", "oshxona", "zal", "kirish", "koridor") or n in ("A-101", "A-201", "D-101", "E-101"): return "iDS-2CD7A46G0-IZHS"
     if r["kind"] == "kompyuter sinfi" or (r["building"] in ("B-bino",) and (r["floor"] or 0) >= 3): return "DS-2CD3D46G2T-IZHS"
     return "DS-2CD2346G2-ISU/SL"
@@ -97,6 +100,8 @@ def run(con, R):
     _queues(con, R, t)
     _overflows(con, R, t, cams)
     con.commit()
+    from . import seed_facecam    # Kirish nazorati (Face ID): shaxslar (rozilik), 14 kunlik sintetik kirish/chiqish voqealari
+    seed_facecam.run(con)
 
 def _ev(c, cam, kind, ts, status=None, note=None, dup=0, count=None, value=None, ticket_id=None, handled_by=None, last=None):
     room = {"guard": cam["guard"], "zone": cam["zone"], "id": cam["room_id"]}

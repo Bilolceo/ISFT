@@ -2,9 +2,11 @@
 
 Ishga tushirish:  .venv/bin/python tests/test_portal.py
 Qayta ishga tushirish mumkin (qayta seed shart emas): test o'z yozishmalarini noyob mavzu bilan yaratadi va oxirida yopadi,
-qoralama va shablonlarini o'chiradi. Demo yozishmalar faqat o'qiladi. Bazaga faqat o'qish rejimida murojaat qilinadi.
+qoralama va shablonlarini o'chiradi, tashkiliy tuzilmaga kiritgan o'zgarishlarini (rahbar, kurator) asl holiga qaytaradi.
+Demo yozishmalar faqat o'qiladi. Bazaga faqat o'qish rejimida murojaat qilinadi; yagona istisno — kuratorning qayta ishga
+tushirishda saqlanishini tekshirish uchun alohida jarayonda `portal.sync_units()` chaqiriladi (server startida ham aynan shu bajariladi).
 """
-import datetime as dt, hashlib, io, sqlite3, sys, time, zipfile
+import datetime as dt, hashlib, io, re, sqlite3, subprocess, sys, time, zipfile
 from pathlib import Path
 import httpx
 
@@ -72,10 +74,14 @@ STAMP = time.strftime("%Y%m%d-%H%M%S")
 U = str(int(time.time() * 1000))[-9:]          # noyob so'z qo'shimchasi (FTS uchun)
 TODAY = dt.date.today()
 D2, D3, YDAY = (TODAY + dt.timedelta(days=2)).isoformat(), (TODAY + dt.timedelta(days=3)).isoformat(), (TODAY - dt.timedelta(days=1)).isoformat()
+D5, D7 = (TODAY + dt.timedelta(days=5)).isoformat(), (TODAY + dt.timedelta(days=7)).isoformat()
+dmy = lambda d: dt.date.fromisoformat(d).strftime("%d.%m.%Y")
+dm = lambda d: dt.date.fromisoformat(d).strftime("%d.%m")
 
-rektor, pro, reg, cc, ithead, iteng, akad, sirtqi, buxg, kaf = (S(i) for i in (2, 3, 17, 23, 21, 22, 18, 27, 11, 31))
+rektor, pro, reg, cc, ithead, iteng, akad, sirtqi, buxg, kaf, kadr, mbaza = (S(i) for i in (2, 3, 17, 23, 21, 22, 18, 27, 11, 31, 12, 28))
 AUDIT0 = q("SELECT COALESCE(MAX(id),0) FROM audit_log")[0][0]
 MY_THREADS, MY_DRAFTS, MY_TEMPLATES = [], [], []   # (client, id)
+ORG_RESTORE = {}     # bo'lim kaliti → asl {"head_user", "curator"} (test oxirida qaytariladi)
 
 def new_thread(c, tag, to, due=None, body=None, **kw):
     r = post(c, "/api/portal/threads", {"subject": f"Portal v2 test {tag} {STAMP}", "body": body or f"Test xati {tag} ({STAMP}).",
@@ -90,16 +96,160 @@ def cleanup():
         st = q("SELECT status FROM portal_threads WHERE id=?", (tid,))
         if st and st[0][0] == "ochiq":
             r = post(akad, f"/api/portal/threads/{tid}/close", {"note": "test yakuni"})
+            if r.status_code == 403: r = post(rektor, f"/api/portal/threads/{tid}/close", {"note": "test yakuni"})   # akad yuboruvchi bo'lmagan xatlar
             print(f"  yozishma #{tid} yopildi: {r.status_code}")
     for c, did in MY_DRAFTS:
         c.delete(f"/api/portal/drafts/{did}")
+    for key, orig in ORG_RESTORE.items():
+        r = rektor.put(f"/api/portal/org/{key}", json=orig)
+        print(f"  tuzilma «{key}» asl holiga qaytarildi: {r.status_code} {orig}")
     for c, tid in MY_TEMPLATES:
         c.delete(f"/api/portal/templates/{tid}")
     for fid, uid in q("SELECT id, uploader_id FROM portal_files WHERE name LIKE ? ORDER BY version DESC", (f"%{U}%",)):
         c = {17: reg, 23: cc, 18: akad}.get(uid)
         if c: print(f"  test fayli #{fid} o'chirildi: {c.delete(f'/api/portal/files/{fid}').status_code}")
-    left = [t for t in MY_THREADS if q("SELECT status FROM portal_threads WHERE id=?", (t,))[0][0] != "yopilgan"]
+    left = [t for t in MY_THREADS if q("SELECT status FROM portal_threads WHERE id=?", (t,))[0][0] not in ("yopilgan", "qaytarilgan")]
     print(f"  ochiq qolgan test yozishmalari: {left or 'yo‘q'}")
+
+def students_and_review():
+    """v2.2: xatga biriktirilgan talabalar ro'yxati (RBAC), talabalar bo'yicha ijro, javobni ko'rib chiqish (qabul / qaytarish)."""
+    # ============================================================== 21. Talabalar ro'yxati
+    print("— 21. Talabalar ro'yxati —")
+    ok(reg.get("/api/portal/units").json()["students"] is True and rektor.get("/api/portal/units").json()["students"] is False
+       and buxg.get("/api/portal/units").json()["students"] is False, "units.students: Registrator — ha, rektor (jamlangan) va buxgalteriya — yo'q")
+    ok(kaf.get("/api/portal/units").json()["student_scope"].endswith("kafedrasi"), "kafedra mudiri: ko'lam — o'z kafedrasi")
+    sr = reg.get("/api/portal/students", params={"q": "IQT-25"}).json()
+    ok(sr["groups"] and all("IQT-25" in g["name"] for g in sr["groups"]), "qidiruv: guruh nomi bo'yicha «butun guruh» takliflari")
+    G = sr["groups"][0]
+    gs = reg.get("/api/portal/students", params={"group_id": G["id"]}).json()["items"]
+    ok(len(gs) == G["n"] and len(gs) >= 11, f"butun guruh: {G['name']} — {len(gs)} ta talaba")
+    ok(reg.get("/api/portal/students", params={"q": "a"}).json()["items"] == [], "1 harfli so'rov — bo'sh natija")
+    for c, n in ((rektor, "rektor"), (buxg, "buxgalteriya")):
+        ok(c.get("/api/portal/students", params={"q": "IQT"}).status_code == 403, f"{n}: talaba qidiruvi 403")
+    lk = post(reg, "/api/portal/students/lookup", {"hemis": f"{gs[0]['hemis']}, {gs[1]['hemis']}\n99999999999"}).json()
+    ok({x["id"] for x in lk["items"]} == {gs[0]["id"], gs[1]["id"]} and lk["missing"] == ["99999999999"], "HEMIS ID ro'yxati: 2 ta topildi, 1 ta topilmadi")
+    ok(post(rektor, "/api/portal/students/lookup", {"ids": [gs[0]["id"]]}).status_code == 403, "rektor: id bo'yicha talaba ma'lumoti 403")
+    ten = [x["id"] for x in gs[:10]]
+    names = [x["name"] for x in gs[:10]]
+    r = post(buxg, "/api/portal/threads", {"subject": f"Portal v2.2 rad {STAMP}", "body": "x", "to": ["talabalar"], "students": ten[:2]})
+    ok(r.status_code == 403, "buxgalteriya: talabalar ro'yxatini biriktira olmaydi (403)")
+    r = post(kaf, "/api/portal/threads", {"subject": f"Portal v2.2 rad {STAMP}", "body": "x", "to": ["akademik"], "students": ten[:2]})
+    ok(r.status_code == 400 and "ko'lamingizda emas" in r.json()["detail"], "kafedra mudiri: boshqa kafedra talabasini biriktira olmaydi (400)")
+    T, REF = new_thread(reg, "talabalar", ["prorektor_oquv"], due=D5, body=f"Harbiy ta'lim: yangi guruh ochish (test {U})", kind="xat",
+                        students=ten, student_note="Yangi guruhga ko'chirish")
+    d = detail(reg, T)["students"]
+    ok(d["total"] == 10 and len(d["items"]) == 10 and d["can_view"] and d["can_add"] and not d["can_mark"], "yuboruvchi: 10 ta talaba, qo'shish mumkin, belgilash yo'q")
+    ok(all(x["note"] == "Yangi guruhga ko'chirish" and x["exec"] == "kutilmoqda" for x in d["items"]), "har bir talabada izoh va «kutilmoqda» holati")
+    it = item(reg, T, "sent")
+    ok(it["students"] == {"total": 10, "done": 0, "failed": 0}, "ro'yxatda: students = {total 10, done 0}")
+    dp = detail(pro, T)["students"]
+    ok(dp["can_view"] and len(dp["items"]) == 10 and dp["can_mark"], "prorektor (qabul qiluvchi, rezolyutsiyasiz): ro'yxat va belgilash huquqi")
+    ok(post(pro, f"/api/portal/threads/{T}/resolve", {"text": "Ko'chirilsin, HEMIS yangilansin", "units": ["akademik", "malumotlar_bazasi"],
+                                                       "lead": "malumotlar_bazasi", "due": D3}).status_code == 200, "prorektor: rezolyutsiya → Akademik + Ma'lumotlar bazasi")
+    dd = detail(reg, T)
+    ok(rcp(dd, "prorektor_oquv")["status"] == "yo'naltirilgan", "rezolyutsiya qo'ygan prorektor: o'z holati «yo'naltirilgan» (javob kutilmaydi)")
+    ok({e["unit"] for e in dd["students"]["executors"]} == {"akademik", "malumotlar_bazasi"}, "ijrochilar — rezolyutsiya bo'limlari")
+    ok(not detail(pro, T)["students"]["can_mark"] and detail(mbaza, T)["students"]["can_mark"] and detail(akad, T)["students"]["can_mark"],
+       "rezolyutsiyadan keyin: prorektor belgilamaydi, Ma'lumotlar bazasi va Akademik bo'lim belgilaydi")
+    dr = detail(rektor, T)
+    ok(dr["students"]["can_view"] is False and dr["students"]["items"] == [] and dr["students"]["total"] == 10 and dr["students"]["groups"] == [{"name": G["name"], "n": 10}],
+       "rektor (jamlangan): faqat soni va guruh nomlari")
+    ok(not any(n in str(dr) for n in names), "rektor javobida talabalar ismi yo'q")
+    ok(kaf.get(f"/api/portal/threads/{T}").status_code == 403, "ishtirokchi bo'lmagan kafedra: yozishma 403")
+    # ijro belgilari
+    m = post(mbaza, f"/api/portal/threads/{T}/students/mark", {"ids": ten[:6], "status": "bajarildi", "note": "HT guruhiga ko'chirildi"})
+    ok(m.status_code == 200 and m.json()["done"] == 6 and m.json()["pending"] == 4, "Ma'lumotlar bazasi: 6 ta «bajarildi»")
+    ok(post(mbaza, f"/api/portal/threads/{T}/students/mark", {"ids": ten[6:7], "status": "bajarilmadi"}).status_code == 400, "«bajarilmadi» izohsiz — 400")
+    ok(post(mbaza, f"/api/portal/threads/{T}/students/mark", {"ids": ten[6:7], "status": "bajarilmadi", "note": "Qarzdorlik"}).json()["failed"] == 1,
+       "«bajarilmadi» izoh bilan")
+    ok(post(mbaza, f"/api/portal/threads/{T}/students/mark", {"ids": ten[:1], "status": "kutilmoqda"}).json()["done"] == 5, "belgini olib tashlash (kutilmoqda)")
+    ok(post(mbaza, f"/api/portal/threads/{T}/students/mark", {"ids": ten[:1], "status": "xato"}).status_code == 400, "noto'g'ri holat — 400")
+    ok(post(mbaza, f"/api/portal/threads/{T}/students/mark", {"ids": [gs[10]["id"]], "status": "bajarildi"}).status_code == 400, "ro'yxatda yo'q talaba — 400")
+    for c, n in ((reg, "yuboruvchi"), (pro, "prorektor"), (rektor, "rektor"), (kaf, "kafedra")):
+        ok(post(c, f"/api/portal/threads/{T}/students/mark", {"ids": ten[:1], "status": "bajarildi"}).status_code == 403, f"{n}: belgilash 403")
+    x = next(i for i in detail(reg, T)["students"]["items"] if i["id"] == ten[6])
+    ok(x["exec"] == "bajarilmadi" and x["exec_note"] == "Qarzdorlik" and x["exec_unit"].startswith("Ma'lumotlar") and x["exec_by"], "belgi: kim, qaysi bo'lim, izoh")
+    ok(item(reg, T, "sent")["students"] == {"total": 10, "done": 5, "failed": 1}, "ro'yxatdagi progress yangilandi (5/10, 1 bajarilmadi)")
+    ok(item(pro, T, "control")["students"]["done"] == 5, "«Nazorat» qutisida ham progress")
+    sysm = [mm["body"] for mm in detail(rektor, T)["messages"] if mm["kind"] == "tizim"]
+    ok(any(b_.startswith("Talabalar ijrosi") for b_ in sysm) and not any(n in " ".join(sysm) for n in names), "tizim yozuvlarida faqat sonlar (ism yo'q)")
+    # CSV
+    cv = reg.get(f"/api/portal/threads/{T}/students.csv")
+    ok(cv.status_code == 200 and cv.text.startswith("﻿") and cv.text.count("\n") == 11 and "Qarzdorlik" in cv.text, "CSV: BOM, sarlavha + 10 qator, izoh")
+    ok(rektor.get(f"/api/portal/threads/{T}/students.csv").status_code == 403, "rektor: CSV 403")
+    ok(kaf.get(f"/api/portal/threads/{T}/students.csv").status_code == 403, "ishtirokchi emas: CSV 403")
+    # qo'shish
+    ok(post(reg, f"/api/portal/threads/{T}/students", {"students": [gs[10]["id"]]}).json().get("added") == 1, "yuboruvchi talaba qo'shdi (11)")
+    ok(post(reg, f"/api/portal/threads/{T}/students", {"students": [gs[10]["id"]]}).status_code == 409, "takroriy qo'shish — 409")
+    ok(post(pro, f"/api/portal/threads/{T}/students", {"students": [gs[11]["id"]]}).status_code == 403, "prorektor qo'sha olmaydi — 403")
+    ok(detail(mbaza, T)["students"]["total"] == 11, "ijrochida jami 11")
+    # qoralama
+    r = reg.put("/api/portal/drafts", json={"subject": f"Qoralama {STAMP}", "students": ten[:3]})
+    MY_DRAFTS.append((reg, r.json()["id"]))
+    ok(next(x for x in reg.get("/api/portal/drafts").json() if x["id"] == r.json()["id"])["students"] == ten[:3], "qoralamada talabalar saqlanadi")
+    r = rektor.put("/api/portal/drafts", json={"subject": f"Qoralama {STAMP}", "students": ten[:3]})
+    MY_DRAFTS.append((rektor, r.json()["id"]))
+    ok(next(x for x in rektor.get("/api/portal/drafts").json() if x["id"] == r.json()["id"])["students"] == [], "jamlangan ko'rinishdagi rahbar qoralamasiga talabalar yozilmaydi")
+
+    # ============================================================== 22. Javobni ko'rib chiqish
+    print("— 22. Javobni ko'rib chiqish —")
+    ok(post(reg, f"/api/portal/threads/{T}/review", {"unit": "akademik", "decision": "accept"}).status_code == 409, "javob yo'q — qabul 409")
+    ok(post(akad, f"/api/portal/threads/{T}/reply", {"body": f"Guruh ochildi (test {U})"}).status_code == 200, "Akademik bo'lim javob yozdi")
+    dd = detail(reg, T)
+    ok(rcp(dd, "akademik")["can_review"] and dd["perms"]["can_review"] and not rcp(dd, "malumotlar_bazasi")["can_review"], "yuboruvchi: akademik javobini ko'rib chiqa oladi")
+    ok(rcp(detail(pro, T), "akademik")["can_review"], "rezolyutsiya muallifi (prorektor) ham ko'rib chiqa oladi")
+    ok(not detail(mbaza, T)["perms"]["can_review"], "boshqa ijrochi ko'rib chiqa olmaydi")
+    ok(has(reg, T, "sent", "review") and item(reg, T, "sent")["to_review"] == 1, "yuboruvchi: «Ko'rib chiqish» filtri va to_review=1")
+    ok(lst(reg, limit=1)["counts"]["to_review"] >= 1, "counts.to_review")
+    ok(has(pro, T, "control", "review"), "prorektor: Nazorat → «Ko'rib chiqish»")
+    ok(post(mbaza, f"/api/portal/threads/{T}/review", {"unit": "akademik", "decision": "accept"}).status_code == 403, "ijrochi bo'lim — ko'rib chiqish 403")
+    ok(post(reg, f"/api/portal/threads/{T}/review", {"unit": "akademik", "decision": "return"}).status_code == 400, "izohsiz qaytarish — 400")
+    ok(post(reg, f"/api/portal/threads/{T}/review", {"unit": "akademik", "decision": "maybe", "comment": "x"}).status_code == 400, "noto'g'ri qaror — 400")
+    ok(post(reg, f"/api/portal/threads/{T}/review", {"unit": "buxgalteriya", "decision": "accept"}).status_code == 404, "qabul qiluvchi bo'lmagan bo'lim — 404")
+    ok(post(reg, f"/api/portal/threads/{T}/review", {"unit": "akademik", "decision": "return", "comment": "x", "due": YDAY}).status_code == 400, "o'tgan muddat — 400")
+    r = post(reg, f"/api/portal/threads/{T}/review", {"unit": "akademik", "decision": "return", "comment": f"Buyruq raqamini ko'rsating {U}", "due": D2})
+    ok(r.status_code == 200 and r.json()["status"] == "o'qilgan" and r.json()["review"] == "qaytarildi" and r.json()["returns"] == 1, "qaytarildi: holat «o'qilgan», returns=1")
+    a = rcp(detail(akad, T), "akademik")
+    ok(a["review"] == "qaytarildi" and a["review_note"].startswith("Buyruq raqamini") and a["due"] == D2 and a["review_by"], "qabul qiluvchida: izoh, yangi muddat, kim qaytargani")
+    ok(any(mm["kind"] == "qaytarish" and U in mm["body"] for mm in detail(akad, T)["messages"]), "yozishmada «qaytarish» xabari")
+    ia = item(akad, T)
+    ok(ia["review"] == "qaytarildi" and ia["my_status"] == "o'qilgan", "kiruvchi ro'yxatda: «Qaytarildi» belgisi")
+    ok(has(akad, T, "inbox", "returned") and lst(akad, limit=1)["counts"]["inbox_returned"] >= 1, "qabul qiluvchi: «Qaytarilgan» filtri va hisoblagichi")
+    ok(has(akad, T, "inbox", "pending"), "qaytarilgan javob yana «Javobsiz» qatorida")
+    rem = akad.get("/api/portal/reminders").json()["items"]
+    ok(any(x["thread_id"] == T and x.get("returned") for x in rem), "eslatma: qaytarilgan (returned=true)")
+    ok(not has(reg, T, "sent", "review"), "ko'rib chiqilgandan keyin «Ko'rib chiqish» filtridan chiqdi")
+    ok(post(akad, f"/api/portal/threads/{T}/reply", {"body": "Buyruq № 45-T asosida"}).status_code == 200, "qayta javob")
+    a = rcp(detail(reg, T), "akademik")
+    ok(a["status"] == "javob berilgan" and a["review"] is None and a["returns"] == 1 and a["can_review"], "qayta javob: ko'rib chiqish kutilmoqda, returns saqlanadi")
+    ok(post(pro, f"/api/portal/threads/{T}/review", {"unit": "akademik", "decision": "accept", "comment": "Rahmat"}).json()["review"] == "qabul",
+       "prorektor (rezolyutsiya muallifi) qabul qildi")
+    ok(post(pro, f"/api/portal/threads/{T}/review", {"unit": "akademik", "decision": "accept"}).status_code == 409, "takroriy qabul — 409")
+    ok(item(akad, T)["review"] == "qabul", "qabul qiluvchida «Qabul qilindi»")
+    rv = detail(reg, T)["reviews"]
+    ok([x["decision"] for x in rv] == ["return", "accept"] and rv[0]["by_unit"] == "Registrator ofisi", "ko'rib chiqish tarixi: qaytarish → qabul")
+    # yopilgan yozishmada amallar yo'q
+    ok(post(reg, f"/api/portal/threads/{T}/close", {"note": "test"}).status_code == 200, "yozishma yopildi")
+    ok(post(mbaza, f"/api/portal/threads/{T}/students/mark", {"ids": ten[:1], "status": "bajarildi"}).status_code == 409, "yopilgan: belgilash 409")
+    ok(post(reg, f"/api/portal/threads/{T}/review", {"unit": "akademik", "decision": "return", "comment": "x"}).status_code == 409, "yopilgan: ko'rib chiqish 409")
+    ok(post(reg, f"/api/portal/threads/{T}/students", {"students": [gs[11]["id"]]}).status_code == 409, "yopilgan: talaba qo'shish 409")
+    # demo (v2.2) — Registrator → prorektor → Akademik/Ma'lumotlar bazasi
+    demo = [x for x in all_items(reg, "sent") if x["subject"].startswith("Harbiy ta'lim fakultetiga")] + \
+           [x for x in all_items(reg, "archive") if x["subject"].startswith("Harbiy ta'lim fakultetiga")]
+    ok(demo and demo[0]["students"]["total"] == 10, "demo: Baratov xati 10 ta talaba bilan")
+    js = httpx.get(f"{B}/portal.js").text
+    ok("ptStuBlock" in js and "/review" in js and "students/mark" in js and "students.csv" in js, "portal.js: ro'yxat bloki, belgilash, CSV, ko'rib chiqish")
+    # audit
+    rows = q("SELECT action, detail, allowed, user_id FROM audit_log WHERE id>? AND resource='portal'", (AUDIT0,))
+    def seen(action, uid, allowed=1, frag=""):
+        return any(a_ == action and u_ == uid and al == allowed and frag in (dt_ or "") for a_, dt_, al, u_ in rows)
+    ok(seen("portal: talabalar ijrosi belgilandi", 28, 1, REF), "audit: ijro belgilandi (28)")
+    ok(seen("portal: talabalar ijrosini belgilash", 17, 0, REF), "audit: yuboruvchining belgilash urinishi rad")
+    ok(seen("portal: javob qayta ishlashga qaytarildi", 17, 1, REF) and seen("portal: javob qabul qilindi", 3, 1, REF), "audit: qaytarildi (17), qabul (3)")
+    ok(seen("portal: javobni ko'rib chiqish", 28, 0, REF), "audit: ijrochining ko'rib chiqish urinishi rad")
+    ok(seen("portal: talabalar ro'yxati CSV", 17, 1, REF) and seen("portal: talabalar ro'yxati CSV", 2, 0, REF), "audit: CSV yuklandi / rektorga rad")
+    ok(seen("portal: talabalar ro'yxatini biriktirish", 11, 0), "audit: buxgalteriyaning ro'yxat biriktirish urinishi rad")
+    ok(seen("portal: xat yuborildi", 17, 1, "talabalar: 10 ta"), "audit: xat yuborildi (talabalar soni bilan)")
 
 def main():
     # ============================================================== 1. Bo'limlar
@@ -107,7 +257,7 @@ def main():
     u17, u23 = reg.get("/api/portal/units").json(), cc.get("/api/portal/units").json()
     ok(u17["me"] == "talabalar" and u23["me"] == "talabalar", "17 va 23 — talabalar bo'limi")
     ok(u17["is_head"] is True and u23["is_head"] is False, "is_head: 17 rahbar, 23 rahbar emas")
-    ok(len(u17["members"]) == 2 and {m["id"] for m in u17["members"]} == {17, 23}, "talabalar a'zolari: 2 ta (17, 23)")
+    ok({17, 23} <= {m["id"] for m in u17["members"]} and u17["members"][0]["id"] == 17, "talabalar a'zolari: 17 (rahbar, birinchi) va 23 (boshqa modullar yangi xodim qo'shishi mumkin)")
     ok(next(m for m in u17["members"] if m["id"] == 17)["head"] and next(m for m in u23["members"] if m["id"] == 23)["me"], "members: head/me belgilari")
     ok(any(x["key"] == "sirtqi" for x in u17["units"]) and {"xat", "sorov"} <= set(u17["kinds"]), "units ro'yxati va kinds")
     for c, uid, lead in ((rektor, 2, True), (pro, 3, True), (reg, 17, False), (cc, 23, False), (ithead, 21, False), (iteng, 22, False),
@@ -463,8 +613,220 @@ def main():
     rr = reg.get("/api/portal/reminders").json()["items"]
     ok(all(x["who"] in ("menga", "bolimga", "yuborgan", "nazorat") for x in rr), "17 eslatmalari: who qiymatlari to'g'ri")
 
+    # ============================================================== 15. Xatni qaytarib olish
+    print("— 15. Xatni qaytarib olish —")
+    W6 = f"qaytarma{U}"
+    inbox_b0 = lst(buxg, limit=1)["counts"]["inbox"]
+    T6, REF6 = new_thread(akad, "T6 qaytarib olish", ["talabalar", "buxgalteriya"], due=D3, body=f"Qaytarib olinadigan xat. Kalit so'z {W6}.")
+    ok(lst(buxg, limit=1)["counts"]["inbox"] == inbox_b0 + 1 and has(buxg, T6) and has(buxg, T6, q_=W6), "11 kiruvchida T6 bor (qidiruvda ham)")
+    ok(detail(akad, T6)["perms"]["can_recall"] is True, "yuboruvchi (18): perms.can_recall = true (hech kim o'qimagan)")
+    ok(post(reg, f"/api/portal/threads/{T6}/recall", {"note": "x"}).status_code == 403, "qabul qiluvchi (17) qaytarib ola olmaydi (403)")
+    ok(post(sirtqi, f"/api/portal/threads/{T6}/recall").status_code == 403, "begona bo'lim (27) qaytarib ola olmaydi (403)")
+    ok(post(rektor, f"/api/portal/threads/{T6}/recall").status_code == 403, "rahbariyat ham (yuboruvchi emas) qaytarib ola olmaydi (403)")
+    r = post(akad, f"/api/portal/threads/{T6}/recall", {"note": "Xato bo'lim tanlangan"})
+    ok(r.status_code == 200 and r.json()["status"] == "qaytarilgan", "18 xatni qaytarib oldi")
+    ok(q("SELECT COUNT(*) FROM portal_recipients WHERE thread_id=?", (T6,))[0][0] == 0, "bazada qabul qiluvchi yozuvlari qolmadi")
+    for c, n in ((buxg, 11), (reg, 17), (cc, 23)):
+        ok(not has(c, T6) and not has(c, T6, "archive") and not has(c, T6, "inbox", "unread"), f"{n}: T6 kiruvchi va arxivda yo'q")
+        ok(c.get("/api/portal/threads", params={"box": "inbox", "q": W6}).json()["total"] == 0, f"{n}: qidiruvda (FTS) T6 topilmaydi")
+        rr = c.get(f"/api/portal/threads/{T6}")
+        ok(rr.status_code == 410 and "qaytarib olingan" in rr.json()["detail"], f"{n}: yozishmani ochish 410 «qaytarib olingan»")
+        cn = lst(c, limit=1)["counts"]
+        ok(cn["inbox"] == lst(c, "inbox", limit=1)["total"] and cn["archive"] == lst(c, "archive", limit=1)["total"], f"{n}: hisoblagichlar ro'yxat bilan mos")
+    ok(lst(buxg, limit=1)["counts"]["inbox"] == inbox_b0, "11: counts.inbox avvalgi holatga qaytdi")
+    ok(not any(x["link"] == {"view": "portal", "thread": T6} for x in buxg.get("/api/notifications").json()["items"]), "11 bildirishnomalarida T6 yo'q")
+    ok(not any(x["thread_id"] == T6 for x in buxg.get("/api/portal/reminders").json()["items"]), "11 eslatmalarida T6 yo'q")
+    a6 = item(akad, T6, "archive")
+    ok(a6 is not None and a6["status"] == "qaytarilgan" and a6["recalled"] and not has(akad, T6, "sent"), "18: T6 Arxivda (qaytarilgan), Yuborilganlarda yo'q")
+    ok([x["unit"] for x in a6["recipients"]] == ["talabalar", "buxgalteriya"], "arxiv ro'yxatida qabul qiluvchilar ko'rsatiladi")
+    d = detail(akad, T6)
+    ok(d["status"] == "qaytarilgan" and d["recalled"] and [x["unit"] for x in d["recalled"]["recipients"]] == ["talabalar", "buxgalteriya"]
+       and d["recalled"]["due"] == D3 and d["recalled"]["note"] == "Xato bo'lim tanlangan", "detail: recalled (qabul qiluvchilar, muddat, izoh)")
+    P = d["perms"]
+    ok(P["can_resend"] and not P["can_reopen"] and not P["can_reply"] and not P["can_recall"] and not P["can_change_due"] and not d["recipients"], "perms: can_resend, qolganlari yo'q")
+    ok(any(m["kind"] == "tizim" and m["body"].startswith("Xat qaytarib olindi") for m in d["messages"]), "tizim yozuvi «Xat qaytarib olindi»")
+    ok(post(akad, f"/api/portal/threads/{T6}/reply", {"body": "x"}).status_code == 409, "qaytarilgan xatga javob 409")
+    ok(post(akad, f"/api/portal/threads/{T6}/reopen").status_code == 409, "qaytarilgan xatni qayta ochish 409")
+    ok(post(akad, f"/api/portal/threads/{T6}/recall").status_code == 409, "qayta qaytarib olish 409")
+    ok(post(rektor, f"/api/portal/threads/{T6}/resolve", {"text": "x", "units": ["buxgalteriya"]}).status_code == 409, "qaytarilgan xatga rezolyutsiya 409")
+    ar = item(rektor, T6, "all")
+    ok(ar is not None and ar["recalled"], "rektor «Barchasi»: T6 «qaytarilgan» belgisi bilan")
+    ok(lst(rektor, "all", limit=1)["total"] == q("SELECT COUNT(*) FROM portal_threads")[0][0], "box=all total = COUNT(*) (qaytarilgan ham)")
+    # «Tahrirlab qayta yuborish»: mavjud qoralama API orqali
+    r = akad.put("/api/portal/drafts", json={"subject": d["subject"], "body": d["messages"][0]["body"], "to": [x["unit"] for x in d["recalled"]["recipients"]], "due": D3})
+    ok(r.status_code == 200, "qaytarilgan xatdan qoralama yaratildi"); MY_DRAFTS.append((akad, r.json()["id"]))
+    T7, REF7 = new_thread(akad, "T7 o'qilgan", ["talabalar"])
+    detail(cc, T7)                     # 23 (talabalar xodimi) o'qidi
+    ok(detail(akad, T7)["perms"]["can_recall"] is False, "o'qilgandan keyin perms.can_recall = false")
+    r = post(akad, f"/api/portal/threads/{T7}/recall")
+    ok(r.status_code == 409 and r.json()["detail"] == "Xat o'qilgan — qaytarib bo'lmaydi. Yozishmani yopishingiz mumkin.", "o'qilgan xatni qaytarish 409 (aniq matn)")
+    ok(has(cc, T7) and q("SELECT status FROM portal_threads WHERE id=?", (T7,))[0][0] == "ochiq", "rad etilgan qaytarish yozishmani o'zgartirmadi")
+    T8, _ = new_thread(akad, "T8 rezolyutsiyali", ["talabalar"])
+    ok(post(rektor, f"/api/portal/threads/{T8}/resolve", {"text": "Ko'rib chiqilsin", "units": ["buxgalteriya"]}).status_code == 200, "T8 ga rezolyutsiya (o'qilmasdan)")
+    ok(post(akad, f"/api/portal/threads/{T8}/recall").status_code == 409, "rezolyutsiya qo'yilgan xatni qaytarish 409")
+
+    # ============================================================== 16. Muddatni o'zgartirish
+    print("— 16. Muddatni o'zgartirish —")
+    UN = {u["key"]: u["name"] for u in reg.get("/api/portal/units").json()["units"]}
+    T9, REF9 = new_thread(akad, "T9 muddat", ["talabalar", "buxgalteriya", "sirtqi"], due=D2)
+    ok(detail(akad, T9)["perms"]["can_change_due"] and not detail(buxg, T9)["perms"]["can_change_due"], "perms.can_change_due: yuboruvchida bor, qabul qiluvchida yo'q")
+    ok(detail(pro, T9)["perms"]["can_change_due"], "rahbariyat (prorektor): can_change_due")
+    for c, n in ((buxg, 11), (reg, 17)):
+        ok(post(c, f"/api/portal/threads/{T9}/due", {"due": D5}).status_code == 403, f"{n} (qabul qiluvchi) muddatni o'zgartira olmaydi (403)")
+    ok(post(akad, f"/api/portal/threads/{T9}/due", {"due": YDAY}).status_code == 400, "o'tgan sana 400")
+    ok(post(akad, f"/api/portal/threads/{T9}/due", {"due": "15-11-2026"}).status_code == 400, "noto'g'ri sana 400")
+    ok(post(akad, f"/api/portal/threads/{T9}/due", {"due": ""}).status_code == 400, "bo'sh sana 400")
+    ok(post(akad, f"/api/portal/threads/{T9}/due", {"due": D5, "units": ["kadrlar"]}).status_code == 400, "qabul qiluvchi bo'lmagan bo'lim 400")
+    ok(post(akad, f"/api/portal/threads/{T9}/due", {"due": D2}).status_code == 400, "o'zgarmagan muddat 400")
+    r = post(akad, f"/api/portal/threads/{T9}/due", {"due": D3, "note": "ma'lumot to'planmoqda"})
+    ok(r.status_code == 200 and r.json()["old"] == D2 and r.json()["due"] == D3, "18: barcha bo'limlar uchun muddat D2 → D3")
+    d = detail(akad, T9)
+    ok(d["due"] == D3 and all(x["due"] == D3 for x in d["recipients"]), "yozishma va barcha qabul qiluvchilar muddati D3")
+    ok(any(m["kind"] == "tizim" and m["body"] == f"Muddat o'zgartirildi: {dmy(D2)} → {dmy(D3)} (ma'lumot to'planmoqda)" for m in d["messages"]),
+       f"tizim yozuvi «Muddat o'zgartirildi: {dmy(D2)} → {dmy(D3)} (izoh)»")
+    ok(item(buxg, T9)["due"] == D3, "11 ro'yxatida muddat D3")
+    ok(post(reg, f"/api/portal/threads/{T9}/reply", {"body": "Registrator: bajarildi."}).status_code == 200, "17 javob berdi")
+    ok(post(akad, f"/api/portal/threads/{T9}/due", {"due": D5, "units": ["talabalar"]}).status_code == 400, "javob bergan bo'lim muddatini o'zgartirish 400")
+    r = post(akad, f"/api/portal/threads/{T9}/due", {"due": D5, "units": ["buxgalteriya"]})
+    ok(r.status_code == 200 and r.json()["units"] == ["buxgalteriya"], "faqat buxgalteriya uchun D5")
+    d = detail(akad, T9)
+    ok(rcp(d, "buxgalteriya")["due"] == D5 and rcp(d, "sirtqi")["due"] == D3 and d["due"] == D3, "buxgalteriya D5, sirtqi D3, yozishma D3")
+    ok(any(m["kind"] == "tizim" and m["body"] == f"Muddat o'zgartirildi ({UN['buxgalteriya']}): {dmy(D3)} → {dmy(D5)}" for m in d["messages"]), "tizim yozuvida bo'lim nomi")
+    ok(item(buxg, T9)["due"] == D5 and item(sirtqi, T9)["due"] == D3, "11 da D5, 27 da D3")
+    r = post(pro, f"/api/portal/threads/{T9}/due", {"due": D7})
+    ok(r.status_code == 200 and r.json()["old"] is None, "prorektor (rahbariyat) hammasi uchun D7 (avvalgi — turli muddatlar)")
+    d = detail(akad, T9)
+    ok(rcp(d, "buxgalteriya")["due"] == D7 and rcp(d, "sirtqi")["due"] == D7 and d["due"] == D7, "kutilayotganlarning hammasi D7")
+    ok(any(m["body"] == f"Muddat o'zgartirildi: turli muddatlar → {dmy(D7)}" for m in d["messages"]), "«turli muddatlar → …» yozuvi")
+    ok(post(akad, f"/api/portal/threads/{T9}/close", {"note": "test"}).status_code == 200, "T9 yopildi")
+    ok(post(akad, f"/api/portal/threads/{T9}/due", {"due": D7}).status_code == 409, "yopilgan yozishmada muddat 409")
+
+    # ============================================================== 17. Rezolyutsiyani tahrirlash va bekor qilish
+    print("— 17. Rezolyutsiyani tahrirlash va bekor qilish —")
+    T10, REF10 = new_thread(akad, "T10 rezolyutsiya tahriri", ["talabalar"], due=D3)
+    r = post(rektor, f"/api/portal/threads/{T10}/resolve", {"text": "Birgalikda ko'rib chiqilsin", "units": ["buxgalteriya", "sirtqi"], "lead": "buxgalteriya", "due": D3})
+    RID10 = r.json()["id"]
+    z = detail(rektor, T10)["resolutions"][0]
+    ok(z["can_edit"] and z["can_cancel"] and not detail(pro, T10)["resolutions"][0]["can_edit"], "can_edit/can_cancel: muallifda bor, prorektorda yo'q")
+    E = f"/api/portal/threads/{T10}/resolutions/{RID10}"
+    body = {"text": "Birgalikda ko'rib chiqilsin", "units": ["buxgalteriya", "kadrlar"], "lead": "kadrlar", "due": D5}
+    for c, n in ((pro, "prorektor"), (reg, 17), (buxg, 11)):
+        ok(post(c, f"{E}/edit", body).status_code == 403 and post(c, f"{E}/cancel", {}).status_code == 403, f"{n}: tahrirlash/bekor qilish 403")
+    ok(post(rektor, f"{E}/edit", {**body, "due": YDAY}).status_code == 400, "o'tgan muddat bilan tahrir 400")
+    ok(post(rektor, f"{E}/edit", {**body, "units": ["akademik"]}).status_code == 400, "yuboruvchini ijrochi qilish 400")
+    ok(post(rektor, f"{E}/edit", {"text": "Birgalikda ko'rib chiqilsin", "units": ["buxgalteriya", "sirtqi"], "lead": "buxgalteriya", "due": D3}).status_code == 400, "o'zgarishsiz tahrir 400")
+    ok(post(rektor, f"/api/portal/threads/{T10}/resolutions/999999/edit", body).status_code == 404, "mavjud bo'lmagan rezolyutsiya 404")
+    r = post(rektor, f"{E}/edit", body)
+    ok(r.status_code == 200 and r.json()["added"] == ["kadrlar"] and r.json()["removed"] == ["sirtqi"], "tahrir: +kadrlar, −sirtqi, mas'ul kadrlar, muddat D5")
+    d = detail(rektor, T10); z = d["resolutions"][0]
+    ok([x["unit"] for x in z["units"]] == ["buxgalteriya", "kadrlar"] and z["lead_unit"] == "kadrlar" and z["due"] == D5 and z["edited_at"], "rezolyutsiya kartasi yangilandi")
+    ok(rcp(d, "sirtqi") is None, "sirtqi (shu rezolyutsiya bilan qo'shilgan, javob bermagan) qabul qiluvchilardan olib tashlandi")
+    rk, rb = rcp(d, "kadrlar"), rcp(d, "buxgalteriya")
+    ok(rk and rk["via"] == "rezolyutsiya" and rk["status"] == "yangi" and rk["due"] == D5 and rk["lead"], "kadrlar: yangi, via rezolyutsiya, D5, mas'ul")
+    ok(rb["due"] == D5 and not rb["lead"], "buxgalteriya: muddat D5 ga o'tdi, mas'ul emas")
+    em = [m for m in d["messages"] if m["kind"] == "rezolyutsiya" and (m["meta"] or {}).get("edit")]
+    ok(len(em) == 1 and em[0]["body"].startswith(f"Rezolyutsiya o'zgartirildi: muddat {dm(D3)} → {dm(D5)}; qo'shildi: {UN['kadrlar']}; olib tashlandi: {UN['sirtqi']}"),
+       f"o'zgarish xabari: {em[0]['body'].splitlines()[0] if em else '—'}")
+    ok(not has(sirtqi, T10) and has(kadr, T10) and item(kadr, T10)["due"] == D5, "27 kiruvchisida yo'q, 12 (kadrlar) kiruvchisida D5 bilan")
+    ok(post(buxg, f"/api/portal/threads/{T10}/reply", {"body": "Buxgalteriya: hisob ilova qilindi."}).status_code == 200, "11 javob berdi")
+    r = post(rektor, f"{E}/edit", {"text": "Kadrlar bo'limi yakunlasin", "units": ["kadrlar", "talabalar"], "lead": "kadrlar", "due": D5})
+    ok(r.status_code == 200 and r.json()["kept"] == ["buxgalteriya"] and r.json()["added"] == ["talabalar"], "javob bergan buxgalteriya olib tashlansa — yozishmada qoladi (kept)")
+    d = detail(rektor, T10)
+    ok(rcp(d, "buxgalteriya")["status"] == "javob berilgan" and rcp(d, "buxgalteriya")["due"] == D3 and not rcp(d, "buxgalteriya")["lead"],
+       "buxgalteriya: javob saqlandi, shaxsiy muddat bekor (yozishma muddati D3)")
+    ok(rcp(d, "talabalar")["due"] == D5 and rcp(d, "talabalar")["via"] == "xat", "asl qabul qiluvchi talabalar ijrochi bo'ldi (D5), via=xat")
+    ok(d["resolutions"][0]["text"] == "Kadrlar bo'limi yakunlasin", "ko'rsatma matni yangilandi")
+    r = post(rektor, f"{E}/edit", {"text": "Kadrlar bo'limi yakunlasin", "units": ["kadrlar"], "lead": "kadrlar", "due": D5})
+    ok(r.status_code == 200 and r.json()["kept"] == ["talabalar"], "asl qabul qiluvchi (talabalar) olib tashlansa — qoladi")
+    d = detail(rektor, T10)
+    ok(rcp(d, "talabalar") and rcp(d, "talabalar")["due"] == D3, "talabalar shaxsiy muddati bekor qilindi (D3)")
+    c0 = lst(rektor, "control", limit=1)["counts"]["control"]
+    ok(has(rektor, T10, "control"), "T10 rektor «Nazorat» qutisida")
+    r = post(rektor, f"{E}/cancel", {"note": "Masala boshqa tartibda hal qilinadi"})
+    ok(r.status_code == 200 and r.json()["removed"] == ["kadrlar"], "rektor rezolyutsiyani bekor qildi: kadrlar (javob bermagan) chiqarildi")
+    d = detail(rektor, T10); z = d["resolutions"][0]
+    ok(z["state"] == "bekor" and not z["can_edit"] and not z["can_cancel"] and not z["can_close"] and not z["overdue"], "holat «bekor», amallar yo'q")
+    ok(rcp(d, "kadrlar") is None and rcp(d, "talabalar") and rcp(d, "buxgalteriya"), "kadrlar chiqarildi, boshqalar qoldi")
+    ok(any(m["kind"] == "tizim" and m["body"].startswith("Rezolyutsiya bekor qilindi: Masala boshqa tartibda hal qilinadi") for m in d["messages"]), "tizim yozuvi «Rezolyutsiya bekor qilindi»")
+    ok(lst(rektor, "control", limit=1)["counts"]["control"] == c0 - 1, f"counts.control kamaydi ({c0} → {c0 - 1})")
+    ok(not has(rektor, T10, "control"), "bekor qilingan rezolyutsiya «Nazorat» qutisida yo'q")
+    ok(not item(rektor, T10, "all")["resolution"], "ro'yxatda «Rezolyutsiya» belgisi yo'q")
+    ok(not has(kadr, T10), "12 (kadrlar) kiruvchisida T10 yo'q")
+    ok(not any(x["thread_id"] == T10 and x["who"] == "nazorat" for x in rektor.get("/api/portal/reminders").json()["items"]), "rektor eslatmalarida T10 nazorati yo'q")
+    ok(post(rektor, f"{E}/edit", body).status_code == 409 and post(rektor, f"{E}/cancel", {}).status_code == 409, "bekor qilingandan keyin tahrir/bekor 409")
+    ok(post(rektor, f"{E}/close").status_code == 409, "bekor qilingan rezolyutsiyani yechish 409")
+    # bir bo'lim ikki rezolyutsiyada: biri bekor qilinsa — ikkinchisining muddati va mas'ulligi tiklanadi
+    T11, _ = new_thread(akad, "T11 ikki rezolyutsiya", ["talabalar"])
+    Ra = post(rektor, f"/api/portal/threads/{T11}/resolve", {"text": "Birinchi", "units": ["buxgalteriya", "sirtqi"], "lead": "sirtqi", "due": D5}).json()["id"]
+    Rb = post(rektor, f"/api/portal/threads/{T11}/resolve", {"text": "Ikkinchi", "units": ["buxgalteriya"], "due": D3}).json()["id"]
+    rb = rcp(detail(rektor, T11), "buxgalteriya")
+    ok(rb["due"] == D3 and rb["lead"], "ikkinchi rezolyutsiya: buxgalteriya D3, mas'ul")
+    r = post(rektor, f"/api/portal/threads/{T11}/resolutions/{Rb}/cancel", {})
+    rb = rcp(detail(rektor, T11), "buxgalteriya")
+    ok(r.status_code == 200 and r.json()["removed"] == [] and rb and rb["due"] == D5 and not rb["lead"],
+       "ikkinchisi bekor: buxgalteriya qoldi, birinchi rezolyutsiya muddati (D5) tiklandi, mas'ul emas")
+    ok(post(rektor, f"/api/portal/threads/{T11}/resolutions/{Ra}/edit", {"text": "Birinchi", "units": ["sirtqi"], "lead": "sirtqi", "due": D5}).json()["removed"] == ["buxgalteriya"],
+       "birinchisidan olib tashlansa — endi qabul qiluvchilardan chiqariladi")
+    # muddati o'tgan nazorat bekor qilinsa — control_overdue hisobiga kirmaydi (demo bazadagi rezolyutsiyalar o'zgartirilmaydi)
+    cn = lst(rektor, "control", limit=1)["counts"]
+    exp = q("""SELECT COUNT(*) FROM portal_resolutions z JOIN portal_threads t ON t.id=z.thread_id WHERE z.author_unit='rektorat' AND z.state='nazoratda'
+               AND t.status='ochiq' AND z.due<? AND EXISTS(SELECT 1 FROM json_each(z.units) j JOIN portal_recipients r ON r.thread_id=z.thread_id
+               AND r.unit=j.value WHERE r.status IN ('yangi','o''qilgan'))""", (TODAY.isoformat(),))[0][0]
+    ok(cn["control_overdue"] == exp, f"counts.control_overdue faqat nazoratdagilar ({exp})")
+
+    # ============================================================== 18. Bo'limlar katalogi va tuzilmani tahrirlash
+    print("— 18. Bo'limlar katalogi —")
+    o = reg.get("/api/portal/org").json()
+    ok(o["can_edit"] is False and rektor.get("/api/portal/org").json()["can_edit"] and ithead.get("/api/portal/org").json()["can_edit"], "can_edit: rektor va IT boshlig'i")
+    ok(not pro.get("/api/portal/org").json()["can_edit"] and not akad.get("/api/portal/org").json()["can_edit"], "prorektor va xodimlarda can_edit yo'q")
+    ou = {u["key"]: u for u in o["units"]}
+    ok({g["key"] for g in o["groups"]} == {"rahbariyat", "bolim", "fakultet", "kafedra"} and len(ou) >= 30, f"guruhlar va bo'limlar ({len(ou)})")
+    t_ = ou["talabalar"]
+    ok(t_["head_user"] == 17 and t_["members_count"] == len(t_["members"]) >= 2 and {17, 23} <= {m["id"] for m in t_["members"]} and t_["members"][0]["head"],
+       f"talabalar: rahbar 17, {t_['members_count']} xodim (17, 23 va boshqalar)")
+    ok(t_["curator"] == "prorektor_oquv" and "O'quv" in t_["curator_name"] and t_["info"]["place"], "talabalar: kurator, joylashuv")
+    ok(ou["kadrlar"]["curator"] is None and ou["it"]["curator"] is None, "kadrlar, IT — rektorga bevosita (kurator yo'q)")
+    ok(all(ou[k]["curator"] == "prorektor_moliya" for k in ("marketing", "xarid") if k in ou), "marketing, xarid — moliya prorektori")
+    ok({c_["key"] for c_ in o["curators"]} >= {"prorektor_oquv", "prorektor_ilmiy", "prorektor_moliya"}, "kurator tanlovi — prorektorlar")
+    ORG0 = {k: {"head_user": ou[k]["head_user"], "curator": ou[k]["curator"]} for k in ("talabalar", "xalqaro")}
+    for c, n in ((reg, 17), (akad, 18), (pro, "prorektor"), (iteng, 22)):
+        ok(c.put("/api/portal/org/talabalar", json={"head_user": 23}).status_code == 403, f"{n}: tuzilmani o'zgartirish 403")
+    ok(rektor.put("/api/portal/org/nomalum", json={"curator": None}).status_code == 404, "noma'lum bo'lim 404")
+    ok(rektor.put("/api/portal/org/talabalar", json={"head_user": 11}).status_code == 400, "boshqa bo'lim xodimini rahbar qilish 400")
+    ok(rektor.put("/api/portal/org/talabalar", json={"curator": "kadrlar"}).status_code == 400, "prorektor bo'lmagan kurator 400")
+    ok(rektor.put("/api/portal/org/rektorat", json={"curator": "prorektor_oquv"}).status_code == 400, "rahbariyatga kurator 400")
+    ORG_RESTORE["talabalar"] = ORG0["talabalar"]
+    r = rektor.put("/api/portal/org/talabalar", json={"head_user": 23})
+    ok(r.status_code == 200 and r.json()["changes"], "rektor: talabalar rahbari → 23")
+    ok(cc.get("/api/portal/units").json()["is_head"] and not reg.get("/api/portal/units").json()["is_head"], "is_head darhol o'zgardi (23 rahbar)")
+    ok(next(u for u in reg.get("/api/portal/org").json()["units"] if u["key"] == "talabalar")["head"].startswith("Rahimova"), "katalogda rahbar ismi yangilandi")
+    ok(rektor.put("/api/portal/org/talabalar", json=ORG0["talabalar"]).status_code == 200 and reg.get("/api/portal/units").json()["is_head"], "rahbar asl holiga qaytdi (17)")
+    ORG_RESTORE["xalqaro"] = ORG0["xalqaro"]
+    r = ithead.put("/api/portal/org/xalqaro", json={"curator": "prorektor_oquv"})
+    ok(r.status_code == 200, "IT boshlig'i: Xalqaro hamkorlik kuratori → o'quv prorektori")
+    ok("xalqaro" in pro.get("/api/portal/units").json()["curated"], "prorektor_oquv «Yo'nalishim»ga xalqaro qo'shildi")
+    ok(q("SELECT curator, curator_manual FROM org_units WHERE key='xalqaro'")[0] == ("prorektor_oquv", 1), "bazada curator_manual=1")
+    sp = subprocess.run([sys.executable, "-c", "from app import portal, db; portal.sync_units(db._open())"], cwd=ROOT, capture_output=True, text=True, timeout=120)
+    ok(sp.returncode == 0, f"sync_units (server qayta ishga tushgandagidek) bajarildi {sp.stderr[-200:]}")
+    ok(q("SELECT curator, curator_manual FROM org_units WHERE key='xalqaro'")[0] == ("prorektor_oquv", 1), "qo'lda tayinlangan kurator sync_units dan keyin saqlandi")
+    ok(q("SELECT head_user FROM org_units WHERE key='talabalar'")[0][0] == 17, "rahbar (head_user) sync_units dan keyin saqlandi")
+    r = ithead.put("/api/portal/org/xalqaro", json=ORG0["xalqaro"])
+    ok(r.status_code == 200 and q("SELECT curator, curator_manual FROM org_units WHERE key='xalqaro'")[0] == ("prorektor_ilmiy", 0), "kurator asl holiga qaytdi (curator_manual=0)")
+    ORG_RESTORE.clear()
+    ok("xalqaro" not in pro.get("/api/portal/units").json()["curated"], "prorektor_oquv yo'nalishidan xalqaro chiqdi")
+
+    # ============================================================== 19. Rahbar qutilari
+    print("— 19. Rahbar qutilari —")
+    js = httpx.get(f"{B}/portal.js").text
+    ok(re.search(r'U\.can_resolve && \["control", "Nazorat", [^\]]*, 1,', js) is not None, "portal.js: «Nazorat» rezolyutsiya qo'yuvchilar uchun asosiy segment")
+    for c, n, lead in ((rektor, "rektor", True), (pro, "prorektor", True), (reg, 17, False)):
+        u = c.get("/api/portal/units").json(); cn = lst(c, limit=1)["counts"]
+        ok(u["can_resolve"] is lead and (("control" in cn and "control_overdue" in cn) if lead else "control" not in cn), f"{n}: can_resolve={lead}, counts.control")
+
+    students_and_review()
+
     # ============================================================== 14. Audit
-    print("— 14. Audit —")
+    print("— 20. Audit —")
     rows = q("SELECT action, detail, allowed, user_id FROM audit_log WHERE id>? AND resource='portal'", (AUDIT0,))
     def seen(action, ref, uid=None, allowed=1):
         return any(a == action and ref in (dt_ or "") and al == allowed and (uid is None or u_ == uid) for a, dt_, al, u_ in rows)
@@ -479,6 +841,13 @@ def main():
     ok(seen("portal: yozishmani ochish", f"{REF1}", 11, 0), "audit: 11 ning begona yozishmani ochishi rad (allowed=0)")
     ok(any(a == "portal: fayl yuklab olindi" and al == 1 for a, _, al, _u in rows), "audit: fayl yuklab olindi")
     ok(any(a.startswith("portal: all qutisi") and al == 0 and u_ == 17 for a, _, al, u_ in rows), "audit: 17 ning box=all urinishi rad")
+    ok(seen("portal: xat qaytarib olindi", REF6, 18) and seen("portal: xatni qaytarib olish", REF7, 18, 0), "audit: qaytarib olindi / o'qilgan xatni qaytarish rad")
+    ok(seen("portal: muddat o'zgartirildi", REF9, 18) and seen("portal: muddat o'zgartirildi", REF9, 3) and seen("portal: muddatni o'zgartirish", REF9, 11, 0),
+       "audit: muddat o'zgartirildi (18, prorektor), 11 urinishi rad")
+    ok(seen("portal: rezolyutsiya o'zgartirildi", REF10, 2) and seen("portal: rezolyutsiya bekor qilindi", REF10, 2), "audit: rezolyutsiya o'zgartirildi / bekor qilindi")
+    ok(seen("portal: rezolyutsiyani o'zgartirish", REF10, 3, 0), "audit: prorektorning tahrir urinishi rad")
+    ok(seen("portal: tashkiliy tuzilma o'zgartirildi", "Registrator", 2) and seen("portal: tashkiliy tuzilmani o'zgartirish", "talabalar", 17, 0),
+       "audit: tuzilma o'zgartirildi (rektor), 17 urinishi rad")
 
 if __name__ == "__main__":
     try:

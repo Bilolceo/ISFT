@@ -393,7 +393,7 @@ def _clean_payload(p: dict) -> dict:
     if eff not in EFFECTS: raise HTTPException(400, "Noma'lum amal turi")
     if eff == "task":
         role = p.get("role")
-        if role not in ROLES: raise HTTPException(400, "Noma'lum lavozim")
+        if role not in ROLES or ROLES[role].legacy: raise HTTPException(400, "Noma'lum lavozim")   # bekor qilingan lavozim (dekan) — yo'q
         text = str(p.get("text") or "").strip()
         if not text: raise HTTPException(400, "Topshiriq matni bo'sh")
         try: due = dt.date.fromisoformat(str(p.get("due"))).isoformat()

@@ -1,0 +1,36 @@
+/* Registrator ofisi: ish stoli, ruxsatnoma, otrabotka tekshiruvi (static/registrar.js). Ranglar — style.css tokenlari (yorug'/qorong'i). */
+.rg-chains{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+@media (max-width:1100px){.rg-chains{grid-template-columns:minmax(0,1fr)}}
+.rg-chains h3{display:flex;align-items:center;gap:8px;margin:0 0 10px}
+.rg-steps{display:flex;flex-direction:column;align-items:stretch;gap:6px}
+.rg-step{flex:none;min-width:0;display:flex;flex-direction:column;gap:4px;text-align:left;padding:12px 14px;border-radius:14px;
+  border:1px solid var(--line-2);background:var(--surface-2);color:var(--ink);font:inherit;cursor:pointer;transition:border-color .15s}
+.rg-step:hover,.rg-step:focus-visible{border-color:var(--teal);outline:none}
+.rg-step b{font-size:13px;line-height:1.3}
+.rg-step .rg-n{font-size:28px;font-weight:700;line-height:1.1;font-variant-numeric:tabular-nums}
+.rg-step.bad .rg-n{color:var(--bad)}.rg-step.warn .rg-n{color:var(--warn)}.rg-step.good .rg-n{color:var(--ok)}
+.rg-step.bad{box-shadow:inset 3px 0 0 var(--bad)}.rg-step.warn{box-shadow:inset 3px 0 0 var(--warn)}
+.rg-arr{align-self:center;color:var(--muted);font-size:16px;line-height:1;transform:rotate(90deg)}
+.rg-tones{display:grid;grid-template-columns:repeat(auto-fit,minmax(92px,1fr));gap:8px}
+.rg-tone{display:flex;flex-direction:column;gap:2px;padding:10px 12px;border-radius:12px;border:1px solid transparent;font:inherit;text-align:left;cursor:pointer}
+.rg-tone b{font-size:22px;font-variant-numeric:tabular-nums}.rg-tone span{font-size:12px}
+.rg-tone.low{background:var(--ok-soft);color:var(--ok)}.rg-tone.mid{background:var(--warn-soft);color:var(--warn)}
+.rg-tone.high{background:var(--bad-soft);color:var(--bad)}.rg-tone.gray{background:var(--surface-2);color:var(--ink-2);border-color:var(--line-2)}
+.rg-tone:focus-visible,.rg-tone:hover{border-color:var(--teal);outline:none}
+.rg-talk{margin:8px 0 10px;gap:12px}.rg-talk ol,.rg-talk ul{margin:4px 0 0;padding-left:18px}.rg-talk li{margin:2px 0}
+.rg-sum{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
+.chip-s.good b{color:var(--ok)}.chip-s.bad b{color:var(--bad)}
+.rg-card .rg-acts,.rg-inl{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.rg-inl input[type=date]{max-width:160px}.rg-inl input[type=text]{flex:1;min-width:160px}
+.rg-defer{margin-top:10px}.rg-defer summary{cursor:pointer;color:var(--muted)}.rg-defer .rg-inl{margin-top:8px}
+.rg-checks{list-style:none;padding:0;margin:4px 0 8px}.rg-checks li{margin:3px 0}
+.rg-rt{margin-bottom:10px}
+.rg-cd{font-variant-numeric:tabular-nums}
+.rg-demo{display:inline-flex;gap:4px;flex-wrap:wrap;margin-left:4px}
+.rg-flag{background:var(--bad-soft);color:var(--ink);margin-bottom:10px}.rg-flag svg{color:var(--bad)}
+.rg-kv{grid-template-columns:130px minmax(0,1fr)}
+.rg-kv span svg{vertical-align:-2px}
+.rg-warn{margin:10px 0 6px;padding-left:18px;color:var(--warn)}
+.rg-force{display:flex;gap:8px;align-items:flex-start;margin-top:10px}.rg-force input{width:auto;margin-top:2px}
+.rg-auto{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}
+@media (max-width:640px){.rg-kv{grid-template-columns:100px minmax(0,1fr)}}

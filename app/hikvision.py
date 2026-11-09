@@ -2,6 +2,8 @@
 
 Tamoyillar:
   * Video, kadr va yuz tasvirlari olinmaydi. Voqealar oqimida keladigan rasm qismlari o'qiladi-yu, saqlanmasdan tashlab yuboriladi.
+    Istisno — Kirish nazorati (Face ID, app/facecam.py, bayroq ISFT_CORE_FEATURE_FACE): yuz voqeasining fon rasmi kameradan
+    alohida so'raladi va ko'pi bilan ISFT_CORE_FACE_KEEP_DAYS kun saqlanadi; yuzni solishtirishni kameraning o'zi bajaradi.
   * HTTP Digest (ISAPI standarti), ixtiyoriy HTTPS. Cheklangan ("Operator"/faqat o'qish) foydalanuvchi bilan ishlaydi.
   * Imkoniyatlar har bir model uchun alohida aniqlanadi (probe): qo'llamagan funksiya "yo'q" deb belgilanadi, xato bermaydi.
   * Tarmoq va avtorizatsiya xatolari tushunarli o'zbekcha xabarga o'giriladi (IsapiError).
@@ -12,7 +14,10 @@ Endpointlar (Hikvision ISAPI):
   GET  /ISAPI/System/Video/inputs/channels/{ch}/counting/capabilities — odam sanash qo'llanadimi
   POST /ISAPI/System/Video/inputs/channels/{ch}/counting/search   — kunlik kirdi/chiqdi statistikasi
   GET  /ISAPI/Event/triggers                                      — voqealar tizimi mavjudligi
-  GET  /ISAPI/Event/notification/alertStream                      — uzluksiz voqealar oqimi (multipart, XML qismlar)
+  GET  /ISAPI/Event/notification/alertStream                      — uzluksiz voqealar oqimi (multipart, XML va JSON qismlar)
+  GET/POST /ISAPI/Intelligent/FDLib?format=json                   — yuz kutubxonasi (faqat FEATURE_FACE=1, rozilik bergan shaxslar)
+  POST /ISAPI/Intelligent/FDLib/FaceDataRecord?format=json        — kutubxonaga yozuv (FPID + yuz rasmi)
+  PUT  /ISAPI/Intelligent/FDLib/FDSearch/Delete?format=json       — rozilik qaytarib olinganda yozuvni o'chirish
 Testlash: tools/fake_hikvision.py emulyatori va tests/test_hikvision.py.
 """
 import datetime as dt, re, xml.etree.ElementTree as ET
@@ -59,7 +64,7 @@ EVENT_KIND = {
     "vmd": "harakat",
 }
 # Biometrik / avtoraqam voqealari — bayroq ortida (standart holatda O'CHIQ, ZRU-547: alohida yozma rozilik kerak)
-FACE_TYPES = {"facesnap", "facecapture", "facedetection", "facematch", "facecontrast", "alarmresult", "accesscontrollerevent"}
+FACE_TYPES = {"facesnap", "facecapture", "facedetection", "facematch", "facesnapmatch", "facecontrast", "alarmresult", "accesscontrollerevent"}
 ANPR_TYPES = {"anpr", "vehicledetection", "licenseplate"}
 KIND_LABEL = {"chiziq_kesish": "Chiziq kesildi", "hududga_kirish": "Taqiqlangan hududga kirish", "hududdan_chiqish": "Hududdan chiqish",
               "uzoq_turish": "Uzoq turib qolish", "toplanish": "Odamlar to'planishi", "yugurish": "Yugurish",
@@ -80,7 +85,8 @@ def normalize(ev: dict, keep_vmd: bool = False, face: bool = False, anpr: bool =
         return None                         # Hikvision oqimi har ~10 s shunday "yurak urishi" yuboradi
     if low in FACE_TYPES:
         if not face: return None            # FEATURE_FACE=0 — biometrik voqea umuman qayta ishlanmaydi
-        kind = "xodim_keldi"
+        # kirish terminali (xodim raqami) — eski "xodim_keldi"; yuzni solishtirish (FPID, o'xshashlik, ramka) — "yuz" (app/facecam.py)
+        kind = "xodim_keldi" if low == "accesscontrollerevent" else "yuz"
     elif low in ANPR_TYPES:
         if not anpr: return None
         kind = "avtoraqam"
@@ -88,9 +94,12 @@ def normalize(ev: dict, keep_vmd: bool = False, face: bool = False, anpr: bool =
         kind = EVENT_KIND.get(low, "olomon" if "density" in low or "crowd" in low else f"boshqa:{low}" if low else None)
     if kind == "harakat" and not keep_vmd: return None
     if kind is None: return None
-    return {"kind": kind, "raw_type": raw, "state": state or "active", "channel": ev.get("channel"),
-            "dev_ts": ev.get("ts"), "count": ev.get("count"), "desc": ev.get("desc"), "value": ev.get("value"),
-            "wait_s": ev.get("wait_s"), "subject": ev.get("subject") if face or anpr else None}
+    out = {"kind": kind, "raw_type": raw, "state": state or "active", "channel": ev.get("channel"),
+           "dev_ts": ev.get("ts"), "count": ev.get("count"), "desc": ev.get("desc"), "value": ev.get("value"),
+           "wait_s": ev.get("wait_s"), "subject": ev.get("subject") if face or anpr else None}
+    if kind == "yuz":                       # FPID (kutubxonadagi shaxs kodi — ism emas), o'xshashlik 0..1, yuz ramkasi 0..1, fon rasmi manzili
+        out.update({k: ev.get(k) for k in ("fpid", "similarity", "rect", "bkg_url", "picture", "group")})
+    return out
 
 def _num(m, *keys):
     for k in keys:
@@ -112,24 +121,101 @@ def parse_alert(xml_text: str) -> dict | None:
     temp = _num(m, "maxTemperature", "currentTemperature", "temperature")
     # yuz/avtoraqam: rasm EMAS — faqat xodim raqami / avtoraqam matni (bayroq yoqilganda, ro'yxat bilan solishtiriladi)
     subj = m.get("employeeNoString") or m.get("licensePlate") or None
-    return {"type": m.get("eventType"), "state": m.get("eventState"), "channel": int(ch) if (ch or "").isdigit() else None,
-            "ts": m.get("dateTime"), "desc": m.get("eventDescription"), "count": cnt, "wait_s": wait, "value": temp, "subject": subj}
+    out = {"type": m.get("eventType"), "state": m.get("eventState"), "channel": int(ch) if (ch or "").isdigit() else None,
+           "ts": m.get("dateTime"), "desc": m.get("eventDescription"), "count": cnt, "wait_s": wait, "value": temp, "subject": subj}
+    if (m.get("eventType") or "").lower() in FACE_TYPES:    # XML ko'rinishidagi yuz voqeasi (eski proshivkalar)
+        out.update(fpid=m.get("FPID") or m.get("PID") or None, similarity=_sim(_num(m, "similarity", "maxsimilarity")),
+                   rect=_rect({k: _num(m, k) for k in ("x", "y", "width", "height")}), bkg_url=m.get("bkgUrl") or m.get("backgroundImageURL") or None)
+    return out
+
+def _sim(v):
+    """O'xshashlik: 0..1 yoki 0..100 → 0..1."""
+    if v is None: return None
+    return round(v / 100 if v > 1 else v, 4)
+
+def _rect(r: dict):
+    """faceRect {x, y, width, height}: 0..1 (JSON) yoki 0..1000 (ba'zi XML) → [x, y, w, h] 0..1."""
+    try:
+        v = [float(r.get(k)) for k in ("x", "y", "width", "height")]
+    except (TypeError, ValueError):
+        return None
+    if max(v) > 1.0: v = [x / 1000 for x in v]
+    return [round(min(1, max(0, x)), 4) for x in v]
+
+def parse_json_alert(text: str) -> list:
+    """JSON voqea (DeepinView `alarmResult` — yuzni kutubxona bilan solishtirish). Har bir yuz — alohida voqea, bitta `group` bilan.
+    Maydonlar Hikvision ISAPI hujjatlariga taxminan yaqin; haqiqiy proshivkada qayta tekshiriladi (docs/hikvision.md, 13-bo'lim)."""
+    import json
+    try:
+        o = json.loads(text)
+    except ValueError:
+        return []
+    if not isinstance(o, dict) or "eventType" not in o: return []
+    base = {"type": o.get("eventType"), "state": o.get("eventState"), "channel": o.get("channelID") if isinstance(o.get("channelID"), int) else None,
+            "ts": o.get("dateTime"), "desc": o.get("eventDescription"), "count": None, "wait_s": None, "value": None, "subject": None}
+    out = []
+    for gi, res in enumerate(o.get("alarmResult") or o.get("faceCapture") or []):
+        attrs = res.get("targetAttrs") or {}
+        for f in res.get("faces") or []:
+            best = None
+            for idf in f.get("identify") or []:
+                for c in idf.get("candidate") or []:
+                    rf = c.get("reserve_field") or {}
+                    s = _sim(c.get("similarity") if c.get("similarity") is not None else idf.get("maxsimilarity"))
+                    if rf.get("FPID") and (best is None or (s or 0) > (best[1] or 0)): best = (rf["FPID"], s)
+            out.append({**base, "fpid": best[0] if best else None, "similarity": best[1] if best else None,
+                        "rect": _rect(f.get("faceRect") or {}), "bkg_url": attrs.get("bkgUrl"), "group": f"{o.get('dateTime')}#{gi}"})
+    if not out and (o.get("eventType") or "").lower() not in FACE_TYPES:
+        out.append(base)
+    return out
 
 class AlertStreamParser:
     """alertStream baytlaridan XML voqealarni ajratadi. Multipart chegaralariga tayanmaydi (modellar orasida farq qiladi):
     <EventNotificationAlert ...>...</EventNotificationAlert> bloklarini qidiradi; orasidagi hamma narsa (JPEG va h.k.) tashlanadi."""
     START, END = b"<EventNotificationAlert", b"</EventNotificationAlert>"
+    JSON_HDR = b"application/json"      # DeepinView yuz voqealari (alarmResult) JSON qism sifatida keladi
     MAX_BUF = 2_000_000
 
     def __init__(self):
         self.buf = b""
         self.dropped_bytes = 0
 
+    @staticmethod
+    def _json_end(buf: bytes, b: int) -> int:
+        """buf[b] == '{' — mos yopuvchi '}' dan keyingi indeks (satrlar ichidagi qavslar hisobga olinmaydi); to'liq kelmagan bo'lsa -1."""
+        depth, ins, esc = 0, False, False
+        for i in range(b, len(buf)):
+            ch = buf[i]
+            if ins:
+                if esc: esc = False
+                elif ch == 0x5C: esc = True
+                elif ch == 0x22: ins = False
+                continue
+            if ch == 0x22: ins = True
+            elif ch == 0x7B: depth += 1
+            elif ch == 0x7D:
+                depth -= 1
+                if depth == 0: return i + 1
+        return -1
+
     def feed(self, chunk: bytes) -> list:
         self.buf += chunk
         out = []
         while True:
             s = self.buf.find(self.START)
+            j = self.buf.find(self.JSON_HDR)
+            if j >= 0 and (s < 0 or j < s):        # JSON qism: Content-Type sarlavhasidan keyingi birinchi { ... }
+                b = self.buf.find(b"{", j)
+                e = self._json_end(self.buf, b) if b >= 0 else -1
+                if e < 0:
+                    if j: self.dropped_bytes += j; self.buf = self.buf[j:]
+                    if len(self.buf) > self.MAX_BUF: self.dropped_bytes += len(self.buf); self.buf = b""
+                    break
+                self.dropped_bytes += b
+                part = self.buf[b:e]
+                self.buf = self.buf[e:]
+                out += parse_json_alert(part.decode("utf-8", "replace"))
+                continue
             if s < 0:
                 keep = len(self.START) - 1          # boshlanish tegi bo'linib kelishi mumkin
                 self.dropped_bytes += max(0, len(self.buf) - keep)
@@ -269,6 +355,48 @@ class HikClient:
         except httpx.ConnectError: raise IsapiError("Voqealar oqimi: ulanib bo'lmadi")
         except httpx.TimeoutException: raise IsapiError("Voqealar oqimi: 90 s davomida ma'lumot kelmadi")
         except httpx.HTTPError as e: raise IsapiError(f"Voqealar oqimi uzildi: {e.__class__.__name__}")
+
+    # ---------------- Yuz kutubxonasi (FDLib) — faqat yozma rozilik bergan shaxslar; kameraga ism emas, faqat FPID yuboriladi ----------------
+    FDLIB = "/ISAPI/Intelligent/FDLib"
+
+    async def fdlib_ensure(self, name: str = "ISFT_Kirish") -> str:
+        """Yuz kutubxonasi (FDLib) bor bo'lsa — FDID, yo'q bo'lsa yaratadi. Kamera "face picture library"ni qo'llamasa — NotSupported."""
+        r = await self._req("GET", f"{self.FDLIB}?format=json", "Yuz kutubxonasi")
+        try: libs = r.json().get("FDLib") or []
+        except ValueError: libs = []
+        for lib in libs:
+            if lib.get("name") == name: return str(lib.get("FDID"))
+        r = await self._req("POST", f"{self.FDLIB}?format=json", "Yuz kutubxonasini yaratish",
+                            json={"faceLibType": "blackFD", "name": name, "customInfo": "ISFT Core: faqat yozma roziligi bor shaxslar"})
+        try: return str(r.json().get("FDID"))
+        except ValueError: raise IsapiError("Yuz kutubxonasi yaratildi, lekin FDID qaytmadi")
+
+    async def fdlib_add(self, fdid: str, fpid: str, jpeg: bytes) -> bool:
+        """Yozuv qo'shish: POST /ISAPI/Intelligent/FDLib/FaceDataRecord?format=json (multipart: FaceDataRecord JSON + img).
+        name maydoniga FPID yoziladi — kamerada ism saqlanmaydi (shaxs FPID orqali faqat ISFT Core bazasida aniqlanadi)."""
+        import json as _json
+        rec = {"faceLibType": "blackFD", "FDID": str(fdid), "FPID": fpid, "name": fpid}
+        await self._req("POST", f"{self.FDLIB}/FaceDataRecord?format=json", "Yuz yozuvini qo'shish",
+                        files={"FaceDataRecord": (None, _json.dumps(rec), "application/json"), "img": ("face.jpg", jpeg, "image/jpeg")})
+        return True
+
+    async def fdlib_delete(self, fdid: str, fpids: list) -> bool:
+        """Rozilik qaytarib olinganda: PUT /ISAPI/Intelligent/FDLib/FDSearch/Delete?format=json&FDID=..&faceLibType=blackFD."""
+        await self._req("PUT", f"{self.FDLIB}/FDSearch/Delete?format=json&FDID={fdid}&faceLibType=blackFD", "Yuz yozuvini o'chirish",
+                        json={"FPID": [{"value": x} for x in fpids]})
+        return True
+
+    async def fetch_picture(self, url: str, max_bytes: int = 3_000_000) -> bytes | None:
+        """Voqeadagi fon rasmi (bkgUrl). Faqat shu kameraning o'z manzilidan (SSRF'dan himoya) — yo'l qismi olinadi."""
+        from urllib.parse import urlsplit
+        u = urlsplit(url or "")
+        if not u.path.startswith("/"): return None
+        try:
+            r = await self._req("GET", u.path + (f"?{u.query}" if u.query else ""), "Voqea rasmi")
+        except NotSupported:
+            return None
+        b = r.content
+        return b if b[:2] == b"\xff\xd8" and len(b) <= max_bytes else None
 
 SKEW_WARN_S = 60
 

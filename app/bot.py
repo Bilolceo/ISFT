@@ -15,7 +15,8 @@ con = db.connect()
 TG_LIMIT = SS.Limiter(5, 600)     # bitta Telegram akkaunt yoki bitta lavozim kodi: 10 daqiqada 5 ta xato
 
 def user_by_tg(tg_id):
-    return db.one(con, "SELECT * FROM users WHERE telegram_id=?", (tg_id,))
+    u = db.one(con, "SELECT * FROM users WHERE telegram_id=?", (tg_id,))
+    return u if u and u.get("active") != 0 else None   # accounts.py: faolsizlantirilgan akkaunt
 
 async def start(update: Update, _: ContextTypes.DEFAULT_TYPE):
     u = user_by_tg(update.effective_user.id)
@@ -37,6 +38,7 @@ async def try_link(update: Update, text: str) -> bool:
     if wait:
         await update.message.reply_text(f"⛔ Juda ko'p noto'g'ri urinish. {wait} daqiqadan keyin qayta urinib ko'ring."); return True
     u = db.one(con, "SELECT * FROM users WHERE upper(link_code)=?", (parts[0].upper(),))
+    if u and u.get("active") == 0: u = None   # accounts.py: faolsizlantirilgan akkaunt ulanmaydi
     if u and not rbac.check_password(u["pin"], parts[1]):
         rbac.audit(con, rbac.Ctx(u, rbac.ROLES[u["role"]], "telegram"), "telegram ulanish", "auth", False, f"noto'g'ri parol · tg {tg}")
         TG_LIMIT.fail(("kod", parts[0].upper())); u = None

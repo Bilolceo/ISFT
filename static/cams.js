@@ -7,7 +7,7 @@
    Uslublar: cams.css
    ===================================================================== */
 const CM = {tab: "holat", days: 7, prio: 3, status: "", group: "", show: 25, h: null, e: null, q: null, err: {}};
-try { const t = localStorage.getItem("jarvis.camsTab"); if (["holat", "voqealar", "navbat"].includes(t)) CM.tab = t; } catch (e) {}
+try { const t = localStorage.getItem("jarvis.camsTab"); if (["holat", "voqealar", "navbat", "face"].includes(t)) CM.tab = t; } catch (e) {}
 const CM_QUEUE_ROLES = ["qabul", "buxgalteriya"];   /* backend: QUEUE_ZONES[*].role — faqat o'z navbatini ko'radi */
 
 if (typeof ICONS === "object") {
@@ -42,6 +42,7 @@ const cmCanReport = () => ME && (["rektor", "xojalik"].includes(ME.role_key) || 
 function camsNav() {
   const a = document.querySelector('#nav a[data-v="cams"]');
   if (a && ME && !ME.allow.includes("spaces") && CM_QUEUE_ROLES.includes(ME.role_key)) a.classList.remove("hidden");
+  if (a && typeof fcRole === "function" && fcRole()) a.classList.remove("hidden");   /* facecam.js: Kirish (Face ID) — kadrlar, tyutor ham */
 }
 
 async function cmLoadEv() {
@@ -53,28 +54,31 @@ async function cmLoadEv() {
    ===================================================================== */
 async function renderCams(keep) {
   const el = $("#v-cams"), full = ME.allow.includes("spaces");
-  if (!full) CM.tab = "navbat";
+  const fc = typeof fcRole === "function" && fcRole(), qOnly = !full && CM_QUEUE_ROLES.includes(ME.role_key);   /* fc — Kirish (Face ID) yorlig'i: facecam.js */
+  if (!full) CM.tab = fc && !qOnly ? "face" : "navbat";
+  if (CM.tab === "face" && !fc) CM.tab = "holat";
   if (!keep || !el.querySelector(".cm-tabs, #cmBody")) el.innerHTML = `<p class="muted">Yuklanmoqda…</p>`;
   const safe = p => Promise.resolve(p).then(x => x, e => { if (e?.message === "auth") throw e; return {__err: e?.message || "xato"}; });
-  const [h, e, q] = await Promise.all([full ? safe(J("/api/cams/health")) : null, full ? safe(cmLoadEv()) : null, safe(J("/api/cams/queues"))]);
+  const [h, e, q] = await Promise.all([full ? safe(J("/api/cams/health")) : null, full ? safe(cmLoadEv()) : null, full || qOnly ? safe(J("/api/cams/queues")) : null]);
   CM.err = {};
   for (const [k, v] of [["h", h], ["e", e], ["q", q]]) { if (v && v.__err) { CM.err[k] = v.__err; CM[k] = null; } else CM[k] = v; }
-  if (!full && !CM.q) {
+  if (!full && !CM.q && !fc) {
     el.innerHTML = `<div class="head"><div><h2>Kameralar va xavfsizlik</h2></div></div>` + locked("Kameralar va xavfsizlik — rektor, prorektorlar va xo'jalik bo'limi uchun");
     return;
   }
   const now = CM.h?.now || CM.q?.now || "";
   const tabs = full ? [["holat", "Holat", "cctv"], ["voqealar", "Voqealar", "bolt"], ["navbat", `<span class="cm-tl">Navbat va olomon</span><span class="cm-ts">Navbat</span>`, "users"]] : [];
+  if (fc) tabs.push(["face", `<span class="cm-tl">Kirish (Face ID)</span><span class="cm-ts">Face ID</span>`, "scanface"]);
   const flags = CM.h?.flags || {face: false, anpr: false};
   el.innerHTML = `<div class="head cm-head"><div><h2>Kameralar va xavfsizlik</h2>
-      <span class="muted">Kameralar odamni emas, xonani sanaydi: rasm va video saqlanmaydi, yuzni tanish o'chirilgan</span>
-      ${pgSrc(`Manba: Hikvision kameralari (demo: simulyator) · faqat metama'lumot · oxirgi yangilanish: <b>${whenTxt(now)}</b>`, "clock")}</div>
-    <div class="row-actions cm-hact"><span class="tag low" title="Voqealar shaxsga bog'lanmaydi — xona, bino va qavat kesimida">${ico("lock", 14)}Shaxssiz ma'lumot</span>
+      <span class="muted">${fc || flags.face ? "Auditoriya kameralari odamni emas, xonani sanaydi; yuzni tanish — faqat bino kirishlarida va faqat yozma roziligi bor shaxslar uchun" : "Kameralar odamni emas, xonani sanaydi: rasm va video saqlanmaydi, yuzni tanish o'chirilgan"}</span>
+      ${now ? pgSrc(`Manba: Hikvision kameralari (demo: simulyator) · faqat metama'lumot · oxirgi yangilanish: <b>${whenTxt(now)}</b>`, "clock") : ""}</div>
+    <div class="row-actions cm-hact"><span class="tag low" id="cmAnon" title="Voqealar shaxsga bog'lanmaydi — xona, bino va qavat kesimida">${ico("lock", 14)}Shaxssiz ma'lumot</span>
       <button class="btn sm ghost" id="cmRefresh" aria-label="Ma'lumotni yangilash">${ico("refresh", 16)}<span class="cm-hide-sm">Yangilash</span></button>
       ${full && cmCanReport() ? `<button class="btn sm" id="cmReport">${ico("download", 16)}Haftalik hisobot (.docx)</button>` : ""}</div></div>
     ${tabs.length ? `<div class="pn-tabs cm-tabs" role="tablist" aria-label="Kameralar bo'limlari">${tabs.map(([k, l, i]) => `<button class="pn-tab${CM.tab === k ? " on" : ""}" role="tab" id="cmt-${k}" aria-controls="cmBody" aria-selected="${CM.tab === k}" tabindex="${CM.tab === k ? 0 : -1}" data-cmt="${k}">${ico(i, 16)}<span>${l}</span><em hidden></em></button>`).join("")}</div>` : ""}
     <div id="cmBody" ${tabs.length ? `role="tabpanel" aria-labelledby="cmt-${CM.tab}"` : ""}></div>
-    <p class="cm-flags">${ico("shield", 14)}<span>Yuzni tanish: <b>${flags.face ? "yoqilgan" : "o'chiq"}</b> (ZRU-547) · Avtoraqam: <b>${flags.anpr ? "yoqilgan" : "o'chiq"}</b> · kadr va video serverga olinmaydi · har bir ko'rish audit jurnaliga yoziladi</span></p>`;
+    <p class="cm-flags">${ico("shield", 14)}<span>Yuzni tanish: <b>${flags.face || fc ? "yoqilgan — faqat kirishlarda, yozma rozilik bilan" : "o'chiq"}</b> (ZRU-547) · Avtoraqam: <b>${flags.anpr ? "yoqilgan" : "o'chiq"}</b> · ${flags.face || fc ? "kirish kadri ko'pi bilan 7 kun saqlanadi, video olinmaydi" : "kadr va video serverga olinmaydi"} · har bir ko'rish audit jurnaliga yoziladi</span></p>`;
   el.querySelectorAll("[data-cmt]").forEach(b => {
     b.onclick = () => cmSetTab(b.dataset.cmt);
     b.onkeydown = ev => {
@@ -107,6 +111,8 @@ function cmCounts() {
 }
 function cmBody() {
   const b = $("#cmBody"); if (!b) return;
+  const an = $("#cmAnon"); if (an) an.hidden = CM.tab === "face";
+  if (CM.tab === "face" && typeof renderFace === "function") { renderFace(b); return; }   /* facecam.js */
   const fn = {holat: cmHolat, voqealar: cmVoqealar, navbat: cmNavbat}[CM.tab] || cmNavbat;
   const key = {holat: "h", voqealar: "e", navbat: "q"}[CM.tab] || "q";
   if (!CM[key]) { b.innerHTML = CM.err[key] === "denied" ? locked("Bu bo'lim") : errCard("cams"); return; }
@@ -192,7 +198,7 @@ function cmVoqealar(b) {
     : `<div class="cm-empty">${ico("checkc", 26)}<b>Voqea yo'q</b><span>Tanlangan davr va filtr bo'yicha voqea topilmadi.</span>${CM.status || CM.group || CM.prio !== 3 || CM.days !== 7 ? `<button class="btn sm" id="cmReset">Filtrni tiklash</button>` : ""}</div>`;
   const byB = Object.entries(st.by_building || {}).sort((a, b) => b[1] - a[1]);
   s += `<div class="cm-evwrap"><section class="card cm-evlist" aria-label="Voqealar ro'yxati"><div class="head cm-ch"><h3>${ico("bolt", 18)}Voqealar <span class="cm-cnt">${evs.length}</span></h3>
-      <span class="tiny muted">${E.can_manage ? "Belgilash statistikani aniqlashtiradi: noto'g'ri signallar ulushi kuzatiladi" : "Faqat ko'rish — belgilashni xo'jalik bo'limi va rektor bajaradi"}</span></div>
+      <span class="tiny muted">${E.manage_groups ? "Siz kamera texnik holati voqealarini (to'sish, tasvir yo'qolishi, siljish) belgilaysiz; xavfsizlik voqealari — xo'jalik bo'limi va rektor" : E.can_manage ? "Belgilash statistikani aniqlashtiradi: noto'g'ri signallar ulushi kuzatiladi" : "Faqat ko'rish — belgilashni xo'jalik bo'limi va rektor bajaradi"}</span></div>
       <div class="cm-evs" id="cmEvs">${list}</div></section>
     <aside class="card cm-evside"><h3>${ico("chart", 18)}Turlar bo'yicha</h3>${st.by_kind.length ? bars(st.by_kind, {label: r => r.label, value: r => r.n, top: 6}) : `<p class="muted tiny">Ma'lumot yo'q</p>`}
       <h3 class="cm-h2">${ico("building", 18)}Binolar bo'yicha <span class="tiny muted">P1–P3</span></h3>${byB.length ? bars(byB, {label: r => r[0], value: r => r[1], alt: true}) : `<p class="muted tiny">Ma'lumot yo'q</p>`}
@@ -208,7 +214,7 @@ function cmVoqealar(b) {
 function cmEv(e, E) {
   const SL = E.status_label || {}, closed = ["yopildi", "notogri", "qayd"].includes(e.status);
   const day = e.ts.slice(0, 10), t2 = e.last_ts && e.last_ts !== e.ts ? (e.last_ts.slice(0, 10) === day ? e.last_ts.slice(11, 16) : whenTxt(e.last_ts)) : "";
-  const acts = E.can_manage ? (CM_NEXT[e.status] || []) : [];
+  const acts = E.can_manage && (!E.manage_groups || E.manage_groups.includes(e.group)) ? (CM_NEXT[e.status] || []) : [];   /* AT bo'limi — faqat kamera texnik holati */
   return `<article class="cm-ev ${CM_PRIO_CLS[e.priority] || "p4"}${closed ? " done" : ""}" id="cme-${e.id}" tabindex="-1">
     ${cmPrio(e.priority, (E.prio_label || {})[e.priority])}
     <div class="cm-ev-b">
