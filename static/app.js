@@ -109,7 +109,7 @@ ICONS.users = '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="
 const ico = (n, sz = 18) => `<svg class="i" viewBox="0 0 24 24" width="${sz}" height="${sz}" aria-hidden="true">${ICONS[n] || ""}</svg>`;
 function hydrateIcons(root = document) {
   root.querySelectorAll("[data-ico]").forEach(el => { if (!el.dataset.done) { el.innerHTML = ico(el.dataset.ico); el.dataset.done = 1; } });
-  root.querySelectorAll("#nav a[data-i]").forEach(a => { if (!a.querySelector("svg")) a.insertAdjacentHTML("afterbegin", ico(a.dataset.i)); });
+  root.querySelectorAll("#nav a[data-i]").forEach(a => { if (!a.querySelector(":scope > svg")) a.insertAdjacentHTML("afterbegin", ico(a.dataset.i)); });   /* :scope — .nav-pin ichidagi svg hisoblanmasin */
 }
 hydrateIcons();
 
@@ -133,7 +133,7 @@ const initials = t => { const w = String(t).replace(/[^\p{L}\s]/gu, "").split(/\
 const personOf = u => u.name.includes(":") ? u.name.split(":")[1].trim() : "Demo foydalanuvchi";
 async function showLogin() {
   $("#app").classList.add("hidden"); $("#login").classList.remove("hidden");
-  USERS = await (await fetch("/api/users")).json();
+  USERS = await fetch("/api/users").then(r => r.ok ? r.json() : []).catch(() => []);
   if (!selUser) selUser = (USERS.find(u => u.level === 1 && /^Rektor$/i.test(u.role)) || USERS[0]).id;
   LVL = (USERS.find(u => u.id === selUser) || {level: 1}).level;
   $("#lvlTabs").innerHTML = [1, 2, 3, 4].map(l => `<button type="button" role="tab" data-l="${l}">${LVL_TABS[l]}</button>`).join("");

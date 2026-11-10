@@ -8,9 +8,10 @@ sirtqi — sirtqi talabalar; tyutor — o'z guruhlari; kafedra — kafedra guruh
 call-markaz — cheklangan (navbatidagi talaba, ism/telefon/qo'ng'iroqlar).
 """
 import json
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from . import db, rbac
 from . import student_ops as SO
+from .academic_rules import CURRENT_SEMESTER
 
 router = APIRouter()
 _con = None
@@ -43,7 +44,7 @@ def card(c, sid: int) -> dict:
     out["study_form"] = s.get("study_form")
     if acad:
         out["rating"] = (_q("SELECT semester, gpa, avg_score, r_group, n_group, r_course, n_course, attendance FROM rating_cache WHERE student_id=? ORDER BY semester DESC LIMIT 1", (sid,)) or [None])[0]
-        out["current"] = _q("SELECT subject, oraliq, credits FROM grades WHERE student_id=? AND semester=1 ORDER BY subject", (sid,))
+        out["current"] = _q("SELECT subject, oraliq, credits FROM grades WHERE student_id=? AND semester=? ORDER BY subject", (sid, CURRENT_SEMESTER))
         out["appeals"] = _q("SELECT subject, status, filed_at, deadline, score_old, score_new FROM grade_appeals WHERE student_id=? ORDER BY id DESC", (sid,))
         out["restudy"] = _q("SELECT subject, credits, decision, amount, paid, deadline FROM restudy WHERE student_id=? ORDER BY id DESC", (sid,))
         out["orders"] = _q("""SELECT o.id, o.kind, o.title, o.status, o.reg_no, o.order_date FROM order_students os JOIN orders o ON o.id=os.order_id
@@ -60,7 +61,11 @@ def card(c, sid: int) -> dict:
         out["intl"] = _q("SELECT status, total, rank, created_at, credit_status FROM intl_applications WHERE student_id=? ORDER BY id DESC", (sid,))
         out["requests"] = _q("SELECT kind, status, created_at, review_note, doc_reg FROM student_requests WHERE student_id=? ORDER BY id DESC LIMIT 30", (sid,))
     if k in FIN:
-        out["payments"] = _q("""SELECT paid_on, amount, receipt_no, method, status FROM fin_payments WHERE student_id=? ORDER BY paid_on DESC, id DESC LIMIT 30""", (sid,))
+        # yagona kvitansiya reyestri (app/moliya.py): kontrakt, qayta o'qish va turar joy to'lovlari — turi bilan
+        out["payments"] = _q("""SELECT paid_on, amount, receipt_no, method, status, COALESCE(kind,'kontrakt') kind, ref_id FROM fin_payments
+                                WHERE student_id=? ORDER BY paid_on DESC, id DESC LIMIT 30""", (sid,))
+        out["dorm_charges"] = _q("""SELECT ch.id, ch.period, ch.amount, ch.paid, ch.due, ch.receipt FROM yj_charges ch JOIN yj_residents r ON r.id=ch.resident_id
+                                    WHERE r.student_id=? ORDER BY ch.period DESC, ch.id DESC LIMIT 24""", (sid,))   # turar joy hisobi (qoldiq)
         out["deferments"] = _q("SELECT until, note FROM contract_deferments WHERE student_id=? ORDER BY id DESC", (sid,))
     return out
 
@@ -68,6 +73,8 @@ def card(c, sid: int) -> dict:
 def api_card(sid: int, request: Request):
     c = _ctx(request)
     SO._view_guard(c, "talaba kartasi (360)")
+    if not db.one(_con, "SELECT 1 x FROM students WHERE id=?", (sid,)):   # mavjud bo'lmagan talaba — 404 («ko'lamingizda emas» emas)
+        raise HTTPException(404, "Talaba topilmadi")
     if c.role.key == "call_center":
         d = SO.api_student(sid, request)        # o'z navbatidagi talaba, minimal ma'lumot
         return {"base": d, "role": "call_center", "actions": [], "limited": True}

@@ -4,7 +4,7 @@ Strategik: KPI maqsadi = ko'rsatkich (desks.strategic/quality dagi kalit) + mas'
 avtomatik (o'sha ko'rsatkichdan). «Kengash hisoboti» — choraklik .docx (maqsadlar va asosiy ko'rsatkichlar).
 Sifat: (1) topilma — kafedraga topshiriq sifatida yuboriladi (directives.create_linked); (2) akkreditatsiya nazorat varaqasi.
 """
-import datetime as dt, io
+import datetime as dt, io, math
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
@@ -28,6 +28,11 @@ CREATE TABLE IF NOT EXISTS akkr_items(id INTEGER PRIMARY KEY, section TEXT, titl
 """
 
 def _now(): return clock.now().replace(microsecond=0).isoformat()
+
+def _date(v: str, msg="Muddat noto'g'ri") -> str:
+    """'YYYY-MM-DD' ga keltiradi (fromisoformat '20270101' kabi shakllarni ham qabul qiladi — saqlashda yagona ko'rinish, satr taqqoslash uchun)."""
+    try: return dt.date.fromisoformat(str(v).strip()).isoformat()
+    except ValueError: raise HTTPException(400, msg)
 
 def init(con):
     con.executescript(SCHEMA); con.commit()
@@ -87,7 +92,7 @@ def _targets():
     for t in db.rows(_con, "SELECT * FROM kpi_targets ORDER BY deadline"):
         m = ms.get(t["metric"]) or {}
         v = m.get("value")
-        ok = v is not None and (v >= t["target"] if t["good"] == "up" else v <= t["target"])
+        ok = v is not None and t["target"] is not None and (v >= t["target"] if t["good"] == "up" else v <= t["target"])
         st = "bajarildi" if ok else ("muddati_otgan" if t["deadline"] and t["deadline"] < td else "yolda")
         out.append({**t, "actual": v, "unit": m.get("unit", ""), "metric_label": m.get("label", t["metric"]), "owner_name": um.get(t["owner_unit"], t["owner_unit"]),
                     "status": st, "status_label": {"bajarildi": "Erishildi", "muddati_otgan": "Muddati o'tdi", "yolda": "Jarayonda"}[st]})
@@ -116,10 +121,11 @@ def api_kpi_add(body: TargetIn, request: Request, tid: int = 0):
     ms = _metrics()
     if body.metric not in ms: raise HTTPException(400, "Ko'rsatkichni tanlang")
     if body.owner_unit not in _units(): raise HTTPException(400, "Mas'ul bo'limni tanlang")
-    try: dt.date.fromisoformat(body.deadline)
-    except ValueError: raise HTTPException(400, "Muddat noto'g'ri")
+    if not math.isfinite(body.target) or body.target < 0: raise HTTPException(400, "Maqsad qiymat noto'g'ri")
+    body.deadline = _date(body.deadline)
     title = body.title.strip() or ms[body.metric]["label"]
     if tid:
+        if not db.one(_con, "SELECT 1 x FROM kpi_targets WHERE id=?", (tid,)): raise HTTPException(404, "Maqsad topilmadi")
         _con.execute("UPDATE kpi_targets SET metric=?, title=?, owner_unit=?, target=?, good=?, deadline=?, note=?, updated_at=? WHERE id=?",
                      (body.metric, title, body.owner_unit, body.target, ms[body.metric]["good"], body.deadline, body.note, _now(), tid))
     else:
@@ -132,7 +138,8 @@ def api_kpi_add(body: TargetIn, request: Request, tid: int = 0):
 @router.post(P + "/kpi/{tid}/delete")
 def api_kpi_del(tid: int, request: Request):
     c = C(request, KPI_EDIT, (), True)
-    _con.execute("DELETE FROM kpi_targets WHERE id=?", (tid,)); _con.commit()
+    if not _con.execute("DELETE FROM kpi_targets WHERE id=?", (tid,)).rowcount: raise HTTPException(404, "Maqsad topilmadi")
+    _con.commit()
     rbac.audit(_con, c, "KPI maqsadi o'chirildi", rbac.KPI, True, f"#{tid}")
     return {"ok": True}
 
@@ -191,9 +198,9 @@ class FindIn(BaseModel):
 def api_finding(body: FindIn, request: Request):
     c = C(request, SIF_EDIT, (), True)
     if not body.unit.startswith("kaf") or body.unit not in _units(): raise HTTPException(400, "Kafedrani tanlang")
-    try:
-        if dt.date.fromisoformat(body.due) < clock.today(): raise HTTPException(400, "Muddat o'tgan sana bo'lmasin")
-    except ValueError: raise HTTPException(400, "Muddat noto'g'ri")
+    if len(body.title.strip()) < 5 or len(body.body.strip()) < 10: raise HTTPException(400, "Topilma va tafsilotni to'liq yozing")
+    body.due = _date(body.due)
+    if body.due < clock.today().isoformat(): raise HTTPException(400, "Muddat o'tgan sana bo'lmasin")
     from . import directives as DIR
     tid = DIR.create_linked(_con, c.user["id"], "sifat", body.unit, f"Sifat topilmasi: {body.title.strip()}", body.body.strip(), body.due,
                             prio="muhim", expect="Kamchilik bartaraf etilgani haqida qisqa hisobot", src="sifat")
@@ -215,8 +222,11 @@ def api_akkr(iid: int, body: AkkrIn, request: Request):
     if body.status not in AKKR_ST: raise HTTPException(400, "Holat noto'g'ri")
     r = db.one(_con, "SELECT * FROM akkr_items WHERE id=?", (iid,))
     if not r: raise HTTPException(404)
+    if body.owner_unit and body.owner_unit not in _units(): raise HTTPException(400, "Mas'ul bo'limni tanlang")
+    due = _date(body.due) if body.due.strip() else ""
+    note = body.note.strip() if "note" in body.model_fields_set else r["note"]   # faqat holat o'zgarsa (sahifadagi ro'yxat) — izoh o'chmasin
     _con.execute("UPDATE akkr_items SET status=?, note=?, owner_unit=COALESCE(NULLIF(?,''), owner_unit), due=COALESCE(NULLIF(?,''), due), updated_by=?, updated_at=? WHERE id=?",
-                 (body.status, body.note.strip(), body.owner_unit, body.due, c.user["full_name"], _now(), iid))
+                 (body.status, note, body.owner_unit, due, c.user["full_name"], _now(), iid))
     _con.commit()
     rbac.audit(_con, c, "akkreditatsiya bandi", rbac.ACADEMIC, True, f"#{iid} → {body.status}")
     return {"ok": True}
@@ -230,8 +240,11 @@ class AkkrNew(BaseModel):
 @router.post(P + "/sifat/akkr")
 def api_akkr_new(body: AkkrNew, request: Request):
     c = C(request, SIF_EDIT, (), True)
+    if len(body.section.strip()) < 2 or len(body.title.strip()) < 3: raise HTTPException(400, "Bo'lim va bandni yozing")
+    if body.owner_unit not in _units(): raise HTTPException(400, "Mas'ul bo'limni tanlang")
+    due = _date(body.due) if body.due.strip() else None
     i = _con.execute("INSERT INTO akkr_items(section,title,owner_unit,status,due,updated_by,updated_at) VALUES(?,?,?,'yoq',?,?,?)",
-                     (body.section.strip(), body.title.strip(), body.owner_unit, body.due or None, c.user["full_name"], _now())).lastrowid
+                     (body.section.strip(), body.title.strip(), body.owner_unit, due, c.user["full_name"], _now())).lastrowid
     _con.commit()
     rbac.audit(_con, c, "akkreditatsiya bandi qo'shildi", rbac.ACADEMIC, True, f"#{i}")
     return {"ok": True, "id": i}

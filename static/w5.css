@@ -29,3 +29,5 @@
 .w5-modal textarea{min-height:0}
 .w5-acts{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
 @media (max-width:760px){.w5-funnel{grid-template-columns:repeat(3,minmax(0,1fr))}.w5-grid{grid-template-columns:1fr}}
+/* Kiruvchi xatlar, Qabul, KPI jadvallari: tor ekranda kesilmasin — gorizontal skroll */
+#dvList,#qbList,.card:has(> table.w5-tbl){overflow-x:auto}

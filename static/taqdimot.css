@@ -131,5 +131,5 @@ tr.tq-click:hover td{background:var(--surface-2)}
   .tq-grid .wide{grid-column:auto}
   .tq-card{padding:14px}
   .tq-tabs,.tq-seg{width:auto}
-  .tq-bar{flex-wrap:wrap}.tq-meta-b{max-width:100%}.tq-bar-r{flex-wrap:wrap}
+  .tq-bar{flex-wrap:wrap}.tq-meta-b{max-width:100%}.tq-bar-r{flex-wrap:wrap;flex:1 1 100%;min-width:0}
 }

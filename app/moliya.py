@@ -341,9 +341,11 @@ def student(sid: int, request: Request):
     s = _contract(_con, sid)
     if not s: raise HTTPException(404, "Talaba topilmadi")
     _audit(c, "moliya: talaba to'lov holati", CONTRACTS, True, f"#{sid} {_short(s['full_name'])}")
-    pays = db.rows(_con, """SELECT id, receipt_no, paid_on, amount, method, payer, status, storno_reason, storno_by, storno_at, created_by_name, created_at
-                            FROM fin_payments WHERE student_id=? ORDER BY paid_on DESC, id DESC""", (sid,))
-    for p in pays: p["method_label"] = METHODS.get(p["method"], p["method"]); p["created_by_name"] = _short(p["created_by_name"])
+    pays = db.rows(_con, """SELECT id, receipt_no, paid_on, amount, method, payer, status, storno_reason, storno_by, storno_at, created_by_name, created_at,
+                            COALESCE(kind,'kontrakt') kind, ref_id FROM fin_payments WHERE student_id=? ORDER BY paid_on DESC, id DESC""", (sid,))
+    for p in pays:
+        p["method_label"] = METHODS.get(p["method"], p["method"]); p["created_by_name"] = _short(p["created_by_name"])
+        p["kind_label"] = PAY_KINDS.get(p["kind"], p["kind"])   # qayta o'qish / turar joy to'lovi kontrakt tarixiga aralashib ketmasin
     return {"student": s, "contract_no": MM.contract_no(sid) if s["payment_type"] == "kontrakt" else None,
             "contract": _plan_status(_con, s) if s["payment_type"] == "kontrakt" else None, "payments": pays,
             "note": "Tizimdagi to'lovlar reyestri ISFT Core'da kiritilganlarni ko'rsatadi; oldingi to'lovlar «to'langan» summasiga kiritilgan."}

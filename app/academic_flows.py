@@ -745,7 +745,7 @@ def restudy_pay(c: Ctx, rid: int, amount: int, receipt: str = "", method: str = 
     if not r or r["decision"] != "qayta_oqish": _bad("To'lov qatori topilmadi", 404)
     if amount <= 0: _bad("Summa musbat bo'lishi kerak")
     from . import moliya as ML
-    rec = (receipt or "").strip() or f"QO-{rid}-{clock.now().strftime('%y%m%d%H%M%S')}"
+    rec = (receipt or "").strip() or f"QO-{rid}-{clock.now().strftime('%y%m%d%H%M%S%f')}"
     res = ML._post_payment(c, r["student_id"], rec, _today().isoformat(), int(amount), method or "bank",
                            note=f"Qayta o'qish: {r['subject']}", kind="qayta_oqish", ref_id=rid)
     rbac.audit(_con, c, "talaba harakati: qayta o'qish to'lovi", RES, True, f"#{rid} · +{amount} → {res['paid']}/{r['amount']} · {res['receipt_no']}")

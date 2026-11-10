@@ -15,6 +15,8 @@
   };
   if (!ICONS.gear) ICONS.gear = '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>';
   if (!ICONS.chev) ICONS.chev = '<path d="m6 9 6 6 6-6"/>';
+  /* «Ilm va xalqaro» guruhi ikonkasi: ilmiy.js keyinroq yuklanadi, boot() esa undan oldin navGroup() ni chaqirishi mumkin */
+  if (!ICONS.flask) ICONS.flask = '<path d="M9 3h6M10 3v6L4.5 18.5A2 2 0 0 0 6.2 21h11.6a2 2 0 0 0 1.7-2.5L14 9V3"/><path d="M7 15h10"/>';
 
   /* ---------- 1–2) Guruhlar, tezkor (sevimlilar) va lavozimga ko'ra yorliqlar ----------
      Menyu bandlari ma'noli guruhlarga bo'linadi. 12 tadan ko'p band ko'radigan lavozimlarda guruhlar yig'iladi
@@ -60,6 +62,8 @@
     const pins = jget(PIN_KEY, []);
     anchors.forEach(a => {
       label(a);
+      /* ikonkasi keyin yuklangan modulda aniqlangan band (app.js hydrateIcons vaqtida ICONS[...] hali yo'q edi) — bo'sh svg to'ldiriladi */
+      const sv = a.querySelector(":scope > svg"); if (sv && !sv.innerHTML.trim() && ICONS[a.dataset.i]) sv.innerHTML = ICONS[a.dataset.i];
       const t = (LBL[a.dataset.v] || {})[ROLE]; setLabel(a, t || a.dataset.lbl0);
       if (!a.querySelector(".nav-pin")) {
         const p = document.createElement("span"); p.className = "nav-pin"; p.setAttribute("role", "button"); p.tabIndex = -1;

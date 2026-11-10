@@ -93,3 +93,4 @@
   .kd-dl{grid-template-columns:minmax(0,1fr)}
   .kd-dl dt{margin-top:6px}
 }
+#kdHeadStaff{overflow-x:auto}   /* bo'lim boshlig'i: xodimlar jadvali tor ekranda kesilmasin */

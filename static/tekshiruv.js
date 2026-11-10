@@ -271,7 +271,7 @@ async function tkProgress() {
   const B = TK.batch, box = $("#tkProg"); if (!box) return;
   const p = B.progress;
   if (!p.running) { box.innerHTML = B.run_err ? `<div class="tk-note warn">${ico("info", 16)}<span>${esc(B.run_err)}</span></div>` : ""; return; }
-  box.innerHTML = `<div class="tk-prog"><span class="tk-spin"></span><span>Tekshirilmoqda: ${p.done} / ${p.total}</span><div class="tk-bar"><i style="width:${p.total ? Math.round(100 * p.done / p.total) : 0}%"></i></div></div>`;
+  box.innerHTML = `<div class="tk-prog"><span class="tk-spin"></span><span>Tekshirilmoqda: ${p.done} / ${p.total}</span><div class="tk-pbar"><i style="width:${p.total ? Math.round(100 * p.done / p.total) : 0}%"></i></div></div>`;
   TK.poll = setTimeout(async () => {
     if (!TK.batch || TK.batch.id !== B.id || !$("#tkProg")) return;
     try { const r = await tkApi(`/api/tekshiruv/batches/${B.id}/progress`); if (r.running) { TK.batch.progress = r; tkProgress(); } else { toast("Tekshiruv tugadi"); tkOpen(B.id); } }

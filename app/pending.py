@@ -273,9 +273,9 @@ def bugun(c) -> list:
                 u = SP.STAFF_UNIT.get(k)
                 n = _one(f"SELECT COUNT(*) n {SP.REQ_FROM} WHERE {SP._scope_sql(u)} AND r.status='yangi'") if u else 0
                 out.insert(0, _k("Talaba kabinetidan so'rovlar", n, "ko'rib chiqilmagan", "warn" if n else "good", {"view": "talaba_xodim", "href": "/talaba/xodim"}))
-            if k == "akademik":
+            if k == "akademik":   # 4 ta joydan biri — kesishda (out[:4]) tushib qolmasin
                 n = _one("SELECT COUNT(*) n FROM intl_applications WHERE credit_status='kutilmoqda'")
-                out.append(_k("Kreditni tan olish", n, "almashinuvdan qaytganlar", "warn" if n else "", {"view": "xalqaro", "tab": "credits"}))
+                out.insert(min(3, len(out)), _k("Kreditni tan olish", n, "almashinuvdan qaytganlar", "warn" if n else "", {"view": "xalqaro", "tab": "credits"}))
             out = out[:4]
         elif k == "amaliyot":
             from . import amaliyot as AMm

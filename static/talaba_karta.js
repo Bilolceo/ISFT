@@ -103,7 +103,7 @@
         return `<div class="card"><h3>Joriy semestr (oraliq nazorat)</h3>${T(["Fan", "Oraliq", "Kredit"], (d.current || []).map(g => [esc(g.subject), g.oraliq ?? "—", g.credits ?? "—"]))}</div>
           <div class="card"><h3>Akademik qarzlar</h3>${T(["Fan", "Natija"], (f.grades || []).filter(g => g.fail ?? g.score < 40).map(g => [esc(g.subject), `<b class="bad">${esc(String(g.shown ?? g.score))}</b>`]))}</div>
           <div class="card"><h3>Otrabotka ${gl("otrabotka")}</h3>${T(["Fan", "Holat", "Varaqa", "Muddat"], (b.retakes || []).map(x => [esc(x.subject), tag(x.status), esc(x.reg_no || "—"), dtm(x.due_at)]))}</div>
-          <div class="card"><h3>Qayta o'qish ${gl("qayta")}</h3>${T(["Fan", "Kredit", "Qaror", "Summa", "To'langan"], (d.restudy || []).map(x => [esc(x.subject), x.credits, tag(x.decision), som(x.amount || 0), x.paid ? "ha" : "yo'q"]))}</div>
+          <div class="card"><h3>Qayta o'qish ${gl("qayta")}</h3>${T(["Fan", "Kredit", "Qaror", "Summa", "To'langan"], (d.restudy || []).map(x => [esc(x.subject), x.credits, tag(x.decision), som(x.amount || 0), !x.paid ? "yo'q" : (x.amount && x.paid < x.amount ? som(x.paid) + " (qisman)" : (x.amount ? som(x.paid) : "ha"))]))}</div>
           <div class="card"><h3>Apellyatsiyalar</h3>${T(["Fan", "Holat", "Berilgan", "Ball"], (d.appeals || []).map(x => [esc(x.subject), tag(x.status), dmy(x.filed_at), `${x.score_old ?? "—"} → ${x.score_new ?? "—"}`]))}</div>
           <div class="card"><h3>Dars qoldirishlar</h3>${T(["Sana", "Soat", "Sabab"], (b.absences || []).slice(0, 40).map(a => [`${dmy(a.start)}${a.end !== a.start ? "–" + dmy(a.end) : ""}`, a.hours, esc(a.reason || "")]))}</div>
           <details class="card"><summary><b>Urinishlar tarixi (barcha semestrlar)</b></summary>${T(["Semestr", "Fan", "Urinish", "Ball"], (b.attempts || []).map(h => [esc(h.sem_label || h.semester), esc(h.subject), h.attempt, h.score ?? "—"]))}</details>`;
@@ -118,7 +118,8 @@
       case "moliya":
         return `<div class="tk-kpis"><div><span>Kontrakt</span><b>${s.contract_amount != null ? som(s.contract_amount) : "—"}</b></div><div><span>To'langan</span><b>${s.paid_amount != null ? som(s.paid_amount) : "—"}</b></div>
             <div><span>Qarz</span><b class="${b.debt > 0 ? "bad" : ""}">${b.debt != null ? som(b.debt) : "—"}</b></div></div>
-          <div class="card"><h3>To'lovlar</h3>${T(["Sana", "Summa", "Kvitansiya", "Usul", "Holat"], (d.payments || []).map(p => [dmy(p.paid_on), som(p.amount), esc(p.receipt_no || ""), esc(p.method || ""), tag(p.status)]))}</div>
+          <div class="card"><h3>To'lovlar</h3>${T(["Sana", "Turi", "Summa", "Kvitansiya", "Usul", "Holat"], (d.payments || []).map(p => [dmy(p.paid_on), esc(({kontrakt: "Kontrakt", qayta_oqish: "Qayta o'qish", turar_joy: "Turar joy"})[p.kind] || p.kind || "Kontrakt"), som(p.amount), esc(p.receipt_no || ""), esc(p.method || ""), tag(p.status)]))}</div>
+          ${(d.dorm_charges || []).length ? `<div class="card"><h3>Turar joy to'lovlari</h3>${T(["Davr", "Summa", "To'langan", "Muddat", "Kvitansiya"], d.dorm_charges.map(x => [esc(x.period || ""), som(x.amount || 0), som(x.paid || 0), dmy(x.due), esc(x.receipt || "")]))}</div>` : ""}
           ${(d.deferments || []).length ? `<div class="card"><h3>Muddat uzaytirilgan</h3>${T(["Muddat", "Izoh"], d.deferments.map(x => [dmy(x.until), esc(x.note || "")]))}</div>` : ""}`;
       case "boshqa": {
         const dm = d.dorm || {};

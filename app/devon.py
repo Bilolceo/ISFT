@@ -7,6 +7,7 @@ pending(ctx) — Mening vazifalarim / qo'ng'iroqcha uchun: rezolyutsiya kutayotg
 """
 import datetime as dt, re
 from pathlib import Path
+from urllib.parse import unquote
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -51,7 +52,8 @@ def bind(con, ctx_fn):
     _con, _ctx = con, ctx_fn
 
 def _next_no(con, d: dt.date) -> str:
-    n = db.one(con, "SELECT COUNT(*) n FROM in_letters WHERE in_no LIKE ?", (f"K-{d.year}/%",))["n"] + 1
+    m = db.one(con, "SELECT MAX(CAST(substr(in_no, 8) AS INTEGER)) m FROM in_letters WHERE in_no LIKE ?", (f"K-{d.year}/%",))["m"]
+    n = (m or 0) + 1   # MAX — o'chirilgan yozuvdan keyin ham raqam takrorlanmaydi
     return f"K-{d.year}/{n:04d}"
 
 def seed_demo(con):
@@ -167,12 +169,13 @@ async def api_file(lid: int, request: Request):
     if c.role.key not in REGISTRAR: raise AccessDenied("⛔ Faylni Devonxona yuklaydi.")
     r = _get(lid)
     data = await request.body()
-    if not data or len(data) > 20 * 1024 * 1024: raise HTTPException(413, "Fayl 20 MB dan oshmasin")
+    if not data: raise HTTPException(400, "Fayl bo'sh")
+    if len(data) > 20 * 1024 * 1024: raise HTTPException(413, "Fayl 20 MB dan oshmasin")
     ext = next((e for m, e in MAGIC.items() if data.startswith(m)), None)
     if not ext: raise HTTPException(415, "Faqat PDF, JPG, PNG yoki DOCX")
     FILES.mkdir(parents=True, exist_ok=True)
     stored = f"in{lid}{ext}"; (FILES / stored).write_bytes(data)
-    name = re.sub(r"[^\w.\- ]", "_", request.headers.get("x-filename", "") or f"{r['in_no']}{ext}")[:120]
+    name = re.sub(r"[^\w.\- ]", "_", unquote(request.headers.get("x-filename", "")) or f"{r['in_no']}{ext}")[:120]   # mijoz encodeURIComponent bilan yuboradi
     _con.execute("UPDATE in_letters SET file_name=?, file_stored=? WHERE id=?", (name, stored, lid)); _con.commit()
     rbac.audit(_con, c, "kiruvchi xat fayli", RES, True, r["in_no"])
     return {"ok": True}

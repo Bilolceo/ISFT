@@ -1098,7 +1098,7 @@ def student_card(c: Ctx, sid):
     rt = [] if c.role.key == "buxgalteriya" else db.rows(_con, "SELECT * FROM retakes WHERE student_id=? ORDER BY id DESC", (sid,))
     lv = db.rows(_con, "SELECT * FROM student_leaves WHERE student_id=?", (sid,))
     debt = (s["contract_amount"] or 0) - (s["paid_amount"] or 0)
-    if c.role.key == "kafedra":   # kontrakt ruxsati yo'q — moliyaviy maydonlar ko'rsatilmaydi (sirtqi bo'lim o'z talabalarining to'lov holatini ko'radi)
+    if c.role.key in ("kafedra", "imtihon"):   # kontrakt ruxsati yo'q — moliyaviy maydonlar ko'rsatilmaydi (sirtqi bo'lim o'z talabalarining to'lov holatini ko'radi)
         debt = None; s = {k: v for k, v in s.items() if k not in ("contract_amount", "paid_amount")}
     now = _now()
     for r in rt: _retake_view(r, now)

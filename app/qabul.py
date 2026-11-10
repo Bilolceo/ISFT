@@ -22,6 +22,8 @@ STAGES = {"ariza": "Ariza qabul qilindi", "hujjat": "Hujjatlar tekshirildi", "im
           "shartnoma": "Shartnoma tuzildi", "buyruq": "Qabul buyrug'i loyihasida", "rad": "Rad etildi"}
 NEXT = {"ariza": "hujjat", "hujjat": "imtihon", "imtihon": "shartnoma"}
 PASS_SCORE = 56          # imtihon/suhbat o'tish bali (100 ballik)
+FORMS = ("kunduzgi", "sirtqi", "kechki", "masofaviy")
+PAYS = ("kontrakt", "grant")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS qb_applicants(id INTEGER PRIMARY KEY, full_name TEXT, phone TEXT, direction TEXT, study_form TEXT, payment_type TEXT,
@@ -107,7 +109,10 @@ class AppIn(BaseModel):
 @router.post(P + "/applicants")
 def api_create(body: AppIn, request: Request):
     c = C(request, True)
+    if len(body.full_name.strip()) < 5: raise HTTPException(400, "F.I.Sh. ni to'liq kiriting")
     if body.direction not in _dirs(_con): raise HTTPException(400, "Yo'nalishni tanlang")
+    if body.study_form not in FORMS: raise HTTPException(400, "Ta'lim shakli noto'g'ri")
+    if body.payment_type not in PAYS: raise HTTPException(400, "To'lov turi noto'g'ri")
     i = _con.execute("""INSERT INTO qb_applicants(full_name,phone,direction,study_form,payment_type,stage,created_by,created_at,updated_at)
                         VALUES(?,?,?,?,?,'ariza',?,?,?)""", (body.full_name.strip(), body.phone.strip(), body.direction, body.study_form,
                                                              body.payment_type, c.user["id"], _now(), _now())).lastrowid
@@ -147,7 +152,8 @@ def api_advance(aid: int, body: AdvIn, request: Request):
 def api_reject(aid: int, body: AdvIn, request: Request):
     c = C(request, True)
     r = db.one(_con, "SELECT * FROM qb_applicants WHERE id=?", (aid,))
-    if not r or r["stage"] in ("buyruq", "rad"): raise HTTPException(409, "Rad etib bo'lmaydi")
+    if not r: raise HTTPException(404)
+    if r["stage"] in ("buyruq", "rad"): raise HTTPException(409, "Rad etib bo'lmaydi")
     if len(body.note.strip()) < 3: raise HTTPException(400, "Sababini yozing")
     _con.execute("UPDATE qb_applicants SET stage='rad', note=?, updated_at=? WHERE id=?", (body.note.strip(), _now(), aid))
     _log(aid, c, "rad etildi", body.note); _con.commit()

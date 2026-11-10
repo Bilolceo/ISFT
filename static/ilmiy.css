@@ -103,3 +103,5 @@
   .il-dl{grid-template-columns:1fr}
   .il-dl dt{margin-top:4px}
 }
+/* jadval o'ramasi: tor ekranda jadval kesilmasin (.shell overflow-x:hidden) — gorizontal skroll */
+.tbl-wrap{overflow-x:auto;max-width:100%}

@@ -563,7 +563,8 @@ details.script ol{margin:8px 0;padding-left:18px;display:flex;flex-direction:col
   /* guruh sarlavhalari: relsda ham shu balandlik — matn o'rnida markazdagi ingichka chiziq */
   #app #nav .nav-h,#app.rail #nav .nav-h:not(.nav-tg){position:relative;display:block;flex:none;box-sizing:border-box;width:auto;height:33px;
     margin:0;padding:14px 12px 6px;font-size:11px;line-height:13px;white-space:nowrap;overflow:hidden;background:none;transition:color .15s}
-  #app #nav>.nav-h:first-child,#app.rail #nav>.nav-h:first-child{display:block;height:25px;padding-top:6px}
+  #app #nav>.nav-h:first-child:not(.nav-tg),#app.rail #nav>.nav-h:first-child:not(.nav-tg){display:block;height:25px;padding-top:6px}   /* guruh ochgichi (nav-tg) flex bo'lib qoladi — aks holda nomi va ▾ kesiladi */
+  #app.rail #nav>.nav-tg:first-child{display:flex}   /* relsda ham birinchi guruh ochgichi ko'rinsin (yig'ilgan «Ish stoli»ni qayta ochish uchun) */
   #app.rail #nav .nav-h:not(.nav-tg){color:transparent}
   #app.rail #nav .nav-h:not(.nav-tg)::after{content:"";position:absolute;left:8px;right:8px;top:21px;height:1px;background:var(--line)}
   #app.rail #nav>.nav-h:first-child::after{display:none}

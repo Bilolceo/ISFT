@@ -65,6 +65,9 @@ def api_done(kind: str, rid: int, body: DoneIn, request: Request):
     c = C(request)
     if c.role.key != "it_head": raise AccessDenied("⛔ Faqat AT bo'limi boshlig'i.")
     if kind not in ("hire", "dismiss"): raise HTTPException(404)
+    # faqat hozir kutilayotgan so'rov: aks holda (yo'q id yoki hali «suhbat»dagi nomzod) keyingi haqiqiy so'rov oldindan yashirilib qoladi
+    if db.one(_con, "SELECT 1 x FROM it_req_done WHERE kind=? AND ref_id=?", (kind, rid)): raise HTTPException(409, "Allaqachon bajarilgan")
+    if not any(i["kind"] == kind and i["id"] == rid for i in items()): raise HTTPException(404, "So'rov topilmadi")
     _con.execute("INSERT OR REPLACE INTO it_req_done(kind,ref_id,done_at,user_name,note) VALUES(?,?,?,?,?)",
                  (kind, rid, clock.now().replace(microsecond=0).isoformat(), c.user["full_name"], body.note.strip()))
     _con.commit()
@@ -73,5 +76,5 @@ def api_done(kind: str, rid: int, body: DoneIn, request: Request):
 
 def pending(c: Ctx) -> list[dict]:
     if _con is None or c.role.key != "it_head": return []
-    return [{"kind": "akkaunt", "title": i["title"], "sub": i.get("unit_name") or i.get("position") or "", "due": i["date"], "view": "accounts",
+    return [{"kind": "akkaunt", "id": f'{i["kind"]}{i["id"]}', "title": i["title"], "sub": i.get("unit_name") or i.get("position") or "", "due": i["date"], "view": "accounts",
              "src": "Akkauntlar", "sign": False} for i in items()]
