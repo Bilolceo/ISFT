@@ -490,4 +490,11 @@ from . import taqdimot as TQD   # Taqdimot: o'qituvchi materiali (.docx/.pdf/.tx
 TQD.init(con)
 TQD.bind(con, ctx)
 app.include_router(TQD.router)
-app.mount("/", StaticFiles(directory=ROOT / "static", html=True), name="static")
+class _NoCacheStatic(StaticFiles):
+    """JS/CSS/HTML har safar ETag bilan qayta tekshiriladi — yangi deploydan keyin brauzer eski kodni ishlatib qolmasin."""
+    async def get_response(self, path, scope):
+        r = await super().get_response(path, scope)
+        if str(path).endswith((".js", ".css", ".html")) or path in ("", ".", "/"): r.headers["Cache-Control"] = "no-cache"
+        return r
+
+app.mount("/", _NoCacheStatic(directory=ROOT / "static", html=True), name="static")
