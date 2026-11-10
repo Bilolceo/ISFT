@@ -202,16 +202,16 @@ def finance_summary(con, ctx: Ctx, quiet=False):
 
 def payroll_summary(con, ctx: Ctx, quiet=False):
     _g(con, ctx, PAYROLL, "ish haqi fondi", quiet)
-    agg = db.rows(con, "SELECT unit, COUNT(*) n, SUM(salary) fund, ROUND(AVG(salary)) avg FROM staff GROUP BY unit ORDER BY fund DESC")
+    agg = db.rows(con, "SELECT unit, COUNT(*) n, SUM(salary) fund, ROUND(AVG(salary)) avg FROM staff WHERE id NOT IN (SELECT staff_id FROM hr_files WHERE status='boshatilgan') GROUP BY unit ORDER BY fund DESC")
     out = {"by_unit": agg, "total_fund": sum(a["fund"] for a in agg)}
     if not ctx.aggregate_only(PAYROLL):
-        out["staff"] = db.rows(con, "SELECT full_name, unit, position, salary FROM staff ORDER BY salary DESC LIMIT 20")
+        out["staff"] = db.rows(con, "SELECT full_name, unit, position, salary FROM staff WHERE id NOT IN (SELECT staff_id FROM hr_files WHERE status='boshatilgan') ORDER BY salary DESC LIMIT 20")
     return out
 
 def hr_list(con, ctx: Ctx, quiet=False):
     _g(con, ctx, HR, "xodimlar ro'yxati", quiet)
-    return {"staff": db.rows(con, "SELECT full_name, unit, position, hired, passport FROM staff ORDER BY unit LIMIT 40"),
-            "by_unit": db.rows(con, "SELECT unit, COUNT(*) n FROM staff GROUP BY unit ORDER BY n DESC")}
+    return {"staff": db.rows(con, "SELECT full_name, unit, position, hired, passport FROM staff WHERE id NOT IN (SELECT staff_id FROM hr_files WHERE status='boshatilgan') ORDER BY unit LIMIT 40"),
+            "by_unit": db.rows(con, "SELECT unit, COUNT(*) n FROM staff WHERE id NOT IN (SELECT staff_id FROM hr_files WHERE status='boshatilgan') GROUP BY unit ORDER BY n DESC")}
 
 # ---------- Ilmiy ----------
 def science_summary(con, ctx: Ctx, quiet=False):
@@ -251,6 +251,12 @@ def admissions_summary(con, ctx: Ctx, quiet=False):
 def youth_summary(con, ctx: Ctx, quiet=False):
     _g(con, ctx, YOUTH, "yoshlar ishlari", quiet)
     d = db.rows(con, "SELECT * FROM dormitory")
+    try:   # hamkor turar joylar (app/yoshlar.py) — jamlangan: bino, o'rinlar, band (ismlarsiz)
+        d += db.rows(con, """SELECT b.name building, COALESCE(SUM(rm.beds),0) capacity,
+                (SELECT COUNT(*) FROM yj_residents r JOIN yj_rooms r2 ON r2.id=r.room_id WHERE r2.building_id=b.id AND r.status IN ('band','yashaydi')) occupied
+              FROM yj_buildings b LEFT JOIN yj_rooms rm ON rm.building_id=b.id WHERE COALESCE(b.active,1)=1 GROUP BY b.id""")
+    except Exception: pass
+    d = [r for r in d if r.get("capacity")]
     for r in d: r["pct"] = round(100 * r["occupied"] / r["capacity"], 1)
     return {"events": db.rows(con, "SELECT title, date, kind, participants FROM events ORDER BY date DESC"), "dormitory": d,
             "appeals": db.rows(con, "SELECT date, category, text, status FROM appeals ORDER BY date DESC"),

@@ -195,9 +195,9 @@ function orStaffCard(d) {
   const o = d.order, p = o.params || {}, ed = d.can.edit;
   return `<div class="card or-card"><h4>Xodim</h4>
     <dl class="or-dl"><dt>F.I.Sh.</dt><dd><b>${esc(p.staff_name || "—")}</b></dd><dt>Lavozim</dt><dd>${esc([p.unit, p.position].filter(Boolean).join(" — ") || "—")}</dd>
-      <dt>Ta'til</dt><dd>${p.date_from ? dmy(p.date_from) : "—"} – ${p.date_to ? dmy(p.date_to) : "—"} · ${esc(p.days || "")} kalendar kun</dd>
+      ${p.summary ? `<dt>Mazmuni</dt><dd>${esc(p.summary)}</dd>` : `<dt>Ta'til</dt><dd>${p.date_from ? dmy(p.date_from) : "—"} – ${p.date_to ? dmy(p.date_to) : "—"} · ${esc(p.days || "")} kalendar kun</dd>`}
       <dt>Asos</dt><dd>${esc(o.basis || "xodimning arizasi va ta'tillar jadvali")}</dd><dt>Manba</dt><dd>${esc(o.source || "—")}</dd></dl>
-    ${ed ? `<div class="or-form"><label class="or-l">Boshlanish sanasi<input type="date" id="orSD" value="${esc(p.date_from || "")}"></label>
+    ${ed && !p.summary ? `<div class="or-form"><label class="or-l">Boshlanish sanasi<input type="date" id="orSD" value="${esc(p.date_from || "")}"></label>
       <label class="or-l">Kunlar soni<input type="number" min="1" max="120" id="orSN" value="${esc(p.days || "")}"></label>
       <button type="button" class="btn sm" id="orSS">${ico("check", 15)} Saqlash</button></div>` : ""}</div>`;
 }

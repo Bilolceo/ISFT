@@ -84,6 +84,11 @@ KINDS = {
     # xodimlar buyruqlari (Kadrlar bo'limi loyihalaydi, Rektor imzolaydi; talabalar ro'yxati yo'q — xodim params ichida)
     "xodim_tatil": dict(title="Xodimga mehnat ta'tili berish to'g'risida", short="Mehnat ta'tili (xodim)", fields=["date_from", "days"],
                         req=["date_from", "days"], effect=False, staff=True),
+    # Kadrlar bo'limi moduli (app/kadrlar.py) loyihalaydi: ishga qabul (rektor tasdiqlagan nomzod) va ishdan bo'shatish (topshirish varaqasi to'liq)
+    "xodim_qabul": dict(title="Xodimni ishga qabul qilish to'g'risida", short="Ishga qabul (xodim)", fields=["date_from"], req=["date_from"],
+                        effect=False, staff=True, hr=True),
+    "xodim_boshatish": dict(title="Xodimni ishdan bo'shatish to'g'risida", short="Ishdan bo'shatish (xodim)", fields=["date_from", "reason"],
+                            req=["date_from"], effect=False, staff=True, hr=True),
 }
 STAFF_KINDS = tuple(k for k, v in KINDS.items() if v.get("staff"))
 def is_staff_kind(k) -> bool: return k in STAFF_KINDS
@@ -103,6 +108,8 @@ BASIS = {"familiya": "talabaning arizasi va {basis}", "akademik_tatil": "talaban
          "tiklash": "talabaning arizasi va Registrator ofisining taqdimnomasi", "qabul": "qabul komissiyasining qarori", "kurs": "o'quv rejasini to'liq bajarganligi (yakuniy nazorat natijalari)",
          "bekor": "Registrator ofisining bildirgisi (xato aniqlangan)", "hayfsan": "Registrator ofisining bildirgisi va davomat jurnali ma'lumotlari",
          "xodim_tatil": "xodimning arizasi va ta'tillar jadvali",
+         "xodim_qabul": "nomzodning arizasi, tanlov (suhbat) natijalari, rektorning nomzodni tasdiqlashi va mehnat shartnomasi",
+         "xodim_boshatish": "xodimning arizasi (yoki tegishli asos) va topshirish varaqasi",
          "akademik_qarz": "qayta topshirish natijalari (baholar tarixi), belgilangan muddatda akademik qarzdorlik tugatilmaganligi va Registrator ofisining bildirgisi",
          "ichki_kochirish": "talabaning arizasi, akademik farq fanlari ro'yxati va Registrator ofisining taqdimnomasi",
          "kochirib_qabul": "talabaning arizasi, avvalgi OTM akademik ma'lumotnomasi (transkripti) va akademik farq fanlari ro'yxati",
@@ -350,7 +357,7 @@ def _check_scope_students(c: Ctx, studs: list[dict], action: str):
 def checks(o: dict, its: list[dict] | None = None) -> dict:
     if is_staff_kind(o["kind"]):
         p = _j(o.get("params")); errors = []
-        if not p.get("staff_id"): errors.append("Xodim tanlanmagan")
+        if not p.get("staff_id") and not p.get("candidate_id"): errors.append("Xodim tanlanmagan")
         miss = [FIELD_LABELS[f] for f in KINDS[o["kind"]]["req"] if not p.get(f)]
         if miss: errors.append("Majburiy maydon to'ldirilmagan: " + ", ".join(miss))
         return {"errors": errors, "warnings": []}
@@ -656,6 +663,7 @@ def _render_staff(doc, o: dict, p: dict, signed, base_url) -> Path:
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from . import brand as B
     B.regline(doc, o["reg_no"] if signed else "LOYIHA", _d_uz(o["order_date"]) if signed else "«___» __________ 20___ y.")
+    if KINDS.get(o["kind"], {}).get("hr"): return _render_staff_hr(doc, o, p, signed, base_url)
     B.title(doc, "BUYRUQ" if signed else "BUYRUQ (LOYIHA)", "Mehnat ta'tili berish to'g'risida")
     B.para(doc, "O'zbekiston Respublikasi Mehnat kodeksiga va ta'tillar jadvaliga muvofiq, xodimning arizasi asosida")
     x = doc.add_paragraph(); x.alignment = WD_ALIGN_PARAGRAPH.CENTER; B.run(x, "BUYURAMAN:", 12, True)
@@ -706,6 +714,53 @@ def draft_staff_leave(con, c: Ctx, staff_id: int, date_from: str, days=None, abs
     if status == "yuborilgan": _log(o["id"], c, "imzoga yuborildi", "")
     _con.commit()
     _audit(c, "xodim buyrug'i loyihasi", f"#{o['id']} · {p['staff_name']} · {p['date_from']} · {p['days']} kun")
+    return o
+
+def _render_staff_hr(doc, o: dict, p: dict, signed, base_url) -> Path:
+    """Ishga qabul / ishdan bo'shatish buyrug'i (app/kadrlar.py loyihalaydi)."""
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from . import brand as B
+    hire = o["kind"] == "xodim_qabul"
+    B.title(doc, "BUYRUQ" if signed else "BUYRUQ (LOYIHA)", "Ishga qabul qilish to'g'risida" if hire else "Ishdan bo'shatish to'g'risida")
+    B.para(doc, "O'zbekiston Respublikasi Mehnat kodeksiga muvofiq" + (", tanlov natijalari va nomzodning arizasi asosida" if hire else ""))
+    x = doc.add_paragraph(); x.alignment = WD_ALIGN_PARAGRAPH.CENTER; B.run(x, "BUYURAMAN:", 12, True)
+    if hire:
+        B.para(doc, f"1. {p.get('staff_name') or ''} {_d_uz(p.get('date_from'))}dan {p.get('unit') or ''} — {p.get('position') or ''} lavozimiga {p.get('rate') or 1} stavka bilan "
+                    f"{(p.get('contract_type') or 'mehnat shartnomasi').lower()} asosida" + (f" {_d_uz(p.get('date_to'))}gacha" if p.get("date_to") else "") + " ishga qabul qilinsin.")
+        B.para(doc, "2. Buxgalteriya ish haqini shtat jadvaliga muvofiq hisoblasin.")
+        B.para(doc, "3. Kadrlar bo'limi mehnat shartnomasini rasmiylashtirsin va elektron mehnat daftarchasiga yozuv kiritsin; AT bo'limi akkaunt yaratsin.")
+    else:
+        B.para(doc, f"1. {p.get('unit') or ''} — {p.get('position') or ''} {p.get('staff_name') or ''} {_d_uz(p.get('date_from'))}dan egallab turgan lavozimidan ozod qilinsin "
+                    f"(asos: {p.get('reason') or '—'}).")
+        B.para(doc, "2. Buxgalteriya yakuniy hisob-kitobni (foydalanilmagan ta'til kompensatsiyasi bilan) amalga oshirsin.")
+        B.para(doc, "3. AT bo'limi xodimning tizimdagi akkauntlarini oxirgi ish kuni yakunida bloklasin.")
+    x = doc.add_paragraph(); B.run(x, f"Asos: {o.get('basis') or BASIS[o['kind']]}.", 11, False, italic=True)
+    B.signature(doc, "Rektor", B.INST["rector_short"])
+    x = doc.add_paragraph(); B.run(x, "Loyiha kiritdi: Kadrlar bo'limi  _______________", 10.5)
+    doc.add_paragraph(); x = doc.add_paragraph(); B.run(x, "KELISHILDI:", 10.5, True, B.RGB_TEAL_DARK)
+    for w in ["Bosh buxgalter", "Yuriskonsult"]:
+        x = doc.add_paragraph(); B.run(x, f"{w}  _______________", 10.5)
+    if signed and o.get("verify_code"):
+        B.footer_qr(doc, f"{base_url.rstrip('/')}/verify/{o['verify_code']}", o["verify_code"],
+                    "Buyruq institut axborot tizimida ro'yxatga olingan. Haqiqiyligini QR-kod orqali tekshiring.")
+    OUTD.mkdir(parents=True, exist_ok=True)
+    out = OUTD / f"order-{o['id']}-staff{'-signed' if signed else ''}.docx"
+    doc.save(out)
+    return out
+
+def draft_staff_hr(con, c: Ctx, kind: str, p: dict, title: str, source="Kadrlar bo'limi") -> dict:
+    """Ishga qabul / ishdan bo'shatish buyrug'i loyihasi — app/kadrlar.py chaqiradi (params: staff_name, unit, position, date_from, summary …)."""
+    global _con
+    _con = _con or con
+    if not KINDS.get(kind, {}).get("hr"): raise ValueError("Buyruq turi noto'g'ri")
+    if c.role.key not in STAFF_EDIT: _deny(c, "xodim buyrug'i loyihasi", "Xodimlar buyrug'ini Kadrlar bo'limi tayyorlaydi")
+    ts = _now()
+    cur = _con.execute("""INSERT INTO orders(kind,title,status,source,params,count,created_by,created_at) VALUES(?,?,?,?,?,?,?,?)""",
+                       (kind, (title or KINDS[kind]["title"])[:300], "loyiha", source, json.dumps(p, ensure_ascii=False), 1, c.user["id"], ts))
+    o = db.one(_con, "SELECT * FROM orders WHERE id=?", (cur.lastrowid,))
+    _log(o["id"], c, "loyiha yaratildi", f"{KINDS[kind]['short']} · {p.get('staff_name')} · manba: {source}")
+    _con.commit()
+    _audit(c, "xodim buyrug'i loyihasi", f"#{o['id']} · {KINDS[kind]['short']} · {p.get('staff_name')}")
     return o
 
 LEGACY_DOC_KINDS = ("order_student", "reprimand", "leave_order")
@@ -944,6 +999,7 @@ def meta(request: Request):
     pd = pending(c)
     act = len(pd["sign"]) + len(pd["forward"]) + len(pd["returned"]) + len(pd["register"])
     vis = [k for k in KINDS if (is_staff_kind(k) and c.role.key in STAFF_EDIT + SIGN + CHANCERY) or (not is_staff_kind(k) and c.role.key not in STAFF_EDIT)]
+    vis = [k for k in vis if not KINDS[k].get("hr")]   # ishga qabul / bo'shatish — faqat «Kadrlar» moduli orqali (app/kadrlar.py)
     return {"kinds": [{"key": k, "title": KINDS[k]["title"], "short": KINDS[k]["short"], "fields": KINDS[k]["fields"], "req": KINDS[k]["req"], "effect": KINDS[k]["effect"],
                        "staff": bool(KINDS[k].get("staff"))} for k in vis],
             "field_labels": FIELD_LABELS, "statuses": STATUS, "caps": _caps(c), "counts": cnt, "ocr": IN.ocr_available(),
@@ -1050,6 +1106,7 @@ def create(body: NewOrder, request: Request):
     if is_staff_kind(body.kind) or c.role.key in STAFF_EDIT:
         if not (is_staff_kind(body.kind) and c.role.key in STAFF_EDIT):
             _deny(c, "loyiha yaratish", "Xodimlar buyrug'ini Kadrlar bo'limi, talabalar buyrug'ini Registrator ofisi tayyorlaydi", body.kind)
+        if KINDS.get(body.kind, {}).get("hr"): _bad("Ishga qabul va bo'shatish buyrug'i «Kadrlar» bo'limi (vakansiya / bo'shatish varaqasi) orqali tuziladi")
         p = body.params or {}
         o = draft_staff_leave(_con, c, p.get("staff_id"), p.get("date_from"), p.get("days"), source="qo'lda")
         return {"ok": True, "id": o["id"]}
@@ -1071,7 +1128,8 @@ def edit(oid: int, body: EditOrder, request: Request):
     if body.title is not None: upd["title"] = body.title.strip()[:300] or KINDS[o["kind"]]["title"]
     if body.basis is not None: upd["basis"] = body.basis.strip()[:500] or None
     if body.note is not None: upd["note"] = body.note.strip()[:1000] or None
-    if body.params is not None and is_staff_kind(o["kind"]):
+    if body.params is not None and is_staff_kind(o["kind"]) and KINDS[o["kind"]].get("hr"): pass   # parametrlar app/kadrlar.py jarayonidan
+    elif body.params is not None and is_staff_kind(o["kind"]):
         cur = _j(o.get("params"))
         upd["params"] = json.dumps(_staff_params(cur.get("staff_id"), body.params.get("date_from") or cur.get("date_from"),
                                                  body.params.get("days") or cur.get("days"), cur.get("absence_id")), ensure_ascii=False)

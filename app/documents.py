@@ -180,7 +180,7 @@ def lookup(con, ctx: Ctx, kind: str, q: str = "", group_id: int = 0):
         return db.rows(con, "SELECT id, assignee || ': ' || substr(text,1,70) || ' (muddat ' || due || ')' label FROM tasks WHERE status NOT IN ('bajarildi','qoralama') AND due<? ORDER BY due",
                        (clock.today().isoformat(),))
     if kind == "staff":
-        return db.rows(con, "SELECT id, full_name || ' · ' || unit || ' · ' || position label FROM staff WHERE full_name LIKE ? ORDER BY full_name LIMIT 15", (q,))
+        return db.rows(con, "SELECT id, full_name || ' · ' || unit || ' · ' || position label FROM staff WHERE full_name LIKE ? AND id NOT IN (SELECT staff_id FROM hr_files WHERE status='boshatilgan') ORDER BY full_name LIMIT 15", (q,))
     return []
 
 def _student(con, ctx, sid):

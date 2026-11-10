@@ -454,5 +454,30 @@ from . import student_portal as STP   # Talaba kabineti (/talaba): HEMIS ID + pa
 STP.init(con)
 STP.bind(con, ctx)
 app.include_router(STP.router)
+from . import xalqaro as XQ   # Xalqaro hamkorlik: shartnomalar hayotiy sikli (yuridik → rektor imzosi → muddat), mobillik tanlovi, xorijiy talabalar vizasi, delegatsiyalar
+XQ.init(con)
+XQ.bind(con, ctx)
+app.include_router(XQ.router)
+from . import moliya as MOL   # Moliya: to'lovlar reyestri (qo'lda), kunlik solishtirish, byudjet ijrosi, xarajat tasdig'i, xarid moliyalashtirish, oylik hisobotlar
+MOL.init(con)
+MOL.bind(con, ctx)
+app.include_router(MOL.router)
 
+from . import amaliyot as AML   # Amaliyot: bazalar reyestri (shartnoma, sig'im), davrlar (o'quv reja / jadval), biriktirish, yo'llanma, kundalik, hisobot, baho
+AML.init(con)
+AML.bind(con, ctx)
+app.include_router(AML.router)
+from . import ilmiy as ILM   # Ilmiy faoliyat: nashrlar (kafedra → Ilmiy bo'lim tasdig'i → reyestr), grantlar va hisobotlar, magistrlik dissertatsiyasi bosqichlari
+ILM.init(con)
+ILM.bind(con, ctx)
+app.include_router(ILM.router)
+from . import kadrlar as KDR   # Kadrlar: shaxsiy ish, ishga qabul (vakansiya → nomzod → buyruq → AT so'rovi), bo'shatish varaqasi, shartnoma muddatlari, attestatsiya, shtat jadvali
+KDR.init(con)
+KDR.bind(con, ctx)
+app.include_router(KDR.router)
+
+from . import yoshlar as YJ   # Yoshlar ishlari: hamkor yotoqxonalar (ariza → navbat → joy → to'lov → tartib), ijara monitoringi, tadbirlar (reja → tasdiq → hisobot)
+YJ.init(con)
+YJ.bind(con, ctx)
+app.include_router(YJ.router)
 app.mount("/", StaticFiles(directory=ROOT / "static", html=True), name="static")

@@ -83,7 +83,7 @@ LEAD_ORDER = ["rektorat", "prorektor_oquv", "prorektor_ilmiy", "prorektor_moliya
 #     Sirtqi bo'lim, Amaliyot bo'limi, fakultetlar va kafedralar;
 #   Ilmiy ishlar prorektori: Ilmiy tadqiqotlar bo'limi, Magistratura bo'limi;
 #   Moliya-iqtisod prorektori: Buxgalteriya, Xo'jalik va texnik bo'lim, Marketing bo'limi, Xarid bo'limi;
-#   Yoshlar masalalari birinchi prorektori: Ma'naviyat va ma'rifat bo'limi (tizimda akkaunti yo'q);
+#   Yoshlar masalalari birinchi prorektori: Ma'naviyat va ma'rifat bo'limi, Psixolog, Talabalar turar joyi (komendant);
 #   Rektorga bevosita: Imtihon bo'limi, Kadrlar bo'limi, Strategik bo'lim, Yuridik bo'lim, Sifatni ta'minlash boshqarmasi, Devonxona, Arxiv.
 #   Bu standart qiymatlar: rektor yoki IT boshlig'i «Bo'limlar» bo'limida kuratorni qo'lda o'zgartirsa (org_units.curator_manual=1),
 #   server qayta ishga tushganda ham qo'lda tayinlangan kurator saqlanadi.
@@ -92,11 +92,24 @@ LEAD_ORDER = ["rektorat", "prorektor_oquv", "prorektor_ilmiy", "prorektor_moliya
 CURATOR = {"akademik": "prorektor_oquv", "talabalar": "prorektor_oquv", "malumotlar_bazasi": "prorektor_oquv", "sirtqi": "prorektor_oquv",
            "amaliyot": "prorektor_oquv",
            "ilmiy_bolim": "prorektor_ilmiy", "magistratura": "prorektor_ilmiy", "xalqaro": "prorektor_ilmiy",
-           "buxgalteriya": "prorektor_moliya", "xojalik": "prorektor_moliya", "marketing": "prorektor_moliya", "xarid": "prorektor_moliya"}
+           "manaviyat": "prorektor_yoshlar", "buxgalteriya": "prorektor_moliya", "xojalik": "prorektor_moliya", "marketing": "prorektor_moliya", "xarid": "prorektor_moliya"}
+# Tuzilmadagi qolgan bo'linmalar (04.09.2024): bo'sh prorektor lavozimlari (Umumiy masalalar, Xalqaro aloqalar, Raqamlashtirish)
+# vaqtincha mavjud rahbarga — Karyera markazi O'quv prorektoriga (Amaliyot bo'limi bilan bog'langan), «Biznes va menejment» ITM
+# Xalqaro hamkorlik bo'limi kabi Ilmiy ishlar prorektoriga; Arxiv, Matbuot kotibi, Institut kengashi kotibi — rektorga bevosita.
+CURATOR.update({"arm": "prorektor_oquv", "karyera": "prorektor_oquv",
+                "psixolog": "prorektor_yoshlar", "komendant": "prorektor_yoshlar",
+                "bm_itm": "prorektor_ilmiy",
+                "axborot_xizmati": "prorektor_moliya", "xavfsizlik": "prorektor_moliya", "tibbiy": "prorektor_moliya"})
 def _curator_of(k): return CURATOR.get(k) or ("prorektor_oquv" if k.startswith(("fak", "kaf")) else None)
 
 # Alohida bo'limlar (o'z roli bo'lmasa ham lavozim nomidan aniqlanadi; akkaunti bo'lmasa ham qabul qiluvchi sifatida ko'rinadi)
-EXTRA_UNITS = [("sirtqi", "Sirtqi bo'lim", "Shayzakova Dilbar"), ("malumotlar_bazasi", "Ma'lumotlar bazasi bo'limi", "Ismatov Ravshan")]
+EXTRA_UNITS = [("sirtqi", "Sirtqi bo'lim", "Shayzakova Dilbar"), ("malumotlar_bazasi", "Ma'lumotlar bazasi bo'limi", "Ismatov Ravshan"),
+               # tuzilmadagi, tizimda akkaunti hali yo'q bo'linmalar — topshiriq qabul qiluvchi va kuratorlik uchun ko'rinadi
+               ("manaviyat", "Ma'naviyat va ma'rifat bo'limi", ""), ("psixolog", "Psixolog", ""), ("komendant", "Talabalar turar joyi", ""),
+               ("arm", "Axborot-resurs markazi", ""), ("karyera", "Karyera markazi", ""),
+               ("bm_itm", "«Biznes va menejment» ilmiy tadqiqot markazi", ""),
+               ("axborot_xizmati", "Axborot xizmati bo'limi", ""), ("xavfsizlik", "Xavfsizlik bo'limi", ""), ("tibbiy", "Tibbiy bo'lim", ""),
+               ("arxiv", "Arxiv", ""), ("matbuot", "Matbuot kotibi", ""), ("kengash_kotibi", "Institut kengashi kotibi", "")]
 _TITLE_UNIT = {n.lower(): k for k, n, _ in EXTRA_UNITS}
 # Bo'lim kartasi (qabul qiluvchini tanlashda ko'rsatiladi)
 UNIT_INFO = {
@@ -114,7 +127,7 @@ def derive_unit(u: dict) -> str:
     r = u.get("role")
     t = (u.get("full_name") or "").split(":")[0].strip().lower() if ":" in (u.get("full_name") or "") else ""
     for n, k in _TITLE_UNIT.items():
-        if t.startswith(n): return k
+        if t == n or t.startswith(n + " "): return k     # butun so'z: «Psixolog» ≠ «Psixologiya va pedagogika kafedrasi»
     if r in ("kafedra", "oqituvchi") and u.get("department_id"): return f"kaf{int(u['department_id'])}"
     if r == "tyutor" and u.get("faculty_id"): return f"fak{int(u['faculty_id'])}"
     return ROLE_UNIT.get(r, r)
@@ -2571,7 +2584,7 @@ def seed(con, force=False):
         "Shablonlar", faks + ["buxgalteriya"], "Fakultet tyutorlari to'ldiradi", 75)
     put("ishhaqi", "buxgalteriya", "Ish_haqi_fondi_oktabr_jamlanma.xlsx",
         _xlsx("Jamlanma", ["Bo'lim", "Xodimlar", "Ish haqi fondi (so'm)"],
-              [[r["unit"], r["n"], r["fund"]] for r in db.rows(con, "SELECT unit, COUNT(*) n, SUM(salary) fund FROM staff GROUP BY unit ORDER BY fund DESC LIMIT 12")]),
+              [[r["unit"], r["n"], r["fund"]] for r in db.rows(con, "SELECT unit, COUNT(*) n, SUM(salary) fund FROM staff WHERE id NOT IN (SELECT staff_id FROM hr_files WHERE status='boshatilgan') GROUP BY unit ORDER BY fund DESC LIMIT 12")]),
         "Moliyaviy", [], "Ichki hujjat — faqat Buxgalteriya va rahbariyat", 100)
 
     # ---------- yozishmalar ----------

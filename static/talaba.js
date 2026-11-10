@@ -577,5 +577,15 @@
     } catch (e) { toast(e.message, true); }
   }
 
+  /* Kengaytma sahifalar (boshqa modullar, masalan /amaliyot_talaba.js — talaba.js dan keyin yuklanadi):
+     TK.addPage({k, t, s, i, path, f: async (m) => …}) — «Profil»dan oldin qo'shiladi; yordamchilar: api, esc, toast, dmy, head. */
+  window.TK = { api, esc, toast, dmy, head,
+    addPage(p) {
+      if (PAGES.some((x) => x.k === p.k)) return;
+      if (p.path) P[p.i = p.i || p.k] = p.path;
+      PAGES.splice(PAGES.length - 1, 0, p);
+      if (ME && !ME.must_change && !STAFF) { renderShell(); route(); }
+    } };
+
   boot();
 })();

@@ -609,7 +609,7 @@ def api_staff(request: Request, q: str = ""):
     c = C(request); _need_full(c, "xodim qidiruvi")
     q = (q or "").strip()[:60]
     if len(q) < 2: return []
-    rows = db.rows(_con, "SELECT id, full_name, unit, position FROM staff WHERE full_name LIKE ? OR unit LIKE ? ORDER BY full_name LIMIT 20", (f"%{q}%", f"%{q}%"))
+    rows = db.rows(_con, "SELECT id, full_name, unit, position FROM staff WHERE (full_name LIKE ? OR unit LIKE ?) AND id NOT IN (SELECT staff_id FROM hr_files WHERE status='boshatilgan') ORDER BY full_name LIMIT 20", (f"%{q}%", f"%{q}%"))
     dn = _dept_names(_con); out = []
     for r in rows:
         t = staff_teacher(_con, r)

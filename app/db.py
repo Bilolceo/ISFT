@@ -62,6 +62,7 @@ def connect() -> ThreadCon:
 
 def init(con: sqlite3.Connection) -> None:
     con.executescript(SCHEMA)
+    from . import kadrlar as _K; con.executescript(_K.SCHEMA)   # hr_files — boshqa modullar bo'shatilgan xodimlarni chiqarib tashlaydi (seed ham)
     con.commit()
 
 def rows(con, sql, args=()):

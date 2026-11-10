@@ -37,6 +37,8 @@ LABELS = {KPI: "Umumiy KPI", ACADEMIC: "O'zlashtirish va davomat", STUDENTS: "Ta
           FACILITIES: "Xo'jalik nosozliklari", OPS: "Talabalar markazi", REQUESTS: "Murojaatlar va hodisalar", SPACES: "Auditoriyalar bandligi",
           RATING: "O'zlashtirish reytingi", CHANCERY: "Devonxona: buyruqlar reyestri va chiquvchi yozishmalar", PROCUREMENT: "Xarid so'rovlari",
           FLOWS: "Talaba harakati: sessiya, apellyatsiya, ko'chirish, ISFT granti, bitiruv"}
+PRACTICE = "practice"            # talabalar amaliyoti: bazalar, davrlar, biriktirish, hisobot va baho (app/amaliyot.py) — kirish moduldagi jadval bo'yicha
+LABELS[PRACTICE] = "Talabalar amaliyoti: bazalar, biriktirish, hisobot va baho"
 
 @dataclass(frozen=True)
 class Role:
@@ -104,6 +106,9 @@ ROLES = {r.key: r for r in [
     Role("devonxona", "Devonxona", 3, R(TASKS, CHANCERY), deny_note="Talabalar bazasi, moliya va kadrlar ma'lumoti · buyruqlar — faqat reyestr (o'qish va ro'yxatga olish)"),
     Role("marketing", "Marketing bo'limi", 3, R(ADMISSIONS, TASKS), deny_note="Talabalar shaxsiy ma'lumoti, moliya va kadrlar tafsiloti"),
     Role("xarid", "Xarid bo'limi", 3, R(TASKS, PROCUREMENT), deny_note="Talabalar va kadrlar ma'lumoti · nosozliklar — faqat xarid so'rovlari"),
+    # Yoshlar ishlari (app/yoshlar.py): Ma'naviyat va ma'rifat bo'limi — turar joy va tadbirlar; komendant — faqat yotoqxona (joylashtirish, to'lov, tartib)
+    Role("manaviyat", "Ma'naviyat va ma'rifat bo'limi", 3, R(YOUTH, TASKS), deny_note="Talaba baholari, moliya va kadrlar ma'lumoti · talabalar — faqat turar joy va tadbirlar doirasida"),
+    Role("komendant", "Talabalar turar joyi komendanti", 3, R(YOUTH, TASKS), deny_note="Talaba baholari, moliya va kadrlar ma'lumoti · faqat yotoqxona: joylashtirish, to'lov, tartib qaydlari"),
     Role("tyutor", "Tyutor", 4, R(OPS, ACADEMIC, STUDENTS), scope="fakultet", deny_note="Boshqa fakultet, moliya va kadrlar ma'lumoti"),
     Role("kafedra", "Kafedra mudiri", 4, R(ACADEMIC, STUDENTS, SCIENCE, TASKS, OPS, REPORTS), scope="kafedra",
          deny_note="Boshqa kafedra, moliya va kadrlar ma'lumoti · Talabalar markazi — o'z kafedrasi, o'quv holatlari (o'qish)"),

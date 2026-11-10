@@ -241,6 +241,7 @@
         <p class="xt-pf-note" id="xtPfTgHelp" hidden>ISFT Core botini oching va bitta xabarda ulash kodingiz hamda parolingizni yuboring: <code>${esc(p.telegram.code || "KOD")} parol</code>. Parol bot tomonidan tekshiriladi va saqlanmaydi.</p>
       </section>`;
     body.querySelector("[data-a=pw]")?.addEventListener("click", () => openPassword());
+    if (typeof kadrlarProfile === "function") kadrlarProfile(body);   /* kadrlar.js: o'z shaxsiy ishi (o'qish uchun) */
     body.querySelector("#xtPfTg")?.addEventListener("click", e => { body.querySelector("#xtPfTgHelp").hidden = false; e.currentTarget.remove(); });
     body.querySelector("#xtPfMore")?.addEventListener("click", e => { body.querySelector(".xt-pf-list").innerHTML = sess.map(sessRow).join(""); e.currentTarget.remove(); });
     const cb = body.querySelector("#xtPfClose");

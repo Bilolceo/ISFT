@@ -38,7 +38,7 @@ TOOLS = {
     "science": (S.science_summary, "ilmiy maqolalar, Scopus, grantlar, ilmiy daraja"),
     "international": (S.international_summary, "xalqaro hamkorlar va shartnomalar"),
     "admissions": (S.admissions_summary, "qabul, abituriyentlar"),
-    "youth": (S.youth_summary, "tadbirlar, anonim murojaatlar (institutda yotoqxona yo'q)"),
+    "youth": (S.youth_summary, "tadbirlar, anonim murojaatlar, hamkor turar joylar bandligi"),
     "masters": (S.masters_summary, "magistratura, dissertatsiyalar"),
     "tasks": (S.tasks_list, "majlis topshiriqlari va ularning muddati"),
     "cameras": (lambda con, ctx, quiet=False: __import__("app.camsec", fromlist=["agent_tool"]).agent_tool(con, ctx, quiet),
@@ -269,7 +269,7 @@ def fallback_answer(data: dict, denied: list[str]) -> str:
         elif k == "admissions":
             lines.append(f"• Qabul: {v['total']} ariza. " + ", ".join(f"{f['status']}: {f['n']}" for f in v["funnel"]) + ".")
         elif k == "youth":
-            lines.append((f"• Yotoqxona: " + ", ".join(f"{d['building']} {d['pct']}%" for d in v["dormitory"]) if v["dormitory"] else "• Institutda yotoqxona yo'q") + f". Hal qilinmagan murojaatlar: {v['appeals_open']}.")
+            lines.append((f"• Yotoqxona: " + ", ".join(f"{d['building']} {d['pct']}%" for d in v["dormitory"]) if v["dormitory"] else "• Hamkor turar joylar kiritilmagan") + f". Hal qilinmagan murojaatlar: {v['appeals_open']}.")
         elif k == "masters":
             lines.append(f"• Magistrantlar: {v['total']}. " + ", ".join(f"{s['stage']}: {s['n']}" for s in v["stages"]) + ".")
         elif k == "tasks":

@@ -240,7 +240,7 @@ def _search_people(c: Ctx, q: str) -> list[dict]:
             out.append({"id": f"t{t['id']}", "title": t["full_name"], "sub": " · ".join(x for x in [t["position"], t["degree"] if t["degree"] not in (None, "", "—") else "", t["dep"] and t["dep"] + " kafedrasi"] if x),
                         "icon": "cap", "link": {"view": "portal", "dataset": "oqituvchilar", "q": t["full_name"]}})
     if c.can(rbac.HR) and len(out) < LIM:      # kadrlar ro'yxati — faqat Kadrlar bo'limi (maosh va pasport ko'rsatilmaydi)
-        for s in db.rows(_con, "SELECT id, full_name, unit, position FROM staff WHERE full_name LIKE ? OR position LIKE ? ORDER BY full_name LIMIT ?",
+        for s in db.rows(_con, "SELECT id, full_name, unit, position FROM staff WHERE (full_name LIKE ? OR position LIKE ?) AND id NOT IN (SELECT staff_id FROM hr_files WHERE status='boshatilgan') ORDER BY full_name LIMIT ?",
                          (like, f"%{q}%", LIM - len(out))):
             out.append({"id": f"s{s['id']}", "title": s["full_name"], "sub": f"{s['position']} · {s['unit']}", "icon": "user",
                         "link": {"view": "panel", "tab": "ijro"}})
