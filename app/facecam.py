@@ -21,6 +21,7 @@ from collections import Counter, OrderedDict, defaultdict
 from pathlib import Path
 from fastapi import APIRouter, Request, HTTPException, Response
 from pydantic import BaseModel, Field
+from . import clock
 from . import db, rbac, seed_facecam as SF
 from .rbac import Ctx, AccessDenied
 
@@ -120,7 +121,7 @@ def purge(con):
             try:
                 if now - f.stat().st_mtime > KEEP_DAYS * 86400: f.unlink()
             except OSError: pass
-    lim = (dt.datetime.now() - dt.timedelta(days=EVENTS_DAYS)).isoformat(timespec="seconds")
+    lim = (clock.now() - dt.timedelta(days=EVENTS_DAYS)).isoformat(timespec="seconds")
     try:
         con.execute("DELETE FROM face_events WHERE ts<?", (lim,)); con.execute("DELETE FROM face_frames WHERE ts<?", (lim,)); con.commit()
     except Exception: pass

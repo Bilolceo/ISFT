@@ -87,3 +87,4 @@ for (mid,) in DB.execute("select id from meetings where title='Test' and transcr
     DB.execute(f"delete from tasks where id in ({q})"); DB.execute("delete from meetings where id=?",(mid,))
 DB.commit()
 print("\nNATIJA:", "HAMMASI O'TDI" if not fails else f"{len(fails)} ta xato: {fails}")
+sys.exit(1 if fails else 0)

@@ -9,6 +9,7 @@ Tuzilma: ISFT rasmiy tashkiliy tuzilmasi (2024, 04.09.2024 tasdiqlangan) — fak
   * Kommunal xarajatlar rejadan oshgan
 """
 import random, datetime as dt
+from . import clock
 from . import db, academic_rules as AR
 from .academic_rules import OTHER_UNIT_HEADS
 
@@ -376,7 +377,7 @@ def run():
     global OLD_GRADE_ROWS
     OLD_GRADE_ROWS = 0
     grade_rows, attempt_rows, leave_rows = [], [], []
-    real_today = dt.date.today()
+    real_today = clock.today()
     for gid, did, fi, course, d, form, cnt, level in group_rows:
         key = skey(d, level)
         if level == "magistr": price = tb["magistr"] * bcv
@@ -611,7 +612,7 @@ def run():
     seed_extra.run(con, R, TODAY, teachers, old_rows=OLD_GRADE_ROWS)
     con.commit()
     from . import dateshift   # hikoya 2026-11-04 ga nisbatan yozilgan — hammasini bugungi sanaga suramiz
-    print("Sanalar surildi:", dateshift.shift_all(con, (dt.date.today() - TODAY).days), "kun")
+    print("Sanalar surildi:", dateshift.shift_all(con, (clock.today() - TODAY).days), "kun")
     from . import seed_service
     seed_service.run(con, R)
     from . import seed_occupancy

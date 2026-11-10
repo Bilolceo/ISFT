@@ -16,6 +16,7 @@ import datetime as dt, os, re, sys, threading, time
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
+from . import clock
 from . import db, rbac, sessions as SS
 from .rbac import AccessDenied, Ctx
 
@@ -46,11 +47,11 @@ def C(request: Request) -> Ctx:
         init(_con)
     return _ctx(request)
 
-def _now(): return dt.datetime.now().replace(microsecond=0)
+def _now(): return clock.now().replace(microsecond=0)
 def _iso(t): return t.isoformat(timespec="seconds")
 def _today() -> dt.date:
     from . import services as S
-    return S.TODAY
+    return clock.today()
 def _ts(v) -> str:
     """Har xil sana ko'rinishini solishtirsa bo'ladigan ISO satrga keltiradi."""
     v = str(v or "").replace(" ", "T")[:19]
@@ -143,7 +144,7 @@ def my_profile(request: Request):
     curated = [r["name"] for r in db.rows(_con, "SELECT name FROM org_units WHERE curator=? ORDER BY grp, ord", (c.role.key,))] if c.role.key.startswith("prorektor_") else []
     cur_h = SS._h(request.cookies.get("sid") or "")
     try:
-        sess = [{"created": _iso(dt.datetime.fromtimestamp(s["created"])), "ip": s["ip"] or "—", "device": SS.device(s.get("ua") or ""),
+        sess = [{"created": _iso(clock.from_ts(s["created"])), "ip": s["ip"] or "—", "device": SS.device(s.get("ua") or ""),
                  "current": s["token"] == cur_h}
                 for s in db.rows(_con, "SELECT * FROM sessions WHERE user_id=? AND expires>? ORDER BY (token=?) DESC, created DESC", (uid, time.time(), cur_h))]
     except Exception:
@@ -156,7 +157,7 @@ def my_profile(request: Request):
         return {"ts": r["ts"], "ok": bool(r["allowed"]), "ip": ip.group(1) if ip else "", "device": dev, "reason": reason, "channel": r["channel"]}
     logins = [_login(r) for r in db.rows(_con, "SELECT ts, allowed, detail, channel FROM audit_log WHERE user_id=? AND action='tizimga kirish' ORDER BY id DESC LIMIT 8", (uid,))]
     fails30 = db.one(_con, "SELECT COUNT(*) n FROM audit_log WHERE user_id=? AND action='tizimga kirish' AND allowed=0 AND ts>=?",
-                     (uid, (dt.datetime.now() - dt.timedelta(days=30)).isoformat(timespec="seconds")))["n"]
+                     (uid, (clock.now() - dt.timedelta(days=30)).isoformat(timespec="seconds")))["n"]
     pw = db.one(_con, "SELECT ts FROM audit_log WHERE user_id=? AND action='parol o''zgartirildi' ORDER BY id DESC LIMIT 1", (uid,))
     try: scope = c.scope_label(_con)
     except Exception: scope = ""

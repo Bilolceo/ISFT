@@ -6,9 +6,10 @@ import datetime as dt, json, secrets
 from pathlib import Path
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from . import clock
 from . import db, brand as B
 from .rbac import Ctx, AccessDenied, audit, ROLES
-from .services import TODAY, mln
+from .services import mln
 from . import academic_rules as AR
 
 OUT = db.DATA_DIR / "docs"
@@ -120,8 +121,14 @@ LABELS = {"target": "Talaba / guruh", "purpose": "Qayerga taqdim etish uchun", "
           "task": "Topshiriq", "recipient": "Kimga", "subject_line": "Mavzu", "points": "Asosiy fikrlar", "use_ai": "Matnni ISFT Core tuzsin (AI)",
           "with_salary": "O'rtacha oylikni ko'rsatish", "guest": "Mehmon F.I.Sh.", "guest_org": "Mehmon tashkiloti", "country": "Davlat",
           "purpose_en": "Tashrif maqsadi (inglizcha)", "basis": "Asos", "retake": "Otrabotka", "subject_name": "Fan (ixtiyoriy; bo'sh — butun sessiya)", "note": "Izoh (ixtiyoriy)", "passport": "Pasport raqami (ixtiyoriy)", "expenses": "Xarajatlarni kim qoplaydi"}
-DEFAULTS = {"deadline": (TODAY + dt.timedelta(days=21)).isoformat(), "start": (TODAY + dt.timedelta(days=14)).isoformat(),
-            "end": (TODAY + dt.timedelta(days=42)).isoformat(), "from_date": TODAY.isoformat(), "days": "", "lang": "uz"}
+class _Defaults(dict):
+    """Forma standart qiymatlari — sanalar har murojaatda bugungi (Toshkent) sanadan hisoblanadi, import paytida qotmaydi."""
+    _DAYS = {"deadline": 21, "start": 14, "end": 42, "from_date": 0}
+    def __getitem__(self, k):
+        return (clock.today() + dt.timedelta(days=self._DAYS[k])).isoformat() if k in self._DAYS else dict.__getitem__(self, k)
+    def get(self, k, default=None):
+        return self[k] if k in self._DAYS or k in self.keys() else default
+DEFAULTS = _Defaults({"days": "", "lang": "uz"})
 
 def catalog_for(ctx: Ctx):
     out = []
@@ -171,7 +178,7 @@ def lookup(con, ctx: Ctx, kind: str, q: str = "", group_id: int = 0):
         return db.rows(con, "SELECT id, title || ' · ' || date label FROM meetings WHERE COALESCE(status,'')!='qoralama' ORDER BY date DESC")
     if kind == "task":
         return db.rows(con, "SELECT id, assignee || ': ' || substr(text,1,70) || ' (muddat ' || due || ')' label FROM tasks WHERE status NOT IN ('bajarildi','qoralama') AND due<? ORDER BY due",
-                       (TODAY.isoformat(),))
+                       (clock.today().isoformat(),))
     if kind == "staff":
         return db.rows(con, "SELECT id, full_name || ' · ' || unit || ' · ' || position label FROM staff WHERE full_name LIKE ? ORDER BY full_name LIMIT 15", (q,))
     return []
@@ -218,7 +225,7 @@ class Issuer:
         code = secrets.token_hex(4).upper()
         self.items.append({"reg_no": reg, "code": code, "holder": holder, "title": title or self.tpl["title"]})
         B.letterhead(self.doc, lang)
-        today = dt.date.today()  # hujjat haqiqiy berilgan sana bilan chiqadi
+        today = clock.today()  # hujjat haqiqiy berilgan sana bilan chiqadi
         B.regline(self.doc, reg, d_en(today) if lang == "en" else d_uz(today), lang)
         return reg, code
     def _bump(self, reg):
@@ -234,7 +241,7 @@ class Issuer:
         fname = f"{first}{'_paket' + str(len(self.items)) if len(self.items) > 1 else ''}.docx"
         self.doc.save(OUT / fname)
         status = "loyiha" if self.tpl.get("sign") else "berilgan"
-        now = dt.datetime.now().isoformat(timespec="seconds")
+        now = clock.now().isoformat(timespec="seconds")
         for it in self.items:
             self.con.execute("""INSERT INTO documents(reg_no,kind,title,holder,created_by,creator_role,created_at,status,verify_code,file,params)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?)""", (it["reg_no"], self.tpl["key"], it["title"], it["holder"], self.ctx.user["id"], self.ctx.role.title,
@@ -560,7 +567,7 @@ def g_debtors_list(I, p):
     import re as _re
     sem_lbl = lambda txt: _re.sub(r", (-?\d+)\)", lambda m: f", {AR.SEMESTER_SHORT.get(int(m[1]), m[1])})", txt or "")
     I.page(I.ctx.scope_label(I.con))
-    B.title(I.doc, "AKADEMIK QARZDORLAR RO'YXATI", f"yakunlangan semestrlar bo'yicha, {d_uz(dt.date.today())} holatiga · {I.ctx.scope_label(I.con)}")
+    B.title(I.doc, "AKADEMIK QARZDORLAR RO'YXATI", f"yakunlangan semestrlar bo'yicha, {d_uz(clock.today())} holatiga · {I.ctx.scope_label(I.con)}")
     B.table(I.doc, ["№", "Guruh", "Talaba", "HEMIS ID", "Qarzdor fanlar (ball, semestr)", "Soni"],
             [(i, r["grp"], r["full_name"], r["hemis_id"], sem_lbl(r["subj"]), r["n"]) for i, r in enumerate(rows, 1)], widths=[0.8, 2.2, 4.4, 2.6, 6.2, 1], size=8.5)
     B.para(I.doc, f"Jami {len(rows)} nafar talaba, {sum(r['n'] for r in rows)} ta fan bo'yicha qarzdor ({AR.DEBTOR_DEF}). "
@@ -624,10 +631,10 @@ def g_minutes(I, p):
 def g_exec_notice(I, p):
     tid = str(p.get("task") or "")
     q = "SELECT t.*, m.title meeting, m.date mdate FROM tasks t JOIN meetings m ON m.id=t.meeting_id WHERE t.status NOT IN ('bajarildi','qoralama') AND t.due<?"
-    ts = db.rows(I.con, q + ("" if tid == "*" else " AND t.id=?"), (TODAY.isoformat(),) if tid == "*" else (TODAY.isoformat(), int(tid or 0)))
+    ts = db.rows(I.con, q + ("" if tid == "*" else " AND t.id=?"), (clock.today().isoformat(),) if tid == "*" else (clock.today().isoformat(), int(tid or 0)))
     if not ts: raise ValueError("Muddati o'tgan topshiriq topilmadi")
     for t in ts:
-        late = (TODAY - dt.date.fromisoformat(t["due"])).days
+        late = (clock.today() - dt.date.fromisoformat(t["due"])).days
         I.page(t["assignee"], title=f"Ijro nazorati: {t['assignee']}")
         p_ = I.doc.add_paragraph(); p_.alignment = WD_ALIGN_PARAGRAPH.RIGHT; B.run(p_, f"{t['assignee']}ga", 12, True)
         B.title(I.doc, "Topshiriq ijrosi to'g'risida")
@@ -725,7 +732,7 @@ def set_status(con, ctx: Ctx, doc_id: int, action: str):
     if action == "sign":
         if ctx.role.key != "rektor": raise AccessDenied("⛔ Imzo talab qiladigan hujjatlarni (buyruq, taqdimnoma) faqat rektor imzolaydi.")
         if d["status"] != "loyiha": raise ValueError("Faqat loyiha holatidagi hujjat imzolanadi")
-        con.execute("UPDATE documents SET status='imzolangan', signed_at=? WHERE id=?", (dt.datetime.now().isoformat(timespec="seconds"), doc_id))
+        con.execute("UPDATE documents SET status='imzolangan', signed_at=? WHERE id=?", (clock.now().isoformat(timespec="seconds"), doc_id))
     elif action == "cancel":
         if ctx.role.key != "rektor" and d["created_by"] != ctx.user["id"]: raise AccessDenied("⛔ Hujjatni faqat muallif yoki rektor bekor qiladi.")
         if d["status"] == "imzolangan" and ctx.role.key != "rektor": raise AccessDenied("⛔ Rektor imzolagan buyruqni faqat rektor bekor qiladi.")

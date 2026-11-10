@@ -23,6 +23,7 @@ from pathlib import Path
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from . import clock
 from . import db, rbac, academic_rules as AR
 from .rbac import Ctx, AccessDenied
 
@@ -91,8 +92,8 @@ DEMO_USERS = [  # sun'iy ism-shariflar; parol rbac.DEMO_PASSWORD
     ("Tyutor (Ijtimoiy-gumanitar fanlar va tillar fakulteti): Qodirova Laylo Erkin qizi", "tyutor", 3),
 ]
 
-def _today(): return dt.date.today()
-def _now(): return dt.datetime.now().replace(microsecond=0)
+def _today(): return clock.today()
+def _now(): return clock.now().replace(microsecond=0)
 def _iso(t): return t.isoformat(timespec="seconds") if isinstance(t, dt.datetime) else t.isoformat()
 def _short(name): return name.split(":", 1)[1].strip() if name and ":" in name else name
 
@@ -985,7 +986,7 @@ def summary(c: Ctx):
             # serious_students — panelda «O'qishda xavf» bilan bir xil son (academic_rules.RISK_DEF); holatlar (by_rule) — boshqa birlik
             "serious_students": M["at_risk"]["n"] if M else None, "metrics": M, "rule_scope": rule_scope(c), "mine": mine,
             "can_plan": c.role.key == SUPERVISOR,
-            "last_run": dt.datetime.fromtimestamp(last[0]).isoformat(timespec="seconds") if last else None,
+            "last_run": clock.from_ts(last[0]).isoformat(timespec="seconds") if last else None,
             "calls": calls_summary(_con, w)}
 
 def risk_metrics(con, w="1=1") -> dict:

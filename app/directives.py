@@ -19,6 +19,7 @@ bo'limga) berilmaydi.
 import datetime as dt, json
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel, Field
+from . import clock
 from . import db, rbac, decisions as DEC
 from .rbac import Ctx, AccessDenied, TASKS
 
@@ -46,7 +47,7 @@ SUBORDINATE = {
 STAFF_ROLE = "registrator_xodim"
 DEMO_STAFF = ("Registrator ofisi xodimi: Norov Aziz Bahodir o'g'li", STAFF_ROLE, "talabalar", "REGXODIM")
 
-def _now(): return dt.datetime.now().replace(microsecond=0)
+def _now(): return clock.now().replace(microsecond=0)
 def _iso(t): return t.isoformat(timespec="seconds")
 _short = DEC._short
 
@@ -103,7 +104,7 @@ def seed_demo(con):
          "reg": head("talabalar"), "norov": _uid(con, "SELECT id FROM users WHERE role=? ORDER BY id", (STAFF_ROLE,)),
          "akad": head("akademik"), "kaf3": head("kaf3"), "kaf6": head("kaf6"), "kaf7": head("kaf7")}
     if not all(U.values()): return
-    now, today = _now(), dt.date.today()
+    now, today = _now(), clock.today()
     at = lambda days, h, m=0: _iso(dt.datetime.combine(today + dt.timedelta(days=days), dt.time(h, m)))
     names = {r["id"]: r["full_name"] for r in db.rows(con, "SELECT id, full_name FROM users")}
 
@@ -353,7 +354,7 @@ def _due_dt(due):
 
 def _overdue(t) -> bool:
     d = _due_dt(t.get("due_at") or t.get("due"))
-    return bool(d and t["status"] != "bajarildi" and d < dt.datetime.now())
+    return bool(d and t["status"] != "bajarildi" and d < clock.now())
 
 def _uinfo(uid):
     if not uid: return None
@@ -406,7 +407,7 @@ def task_rows(c: Ctx) -> list[dict]:
     if _con is None: return []   # server starti: modul hali ulanmagan (agent_hub skanerlari DIR.init dan oldin ishlaydi)
     DEC.ensure_migrated()     # /api/meetings orqali yangi kiritilgan bo'limsiz topshiriqlar ham yagona oqimga o'tadi
     w = W(c)
-    now, out = dt.datetime.now(), []
+    now, out = clock.now(), []
     for t in w.by.values():
         if not w.view(t): continue
         r = dict(t)
@@ -414,7 +415,7 @@ def task_rows(c: Ctx) -> list[dict]:
                   "decision": False, "directive": True, "mine": w.mine(t)})
         d = _due_dt(t.get("due_at") or t.get("due"))
         r["overdue"] = bool(d and t["status"] != "bajarildi" and d < now)
-        r["days"] = (d.date() - dt.date.today()).days if d else None
+        r["days"] = (d.date() - clock.today()).days if d else None
         out.append(r)
     return out
 
@@ -434,7 +435,7 @@ def notifications(c: Ctx) -> list[dict]:
     (Muddat eslatmalari — services.tasks_list orqali umumiy «topshiriq» bildirishnomalarida.) TASKS ruxsati yo'q ijrochi
     (masalan, Call-markaz) uchun muddat eslatmalari ham shu yerda."""
     w = W(c)
-    items, today = [], dt.date.today()
+    items, today = [], clock.today()
     recent = _iso(_now() - dt.timedelta(days=3))
     for t in w.by.values():
         sub = " · ".join(x for x in [_issuer_label(t), DEC.unit_name(t.get("unit")) or "",
@@ -560,7 +561,7 @@ def api_create(body: DirIn, request: Request):
     if body.priority not in PRIOS: raise HTTPException(400, "Noto'g'ri ustuvorlik")
     unit, person = authorize(c, action, body.unit, body.user_id)
     due = _valid_due(body.due_at)
-    if due[:10] < dt.date.today().isoformat(): raise HTTPException(400, "Muddat o'tib ketgan sana bo'lmasin")
+    if due[:10] < clock.today().isoformat(): raise HTTPException(400, "Muddat o'tib ketgan sana bo'lmasin")
     T = targets(c)
     my = DEC.unit_of(c) or ("rektorat" if c.role.key in ("rektor", "kotib") else None)
     files = _check_files(c, body.attachments, [unit, my])
@@ -641,7 +642,7 @@ def api_delegate(tid: int, body: DelegateIn, request: Request):
         unit, person = authorize(c, action, it.unit, it.user_id)
         due = _valid_due(it.due_at, required=False) or pdue
         if pdue and due and due > pdue: raise HTTPException(400, f"Quyi topshiriq muddati asosiy topshiriq muddatidan ({pdue.replace('T', ' ')}) kech bo'lmasin")
-        if due and due[:10] < dt.date.today().isoformat(): raise HTTPException(400, "Muddat o'tib ketgan sana bo'lmasin")
+        if due and due[:10] < clock.today().isoformat(): raise HTTPException(400, "Muddat o'tib ketgan sana bo'lmasin")
         dup = [k for k in w.kids.get(tid, []) if k["status"] != "bajarildi" and k["unit"] == unit and k.get("assignee_user") == person]
         if dup or any(p[0] == unit and p[1] == person for p in plan):
             raise HTTPException(409, f"«{_short(DEC._uname(person)) if person else DEC.unit_name(unit)}» ga bu topshiriq allaqachon berilgan")

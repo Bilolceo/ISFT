@@ -21,6 +21,7 @@ Endpointlar (Hikvision ISAPI):
 Testlash: tools/fake_hikvision.py emulyatori va tests/test_hikvision.py.
 """
 import datetime as dt, re, xml.etree.ElementTree as ET
+from . import clock
 from collections import defaultdict
 import httpx
 
@@ -295,7 +296,7 @@ class HikClient:
         try:
             t = await self.device_time()
             if t:
-                now = dt.datetime.now(t.tzinfo) if t.tzinfo else dt.datetime.now()
+                now = dt.datetime.now(t.tzinfo) if t.tzinfo else clock.now()
                 skew = int((t - now).total_seconds())
         except NotSupported:
             pass
@@ -303,7 +304,7 @@ class HikClient:
                 "counting": await self.supports(f"/ISAPI/System/Video/inputs/channels/{channel}/counting/capabilities", "Odam sanash"),
                 "region_counting": (await self.supports(occ_path.format(ch=channel), "Hudud bo'yicha sanash")) if occ_path else None,
                 "events": await self.supports("/ISAPI/Event/triggers", "Voqealar"),
-                "checked_at": dt.datetime.now().isoformat(timespec="seconds")}
+                "checked_at": clock.now().isoformat(timespec="seconds")}
         caps["warnings"] = warnings(caps)
         return caps
 
@@ -315,7 +316,7 @@ class HikClient:
             for k in ("personCount", "regionPeopleNum", "currentPeopleNum", "peopleNum"):
                 if v.get(k): return max(0, v[k][-1])
             raise IsapiError("Javobda odamlar soni topilmadi")
-        today = dt.date.today().isoformat()
+        today = clock.today().isoformat()
         body = ('<?xml version="1.0" encoding="UTF-8"?><CountingStatisticsDescription version="2.0" xmlns="http://www.hikvision.com/ver20/XMLSchema">'
                 f'<reportType>daily</reportType><timeSpanList><timeSpan><startTime>{today}T00:00:00</startTime>'
                 f'<endTime>{today}T23:59:59</endTime></timeSpan></timeSpanList></CountingStatisticsDescription>')

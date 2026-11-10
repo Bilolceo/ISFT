@@ -13,6 +13,7 @@ Tamoyillar:
     hech narsani o'chirmaydi. Muammo topilsa — chiqish kodi 1.
 """
 import argparse, base64, datetime as dt, hashlib, json, os, re, sqlite3, sys, tempfile, zipfile
+from . import clock
 from pathlib import Path
 
 TABLES = ["portal_threads", "portal_recipients", "portal_msgs", "portal_reads", "portal_user_reads", "portal_attach", "portal_files",
@@ -73,7 +74,7 @@ def backup(out: str) -> int:
                         missing.append(r["stored"]); continue
                     z.write(p, f"files/{r['stored']}")
                     nfiles += 1; nbytes += p.stat().st_size
-            manifest = {"format": FORMAT, "version": 1, "created_at": dt.datetime.now().isoformat(timespec="seconds"),
+            manifest = {"format": FORMAT, "version": 1, "created_at": clock.now().isoformat(timespec="seconds"),
                         "files": nfiles, "bytes": nbytes, "missing": missing, "tables": counts,
                         "sqlite": sqlite3.sqlite_version, "python": sys.version.split()[0]}
             z.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=1))

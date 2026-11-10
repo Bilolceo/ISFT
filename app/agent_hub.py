@@ -10,6 +10,7 @@ Tamoyillar:
 import datetime as dt, hashlib, json
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel
+from . import clock
 from . import db, rbac, services as S
 from .rbac import AccessDenied, Ctx, ROLES
 
@@ -55,8 +56,8 @@ APPROVER = {"moliya": "prorektor_moliya", "talaba": "prorektor_oquv", "ijro": "k
 VIS_RES = {"brief": rbac.KPI, "ijro": rbac.TASKS, "talaba": rbac.OPS, "moliya": rbac.FINANCE, "hujjat": rbac.INTL, "talaba247": rbac.KPI}
 EFFECTS = {"task", "remind", "none"}
 
-def _now(): return dt.datetime.now().replace(microsecond=0).isoformat(timespec="seconds")
-def _today(): return S.TODAY.isoformat()
+def _now(): return clock.now().replace(microsecond=0).isoformat(timespec="seconds")
+def _today(): return clock.today().isoformat()
 def _dmy(iso): return f"{iso[8:10]}.{iso[5:7]}.{iso[:4]}" if iso and len(iso) >= 10 else (iso or "")
 def _short(name): return (name or "").split(":", 1)[-1].strip()
 def _cut(t, n=70):
@@ -219,7 +220,7 @@ def scan(con) -> int:
                     "«Jiddiy» darajadagi akademik qarzdorlik holatlari bo'yicha ogohlantirish xatlari va buyruq loyihalarini tayyorlash taklif etiladi.",
                     payload={"effect": "task", "assignee": "Registrator ofisi", "role": "talabalar",
                              "text": f"{jid} ta «Jiddiy» darajadagi akademik holat bo'yicha talabalarga ogohlantirish xatlarini yuborish va zarur buyruq loyihalarini tayyorlash",
-                             "due": (S.TODAY + dt.timedelta(days=5)).isoformat()})
+                             "due": (clock.today() + dt.timedelta(days=5)).isoformat()})
     except Exception as e:
         print("talaba scan:", e)
 
@@ -242,7 +243,7 @@ def scan(con) -> int:
                 f"{o['month']} oyida reja {S.mln(o['planned'])}, amalda {S.mln(o['actual'])}; ketma-ket {n} oy oshish. Sabablar tahlili va tejash choralari taklif etiladi.",
                 payload={"effect": "task", "assignee": "Buxgalteriya bo'limi", "role": "buxgalteriya",
                          "text": f"«{o['category']}» xarajatlari rejadan {o['over_pct']}% oshishi sabablarini tahlil qilish va tejash choralari bo'yicha taklif kiritish",
-                         "due": (S.TODAY + dt.timedelta(days=7)).isoformat()})
+                         "due": (clock.today() + dt.timedelta(days=7)).isoformat()})
             if len(seen) >= 2: break
     except Exception as e:
         print("moliya scan:", e)
@@ -260,7 +261,7 @@ def scan(con) -> int:
                 f"{p['country']} · amal qilish muddati {_dmy(p['expires'])}. Uzaytirish bo'yicha xat va kelishuv loyihasini tayyorlash taklif etiladi.",
                 payload={"effect": "task", "assignee": "Xalqaro hamkorlik bo'limi", "role": "xalqaro",
                          "text": f"{p['name']} ({p['country']}) bilan hamkorlik shartnomasini uzaytirish: hamkorga xat va kelishuv loyihasini tayyorlash",
-                         "due": (S.TODAY + dt.timedelta(days=max(3, min(14, p['days_left'] - 7)))).isoformat()})
+                         "due": (clock.today() + dt.timedelta(days=max(3, min(14, p['days_left'] - 7)))).isoformat()})
     except Exception as e:
         print("hujjat scan:", e)
     return new
@@ -397,7 +398,7 @@ def _clean_payload(p: dict) -> dict:
         text = str(p.get("text") or "").strip()
         if not text: raise HTTPException(400, "Topshiriq matni bo'sh")
         try: due = dt.date.fromisoformat(str(p.get("due"))).isoformat()
-        except (ValueError, TypeError): due = (S.TODAY + dt.timedelta(days=7)).isoformat()
+        except (ValueError, TypeError): due = (clock.today() + dt.timedelta(days=7)).isoformat()
         return {"effect": "task", "assignee": str(p.get("assignee") or ROLES[role].title)[:150], "role": role, "text": text[:500], "due": due}
     if eff == "remind":
         try: ids = [int(i) for i in p.get("task_ids") or []][:20]

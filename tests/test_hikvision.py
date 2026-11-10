@@ -6,6 +6,7 @@ import asyncio, os, random, sqlite3, stat, subprocess, sys, tempfile, time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT)); from app import clock as CLK   # noqa: E402 — institut vaqti (ISFT_CORE_TZ / ISFT_CORE_FAKE_TODAY), server bilan bir xil
 TMP = Path(tempfile.mkdtemp(prefix="jarvis-hik-"))
 os.environ["ISFT_CORE_SECRETS_DIR"] = str(TMP / "secrets")        # importdan OLDIN
 sys.path.insert(0, str(ROOT))
@@ -17,7 +18,7 @@ def ok(cond, msg):
     print(("✓ " if cond else "✗ XATO: ") + msg); fails += (not cond)
 
 PORT_OK, PORT_BAD, PORT_DEAD, PORT_Q, PORT_EV = 18090, 18091, 18099, 18092, 18093
-PY = str(ROOT / ".venv" / "bin" / "python")
+PY = sys.executable   # joriy interpretator (lokal .venv yoki CI)
 procs = []
 def emulator(port, **env):
     e = {**os.environ, **{f"FAKE_HIK_{k.upper()}": str(v) for k, v in env.items()}}
@@ -123,11 +124,11 @@ async def main():
     con.execute("UPDATE rooms SET guard=1 WHERE id=?", (room,)); con.commit()
     camd = db.one(con, "SELECT * FROM cameras WHERE id=?", (cid,))
     # kechagi sana: bugungi kelajakdagi vaqt (masalan, yarim tundan keyin 23:40) takror-filtrni buzib, fon testini yiqitadi
-    night = (dt.datetime.now() - dt.timedelta(days=1)).replace(hour=23, minute=40)
+    night = (CLK.now() - dt.timedelta(days=1)).replace(hour=23, minute=40)
     r1 = OC.handle_event(con, camd, {"type": "fielddetection", "state": "active"}, night)
     ok(r1 and r1["alert"] == 1, "Tunda qo'riqlanadigan xonaga kirish → ogohlantirish")
     ok(OC.handle_event(con, camd, {"type": "fielddetection", "state": "active"}, night + dt.timedelta(seconds=10)) is None, "Dedup oynasida (5 daqiqa) takror voqea — bitta yozuv")
-    day = (dt.datetime.now() - dt.timedelta(days=1)).replace(hour=11, minute=0)
+    day = (CLK.now() - dt.timedelta(days=1)).replace(hour=11, minute=0)
     if day.weekday() == 6: day -= dt.timedelta(days=1)
     r2 = OC.handle_event(con, camd, {"type": "linedetection", "state": "active"}, day)
     ok(r2 and r2["alert"] == 0, "Ish vaqtida kirish — ogohlantirishsiz qayd")
@@ -169,7 +170,7 @@ async def main():
 
     con.execute("UPDATE cameras SET ticket_id=NULL WHERE id=?", (cid,)); con.commit()
     camd = db.one(con, "SELECT * FROM cameras WHERE id=?", (cid,))
-    base = (dt.datetime.now() - dt.timedelta(days=2)).replace(hour=14, minute=0, second=0, microsecond=0)
+    base = (CLK.now() - dt.timedelta(days=2)).replace(hour=14, minute=0, second=0, microsecond=0)
     if base.weekday() == 6: base -= dt.timedelta(days=1)
     e1 = OC.handle_event(con, camd, {"type": "unattendedBaggage", "state": "active"}, base)
     ok(e1 and e1["priority"] == 2 and "rektor" in e1["route"], f"Qarovsiz buyum → P{e1 and e1['priority']}, kimga: {e1 and e1['route']}")
@@ -203,7 +204,7 @@ async def main():
     sim = db.one(con, "SELECT c.id, c.room_id FROM cameras c JOIN rooms r ON r.id=c.room_id WHERE c.mode='sim' AND r.zone IS NULL AND c.id!=? "
                       "AND c.sim_fault IS NULL LIMIT 1", (cid,))
     con.execute("UPDATE cameras SET sim_fault='oflayn', ticket_id=NULL, fail_count=0, last_seen=? WHERE id=?",
-                ((dt.datetime.now() - dt.timedelta(minutes=12)).isoformat(timespec="seconds"), sim["id"])); con.commit()
+                ((CLK.now() - dt.timedelta(minutes=12)).isoformat(timespec="seconds"), sim["id"])); con.commit()
     for _ in range(OC.OFFLINE_FAILS + 3):
         await OC.poll_once()
     tk = db.rows(con, "SELECT id FROM tickets WHERE room_id=? AND item='Kamera' AND status!='hal qilindi'", (sim["room_id"],))

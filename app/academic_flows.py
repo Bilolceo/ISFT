@@ -20,6 +20,7 @@ import datetime as dt, io, json, random, threading
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
+from . import clock
 from . import db, rbac, academic_rules as AR
 from .rbac import Ctx, AccessDenied
 
@@ -96,8 +97,8 @@ CREATE TABLE IF NOT EXISTS diplomas(id INTEGER PRIMARY KEY, student_id INT UNIQU
 CREATE TABLE IF NOT EXISTS flow_meta(k TEXT PRIMARY KEY, v TEXT);
 """
 
-def _today(): return dt.date.today()
-def _now(): return dt.datetime.now().isoformat(timespec="seconds")
+def _today(): return clock.today()
+def _now(): return clock.now().isoformat(timespec="seconds")
 def _iso(d): return d.isoformat() if hasattr(d, "isoformat") else str(d)
 def _bad(msg, code=400): raise HTTPException(code, msg)
 def _short(n): return (n or "").split(":", 1)[1].strip() if ":" in (n or "") else (n or "")
@@ -451,7 +452,7 @@ def slots_xlsx(c: Ctx, sid: int) -> bytes:
         for cell in ws[ws.max_row]: cell.border = brd
     for col, wd in zip("ABCDEFGHIJ", (5, 12, 13, 15, 10, 42, 20, 8, 34, 30)): ws.column_dimensions[col].width = wd
     ws.freeze_panes = "A6"
-    ws.append([]); ws.append([f"Tuzildi: ISFT Core, {dt.datetime.now():%d.%m.%Y %H:%M} · {_who(c)}"])
+    ws.append([]); ws.append([f"Tuzildi: ISFT Core, {clock.now():%d.%m.%Y %H:%M} · {_who(c)}"])
     if D["conflicts"]:
         ws2 = wb.create_sheet("To'qnashuvlar"); ws2.append(["Sana", "To'qnashuv"])
         for x in D["conflicts"]: ws2.append([x["date"], x["text"]])
@@ -1246,7 +1247,7 @@ def supplement_docx(con, sid: int, who: str) -> bytes:
     if d.get("honours"): B.para(doc, "Diplom imtiyozli (institut nizomidagi mezonlar asosida).", indent=False, size=10.5, bold=True)
     B.para(doc, f"Baholash shkalasi: {AR.SCALE_TEXT}. {AR.CREDIT_NOTE}.", indent=False, size=9)
     B.signature(doc, "Rektor", B.INST.get("rector_short", ""))
-    p = doc.add_paragraph(); B.run(p, f"Registrator ofisi boshlig'i  _______________   · Tuzildi: ISFT Core, {dt.datetime.now():%d.%m.%Y %H:%M} · {who}", 9, False, B.RGB_GREY)
+    p = doc.add_paragraph(); B.run(p, f"Registrator ofisi boshlig'i  _______________   · Tuzildi: ISFT Core, {clock.now():%d.%m.%Y %H:%M} · {who}", 9, False, B.RGB_GREY)
     buf = io.BytesIO(); doc.save(buf); return buf.getvalue()
 
 # =============================================================================================

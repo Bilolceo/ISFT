@@ -9,6 +9,7 @@ run(con) — idempotent:
      prorektor kelishgan akademik ta'til, Sirtqi bo'limning loyihasi.
 Hech bir talaba ma'lumoti o'zgartirilmaydi (ta'sir faqat rektor imzolaganda)."""
 import datetime as dt, io, json, random
+from . import clock
 from . import db, rbac
 
 META = "CREATE TABLE IF NOT EXISTS order_meta(k TEXT PRIMARY KEY, v TEXT)"
@@ -41,7 +42,7 @@ LEAVE_REASONS = ["sog'lig'i bo'yicha (tibbiy xulosa)", "homiladorlik va tug'ish"
 
 def registry(con):
     R = random.Random(20261109)
-    YEAR = dt.date.today().year if dt.date.today().month >= 9 else dt.date.today().year - 1
+    YEAR = clock.today().year if clock.today().month >= 9 else clock.today().year - 1
     st = db.rows(con, """SELECT s.id, s.hemis_id, s.full_name, s.group_id, s.status, s.study_form, s.gender, g.name grp, g.course, g.form, g.level, g.direction
                          FROM students s JOIN groups_ g ON g.id=s.group_id ORDER BY s.id""")
     if not st: return
@@ -235,7 +236,7 @@ def samples(con):
     R = random.Random(7731)
     O.SAMPLES.mkdir(parents=True, exist_ok=True)
     anom = set(x for v in (_meta(con, "anomalies") or {}).values() for x in v)
-    today = dt.date.today()
+    today = clock.today()
     base = """SELECT s.*, g.name grp, g.course, g.form, g.direction, f.name fac FROM students s JOIN groups_ g ON g.id=s.group_id JOIN faculties f ON f.id=s.faculty_id
               WHERE {w} ORDER BY s.id"""
     def one(w, salt):
@@ -352,12 +353,12 @@ def demo(con):
     reg = db.one(con, "SELECT id FROM users WHERE role='talabalar' ORDER BY id LIMIT 1")
     if not reg: return
     cr = rbac.ctx_for(con, reg["id"])
-    now = dt.datetime.now().replace(microsecond=0)
+    now = clock.now().replace(microsecond=0)
     idx = {x["file"]: x for x in json.loads((O.SAMPLES / "index.json").read_text(encoding="utf-8"))} if (O.SAMPLES / "index.json").exists() else {}
     # a) katta ro'yxat: 2 versiya
     if "qarzdorlar_v1.xlsx" in idx:
         o = O.create_order(cr, "chetlashtirish_tolov", [], "fayl", "To'lov-kontrakt qarzdorligini bartaraf etmagan talabalarni chetlashtirish to'g'risida (kuzgi semestr)",
-                           params={"date_from": (dt.date.today() + dt.timedelta(days=10)).isoformat()},
+                           params={"date_from": (clock.today() + dt.timedelta(days=10)).isoformat()},
                            note="Buxgalteriya ro'yxati asosida. To'lov qilganlar keyingi versiyalarda chiqariladi.")
         con.execute("UPDATE orders SET demo='bulk', created_at=? WHERE id=?", ((now - dt.timedelta(days=2, hours=3)).isoformat(), o["id"]))
         for f, ago in (("qarzdorlar_v1.xlsx", dt.timedelta(days=2, hours=2)), ("qarzdorlar_v2.xlsx", dt.timedelta(days=1, hours=5))):

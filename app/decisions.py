@@ -17,6 +17,7 @@ Tashqi servisga hech narsa yuborilmaydi: AI — lokal Ollama, qolgani kod.
 import datetime as dt, json, re
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel, Field
+from . import clock
 from . import db, rbac, academic_rules as AR
 from .rbac import Ctx, AccessDenied, TASKS
 
@@ -144,7 +145,7 @@ DEMO_USERS = [
     # Registrator — mavjud "Registrator ofisi" akkaunti (talabalar roli)
 ]
 
-def _now(): return dt.datetime.now().replace(microsecond=0)
+def _now(): return clock.now().replace(microsecond=0)
 def _iso(t): return t.isoformat(timespec="seconds")
 
 def _add_cols(con, table, cols):
@@ -668,7 +669,7 @@ def capabilities(request: Request):
     return {"audio": False,
             "audio_note": "Ovozdan matnga o'tkazish (lokal STT, masalan whisper.cpp) bu serverda o'rnatilmagan. "
                           "Demo uchun namunaviy transkript ishlatiladi; ovoz tashqi servisga yuborilmaydi.",
-            "sample": demo_transcript(dt.date.today()), "demo_tools": demo_tools()}
+            "sample": demo_transcript(clock.today()), "demo_tools": demo_tools()}
 
 @router.get("/api/dec/units")
 def units_(request: Request):
@@ -687,7 +688,7 @@ async def create_draft(body: DraftIn, request: Request):
     c = C(request); _guard(c, "majlis materialini ISFT Core'ga berish", body.title); _secretary(c)
     if body.source not in ("demo", "manual"): raise HTTPException(400, "Noto'g'ri manba")
     if not body.transcript.strip(): raise HTTPException(400, "Majlis matni bo'sh")
-    today = dt.date.today()
+    today = clock.today()
     tasks, minutes, note = await extract(body.transcript, body.title, today)
     now = _iso(_now())
     # bog'liq hodisa: Xizmat markazidagi ochiq hodisa mavzusi qarorda tilga olingan bo'lsa

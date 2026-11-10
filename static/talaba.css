@@ -1,0 +1,247 @@
+/* =====================================================================
+   Talaba kabineti (/talaba) va «Talaba murojaatlari» (/talaba/xodim).
+   Tokenlar — static/style.css (yorug' / qorong'i / tizim). Mobil birinchi: 390px — pastki menyu, ≥ 960px — chap panel.
+   Barcha sinflar "tk-" prefiksi bilan (asosiy ilova uslublari bilan to'qnashmaydi).
+   ===================================================================== */
+body.tk{background:var(--bg-solid);overflow-x:hidden}
+.tk *{min-width:0}
+.tk h1{font-size:24px;line-height:1.2;margin:4px 0 6px}
+.tk h2{font-size:21px;margin:0 0 4px}
+.tk h3{font-size:15px;margin:0 0 10px}
+.tk p{margin:0 0 8px}
+.tk-num{font-variant-numeric:tabular-nums}
+
+/* ---------- kirish ---------- */
+.tk-auth{min-height:100vh;min-height:100dvh;display:grid;place-items:center;padding:24px 16px;
+  background:radial-gradient(900px 500px at 10% -10%,var(--brand-soft),transparent 60%),radial-gradient(700px 400px at 110% 110%,var(--teal-soft),transparent 60%),var(--bg-solid)}
+.tk-auth-card{width:100%;max-width:420px;background:var(--surface);border:1px solid var(--card-brd);border-radius:var(--r-lg);padding:26px 22px;
+  display:flex;flex-direction:column;gap:12px;box-shadow:var(--shadow-pop)}
+.tk-auth-card h1{margin:6px 0 0}
+.tk-auth-card p{margin:0}
+.tk-auth-brand{display:flex;align-items:center;gap:12px}
+.tk-auth-brand img{width:46px;height:38px;object-fit:contain;background:#fff;border-radius:10px;padding:3px}
+.tk-auth-brand b{display:block;font-weight:800;letter-spacing:.02em}.tk-auth-brand small{color:var(--muted)}
+.tk-field{display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600;color:var(--ink-2)}
+.tk-field input,.tk-field select,.tk-field textarea,.tk-in{width:100%;border:1px solid var(--line-2);background:var(--surface);border-radius:12px;padding:11px 13px;
+  font:inherit;font-weight:500;color:var(--ink);outline:none;transition:border-color .15s}
+.tk-field textarea{min-height:84px;resize:vertical}
+.tk-field input:focus,.tk-field select:focus,.tk-field textarea:focus,.tk-in:focus{border-color:var(--teal);box-shadow:0 0 0 3px var(--teal-soft)}
+.tk-field input[aria-invalid=true]{border-color:var(--bad)}
+.tk-err{color:var(--bad);font-size:13px;font-weight:600;min-height:0}
+.tk-err:empty{display:none}
+.tk-ok-msg{color:var(--ok);font-size:13px;font-weight:600}
+.tk-hint{font-size:12.5px;color:var(--muted)}
+.tk-staff-link{font-size:13px;color:var(--brand);text-decoration:none;font-weight:600;align-self:flex-start}
+.btn.block{width:100%}
+.btn.primary{min-height:44px}
+
+/* ---------- qobiq ---------- */
+.tk-shell{min-height:100vh}
+.tk-side{display:none}
+.tk-col{min-width:0}
+.tk-top{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:10px;padding:10px 16px;padding-top:max(10px,env(safe-area-inset-top));
+  background:var(--glass-bar);backdrop-filter:var(--glass-blur);-webkit-backdrop-filter:var(--glass-blur);border-bottom:1px solid var(--line)}
+.tk-top-brand{display:flex;align-items:center;gap:9px;min-width:0;flex:1}
+.tk-top-brand img{width:34px;height:28px;object-fit:contain;background:#fff;border-radius:8px;padding:2px;flex:none}
+.tk-top-brand b{font-weight:800;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tk-top-who{display:none;font-size:13px;color:var(--ink-2);text-align:right;line-height:1.3}
+.tk-top-who small{display:block;color:var(--muted)}
+.tk-top-act{display:flex;gap:6px;align-items:center;flex:none}
+.tk-icon{width:38px;height:38px;border-radius:50%;border:1px solid var(--line-2);background:var(--surface);color:var(--ink-2);display:grid;place-items:center;cursor:pointer;padding:0}
+.tk-icon svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.tk-icon:hover{color:var(--brand);border-color:var(--brand)}
+.tk-main{padding:16px 16px calc(96px + env(safe-area-inset-bottom));max-width:1180px;margin:0 auto;outline:none}
+.tk-main-staff{padding-bottom:48px}
+
+/* pastki menyu (mobil) */
+.tk-bottom{position:fixed;left:0;right:0;bottom:0;z-index:30;display:grid;grid-template-columns:repeat(5,1fr);gap:2px;
+  padding:6px 6px calc(6px + env(safe-area-inset-bottom));background:var(--glass-bar);backdrop-filter:var(--glass-blur);-webkit-backdrop-filter:var(--glass-blur);border-top:1px solid var(--line)}
+.tk-bottom a{display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px 2px;border-radius:12px;color:var(--muted);text-decoration:none;font-size:11px;font-weight:600;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tk-bottom a svg,.tk-nav a svg,.tk-sheet-list a svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.tk-bottom a.on{color:var(--brand);background:var(--brand-soft)}
+.tk-sheet{position:fixed;inset:0;z-index:40;background:rgba(0,0,0,.35);display:flex;align-items:flex-end}
+.tk-sheet-card{width:100%;background:var(--surface);border-radius:24px 24px 0 0;padding:14px 14px calc(16px + env(safe-area-inset-bottom));max-height:85vh;overflow:auto}
+.tk-sheet-h{display:flex;align-items:center;justify-content:space-between;padding:4px 4px 10px}
+.tk-sheet-list{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.tk-sheet-list a{display:flex;align-items:center;gap:10px;padding:13px 12px;border-radius:14px;background:var(--surface-2);color:var(--ink);text-decoration:none;font-weight:600;font-size:13.5px}
+.tk-sheet-list a.on{background:var(--brand-soft);color:var(--brand)}
+
+/* chap panel (keng ekran) */
+@media (min-width:960px){
+  .tk-shell{display:grid;grid-template-columns:248px 1fr}
+  .tk-side{display:flex;flex-direction:column;gap:14px;position:sticky;top:0;height:100vh;padding:18px 14px;background:var(--surface);border-right:1px solid var(--line)}
+  .tk-side-brand{display:flex;gap:10px;align-items:center;padding:4px 8px 8px}
+  .tk-side-brand img{width:42px;height:34px;object-fit:contain;background:#fff;border-radius:9px;padding:2px}
+  .tk-side-brand b{display:block;font-weight:800}.tk-side-brand small{color:var(--muted);font-size:12px}
+  .tk-nav{display:flex;flex-direction:column;gap:2px;overflow:auto;flex:1}
+  .tk-nav a{display:flex;align-items:center;gap:11px;padding:10px 12px;border-radius:12px;color:var(--ink-2);text-decoration:none;font-weight:600;font-size:14px}
+  .tk-nav a:hover{background:var(--hover);color:var(--ink)}
+  .tk-nav a.on{background:var(--brand-fill);color:#fff}
+  .tk-nav .tk-badge{margin-left:auto}
+  .tk-side-foot{display:flex;gap:6px;flex-wrap:wrap}
+  .tk-top-brand img{display:none}
+  .tk-top-who{display:block}
+  .tk-top .tk-top-act [data-act=logout]{display:none}
+  .tk-bottom{display:none}
+  .tk-main{padding:24px 32px 48px}
+  .tk-top-staff .tk-top-brand img{display:block}
+}
+
+/* ---------- kartalar, plitalar ---------- */
+.tk-grid{display:grid;gap:12px}
+.tk-g2,.tk-g3,.tk-g4{display:grid;gap:12px;grid-template-columns:1fr}
+@media (min-width:600px){.tk-g2{grid-template-columns:1fr 1fr}.tk-g3{grid-template-columns:1fr 1fr}.tk-g4{grid-template-columns:1fr 1fr}}
+@media (min-width:1100px){.tk-g3{grid-template-columns:repeat(3,1fr)}.tk-g4{grid-template-columns:repeat(4,1fr)}}
+.tk-card{background:var(--surface);border:1px solid var(--card-brd);border-radius:20px;padding:16px;box-shadow:var(--card-hi);min-width:0}
+@media (min-width:960px){.tk-card{padding:20px 22px;border-radius:var(--r-lg)}}
+.tk-card+.tk-card,.tk-grid+.tk-card,.tk-card+.tk-grid,.tk-g2+.tk-card,.tk-g3+.tk-card,.tk-g4+.tk-card,.tk-card+.tk-g2,.tk-card+.tk-g4,.tk-g4+.tk-g2,.tk-head+.tk-card{margin-top:12px}
+.tk-head{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:8px;margin:2px 0 14px}
+.tk-head p{color:var(--muted);margin:0;font-size:13.5px}
+.tk-hero{background:linear-gradient(135deg,var(--brand-fill),var(--brand-fill-2));color:#fff;border:0}
+.tk-hero h2{color:#fff;font-size:22px}
+.tk-hero .tk-sub{color:rgba(255,255,255,.85);font-size:13.5px}
+.tk-hero .tk-pills{margin-top:10px}
+.tk-hero .tk-pill{background:rgba(255,255,255,.16);color:#fff;border-color:rgba(255,255,255,.22)}
+.tk-pills{display:flex;flex-wrap:wrap;gap:6px}
+.tk-pill{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;padding:4px 10px;border-radius:99px;border:1px solid var(--line-2);color:var(--ink-2);background:var(--surface);white-space:nowrap}
+.tk-pill.ok{background:var(--ok-soft);color:var(--ok);border-color:transparent}
+.tk-pill.warn{background:var(--warn-soft);color:var(--warn);border-color:transparent}
+.tk-pill.bad{background:var(--bad-soft);color:var(--bad);border-color:transparent}
+.tk-pill.info{background:var(--teal-soft);color:var(--teal);border-color:transparent}
+.tk-pill.brand{background:var(--brand-soft);color:var(--brand);border-color:transparent}
+.tk-badge{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 6px;border-radius:99px;background:var(--bad);color:#fff;font-size:11px;font-weight:700}
+.tk-stat{display:flex;flex-direction:column;gap:2px}
+.tk-stat .k{font-size:12.5px;color:var(--muted);font-weight:600}
+.tk-stat .v{font-size:26px;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.15}
+.tk-stat .v small{font-size:14px;color:var(--muted);font-weight:600}
+.tk-stat .s{font-size:12.5px;color:var(--ink-2)}
+.tk-stat.bad .v{color:var(--bad)}.tk-stat.warn .v{color:var(--warn)}.tk-stat.ok .v{color:var(--ok)}
+.tk-muted{color:var(--muted)}
+.tk-small{font-size:12.5px}
+.tk-empty{color:var(--muted);text-align:center;padding:22px 8px;font-size:13.5px}
+
+/* ogohlantirishlar */
+.tk-warns{display:flex;flex-direction:column;gap:8px}
+.tk-warn{display:flex;gap:10px;align-items:flex-start;padding:12px 14px;border-radius:14px;background:var(--surface-2);border-left:4px solid var(--teal);color:var(--ink);text-decoration:none}
+.tk-warn.bad{border-left-color:var(--bad);background:var(--bad-soft)}
+.tk-warn.warn{border-left-color:var(--warn);background:var(--warn-soft)}
+.tk-warn b{display:block;font-size:14px}
+.tk-warn span{font-size:13px;color:var(--ink-2)}
+.tk-warn .tk-go{margin-left:auto;color:var(--muted);flex:none;align-self:center}
+.tk-ok-line{display:flex;gap:8px;align-items:center;padding:12px 14px;border-radius:14px;background:var(--ok-soft);color:var(--ok);font-weight:600;font-size:13.5px}
+
+/* chiziqli o'lchagich */
+.tk-meter{position:relative;height:10px;border-radius:99px;background:var(--track);overflow:visible;margin:8px 0 18px}
+.tk-meter>i{position:absolute;left:0;top:0;bottom:0;border-radius:99px;background:var(--teal)}
+.tk-meter>i.ok{background:var(--ok)}.tk-meter>i.warn{background:var(--warn)}.tk-meter>i.bad{background:var(--bad)}
+.tk-meter>b{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--ink);opacity:.5}
+.tk-meter>em{position:absolute;top:13px;transform:translateX(-50%);font-size:10.5px;font-style:normal;color:var(--muted);white-space:nowrap}
+.tk-meter.thin{height:6px;margin:6px 0 4px}
+.tk-meter.thin>em{display:none}
+
+/* ro'yxatlar */
+.tk-list{display:flex;flex-direction:column}
+.tk-row{display:flex;gap:12px;align-items:flex-start;padding:12px 0;border-bottom:1px solid var(--line)}
+.tk-row:last-child{border-bottom:0;padding-bottom:2px}
+.tk-row:first-child{padding-top:2px}
+.tk-row .tk-main-c{flex:1;min-width:0}
+.tk-row .tk-t{font-weight:700;font-size:14px;overflow-wrap:anywhere}
+.tk-row .tk-d{font-size:12.5px;color:var(--muted);overflow-wrap:anywhere}
+.tk-row .tk-r{text-align:right;flex:none;max-width:45%}
+.tk-score{font-size:20px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1.1}
+.tk-score small{font-size:12px;color:var(--muted);font-weight:600}
+.tk-letter{display:inline-grid;place-items:center;width:30px;height:30px;border-radius:10px;font-weight:800;background:var(--surface-2);color:var(--ink)}
+.tk-letter.A{background:var(--ok-soft);color:var(--ok)}.tk-letter.B,.tk-letter.C{background:var(--teal-soft);color:var(--teal)}
+.tk-letter.D,.tk-letter.E{background:var(--warn-soft);color:var(--warn)}.tk-letter.F{background:var(--bad-soft);color:var(--bad)}
+
+/* semestr akkordeoni */
+.tk-acc{border:1px solid var(--line);border-radius:16px;background:var(--surface);overflow:hidden}
+.tk-acc+.tk-acc{margin-top:10px}
+.tk-acc>summary{list-style:none;cursor:pointer;padding:14px 16px;display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center}
+.tk-acc>summary::-webkit-details-marker{display:none}
+.tk-acc>summary .tk-t{font-weight:700;flex:1 1 220px}
+.tk-acc>summary::after{content:"";width:9px;height:9px;border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);transform:rotate(45deg);margin-left:auto;transition:transform .2s}
+.tk-acc[open]>summary::after{transform:rotate(-135deg)}
+.tk-acc .tk-acc-b{padding:0 16px 12px}
+.tk-hist{margin-top:6px;font-size:12.5px;color:var(--ink-2);background:var(--surface-2);border-radius:10px;padding:8px 10px}
+.tk-hist div+div{margin-top:3px}
+.tk-hist .on{font-weight:700;color:var(--ink)}
+
+/* reyting */
+.tk-place{display:flex;flex-direction:column;gap:4px;padding:16px;border-radius:18px;background:var(--surface-2)}
+.tk-place .k{font-size:13px;color:var(--muted);font-weight:600}
+.tk-place .v{font-size:34px;font-weight:800;letter-spacing:-.03em;font-variant-numeric:tabular-nums;line-height:1}
+.tk-place .v small{font-size:15px;color:var(--muted);font-weight:700}
+.tk-place .s{font-size:12.5px;color:var(--ink-2)}
+
+/* jadval (keng ekran) — mobil ekranda kartaga aylanadi */
+.tk-table{width:100%;border-collapse:collapse;font-size:13.5px}
+.tk-table th,.tk-table td{padding:9px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+.tk-table th{color:var(--muted);font-weight:600;font-size:12px}
+.tk-table td.n,.tk-table th.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.tk-table tr:last-child td{border-bottom:0}
+@media (max-width:640px){
+  .tk-table.stack thead{display:none}
+  .tk-table.stack tr{display:grid;grid-template-columns:1fr auto;gap:2px 10px;padding:10px 0;border-bottom:1px solid var(--line)}
+  .tk-table.stack tr:last-child{border-bottom:0}
+  .tk-table.stack td{border:0;padding:0}
+  .tk-table.stack td.n{text-align:right}
+  .tk-table.stack td[data-l]::before{content:attr(data-l) ": ";color:var(--muted);font-size:12px}
+  .tk-table.stack td.wide{grid-column:1/-1}
+}
+
+/* formalar */
+.tk-form{display:flex;flex-direction:column;gap:12px}
+.tk-form .tk-actions{display:flex;flex-wrap:wrap;gap:8px}
+.tk-seg{display:inline-flex;background:var(--surface-2);border-radius:12px;padding:3px;gap:3px;flex-wrap:wrap}
+.tk-seg label{position:relative}
+.tk-seg input{position:absolute;opacity:0;pointer-events:none}
+.tk-seg span{display:block;padding:8px 14px;border-radius:10px;font-size:13px;font-weight:600;color:var(--ink-2);cursor:pointer}
+.tk-seg input:checked+span{background:var(--seg-on);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.tk-seg input:focus-visible+span{outline:2px solid var(--teal)}
+.tk-file{display:flex;flex-direction:column;gap:6px;padding:14px;border:1.5px dashed var(--line-2);border-radius:14px;background:var(--surface-2);font-size:13px}
+.tk-file input{font-size:13px;max-width:100%}
+.tk-inline{margin-top:10px;padding:14px;border-radius:14px;background:var(--surface-2)}
+.tk-inline .tk-field input,.tk-inline .tk-field select,.tk-inline .tk-field textarea{background:var(--surface)}
+.tk-check{display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--line)}
+.tk-check:last-child{border-bottom:0}
+.tk-check .ic{flex:none;width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-weight:800;font-size:13px}
+.tk-check.ok .ic{background:var(--ok-soft);color:var(--ok)}.tk-check.no .ic{background:var(--bad-soft);color:var(--bad)}
+.tk-check b{display:block;font-size:13.5px}.tk-check span{font-size:12.5px;color:var(--muted);overflow-wrap:anywhere}
+
+/* sana bloki */
+.tk-date{flex:none;width:52px;text-align:center;border-radius:14px;background:var(--brand-soft);color:var(--brand);padding:6px 0;line-height:1.1}
+.tk-date b{display:block;font-size:20px;font-weight:800}
+.tk-date small{font-size:11px;font-weight:700;text-transform:uppercase}
+.tk-date.past{background:var(--surface-2);color:var(--muted)}
+.tk-cd{font-weight:800;font-variant-numeric:tabular-nums}
+.tk-cd.green{color:var(--ok)}.tk-cd.amber{color:var(--warn)}.tk-cd.red{color:var(--bad)}
+
+/* bildirishnoma */
+.tk-toast{position:fixed;left:50%;bottom:calc(84px + env(safe-area-inset-bottom));transform:translateX(-50%);z-index:60;max-width:min(520px,calc(100vw - 32px));
+  padding:12px 18px;border-radius:14px;background:var(--toast-solid);color:var(--toast-ink);font-size:13.5px;font-weight:600;box-shadow:var(--shadow-pop)}
+.tk-toast.bad{background:var(--bad);color:#fff}
+@media (min-width:960px){.tk-toast{bottom:28px}}
+
+/* xodimlar ro'yxati */
+.tk-filters{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px}
+.tk-chip{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 13px;border-radius:99px;border:1px solid var(--line-2);background:var(--surface);color:var(--ink-2);
+  font:inherit;font-size:12.5px;font-weight:600;cursor:pointer}
+.tk-chip.on{background:var(--chip-on-bg);color:var(--chip-on-ink);border-color:var(--chip-on-bg)}
+.tk-chip i{font-style:normal;opacity:.7}
+.tk-filters .tk-in{width:auto;flex:1 1 200px;padding:8px 12px}
+.tk-filters select.tk-in{flex:0 1 220px}
+.tk-req .tk-req-h{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center}
+.tk-req .tk-req-h b{font-size:15px}
+.tk-kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:13px;margin-top:10px}
+.tk-kv dt{color:var(--muted)}.tk-kv dd{margin:0;overflow-wrap:anywhere}
+.tk-req-act{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;align-items:center}
+.tk-req-act .tk-in{flex:1 1 220px;width:auto;padding:8px 12px}
+.tk-g2>.tk-card,.tk-g3>.tk-card,.tk-g4>.tk-card{margin-top:0}
+.tk-pill{white-space:normal;max-width:100%;line-height:1.35;overflow-wrap:anywhere}
+.tk-r .tk-pill{text-align:center}
+.tk-row{flex-wrap:wrap}
+.tk-row>.tk-up{flex:1 1 100%}
+.tk-up:empty{display:none}
+.tk-main-c .tk-pill{white-space:nowrap}

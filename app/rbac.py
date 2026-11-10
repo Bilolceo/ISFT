@@ -2,6 +2,7 @@
 Har bir ma'lumot so'rovi shu yerdan o'tadi. Taklifnomaning 4-bo'limidagi jadval aynan shu yerda kodlangan."""
 import datetime as dt, hashlib, hmac, os
 from dataclasses import dataclass
+from . import clock
 from . import db
 
 # Resurslar (ma'lumot turlari)
@@ -188,7 +189,7 @@ def ctx_for(con, user_id: int, channel="web") -> Ctx:
 
 def audit(con, ctx: Ctx, action: str, resource: str, allowed: bool, detail: str = ""):
     cur = con.execute("INSERT INTO audit_log(ts,user_id,user_name,role,channel,action,resource,allowed,detail) VALUES(?,?,?,?,?,?,?,?,?)",
-                      (dt.datetime.now().isoformat(timespec="seconds"), ctx.user["id"], ctx.user["full_name"], ctx.title,
+                      (clock.now().isoformat(timespec="seconds"), ctx.user["id"], ctx.user["full_name"], ctx.title,
                        ctx.channel, action, resource, int(allowed), detail[:300]))
     con.commit()
     return cur.lastrowid

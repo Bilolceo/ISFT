@@ -14,6 +14,7 @@ from pathlib import Path
 import httpx
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT)); from app import clock as CLK   # noqa: E402 — institut vaqti (ISFT_CORE_TZ / ISFT_CORE_FAKE_TODAY), server bilan bir xil
 DB = Path(os.environ.get("ISFT_CORE_DB") or ROOT / "data" / "jarvis.db")
 B = os.environ.get("ISFT_TEST_URL", "http://127.0.0.1:8000")
 PW = "Isft2026"
@@ -102,7 +103,7 @@ pair = cat[0]
 dep = pair["department_id"]
 head = one("SELECT id FROM users WHERE role='kafedra' AND department_id=?", (dep,))[0]
 CH = S(head)
-due = (__import__("datetime").date.today() + __import__("datetime").timedelta(days=10)).isoformat()
+due = (CLK.today() + __import__("datetime").timedelta(days=10)).isoformat()
 r = C[KAF4].post("/api/syllabus/request", json={"pairs": [{"subject": pair["subject"], "department_id": dep}], "due": due})
 ok(r.status_code == 403, "kafedra mudiri sillabus so'ray olmaydi (403)")
 r = C[AK].post("/api/syllabus/request", json={"pairs": [{"subject": pair["subject"], "department_id": dep}], "due": "2020-01-01"})

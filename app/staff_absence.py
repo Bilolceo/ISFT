@@ -22,6 +22,7 @@ from pathlib import Path
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from . import clock
 from . import db, rbac, services as S, filecheck as FC
 from .rbac import AccessDenied, Ctx, ROLES
 
@@ -57,8 +58,8 @@ CREATE INDEX IF NOT EXISTS ix_ssubs_t ON staff_subs(sub_teacher_id, date);
 CREATE TABLE IF NOT EXISTS staffabs_meta(k TEXT PRIMARY KEY, v TEXT);
 """
 
-def _now(): return dt.datetime.now().replace(microsecond=0).isoformat(timespec="seconds")
-def _today() -> dt.date: return S.TODAY
+def _now(): return clock.now().replace(microsecond=0).isoformat(timespec="seconds")
+def _today() -> dt.date: return clock.today()
 def _d(s) -> dt.date: return dt.date.fromisoformat(str(s)[:10])
 def _dmy(s) -> str: return _d(s).strftime("%d.%m.%Y") if s else ""
 def _short(n): return (n or "").split(":", 1)[-1].strip()
@@ -737,7 +738,7 @@ def seed_demo(con) -> int:
         if not st: return None
         try:
             aid = create(con, kc, AbsIn(staff_id=st["id"], kind=kind, start=day(s), end=day(e), note=note),
-                         ts=(dt.datetime.now() - dt.timedelta(hours=ago_h)).replace(microsecond=0).isoformat(), check=False)
+                         ts=(clock.now() - dt.timedelta(hours=ago_h)).replace(microsecond=0).isoformat(), check=False)
         except HTTPException: return None
         made.append(aid); return aid
     k4 = busy_teachers(4, 3); k1 = busy_teachers(1, 2); k5 = busy_teachers(5, 2); k7 = busy_teachers(7, 2); k2 = busy_teachers(2, 1); k6 = busy_teachers(6, 1)

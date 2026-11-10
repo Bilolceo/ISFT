@@ -11,11 +11,12 @@ from pathlib import Path
 import httpx
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT)); from app import clock as CLK   # noqa: E402 — institut vaqti (ISFT_CORE_TZ / ISFT_CORE_FAKE_TODAY), server bilan bir xil
 sys.path.insert(0, str(ROOT))
 DB = Path(os.environ.get("ISFT_CORE_DB") or ROOT / "data" / "jarvis.db")
 B = os.environ.get("ISFT_TEST_URL", "http://127.0.0.1:8000")
 PW = "Isft2026"
-PY = str(ROOT / ".venv" / "bin" / "python")
+PY = sys.executable   # joriy interpretator (lokal .venv yoki CI)
 N = [0]
 
 def ok(cond, msg):
@@ -124,8 +125,11 @@ R = S(2)
 s = R.get("/api/face/summary").json()
 ok(s["mode"] == "ids" and len(s["cameras"]) >= 3 and all(c["face_capable"] for c in s["cameras"]), f"Rektor: {len(s['cameras'])} ta kirish kamerasi (yuzni solishtirish)")
 ok("sintetik" in s["banner"] and "yozma roziligi" in s["banner"], "Banner: sintetik tasvir va yozma rozilik eslatmasi")
-fr = R.get("/api/face/frames", params={"limit": 96}).json()
-ok(fr["total"] > 20, f"Bugungi kadrlar: {fr['total']}")
+# Kadrlar soni kun vaqtiga bog'liq (yarim tundan keyin "bugun" deyarli bo'sh) — kadrlari eng ko'p bo'lgan oxirgi kunni olamiz.
+FDAY = q("""SELECT substr(ts,1,10) d FROM face_frames WHERE substr(ts,1,10)<=? GROUP BY d HAVING COUNT(*)>20 ORDER BY d DESC LIMIT 1""", (s["today"],))
+FDAY = FDAY[0][0] if FDAY else s["today"]
+fr = R.get("/api/face/frames", params={"limit": 96, "date": FDAY}).json()
+ok(fr["total"] > 20, f"Kadrlar ({FDAY}): {fr['total']}")
 multi = next((f for f in fr["frames"] if len(f["faces"]) >= 2), fr["frames"][0])
 img = R.get(multi["img"])
 ok(img.status_code == 200 and img.headers["content-type"] == "image/jpeg" and img.content[:2] == b"\xff\xd8", "Rasm: JPEG")
@@ -316,7 +320,7 @@ con.close()
 
 # =====================================================================
 print("\n— H. Audit jurnali —")
-since = (dt.datetime.now() - dt.timedelta(minutes=30)).isoformat(timespec="seconds")
+since = (CLK.now() - dt.timedelta(minutes=30)).isoformat(timespec="seconds")
 aud = lambda uid, allowed: q("SELECT COUNT(*) FROM audit_log WHERE resource='face' AND user_id=? AND allowed=? AND ts>=?", (uid, allowed, since))[0][0]
 ok(aud(2, 1) >= 3, f"Rektor ko'rishlari jurnalda ({aud(2, 1)})")
 ok(aud(12, 1) >= 2 and aud(12, 0) >= 1, f"Kadrlar: ruxsat ({aud(12, 1)}) va rad etish ({aud(12, 0)}) jurnalda")

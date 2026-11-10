@@ -12,6 +12,7 @@ from pathlib import Path
 import httpx
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT)); from app import clock as CLK   # noqa: E402 — institut vaqti (ISFT_CORE_TZ / ISFT_CORE_FAKE_TODAY), server bilan bir xil
 DB = Path(os.environ.get("ISFT_CORE_DB") or ROOT / "data" / "jarvis.db")
 B = os.environ.get("ISFT_TEST_URL", "http://127.0.0.1:8000")
 PW = "Isft2026"
@@ -37,7 +38,7 @@ def q(sql, args=()):
 
 kadr, kaf4, kaf2, akad, rektor, pro, teacher, reg, buxg = (S(i) for i in (12, 14, 31, 18, 2, 3, 15, 17, 11))
 AUDIT0 = q("SELECT COALESCE(MAX(id),0) FROM audit_log")[0][0]
-T0 = __import__("datetime").datetime.now().isoformat(timespec="seconds")
+T0 = CLK.now().isoformat(timespec="seconds")
 today = dt.date.fromisoformat(kadr.get("/api/me").json()["today"])
 mon = today + dt.timedelta(days=(7 - today.weekday()) % 7 + 21)          # 3–4 hafta keyingi dushanba
 W0, W1 = mon.isoformat(), (mon + dt.timedelta(days=4)).isoformat()    # dushanba–juma

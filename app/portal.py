@@ -21,6 +21,7 @@ from xml.sax.saxutils import escape as _xe
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
+from . import clock
 from . import db, rbac, services as S, filecheck as FC
 from .rbac import AccessDenied, Ctx, ROLES
 
@@ -47,8 +48,8 @@ PENDING = ("yangi", "o'qilgan")           # javob kutilayotgan holatlar
 DONE = ("javob berilgan", "yo'naltirilgan")
 _PEND_SQL = "('yangi','o''qilgan')"
 
-def _now(): return dt.datetime.now().replace(microsecond=0).isoformat(timespec="seconds")
-def _today(): return S.TODAY.isoformat()
+def _now(): return clock.now().replace(microsecond=0).isoformat(timespec="seconds")
+def _today(): return clock.today().isoformat()
 def _short(name): return (name or "").split(":", 1)[-1].strip() if ":" in (name or "") else ""
 def is_leader(c: Ctx) -> bool: return c.role.key in LEADERS
 def _pos(name): return (name or "").split(":", 1)[0].strip() if ":" in (name or "") else ""
@@ -892,7 +893,7 @@ def _valid_due(v, future=False):
     if not v: return None
     try: d = dt.date.fromisoformat(str(v)[:10])
     except ValueError: raise HTTPException(400, "Muddat sanasi noto'g'ri")
-    if future and d < S.TODAY: raise HTTPException(400, "Muddat o'tgan sana bo'lishi mumkin emas")
+    if future and d < clock.today(): raise HTTPException(400, "Muddat o'tgan sana bo'lishi mumkin emas")
     return d.isoformat()
 
 def _msg(con, c: Ctx, tid, unit, body, ts, kind="xat", meta=None) -> int:
@@ -1521,7 +1522,7 @@ def reminders_for(con, user: dict, horizon: int = 2) -> list[dict]:
     """Xodim uchun muddati yaqin/o'tgan xatlar:
        * menga — xat menga biriktirilgan;  * bolimga — biriktirilmagan, men bo'lim rahbariman;
        * yuborgan — men yuborgan xatga muddatda javob kelmagan;  * nazorat — men qo'ygan rezolyutsiya ijrosi muddatdan o'tgan."""
-    me, uid = unit_key(user), user["id"]; today = S.TODAY
+    me, uid = unit_key(user), user["id"]; today = clock.today()
     lim = (today + dt.timedelta(days=horizon)).isoformat()
     head = head_user(con, me) == uid
     out = []
@@ -1552,14 +1553,14 @@ WHO_LABEL = {"menga": "sizga biriktirilgan", "bolimga": "bo'limingizga", "yuborg
 def telegram_digest(con) -> list[tuple[dict, str, list]]:
     """Telegram'ga ulangan xodimlar uchun kunlik eslatma matni. Bir xil (xat, tur) uchun kuniga ko'pi bilan bitta;
        muddati o'tganlar — har 3 kunda bir marta takrorlanadi."""
-    today = S.TODAY.isoformat(); out = []
+    today = clock.today().isoformat(); out = []
     for u in db.rows(con, "SELECT * FROM users WHERE telegram_id IS NOT NULL"):
         if u["role"] not in ROLES or ROLES[u["role"]].local_only: continue
         items = []
         for it in reminders_for(con, u):
             k = f"{it['who']}:{it['kind']}"
             if con.execute("SELECT 1 FROM portal_reminders WHERE user_id=? AND thread_id=? AND kind=? AND sent_on>=?",
-                           (u["id"], it["thread_id"], k, (S.TODAY - dt.timedelta(days=2 if it["kind"] == "otgan" else 0)).isoformat())).fetchone():
+                           (u["id"], it["thread_id"], k, (clock.today() - dt.timedelta(days=2 if it["kind"] == "otgan" else 0)).isoformat())).fetchone():
                 continue
             items.append((it, k))
         if not items: continue
@@ -1573,7 +1574,7 @@ def telegram_digest(con) -> list[tuple[dict, str, list]]:
     return out
 
 def mark_reminded(con, user_id: int, keys: list):
-    today = S.TODAY.isoformat()
+    today = clock.today().isoformat()
     con.executemany("INSERT OR IGNORE INTO portal_reminders(user_id,thread_id,kind,sent_on) VALUES(?,?,?,?)", [(user_id, t, k, today) for t, k in keys])
     con.commit()
 
@@ -1973,8 +1974,8 @@ def _send_directives(c: Ctx, body: ThreadIn, units_: list[str], thread_id: int |
     from . import directives as DIR, decisions as DEC
     T = DIR.targets(c)
     my = DEC.unit_of(c) or ("rektorat" if c.role.key in ("rektor", "kotib") else None)
-    due = _valid_due(body.due) or (S.TODAY + dt.timedelta(days=7)).isoformat()
-    if due < S.TODAY.isoformat(): raise HTTPException(400, "Muddat o'tgan sana bo'lishi mumkin emas")
+    due = _valid_due(body.due) or (clock.today() + dt.timedelta(days=7)).isoformat()
+    if due < clock.today().isoformat(): raise HTTPException(400, "Muddat o'tgan sana bo'lishi mumkin emas")
     files = DIR._check_files(c, body.file_ids, [DEC.task_key(u) for u in units_] + [my]) if body.file_ids else []
     subj = re.sub(r"\s+", " ", body.subject or "").strip()[:200]
     out = []; um = unit_map(_con)
@@ -1998,7 +1999,7 @@ def api_create(body: ThreadIn, request: Request):
     if dir_to:   # bo'sh mavzu/matn — xat bilan bir xil tekshiruv
         if not re.sub(r"\s+", " ", body.subject or "").strip(): raise HTTPException(400, "Mavzu kiritilmagan")
         if not (body.body or "").strip(): raise HTTPException(400, "Xat matni bo'sh")
-        if body.due and _valid_due(body.due) < S.TODAY.isoformat(): raise HTTPException(400, "Muddat o'tgan sana bo'lishi mumkin emas")
+        if body.due and _valid_due(body.due) < clock.today().isoformat(): raise HTTPException(400, "Muddat o'tgan sana bo'lishi mumkin emas")
     if letter_to:
         tid = create_thread(_con, c, body.model_copy(update={"to": letter_to}))
         t = db.one(_con, "SELECT ref_no, subject FROM portal_threads WHERE id=?", (tid,)); ref = t["ref_no"]
@@ -2424,9 +2425,9 @@ def seed(con, force=False):
         else:
             u = users_by_unit.get(unit)
         return Ctx(u, ROLES[u["role"]]) if u else None
-    now = dt.datetime.now().replace(microsecond=0, second=0)
+    now = clock.now().replace(microsecond=0, second=0)
     def ago(h): return (now - dt.timedelta(hours=h)).isoformat(timespec="seconds")
-    def day(n): return (S.TODAY + dt.timedelta(days=n)).isoformat()
+    def day(n): return (clock.today() + dt.timedelta(days=n)).isoformat()
     kafs = [k for k in um if k.startswith("kaf")]
     faks = [k for k in um if k.startswith("fak")]
 
@@ -2542,7 +2543,7 @@ def seed(con, force=False):
                          GROUP BY g.id, sc.subject ORDER BY g.name LIMIT 60""")
     put("yanaz", "akademik", "Yakuniy_nazorat_jadvali_qishki_sessiya_loyiha.xlsx",
         _xlsx("Yakuniy nazorat", ["Sana", "Vaqt", "Guruh", "Fan", "Nazorat shakli", "Mas'ul o'qituvchi"],
-              [[(S.TODAY + dt.timedelta(days=44 + (i % 18))).strftime("%d.%m.%Y"), ["09:00", "11:00", "14:00"][i % 3], r["grp"], r["subject"],
+              [[(clock.today() + dt.timedelta(days=44 + (i % 18))).strftime("%d.%m.%Y"), ["09:00", "11:00", "14:00"][i % 3], r["grp"], r["subject"],
                 ["yozma", "test", "og'zaki"][i % 3], r["tch"] or ""] for i, r in enumerate(yn)]),
         "O'quv jarayoni", faks + ["imtihon"], "Loyiha — fakultet tyutorlari takliflari bilan yakunlanadi", 48)
     put("sirtqi", "sirtqi", "Sirtqi_sessiya_chaqiruv_xati_namuna.docx",
@@ -2817,9 +2818,9 @@ def seed_demo_v22(con) -> int:
         u = db.one(con, q, a)
         return Ctx(u, ROLES[u["role"]]) if u and u["role"] in ROLES else None
     def by_role(role, unit=None): return cx(role=role, unit=unit)
-    now = dt.datetime.now().replace(microsecond=0, second=0)
+    now = clock.now().replace(microsecond=0, second=0)
     ago = lambda h: (now - dt.timedelta(hours=h)).isoformat(timespec="seconds")
-    day = lambda n: (S.TODAY + dt.timedelta(days=n)).isoformat()
+    day = lambda n: (clock.today() + dt.timedelta(days=n)).isoformat()
     def seen(tid, c, h):      # xodim ochdi: o'qilganlik va bo'lim holati (thread_detail bilan bir xil, audit yozmasdan)
         mx = con.execute("SELECT MAX(id) FROM portal_msgs WHERE thread_id=?", (tid,)).fetchone()[0] or 0
         con.execute("""INSERT INTO portal_user_reads(thread_id,user_id,last_msg,read_at) VALUES(?,?,?,?)

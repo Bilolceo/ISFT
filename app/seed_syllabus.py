@@ -9,6 +9,7 @@ olinmagan; ular solishtirish funksiyasini sinash uchun tuzilgan. Haqiqiy foydala
 tasdiqlangan sillabuslaridan mavzularni kiritadi (syl_ref jadvali).
 """
 import datetime as dt, json, random, sys
+from . import clock
 from . import db
 
 # Soha → tayanch OTMlar (namuna). Har bir fan uchun A — asosiy ro'yxat, B — 2 mavzusi tushirilgan + o'ziga xos qo'shimcha mavzular.
@@ -436,7 +437,7 @@ def _seed_tasks(con, R, today, ak, heads):
 def _seed_load_plan(con, ak):
     """Buxgalteriya hisobi kafedrasi uchun saqlangan yuklama rejasi (potok chegarasi 3)."""
     con.execute("INSERT OR REPLACE INTO syl_load_plans(department_id, params, updated_at, updated_by) VALUES(?,?,?,?)",
-                (4, json.dumps({"settings": {"potok_max": 3}, "rows": {}}, ensure_ascii=False), dt.datetime.now().isoformat(timespec="seconds"), ak["id"]))
+                (4, json.dumps({"settings": {"potok_max": 3}, "rows": {}}, ensure_ascii=False), clock.now().isoformat(timespec="seconds"), ak["id"]))
 
 if __name__ == "__main__":
     from .db import connect

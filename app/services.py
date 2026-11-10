@@ -1,10 +1,16 @@
 """Ma'lumot servislari. Har bir funksiya avval RBAC tekshiruvidan o'tadi va faqat ruxsat etilgan ko'lamni qaytaradi."""
 import datetime as dt, sqlite3
+from . import clock
 from . import db, academic_rules as AR
 from .rbac import (Ctx, require, AccessDenied, KPI, ACADEMIC, STUDENTS, CONTRACTS, FINANCE, PAYROLL, HR, SCIENCE,
                    INTL, ADMISSIONS, YOUTH, MASTERS, TASKS, AUDIT)
 
-TODAY = dt.date.today()   # demo ma'lumotlar seed paytida shu sanaga suriladi (app/dateshift.py)
+# "Bugun" — har so'rovda clock.today() (Toshkent sanasi; yarim tundan keyin yangi kun). Demo ma'lumotlar seed paytida o'sha kunga
+# suriladi (app/dateshift.py). Eski `S.TODAY` nomi faqat moslik uchun: atribut har murojaatda qayta hisoblanadi (PEP 562).
+# `from .services import TODAY` ISHLATMANG — import paytida qotib qoladi; to'g'ridan-to'g'ri clock.today() chaqiring.
+def __getattr__(name):
+    if name == "TODAY": return clock.today()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 def _g(con, ctx, res, action, quiet):
     if quiet:
@@ -120,7 +126,7 @@ def _risk_core(con, sc: str):
             for sid, (lvl, f) in OPS.akademik_signals(con, P, f"s.status='faol' AND {sc}").items():
                 if lvl >= AR.AT_RISK_LEVEL: sig.setdefault(sid, {})["akademik"] = (lvl, f)
             for sid, h, form in con.execute(f"""SELECT a.student_id, SUM(a.hours), s.study_form FROM absences a JOIN students s ON s.id=a.student_id
-                                          WHERE s.status='faol' AND {sc} AND {OPS._unexcused_sql(P, TODAY)} GROUP BY a.student_id"""):
+                                          WHERE s.status='faol' AND {sc} AND {OPS._unexcused_sql(P, clock.today())} GROUP BY a.student_id"""):
                 lvl = OPS.davomat_level(h, P, form)
                 if lvl >= AR.AT_RISK_LEVEL: sig.setdefault(sid, {})["davomat"] = (lvl, {"hours": h})
         except sqlite3.OperationalError:
@@ -228,7 +234,7 @@ def science_summary(con, ctx: Ctx, quiet=False):
 def international_summary(con, ctx: Ctx, quiet=False):
     _g(con, ctx, INTL, "xalqaro hamkorlik", quiet)
     p = db.rows(con, "SELECT * FROM partners ORDER BY expires")
-    for r in p: r["days_left"] = (dt.date.fromisoformat(r["expires"]) - TODAY).days
+    for r in p: r["days_left"] = (dt.date.fromisoformat(r["expires"]) - clock.today()).days
     return {"partners": p, "active": sum(r["status"] == "faol" for r in p), "expiring": [r for r in p if 0 <= r["days_left"] <= 60],
             "exchanged": sum(r["students_exchanged"] for r in p)}
 
@@ -276,7 +282,7 @@ def tasks_list(con, ctx: Ctx, quiet=False):
                             WHERE {where} AND t.status!='qoralama' ORDER BY COALESCE(t.due, '9999'), t.id""", args)
     if args:   # boshqa kafedra/fakultetning bo'limsiz eski topshiriqlari ko'rinmaydi
         rows = [r for r in rows if r.get("unit") or r.get("assignee_user") == uid or DEC.legacy_mine(ctx, r)]
-    now = dt.datetime.now()
+    now = clock.now()
     for r in rows:
         r["decision"] = bool(r.get("source"))
         r["mine"] = r.get("assignee_user") == uid or DEC.legacy_mine(ctx, r) or (head and r.get("unit") == u)
@@ -288,7 +294,7 @@ def tasks_list(con, ctx: Ctx, quiet=False):
         except (ValueError, TypeError):
             r["overdue"], r["days"] = False, None; continue   # buzuq sana butun panelni yiqitmasin
         r["overdue"] = r["status"] != "bajarildi" and d < now
-        r["days"] = (d.date() - TODAY).days
+        r["days"] = (d.date() - clock.today()).days
     from . import directives as DIR   # majlisdan tashqari topshiriqlar (meeting_id yo'q): ko'rinish, "mine", muddat — app/directives.py
     rows += DIR.task_rows(ctx)
     return {"tasks": rows, "overdue": sum(r["overdue"] for r in rows), "done": sum(r["status"] == "bajarildi" for r in rows)}
@@ -354,11 +360,11 @@ def alerts(con, ctx: Ctx):
 #   spark_labels (ixtiyoriy) — spark nuqtalari/ustunlari nomlari
 def _sync_at():
     """HEMIS va buxgalteriya bilan kunlik sinxronlash vaqti. DEMO TAXMIN: jadval — har kuni 08:00 (demo bazada ma'lumot sun'iy)."""
-    now = dt.datetime.now().replace(microsecond=0)
+    now = clock.now().replace(microsecond=0)
     t = dt.datetime.combine(now.date(), dt.time(8, 0))
     return (t if now >= t else t - dt.timedelta(days=1)).isoformat()
 
-def _now_iso(): return dt.datetime.now().replace(microsecond=0).isoformat()
+def _now_iso(): return clock.now().replace(microsecond=0).isoformat()
 
 def _k(key, label, value, sub, source, updated, spark=None, spark_kind=None, labels=None, **old):
     k = {"label": label, "value": value, "sub": sub, **old, "key": key, "source": source, "updated": updated}
@@ -396,7 +402,7 @@ def kpis(con, ctx: Ctx):
     r = safe(at_risk_students)
     if r:
         last = db.one(con, "SELECT value FROM ops_policy WHERE key='_last_run'") if db.one(con, "SELECT 1 x FROM sqlite_master WHERE name='ops_policy'") else None
-        upd = dt.datetime.fromtimestamp(last["value"]).replace(microsecond=0).isoformat() if last else sync
+        upd = clock.from_ts(last["value"]).replace(microsecond=0).isoformat() if last else sync
         out.append(_k("oqishda_xavf", RISK_LABEL, r["count"], f"{round(100*r['count']/max(1,r['of']),1)}% faol talaba · o'zlashtirish yoki davomat (kritik/jiddiy)",
                       "Talabalar markazi qoidalari (HEMIS baholari va davomati)", upd, [r["count"], r["of"]], "ring", bad=True))
     c = safe(contracts_summary)
@@ -424,9 +430,9 @@ def kpis(con, ctx: Ctx):
                       [x["n"] for x in yr], "line", [str(x["y"]) for x in yr]))
     i = safe(international_summary)
     if i:
-        yrs = list(range(TODAY.year - 4, TODAY.year + 1))   # yil oxiridagi amaldagi shartnomalar soni (imzolangan va tugamagan)
+        yrs = list(range(clock.today().year - 4, clock.today().year + 1))   # yil oxiridagi amaldagi shartnomalar soni (imzolangan va tugamagan)
         ps = i["partners"]
-        act = [sum(1 for p in ps if p["signed"][:4] <= str(y) and p["expires"] >= (f"{y}-12-31" if y < TODAY.year else TODAY.isoformat())) for y in yrs]
+        act = [sum(1 for p in ps if p["signed"][:4] <= str(y) and p["expires"] >= (f"{y}-12-31" if y < clock.today().year else clock.today().isoformat())) for y in yrs]
         out.append(_k("hamkorlar", "Xalqaro hamkorlar", i["active"], f"{len(i['expiring'])} tasi tugamoqda", "Xalqaro shartnomalar reyestri", sync,
                       act, "line", [str(y) for y in yrs]))
     ad = safe(admissions_summary)
@@ -439,7 +445,7 @@ def kpis(con, ctx: Ctx):
                         "ISFT Core · majlis topshiriqlari", _now_iso(), [t["done"], len(t["tasks"])], "progress", bad=t["overdue"] > 0))
     y = safe(youth_summary)
     if y:
-        wk = [(TODAY - dt.timedelta(days=7 * (5 - j) + 6), TODAY - dt.timedelta(days=7 * (5 - j))) for j in range(6)]   # oxirgi 6 hafta
+        wk = [(clock.today() - dt.timedelta(days=7 * (5 - j) + 6), clock.today() - dt.timedelta(days=7 * (5 - j))) for j in range(6)]   # oxirgi 6 hafta
         ser = [sum(1 for x in y["appeals"] if a0.isoformat() <= x["date"] <= a1.isoformat()) for a0, a1 in wk]
         out.append(_k("murojaatlar", "Murojaatlar", y["appeals_open"], "hal qilinmagan", "ISFT Core · anonim murojaatlar", _now_iso(),
                       ser, "bars", [a1.isoformat() for _, a1 in wk]))

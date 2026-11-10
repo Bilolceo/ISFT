@@ -21,6 +21,7 @@ Har bir amal rbac.audit(resource="accounts").
 import datetime as dt, re, secrets, time
 from fastapi import APIRouter, Request, HTTPException, Response
 from pydantic import BaseModel
+from . import clock
 from . import db, rbac, sessions as SS
 from .rbac import AccessDenied, Ctx
 
@@ -70,7 +71,7 @@ def bind(con, ctx_fn):
     if not getattr(router, "_desks", False):
         router.include_router(DK.router); router._desks = True
 
-def _now(): return dt.datetime.now().isoformat(timespec="seconds")
+def _now(): return clock.now().isoformat(timespec="seconds")
 def _short(name): return (name or "").split(":", 1)[1].strip() if ":" in (name or "") else ""
 def _pos(name): return (name or "").split(":", 1)[0].strip() if ":" in (name or "") else (name or "")
 
@@ -174,7 +175,7 @@ def _last_logins() -> dict:
     out = {r["user_id"]: r["ts"] for r in db.rows(_con, "SELECT user_id, MAX(ts) ts FROM audit_log WHERE action='tizimga kirish' AND allowed=1 GROUP BY user_id")}
     try:      # audit jurnali tozalangan bo'lsa ham — sessiyalar jadvalidan
         for r in db.rows(_con, "SELECT user_id, MAX(created) c FROM sessions GROUP BY user_id"):
-            ts = dt.datetime.fromtimestamp(r["c"]).isoformat(timespec="seconds") if r["c"] else None
+            ts = clock.from_ts(r["c"]).isoformat(timespec="seconds") if r["c"] else None
             if ts and ts > (out.get(r["user_id"]) or ""): out[r["user_id"]] = ts
     except Exception: pass
     return out

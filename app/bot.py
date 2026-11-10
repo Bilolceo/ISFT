@@ -10,7 +10,6 @@ Xavfsizlik: kanal 'telegram' — ish haqi va kadrlar ma'lumoti hech kimga chiqma
 Rejali ishlar (kunlik brifing 08:00, portal eslatmalari 09:00) Toshkent vaqtida: ISFT_CORE_TZ (standart Asia/Tashkent)."""
 from __future__ import annotations
 import asyncio, datetime as dt, hashlib, json, logging, os, re
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 try:
     from telegram import Update, BotCommand
     from telegram.constants import ChatAction
@@ -18,6 +17,7 @@ try:
     from telegram.error import InvalidToken, Conflict
 except ImportError:          # kutubxona yo'q bo'lsa ham veb-ilova ishlaydi — bot o'chiq deb ko'rsatiladi
     Application = None
+from . import clock
 from . import db, rbac, ai, reports, agent as AG, agent_hub as AH, sessions as SS
 from .rbac import AccessDenied
 
@@ -27,15 +27,7 @@ con = db.connect()           # veb-jarayon ichida start_in_app() ilovaning ulani
 
 TG_LIMIT = SS.Limiter(5, 600)     # bitta Telegram akkaunt yoki bitta lavozim kodi: 10 daqiqada 5 ta xato
 
-def _tz():
-    name = os.getenv("ISFT_CORE_TZ", "Asia/Tashkent")
-    try:
-        return ZoneInfo(name)
-    except (ZoneInfoNotFoundError, ValueError):
-        log.warning("vaqt zonasi topilmadi (%s) — UTC+5 (Toshkent) ishlatiladi", name)
-        return dt.timezone(dt.timedelta(hours=5), "UZT")
-
-TZ = _tz()
+TZ = clock.TZ   # ISFT_CORE_TZ (standart Asia/Tashkent; tzdata bo'lmasa UTC+5) — app/clock.py
 
 # ---------- holat (/api/status → "bot") ----------
 STATE = {"enabled": False, "running": False, "username": None, "mode": None, "note": None,

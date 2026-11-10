@@ -19,6 +19,7 @@ import datetime as dt, io, math, threading, time
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
+from . import clock
 from . import db, rbac, academic_rules as AR
 from .rbac import Ctx, AccessDenied
 
@@ -58,7 +59,7 @@ COLS = ("student_id, semester, gpa, avg_score, credits, credits_ok, n_subj, n_f,
 _state = {"checked": 0.0, "fp": None}
 _memo = {}
 
-def _now(): return dt.datetime.now().replace(microsecond=0)
+def _now(): return clock.now().replace(microsecond=0)
 
 # =============================================================================================
 # Kesh

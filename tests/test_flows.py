@@ -12,6 +12,7 @@ from pathlib import Path
 import httpx
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT)); from app import clock as CLK   # noqa: E402 — institut vaqti (ISFT_CORE_TZ / ISFT_CORE_FAKE_TODAY), server bilan bir xil
 DB = Path(os.environ.get("ISFT_CORE_DB") or ROOT / "data" / "jarvis.db")
 B = os.environ.get("ISFT_TEST_URL", "http://127.0.0.1:8000")
 PW = "Isft2026"
@@ -50,7 +51,7 @@ def uid(role):
     return q1("SELECT id FROM users WHERE role=? AND COALESCE(active,1)=1 ORDER BY id LIMIT 1", (role,))
 
 T0 = time.strftime("%Y-%m-%dT%H:%M:%S")
-TODAY = dt.date.today()
+TODAY = CLK.today()
 reg, aka, imt, kaf, sir, bux, rek, cc = S(17), S(18), S(8), S(31), S(27), S(11), S(2), S(23)
 pro = S(uid("prorektor_oquv"))
 KAF_DEPT = q1("SELECT department_id FROM users WHERE id=31")

@@ -15,6 +15,7 @@ from pathlib import Path
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel, Field
+from . import clock
 from . import db, rbac, brand, academic_rules as AR
 from .rbac import Ctx, AccessDenied, FACILITIES, REQUESTS, YOUTH, PROCUREMENT
 
@@ -97,7 +98,7 @@ def bind(con, ctx_fn):
     _con, _ctx = con, ctx_fn
     init(con)
 
-def now(): return dt.datetime.now().replace(microsecond=0)
+def now(): return clock.now().replace(microsecond=0)
 def iso(t): return t.isoformat(timespec="seconds")
 def e(s): return html.escape(str(s or ""))
 

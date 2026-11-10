@@ -20,6 +20,7 @@ from pathlib import Path
 import httpx
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT)); from app import clock as CLK   # noqa: E402 — institut vaqti (ISFT_CORE_TZ / ISFT_CORE_FAKE_TODAY), server bilan bir xil
 sys.path.insert(0, str(ROOT))
 from app import db as DB, student_ops as OPS, registrar as RG, registrar_scan as RS, academic_rules as AR   # noqa: E402
 
@@ -139,7 +140,7 @@ try:
     rid, sid, subj, sc0 = retake_for(reg, "kunduzgi", 2)
     rows = {r["id"]: r for r in reg.get("/api/ops/retakes").json()}
     ok(rows[rid]["tone"] == "green" and 71 < rows[rid]["hours_left"] <= 72, "Yangi varaqa: 3 kun, yashil")
-    con.execute("UPDATE retakes SET due_at=? WHERE id=?", ((dt.datetime.now() - dt.timedelta(hours=5)).isoformat(timespec="seconds"), rid)); con.commit()
+    con.execute("UPDATE retakes SET due_at=? WHERE id=?", ((CLK.now() - dt.timedelta(hours=5)).isoformat(timespec="seconds"), rid)); con.commit()
     OPS.evaluate(con)
     case = q("SELECT id, level FROM ops_cases WHERE key=? AND status='ochiq'", (f"{sid}:otrabotka:{rid}",))
     ok(case and case[0][1] == 2, "Muddat o'tdi → otrabotka holati (kritik)")
@@ -227,14 +228,14 @@ try:
         c_ = RG.permit_check(con, s_id)
         if not c_["eligible"] and [x["key"] for x in c_["checks"] if not x["ok"]] == ["kontrakt"]: cand = s_id; break
     ok(cand, "Faqat kontrakt sababli ruxsat olmaydigan talaba topildi")
-    ok(reg.post("/api/registrar/deferment", json={"student_id": cand, "until": (dt.date.today() + dt.timedelta(days=10)).isoformat(), "note": "test: buxgalteriya kelishuvi"}).status_code == 200, "Registrator kontrakt muddatini uzaytirdi")
+    ok(reg.post("/api/registrar/deferment", json={"student_id": cand, "until": (CLK.today() + dt.timedelta(days=10)).isoformat(), "note": "test: buxgalteriya kelishuvi"}).status_code == 200, "Registrator kontrakt muddatini uzaytirdi")
     DEFER.extend(x[0] for x in q("SELECT id FROM contract_deferments WHERE student_id=? AND note LIKE 'test:%'", (cand,)))
     ok(reg.get(f"/api/registrar/permit/{cand}").json()["eligible"], "Muddat uzaytirilgach — ruxsat beriladi")
-    ok(sir.post("/api/registrar/deferment", json={"student_id": sid_s, "until": (dt.date.today() + dt.timedelta(days=10)).isoformat(), "note": "x y z"}).status_code == 403, "Sirtqi bo'lim kontrakt muddatini uzaytira olmaydi")
+    ok(sir.post("/api/registrar/deferment", json={"student_id": sid_s, "until": (CLK.today() + dt.timedelta(days=10)).isoformat(), "note": "x y z"}).status_code == 403, "Sirtqi bo'lim kontrakt muddatini uzaytira olmaydi")
 
     # ---------------------------------------------------------------- 6. shaxsiy grafik
     print("— 6. Shaxsiy grafik —")
-    r = reg.post("/api/docs/issue", json={"key": "personal_schedule", "params": {"target": f"s:{sid3}", "deadline": (dt.date.today() + dt.timedelta(days=20)).isoformat()}})
+    r = reg.post("/api/docs/issue", json={"key": "personal_schedule", "params": {"target": f"s:{sid3}", "deadline": (CLK.today() + dt.timedelta(days=20)).isoformat()}})
     ok(r.status_code == 200 and r.json()["regs"][0].startswith("SG-"), f"Shaxsiy grafik chiqdi: {r.json().get('regs')}")
     reg_sg = docs_from(r.json())[0]
     code = q("SELECT verify_code FROM documents WHERE reg_no=?", (reg_sg,))[0][0]
@@ -300,7 +301,7 @@ try:
         dx = xo.post(f"/api/registrar/retakes/{ridx}/demo-scan", json={"variant": "signed", "fmt": "pdf"})
         ok(dx.status_code == 200 and dx.json()["scan"]["signed"], "Xodim skan yukladi (o'qildi)")
         ok(xo.post(f"/api/ops/retakes/{ridx}/approve", json={"score": 70}).status_code == 403, "Bahoni tasdiqlash — boshliqda (xodimga 403)")
-        ok(xo.post("/api/registrar/deferment", json={"student_id": sidx, "until": (dt.date.today() + dt.timedelta(days=5)).isoformat(), "note": "x y z"}).status_code == 403, "Kontrakt muddatini uzaytirish — boshliqda")
+        ok(xo.post("/api/registrar/deferment", json={"student_id": sidx, "until": (CLK.today() + dt.timedelta(days=5)).isoformat(), "note": "x y z"}).status_code == 403, "Kontrakt muddatini uzaytirish — boshliqda")
         tx = [t for t in xo.get("/api/ops/tasks?rule=davomat&kind=xat").json() if t["assignee_role"] == "talabalar"]
         ok(tx and all(t["can_act"] for t in tx), "Xodim Registrator navbatidagi xatlarni bajara oladi")
         tb = xo.get("/api/ops/tasks?kind=buyruq").json()
@@ -320,7 +321,7 @@ try:
     far = q("""SELECT json_extract(facts,'$.days') FROM ops_cases WHERE rule='tatil' AND level=1 AND status='ochiq' ORDER BY 1 DESC LIMIT 1""")
     ok(far and 30 < far[0][0] <= 90, f"Ogohlantirish oynasi kengaydi (eng uzog'i {far[0][0] if far else '—'} kun)")
     ok(any(k == "buyruq" for k, _, _ in OPS.PLAN[("tatil", 2)]), "Qaytishga ≤7 kun: Registrator ofisiga buyruq loyihasi topshirig'i")
-    sc = OPS.script("tatil", "buyruq", {"order_no": "TH-25/1", "end": dt.date.today().isoformat(), "days": 5}, {"full_name": "Test Talaba"}, P)
+    sc = OPS.script("tatil", "buyruq", {"order_no": "TH-25/1", "end": CLK.today().isoformat(), "days": 5}, {"full_name": "Test Talaba"}, P)
     ok(any("qayta tiklash" in x and "buyruqlar modulida" in x for x in sc["say"]), "Buyruq topshirig'i: «ta'tildan qaytish» loyihasi va buyruqlar moduliga bog'lanish")
 
     # ---------------------------------------------------------------- 9. akademik model: ruxsatnoma, qarz, ta'til buyrug'i

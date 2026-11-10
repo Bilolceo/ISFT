@@ -8,12 +8,12 @@ Ulagichlar:
 Fon jarayoni har POLL_SEC soniyada kameralarni so'raydi va natijani occupancy jadvaliga yozadi.
 Tahlil: hozirgi holat, 4 haftalik bandlik, hafta×para issiqlik xaritasi, "dars bor — xona bo'sh", sig'imdan oshish.
 """
-import asyncio, datetime as dt, json, os, random, re, xml.etree.ElementTree as ET
-from zoneinfo import ZoneInfo
+import asyncio, datetime as dt, json, os, random, re, time, xml.etree.ElementTree as ET
 from collections import defaultdict
 import httpx
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel, Field
+from . import clock
 from . import db, rbac, hikvision as HK, secret_store as SS
 from .rbac import Ctx, AccessDenied, SPACES
 
@@ -25,7 +25,7 @@ SAMPLE_EVERY_MIN = 5
 OFFLINE_FAILS = int(os.getenv("ISFT_CORE_CAM_OFFLINE_FAILS", "3"))   # ketma-ket xato so'rovlar → nosozlik arizasi
 WORK_HOURS = os.getenv("ISFT_CORE_WORK_HOURS", "07:30-20:00")        # bundan tashqarida qo'riqlanadigan xonaga kirish — ogohlantirish
 EVENT_DEDUP_SEC = int(os.getenv("ISFT_CORE_CAM_DEDUP_SEC", "300"))   # app/camsec.py DEDUP_SEC bilan bir xil
-TZ = ZoneInfo(os.getenv("ISFT_CORE_TZ", "Asia/Tashkent"))           # voqealar server vaqtida (Toshkent), kamera soatida emas
+TZ = clock.TZ                                                      # voqealar server vaqtida (ISFT_CORE_TZ, Toshkent), kamera soatida emas
 OCC_PATH = os.getenv("ISFT_CORE_CAM_OCC_PATH", "")   # masalan: /ISAPI/Intelligent/channels/{ch}/regionPeopleCounting (modelga bog'liq)
 
 SLOTS = [(1, "08:30", "09:50"), (2, "10:00", "11:20"), (3, "11:30", "12:50"), (4, "13:30", "14:50"), (5, "15:00", "16:20"), (6, "16:30", "17:50")]
@@ -72,7 +72,7 @@ def bind(con, ctx_fn):
     _con, _ctx = con, ctx_fn
     init(con)
 
-def now(): return dt.datetime.now(TZ).replace(tzinfo=None, microsecond=0)
+def now(): return clock.now().replace(microsecond=0)
 def iso(t): return t.isoformat(timespec="seconds")
 def hm(s): h, m = map(int, s.split(":")); return h * 60 + m
 
@@ -114,7 +114,7 @@ async def isapi_count(cam) -> int:
 # --- simulyator: jadval + davomat asosida, (xona, sana, para) bo'yicha deterministik ---
 _sched_cache = {"t": 0, "map": {}, "gsize": {}, "att": {}, "zone": {}, "idle": set(), "idle_since": None, "events": {}}
 def _sched(con):
-    if _sched_cache["t"] > dt.datetime.now().timestamp() - 300 and _sched_cache["map"]: return _sched_cache
+    if _sched_cache["t"] > time.time() - 300 and _sched_cache["map"]: return _sched_cache
     m = {}
     for s in db.rows(con, "SELECT * FROM schedule"): m[(s["room_id"], s["weekday"], s["slot"])] = s
     gs = {r["group_id"]: r["n"] for r in db.rows(con, "SELECT group_id, COUNT(*) n FROM students GROUP BY group_id")}
@@ -125,7 +125,7 @@ def _sched(con):
     idle = {int(x) for x in st.get("idle_rooms", "").split(",") if x}
     since = dt.date.fromisoformat(st["idle_since"]) if st.get("idle_since") else None
     evs = {r["date"]: r["n"] for r in db.rows(con, "SELECT e.date, (SELECT COUNT(*) FROM event_checkin c WHERE c.event_id=e.id) n FROM events e")}
-    _sched_cache.update(t=dt.datetime.now().timestamp(), map=m, gsize=gs, att=att, zone=zone, idle=idle, idle_since=since, events=evs)
+    _sched_cache.update(t=time.time(), map=m, gsize=gs, att=att, zone=zone, idle=idle, idle_since=since, events=evs)
     if GHOST_TEACHER["id"] is None:   # demo ssenariysi: seshanba/payshanba 5-parada darsi bor birinchi o'qituvchi
         cnt = defaultdict(int)
         for x in m.values():

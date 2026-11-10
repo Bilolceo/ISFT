@@ -11,6 +11,7 @@ O'qish tartibi (hech biri bo'lmasa — registrator qo'lda kiritadi, tizim buni o
 Demo generator: «to'ldirilgan va imzolangan» yoki «imzosiz» skan (PNG yoki matn qatlamli PDF) — faqat namoyish uchun.
 """
 import datetime as dt, io, random, re, shutil, subprocess, tempfile, zlib
+from . import clock
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
@@ -58,7 +59,7 @@ def make_sheet(info: dict, variant: str = "signed", fmt: str = "png", seed=None)
     text((120, 146), "Registrator ofisi", 24, False, (255, 230, 236))
     text((120, 240), "OTRABOTKA (QAYTA TOPSHIRISH) VARAQASI", 34, True)
     text((120, 300), f"Ro'yxat raqami: {info['reg_no']}", 28, True)
-    text((800, 304), f"Berilgan: {info.get('issued', dt.date.today().strftime('%d.%m.%Y'))}", 22)
+    text((800, 304), f"Berilgan: {info.get('issued', clock.today().strftime('%d.%m.%Y'))}", 22)
     rows = [("Talaba", info["student"]), ("HEMIS ID", info.get("hemis") or "—"), ("Fakultet / guruh", f"{info.get('faculty', '')} · {info.get('grp', '')}"),
             ("Fan", info["subject"]), ("O'qituvchi", info.get("teacher") or "—"),
             ("Avvalgi ball", str(info.get("score_old") if info.get("score_old") is not None else "—")), ("Topshirish muddati", info.get("due") or "—")]
@@ -79,7 +80,7 @@ def make_sheet(info: dict, variant: str = "signed", fmt: str = "png", seed=None)
     score = R.randint(52, 88)
     hand = _font(_HAND, 56)
     ink = (22, 38, 120)
-    d.text((cols[0] + 26, ty + 105), dt.date.today().strftime("%d.%m.%y"), font=_font(_HAND, 38), fill=ink)
+    d.text((cols[0] + 26, ty + 105), clock.today().strftime("%d.%m.%y"), font=_font(_HAND, 38), fill=ink)
     d.text((cols[1] + 110, ty + 80), str(score), font=hand, fill=ink)
     if variant == "signed":
         # imzo: tasodifiy tayanch nuqtalar orqali silliq (Catmull-Rom) egri chiziq + pastki «dum»
@@ -268,7 +269,7 @@ def _read_digits(crop: Image.Image):
 def read_scan(raw: bytes, ext: str) -> dict:
     """Skanni o'qiydi. Natija: method, reg_no, signed, score, score_filled, ocr, warnings."""
     meta = {"method": [], "reg_no": None, "signed": None, "score": None, "score_filled": None,
-            "ocr": bool(tesseract_bin()), "warnings": [], "read_at": dt.datetime.now().isoformat(timespec="seconds")}
+            "ocr": bool(tesseract_bin()), "warnings": [], "read_at": clock.now().isoformat(timespec="seconds")}
     img = page_image(raw, ext)
     text, words = "", []
     if ext == ".pdf":

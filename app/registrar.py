@@ -17,6 +17,7 @@ import datetime as dt, json, random
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
+from . import clock
 from . import db, rbac, academic_rules as AR, student_ops as OPS
 from .rbac import Ctx, AccessDenied
 
@@ -46,7 +47,7 @@ def bind(con, ctx_fn):
     global _con, _ctx
     _con, _ctx = con, ctx_fn
 
-def _now(): return dt.datetime.now().replace(microsecond=0)
+def _now(): return clock.now().replace(microsecond=0)
 def _iso(t): return t.isoformat(timespec="seconds")
 
 # ---------------------------------------------------------------------------------------------
@@ -54,14 +55,14 @@ def _iso(t): return t.isoformat(timespec="seconds")
 # ---------------------------------------------------------------------------------------------
 def contract_need(con, s, today=None):
     """Bugungi kungacha jadval bo'yicha to'lanishi kerak bo'lgan summa va yetishmayotgani."""
-    today = today or dt.date.today()
+    today = today or clock.today()
     plan = db.rows(con, "SELECT * FROM contract_plan WHERE due<=? ORDER BY due DESC LIMIT 1", (today.isoformat(),))
     pct = plan[0]["cum_pct"] if plan else 0
     need = (s["contract_amount"] or 0) * pct // 100
     return need, max(0, need - (s["paid_amount"] or 0)), (plan[0] if plan else None)
 
 def deferment(con, sid, today=None):
-    today = (today or dt.date.today()).isoformat()
+    today = (today or clock.today()).isoformat()
     return db.one(con, "SELECT * FROM contract_deferments WHERE student_id=? AND until>=? ORDER BY until DESC LIMIT 1", (sid, today))
 
 def permit_check(con, sid, subject=None) -> dict:
@@ -132,7 +133,7 @@ def gen_personal_schedule(I, p):
     """documents.py → 'personal_schedule': talabaning qarzlarini yopish rejasi (bandlar — faktlardan)."""
     from . import documents as D, brand as B
     s = D._expand_students(I.con, I.ctx, p)[0]
-    P, today = OPS.policy(I.con), dt.date.today()
+    P, today = OPS.policy(I.con), clock.today()
     try: deadline = dt.date.fromisoformat(p.get("deadline") or "")
     except ValueError: deadline = today + dt.timedelta(days=21)
     if deadline <= today: raise ValueError("Yakuniy muddat bugundan keyin bo'lishi kerak")
@@ -337,7 +338,7 @@ def seed(con, base_url="http://localhost:8000/"):
         need, short_, _ = contract_need(con, s)
         if short_:
             con.execute("INSERT INTO contract_deferments(student_id,until,note,created_by,created_at) VALUES(?,?,?,?,?)",
-                        (s["id"], (dt.date.today() + dt.timedelta(days=20)).isoformat(), "Buxgalteriya bilan kelishildi (demo)", ctx.user["id"], _iso(now)))
+                        (s["id"], (clock.today() + dt.timedelta(days=20)).isoformat(), "Buxgalteriya bilan kelishildi (demo)", ctx.user["id"], _iso(now)))
             break
     con.execute("INSERT OR REPLACE INTO ops_policy(key,value,label,verified) VALUES('_seed_registrar',1,'Registrator demo ma''lumoti',1)")
     con.commit()
@@ -350,7 +351,7 @@ def seed_discipline(con, R=None):
     ba'zilarida taqdimnoma rektorga yuborilgan («loyiha»). Idempotent: hayfsan yozuvi bo'lsa qayta qo'shilmaydi."""
     if con.execute("SELECT 1 FROM discipline LIMIT 1").fetchone(): return 0
     R = R or random.Random(20261109)
-    P, today = OPS.policy(con), dt.date.today()
+    P, today = OPS.policy(con), clock.today()
     rows = []
     for r in db.rows(con, """SELECT student_id, CAST(json_extract(facts,'$.hours') AS INT) h, json_extract(facts,'$.expel') expel FROM ops_cases
                              WHERE rule='davomat' AND status='ochiq' AND level=3 ORDER BY student_id"""):
@@ -442,7 +443,7 @@ def api_defer(body: DeferIn, request: Request):
     OPS._student_row(c, body.student_id)
     try: until = dt.date.fromisoformat(body.until)
     except ValueError: raise HTTPException(400, "Sanani kiriting")
-    if not (dt.date.today() < until <= dt.date.today() + dt.timedelta(days=120)): raise HTTPException(400, "Muddat bugundan 120 kungacha bo'lishi kerak")
+    if not (clock.today() < until <= clock.today() + dt.timedelta(days=120)): raise HTTPException(400, "Muddat bugundan 120 kungacha bo'lishi kerak")
     _con.execute("INSERT INTO contract_deferments(student_id,until,note,created_by,created_at) VALUES(?,?,?,?,?)",
                  (body.student_id, until.isoformat(), body.note.strip(), c.user["id"], _iso(_now())))
     OPS._log(_con, None, None, body.student_id, c, "kontrakt muddati uzaytirildi", f"{until.isoformat()}gacha · {body.note.strip()}")

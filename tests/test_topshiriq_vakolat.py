@@ -12,6 +12,7 @@ from pathlib import Path
 import httpx
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT)); from app import clock as CLK   # noqa: E402 — institut vaqti (ISFT_CORE_TZ / ISFT_CORE_FAKE_TODAY), server bilan bir xil
 DB = Path(os.environ.get("ISFT_CORE_DB") or ROOT / "data" / "jarvis.db")
 B = os.environ.get("ISFT_TEST_URL", "http://127.0.0.1:8000")
 N = [0]
@@ -35,7 +36,7 @@ def one(sql, args=()):
     r = q(sql, args); return r[0] if r else None
 
 def due(days, h=18):
-    return (dt.datetime.combine(dt.date.today() + dt.timedelta(days=days), dt.time(h, 0))).isoformat(timespec="minutes")
+    return (dt.datetime.combine(CLK.today() + dt.timedelta(days=days), dt.time(h, 0))).isoformat(timespec="minutes")
 
 def denied_audits(action):
     return one("SELECT COUNT(*) FROM audit_log WHERE action=? AND allowed=0", (action,))[0]
@@ -249,7 +250,7 @@ try:
     ok(rektor.post(f"/api/dir/{KT}/review", json={"decision": "qaytarish", "note": "Proyektor tekshirilsin"}).status_code == 200, "rektor (nomidan berilgan) qaytara oladi")
 
     print("\n— 8. Muddati o'tgan va demo zanjirlar")
-    late = q("SELECT id FROM tasks WHERE origin='topshiriq' AND status!='bajarildi' AND due_at < ?", (dt.datetime.now().isoformat(timespec="seconds"),))
+    late = q("SELECT id FROM tasks WHERE origin='topshiriq' AND status!='bajarildi' AND due_at < ?", (CLK.now().isoformat(timespec="seconds"),))
     if late:
         v = rektor.get(f"/api/dir/{late[0][0]}").json()
         node = [n for n in [v["tree"]] + v["tree"]["children"] if n["id"] == late[0][0]]

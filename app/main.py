@@ -5,6 +5,7 @@ from fastapi import FastAPI, Request, HTTPException, Response
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from . import clock
 from . import db, rbac, services as S, ai, reports, documents as D, service as SV, occupancy as OC, decisions as DEC, student_ops as OPSM, agent as AG
 from .rbac import AccessDenied
 
@@ -149,7 +150,7 @@ def me(request: Request):
     c = ctx(request)
     return {"id": c.user["id"], "name": c.user["full_name"], "role": c.title, "greet": rbac.greeting(c.user), "photo": photo_of(c.user), "role_key": c.role.key, "level": c.role.level,
             "scope": c.scope_label(con), "allow": sorted(c.role.allow), "deny_note": c.role.deny_note,
-            "labels": rbac.LABELS, "today": S.TODAY.isoformat()}
+            "labels": rbac.LABELS, "today": clock.today().isoformat()}
 
 SECTIONS = {"academic": S.academic_overview, "risk": S.at_risk_students, "contracts": S.contracts_summary, "finance": S.finance_summary,
             "payroll": S.payroll_summary, "hr": S.hr_list, "science": S.science_summary, "international": S.international_summary,
@@ -237,14 +238,14 @@ def _valid_due(v) -> str:
     try:
         return dt.date.fromisoformat(str(v)).isoformat()
     except (ValueError, TypeError):
-        return (S.TODAY + dt.timedelta(days=14)).isoformat()
+        return (clock.today() + dt.timedelta(days=14)).isoformat()
 
 @app.post("/api/meetings")
 def save_meeting(body: Meeting, request: Request):
     c = ctx(request); rbac.require(con, c, rbac.TASKS, "majlisni saqlash", body.title)
     if c.role.key not in ("rektor", "kengash") and not c.role.key.startswith("prorektor_"):
         raise AccessDenied("⛔ Majlis topshiriqlarini faqat rahbariyat kiritadi.")
-    cur = con.execute("INSERT INTO meetings(title,date,kind,transcript) VALUES(?,?,?,?)", (body.title, S.TODAY.isoformat(), "Rektorat", body.transcript))
+    cur = con.execute("INSERT INTO meetings(title,date,kind,transcript) VALUES(?,?,?,?)", (body.title, clock.today().isoformat(), "Rektorat", body.transcript))
     for t in body.tasks:
         who = str(t.get("assignee") or "").strip()[:120]
         con.execute("INSERT INTO tasks(meeting_id,assignee,assignee_role,text,due,status) VALUES(?,?,?,?,?,?)",
@@ -449,5 +450,9 @@ from . import reyting as RT   # Reyting: talabalar o'zlashtirish reytingi (GPA),
 RT.init(con)   # kesh (rating_cache) yo'q yoki manba o'zgargan bo'lsa — mavjud baholardan quriladi; qayta seed shart emas
 RT.bind(con, ctx)
 app.include_router(RT.router)
+from . import student_portal as STP   # Talaba kabineti (/talaba): HEMIS ID + parol, alohida sessiya; xodimlar uchun «Talaba murojaatlari» (/talaba/xodim)
+STP.init(con)
+STP.bind(con, ctx)
+app.include_router(STP.router)
 
 app.mount("/", StaticFiles(directory=ROOT / "static", html=True), name="static")

@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="uz" data-theme="light">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#870037">
+<meta name="robots" content="noindex">
+<title>Talaba kabineti — ISFT</title>
+<script>try{var t=localStorage.getItem("jarvis-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="preload" href="/fonts/manrope-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/talaba.css">
+<link rel="icon" type="image/png" href="/brand/favicon.png">
+</head>
+<body class="tk">
+<!-- ============ KIRISH ============ -->
+<div id="tk-login" class="tk-auth hidden">
+  <form class="tk-auth-card" id="tk-login-form" autocomplete="on" novalidate>
+    <div class="tk-auth-brand"><img src="/brand/logo-sm.png" alt="ISFT instituti logotipi"><div><b>ISFT instituti</b><small>Talaba kabineti</small></div></div>
+    <h1>Kabinetga kirish</h1>
+    <p class="muted">HEMIS ID raqamingiz va parolingizni kiriting.</p>
+    <label class="tk-field"><span>HEMIS ID</span>
+      <input id="tk-hemis" name="username" inputmode="numeric" autocomplete="username" maxlength="20" placeholder="Masalan, 3744642506971" required></label>
+    <label class="tk-field"><span>Parol</span>
+      <input id="tk-pass" name="password" type="password" autocomplete="current-password" maxlength="128" required></label>
+    <div class="tk-err" id="tk-login-err" role="alert"></div>
+    <button class="btn primary block" type="submit" id="tk-login-btn">Kirish</button>
+    <p class="tk-hint" id="tk-demo-hint">Sinov rejimi: birinchi kirishda boshlang'ich parol — <code>Talaba2026</code>. Keyin uni almashtirasiz.</p>
+    <p class="tk-hint">Parolni unutdingizmi? Registrator ofisiga (Asosiy bino, 115-xona yoki Eco bino, 105-xona) murojaat qiling. Sirtqi ta'lim talabalari — Sirtqi bo'limga.</p>
+    <a class="tk-staff-link" href="/">Xodimlar uchun kirish →</a>
+  </form>
+</div>
+
+<!-- ============ MAJBURIY PAROL ALMASHTIRISH ============ -->
+<div id="tk-force" class="tk-auth hidden">
+  <form class="tk-auth-card" id="tk-force-form" novalidate>
+    <div class="tk-auth-brand"><img src="/brand/logo-sm.png" alt=""><div><b>ISFT instituti</b><small>Talaba kabineti</small></div></div>
+    <h1>Yangi parol o'rnating</h1>
+    <p class="muted" id="tk-force-who"></p>
+    <p class="muted">Xavfsizlik uchun boshlang'ich parolni almashtiring: kamida 8 belgi, harf va raqam bo'lsin, HEMIS ID bo'lmasin.</p>
+    <label class="tk-field"><span>Joriy (boshlang'ich) parol</span><input id="tk-f-cur" type="password" autocomplete="current-password" maxlength="128"></label>
+    <label class="tk-field"><span>Yangi parol</span><input id="tk-f-new" type="password" autocomplete="new-password" maxlength="128"></label>
+    <label class="tk-field"><span>Yangi parolni takrorlang</span><input id="tk-f-new2" type="password" autocomplete="new-password" maxlength="128"></label>
+    <div class="tk-err" id="tk-force-err" role="alert"></div>
+    <button class="btn primary block" type="submit">Saqlash va davom etish</button>
+    <button class="btn ghost block" type="button" data-act="logout">Chiqish</button>
+  </form>
+</div>
+
+<!-- ============ KABINET ============ -->
+<div id="tk-app" class="tk-shell hidden">
+  <aside class="tk-side" aria-label="Bo'limlar">
+    <div class="tk-side-brand"><img src="/brand/logo-sm.png" alt="ISFT"><div><b>ISFT</b><small id="tk-side-sub">Talaba kabineti</small></div></div>
+    <nav id="tk-nav" class="tk-nav"></nav>
+    <div class="tk-side-foot">
+      <button class="btn ghost sm" type="button" data-act="theme" title="Mavzu"><span class="tk-theme-l">Mavzu</span></button>
+      <button class="btn ghost sm" type="button" data-act="logout">Chiqish</button>
+    </div>
+  </aside>
+  <div class="tk-col">
+    <header class="tk-top">
+      <div class="tk-top-brand"><img src="/brand/logo-sm.png" alt="ISFT"><b id="tk-top-title">Talaba kabineti</b></div>
+      <div class="tk-top-who" id="tk-who"></div>
+      <div class="tk-top-act">
+        <button class="tk-icon" type="button" data-act="theme" aria-label="Yorug' / qorong'i mavzu"><svg viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>
+        <button class="tk-icon" type="button" data-act="logout" aria-label="Chiqish"><svg viewBox="0 0 24 24"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3"/></svg></button>
+      </div>
+    </header>
+    <div class="tk-main" id="tk-main" tabindex="-1" aria-live="polite"></div>
+  </div>
+  <nav class="tk-bottom" id="tk-bottom" aria-label="Asosiy bo'limlar"></nav>
+  <div class="tk-sheet hidden" id="tk-sheet" role="dialog" aria-label="Barcha bo'limlar"><div class="tk-sheet-card"><div class="tk-sheet-h"><b>Bo'limlar</b>
+    <button class="tk-icon" type="button" data-act="sheet-close" aria-label="Yopish"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    <div id="tk-sheet-list" class="tk-sheet-list"></div></div></div>
+</div>
+
+<!-- ============ XODIMLAR: TALABA MUROJAATLARI ============ -->
+<div id="tk-staff" class="tk-staff hidden">
+  <header class="tk-top tk-top-staff">
+    <div class="tk-top-brand"><img src="/brand/logo-sm.png" alt="ISFT"><b>Talaba murojaatlari</b></div>
+    <div class="tk-top-who" id="tk-staff-who"></div>
+    <div class="tk-top-act">
+      <button class="tk-icon" type="button" data-act="theme" aria-label="Yorug' / qorong'i mavzu"><svg viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>
+      <a class="btn sm" href="/">ISFT Core</a>
+    </div>
+  </header>
+  <div class="tk-main tk-main-staff" id="tk-staff-main"></div>
+</div>
+
+<div class="tk-toast hidden" id="tk-toast" role="status"></div>
+<script src="/talaba.js"></script>
+</body>
+</html>

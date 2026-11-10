@@ -25,6 +25,7 @@ from pathlib import Path
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
+from . import clock
 from . import db, rbac
 from .rbac import Ctx, AccessDenied
 
@@ -55,9 +56,9 @@ def bind(con, ctx_fn):
 
 def today() -> dt.date:
     from . import services as S
-    return S.TODAY
+    return clock.today()
 
-def _now() -> str: return dt.datetime.now().isoformat(timespec="seconds")
+def _now() -> str: return clock.now().isoformat(timespec="seconds")
 
 # =============================================================================================
 # Jadvallar

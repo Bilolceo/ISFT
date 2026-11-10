@@ -25,6 +25,7 @@ from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
+from . import clock
 from . import db, rbac, orders_intake as IN
 from .rbac import Ctx, AccessDenied
 
@@ -125,8 +126,8 @@ REG_READ = READ + STAFF_EDIT + CHANCERY              # buyruqlar reyestri (ko'la
 FORWARD = ("prorektor_oquv",)
 SIGN = ("rektor",)
 
-def _now(): return dt.datetime.now().isoformat(timespec="seconds")
-def _today(): return dt.date.today()
+def _now(): return clock.now().isoformat(timespec="seconds")
+def _today(): return clock.today()
 def _short(name): return (name or "").split(":", 1)[1].strip() if ":" in (name or "") else (name or "")
 def _j(s, d=None):
     try: return json.loads(s) if s else (d if d is not None else {})
@@ -898,7 +899,7 @@ def create_order(c: Ctx, kind: str, students: list[dict], source="qo'lda", title
 def _save_upload(raw: bytes, filename: str) -> str:
     UPL.mkdir(parents=True, exist_ok=True)
     ext = Path(filename or "").suffix.lower()[:6]
-    name = f"{dt.datetime.now():%Y%m%d%H%M%S}-{secrets.token_hex(4)}{ext}"
+    name = f"{clock.now():%Y%m%d%H%M%S}-{secrets.token_hex(4)}{ext}"
     (UPL / name).write_bytes(raw)
     return name
 

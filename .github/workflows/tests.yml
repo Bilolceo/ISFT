@@ -1,0 +1,49 @@
+# ISFT Core: barcha testlar toza muhitda (vaqtinchalik baza → seed → uvicorn → tests/test_*.py). Batafsil: tests/README.md
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      ISFT_CORE_TZ: Asia/Tashkent        # institut vaqti (runner UTC'da — ilova baribir Toshkent sanasini ishlatadi)
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      # Shriftlar: hujjat/rasm generatorlari DejaVu'ga tushadi. Tesseract, ClamAV, Ollama o'rnatilmaydi —
+      # ular ixtiyoriy: OCR testlari o'tkazib yuboriladi, antivirus "tekshirilmadi", AI qoidaviy zaxira javob beradi.
+      - name: Tizim paketlari
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq fonts-dejavu-core
+
+      - name: Python paketlari
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Testlar
+        run: python tests/run_all.py --keep --data-dir "$RUNNER_TEMP/isft-data"
+
+      - name: Loglar (xato bo'lsa)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: isft-test-logs
+          path: ${{ runner.temp }}/isft-data/_testlogs
+          if-no-files-found: ignore

@@ -10,6 +10,7 @@ Oldingi `ai.answer` faqat ma'lumotni qisqa matnga aylantirardi. Agent esa:
 Model bazaga baribir to'g'ridan-to'g'ri kirmaydi: raqamlarni kod hisoblaydi, model faqat matnni silliqlaydi."""
 import asyncio, json, re, time, datetime as dt
 from dataclasses import replace
+from . import clock
 from . import db, services as S, ai, academic_rules as AR
 from .rbac import AccessDenied, Ctx, audit
 
@@ -281,7 +282,7 @@ def academic_drivers(con, ctx: Ctx, groups: list[dict]):
 
 def contract_forecast(con):
     """O'quv yili oxiriga tushum prognozi: grafik bo'yicha to'layotganlar to'liq to'laydi, ortda qolganlar qolgan qarzning yarmini."""
-    today = S.TODAY
+    today = clock.today()
     plan_ = db.rows(con, "SELECT * FROM contract_plan ORDER BY due") if db.one(con, "SELECT name FROM sqlite_master WHERE name='contract_plan'") else []
     passed = [p for p in plan_ if p["due"] < today.isoformat()]
     nxt = next((p for p in plan_ if p["due"] >= today.isoformat()), None)
@@ -305,7 +306,7 @@ def dmy(iso): return f"{iso[8:10]}.{iso[5:7]}.{iso[:4]}" if iso and len(iso) >= 
 
 def task_action(title, assignee, role, text, days=7, agent="ijro"):
     return {"type": "propose", "label": title, "agent": agent,
-            "payload": {"effect": "task", "assignee": assignee, "role": role, "text": text, "due": (S.TODAY + dt.timedelta(days=days)).isoformat()}}
+            "payload": {"effect": "task", "assignee": assignee, "role": role, "text": text, "due": (clock.today() + dt.timedelta(days=days)).isoformat()}}
 
 # ------------------------------------------------------------------------------------------------
 # Har bir yo'nalish bo'yicha: faktlar, sabablar, tavsiyalar (+ og'irlik — strategik xulosa uchun)
@@ -579,7 +580,7 @@ async def run(con, ctx: Ctx, q: str):
     if "qoidalar" not in data and await ai.llm_available():   # qoida matni tahrirlanmaydi — taqdimotdagi ifoda saqlanadi
         yield ev(t="step", id="llm", label=f"Mahalliy AI ({ai.MODEL}) matnni tahrir qilmoqda", status="run")
         try:
-            sysmsg = ai.SYSTEM.format(inst="ISFT instituti", today=S.TODAY.isoformat(), who=ctx.user["full_name"], role=ctx.role.title, scope=ctx.scope_label(con))
+            sysmsg = ai.SYSTEM.format(inst="ISFT instituti", today=clock.today().isoformat(), who=ctx.user["full_name"], role=ctx.role.title, scope=ctx.scope_label(con))
             out = await ai.llm_once([{"role": "system", "content": sysmsg + "\n9. Senga tayyor javob qoralamasi beriladi. Uni ravon, rasmiy o'zbek tilida qayta yoz. "
                                       "Raqamlar, guruh nomlari va tavsiyalar tartibini O'ZGARTIRMA. Yangi raqam qo'shma. 180 so'zdan oshmasin."},
                                      {"role": "user", "content": f"SAVOL: {q}\n\nQORALAMA:\n{text}"}], max_tokens=600)

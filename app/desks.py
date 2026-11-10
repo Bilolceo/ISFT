@@ -14,6 +14,7 @@ import csv, datetime as dt, io
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
+from . import clock
 from . import db, rbac, academic_rules as AR
 from .rbac import AccessDenied, Ctx
 
@@ -47,7 +48,7 @@ def bind(con, ctx_fn):
 
 def _today() -> dt.date:
     from . import services as S
-    return S.TODAY
+    return clock.today()
 
 def _pct(a, b, d=1):
     return round(100 * (a or 0) / b, d) if b else None
@@ -249,7 +250,7 @@ def api_legal_review(pid: int, body: LegalIn, request: Request):
     if body.status not in LEGAL_ST: raise HTTPException(400, "Noto'g'ri xulosa turi")
     if body.status in ("etiroz", "tugatish") and len(body.note.strip()) < 5: raise HTTPException(400, "E'tiroz yoki tugatish uchun izoh yozing")
     if not db.one(_con, "SELECT 1 x FROM partners WHERE id=?", (pid,)): raise HTTPException(404)
-    now = dt.datetime.now().replace(microsecond=0).isoformat()
+    now = clock.now().replace(microsecond=0).isoformat()
     _con.execute("INSERT INTO legal_reviews(partner_id,status,note,by_user,by_name,at) VALUES(?,?,?,?,?,?)",
                  (pid, body.status, body.note.strip(), c.user["id"], c.user["full_name"], now))
     _con.commit()

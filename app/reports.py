@@ -6,6 +6,7 @@ from docx.shared import Pt, RGBColor, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
+from . import clock
 from . import services as S
 from .rbac import Ctx, require, AccessDenied, REPORTS, ACADEMIC, STUDENTS, FINANCE, SCIENCE
 
@@ -53,7 +54,7 @@ def build(con, ctx: Ctx, kind: str) -> Path:
     p = doc.add_paragraph(); p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     r = p.add_run(title.upper()); r.bold = True; r.font.size = Pt(15)
     p = doc.add_paragraph(); p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    r = p.add_run(f"Sana: {S.TODAY.strftime('%d.%m.%Y')}   ·   Tayyorladi: ISFT Core   ·   So'rovchi: {ctx.role.title}   ·   Ko'lam: {ctx.scope_label(con)}")
+    r = p.add_run(f"Sana: {clock.today().strftime('%d.%m.%Y')}   ·   Tayyorladi: ISFT Core   ·   So'rovchi: {ctx.role.title}   ·   Ko'lam: {ctx.scope_label(con)}")
     r.font.size = Pt(9); r.italic = True
 
     def safe(fn, *a):
@@ -131,6 +132,6 @@ def build(con, ctx: Ctx, kind: str) -> Path:
     p = doc.add_paragraph(); r = p.add_run("Ushbu hisobot ISFT Core tizimi tomonidan avtomatik tayyorlandi. Ma'lumotlar institut serveridan olingan; "
                                            "so'rov audit jurnalida qayd etilgan. (MVP: demo ma'lumotlar)"); r.italic = True; r.font.size = Pt(8.5)
     OUT.mkdir(exist_ok=True)
-    path = OUT / f"ISFT_CORE_{kind}_{ctx.role.key}_{dt.datetime.now().strftime('%H%M%S')}.docx"
+    path = OUT / f"ISFT_CORE_{kind}_{ctx.role.key}_{clock.now().strftime('%H%M%S')}.docx"
     doc.save(path)
     return path

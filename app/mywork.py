@@ -20,6 +20,7 @@ Havolalar (`link`) bildirishnomalar markazidagi bilan bir xil ko'rinishda — st
 """
 import datetime as dt, json
 from fastapi import APIRouter, Request
+from . import clock
 from . import db, rbac
 from .rbac import Ctx, AccessDenied
 
@@ -39,7 +40,7 @@ QUEUE_LIST_MAX = 5                                    # bo'lim navbati shundan k
 
 def _today() -> dt.date:
     from . import services as S
-    return S.TODAY
+    return clock.today()
 
 def _short(name): return (name or "").split(":", 1)[1].strip() if ":" in (name or "") else (name or "")
 def _dmy(v) -> str:
@@ -186,7 +187,7 @@ def _markaz(c: Ctx) -> list[dict]:
     from . import student_ops as OPSM
     k = c.role.key
     if k not in OPS_ROLES or not c.can(rbac.OPS): return []
-    now, td = dt.datetime.now().replace(microsecond=0).isoformat(timespec="seconds"), _today().isoformat()
+    now, td = clock.now().replace(microsecond=0).isoformat(timespec="seconds"), _today().isoformat()
     w = f"{OPSM._task_scope_sql(c)} AND t.assignee_role=? AND t.status='yangi'"
     act = f"COALESCE(t.planned_on,'') <= '{td}'"          # keyingi kunlarga rejalashtirilgan qo'ng'iroqlar bugungi ish emas
     # ko'lam sharti talaba jadvaliga (s) ham murojaat qilishi mumkin (masalan, tyutor — o'z guruhlari) — har doim bog'lanadi
@@ -309,7 +310,7 @@ def _due_key(v) -> str:
     return s + "T23:59:59" if len(s) == 10 else s
 
 def collect(c: Ctx) -> dict:
-    today, now = _today(), dt.datetime.now()
+    today, now = _today(), clock.now()
     items, errors = [], []
     for key, fn in COLLECT:
         try:

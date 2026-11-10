@@ -12,6 +12,7 @@ from pathlib import Path
 import httpx
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT)); from app import clock as CLK   # noqa: E402 — institut vaqti (ISFT_CORE_TZ / ISFT_CORE_FAKE_TODAY), server bilan bir xil
 DB = Path(os.environ.get("ISFT_CORE_DB") or ROOT / "data" / "jarvis.db")
 B = os.environ.get("ISFT_TEST_URL", "http://127.0.0.1:8000")
 PW = "Isft2026"
@@ -73,7 +74,7 @@ def post(c, path, body=None): return c.post(path, json=body if body is not None 
 
 STAMP = time.strftime("%Y%m%d-%H%M%S")
 U = str(int(time.time() * 1000))[-9:]          # noyob so'z qo'shimchasi (FTS uchun)
-TODAY = dt.date.today()
+TODAY = CLK.today()
 D2, D3, YDAY = (TODAY + dt.timedelta(days=2)).isoformat(), (TODAY + dt.timedelta(days=3)).isoformat(), (TODAY - dt.timedelta(days=1)).isoformat()
 D5, D7 = (TODAY + dt.timedelta(days=5)).isoformat(), (TODAY + dt.timedelta(days=7)).isoformat()
 dmy = lambda d: dt.date.fromisoformat(d).strftime("%d.%m.%Y")

@@ -3,6 +3,7 @@ import os
 import httpx, sys, sqlite3, datetime as dt, base64, io, json
 from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT)); from app import clock as CLK   # noqa: E402 — institut vaqti (ISFT_CORE_TZ / ISFT_CORE_FAKE_TODAY), server bilan bir xil
 sys.path.insert(0, str(ROOT))
 from app import db as DB, student_ops as OPS, academic_rules as AR
 B = os.environ.get("ISFT_TEST_URL", "http://127.0.0.1:8000"); DBP = str(Path(os.environ.get("ISFT_CORE_DB") or ROOT / "data" / "jarvis.db"))
@@ -56,13 +57,13 @@ ok(dup == 0, "Bitta holat+tur bo'yicha ochiq topshiriq dublikati yo'q")
 kt = dict(zip(("id", "case_id"), q("""SELECT t.id, t.case_id FROM ops_tasks t JOIN ops_cases oc ON oc.id=t.case_id WHERE t.status='yangi' AND t.assignee_role='call_center'
                                      AND oc.rule='kontrakt' AND CAST(json_extract(oc.facts,'$.days') AS INT) < 0 ORDER BY t.id LIMIT 1""")[0]))   # muddati o'tgan (daraja o'zgarmaydi)
 r = cc.post(f"/api/ops/tasks/{kt['id']}/outcome", json={"outcome": "vada", "promise_date": "2020-01-01"}); ok(r.status_code == 400, "Va'da sanasi o'tmishda bo'lsa — rad")
-pd = (dt.date.today() + dt.timedelta(days=2)).isoformat()
+pd = (CLK.today() + dt.timedelta(days=2)).isoformat()
 ok(cc.post(f"/api/ops/tasks/{kt['id']}/outcome", json={"outcome": "vada", "promise_date": pd, "note": "oylik tushgach to'layman"}).json()["ok"], "Va'da berdi (2 kun)")
 ok(cc.post(f"/api/ops/tasks/{kt['id']}/outcome", json={"outcome": "gaplashildi"}).status_code == 409, "Yopilgan topshiriqqa qayta natija — 409")
-st = OPS.evaluate(con, today=dt.date.today() + dt.timedelta(days=3))
+st = OPS.evaluate(con, today=CLK.today() + dt.timedelta(days=3))
 fu = q("SELECT COUNT(*) FROM ops_tasks WHERE case_id=? AND status='yangi' AND title LIKE 'Va''da muddati%'", (kt["case_id"],))[0][0]
 ok(fu == 1, f"Va'da muddati o'tgach qayta qo'ng'iroq yaratildi (followups={st['followups']})")
-OPS.evaluate(con, today=dt.date.today() + dt.timedelta(days=3))
+OPS.evaluate(con, today=CLK.today() + dt.timedelta(days=3))
 ok(q("SELECT COUNT(*) FROM ops_tasks WHERE case_id=? AND status='yangi' AND kind='qongiroq'", (kt["case_id"],))[0][0] == 1, "Qayta ishga tushirish follow-up dublikatini yaratmadi")
 
 # --- javob bermadi x3 → tyutor ---
@@ -204,7 +205,7 @@ ok(not q("""SELECT 1 FROM ops_tasks t JOIN students s ON s.id=t.student_id WHERE
 # =====================================================================================================
 print("— Call-markaz navbati: haqiqiy muddat (SLA) va rejalashtirish —")
 con.commit()
-now_s, td = dt.datetime.now().replace(microsecond=0).isoformat(), dt.date.today().isoformat()
+now_s, td = CLK.now().replace(microsecond=0).isoformat(), CLK.today().isoformat()
 CALLQ = "SELECT t.id, t.due_at, t.planned_on, t.level, t.created_at, t.attempts, t.title, oc.rule, oc.facts FROM ops_tasks t JOIN ops_cases oc ON oc.id=t.case_id WHERE t.status='yangi' AND t.assignee_role='call_center'"
 before = {r[0]: r[1] for r in q(CALLQ)}
 OPS.schedule_calls(con); con.commit()
@@ -215,7 +216,7 @@ ok(rem and all(r[1] <= json.loads(r[8])["due"] + "T18:00:00" for r in rem), f"1.
 dav = [r for r in rows if r[7] == "davomat" and not r[5] and not r[6].startswith("Va'da")]
 ok(dav and all(dt.datetime.fromisoformat(r[1]) - dt.datetime.fromisoformat(r[4]) == dt.timedelta(hours=24) for r in dav), f"1. Davomat 30+ soat: qo'ng'iroq muddati — 24 soat ({len(dav)} ta)")
 cs = reg.get("/api/ops/summary").json()["calls"]
-late_sql = q("SELECT COUNT(*) FROM ops_tasks WHERE status='yangi' AND assignee_role='call_center' AND due_at < ?", (dt.datetime.now().replace(microsecond=0).isoformat(),))[0][0]
+late_sql = q("SELECT COUNT(*) FROM ops_tasks WHERE status='yangi' AND assignee_role='call_center' AND due_at < ?", (CLK.now().replace(microsecond=0).isoformat(),))[0][0]
 ok(abs(cs["late"] - late_sql) <= 2, f"1. «Kechikkan» — haqiqiy (muddati o'tgan) son: {cs['late']} (SQL: {late_sql})")
 cap = cs["capacity"]
 per_day = q("SELECT planned_on, COUNT(*) FROM ops_tasks WHERE status='yangi' AND assignee_role='call_center' GROUP BY planned_on")
@@ -228,7 +229,7 @@ bk = lambda r: (max((r[1] or "9999")[:10], td), -(r[3] or 0))
 today_b = [bk(r) for r in rows if r[2] == td]; later_b = [bk(r) for r in rows if r[2] and r[2] > td and not r[5]]
 ok(not today_b or not later_b or max(today_b) <= min(later_b), "1. Ustuvorlik: avval muddati yaqin va jiddiyroq qo'ng'iroqlar (bugungi ro'yxat)")
 ct2 = cc.get("/api/ops/tasks").json()
-ok(all(t["late"] == (t["due_at"] < dt.datetime.now().isoformat(timespec="seconds")) for t in ct2), "3. Kartada «kechikdi» faqat muddati haqiqatda o'tganlarda")
+ok(all(t["late"] == (t["due_at"] < CLK.now().isoformat(timespec="seconds")) for t in ct2), "3. Kartada «kechikdi» faqat muddati haqiqatda o'tganlarda")
 ok(cc.post("/api/ops/calls/operators", json={"items": [{"user_id": 23, "capacity": 100}]}).status_code == 403, "Operator me'yorini faqat Registrator ofisi boshlig'i o'zgartiradi")
 r = reg.post("/api/ops/calls/operators", json={"items": [{"user_id": 23, "capacity": 100, "active": True}]}).json()
 ok(r["summary"]["capacity"] == 100 and q("SELECT COUNT(*) FROM ops_tasks WHERE status='yangi' AND assignee_role='call_center' AND planned_on=?", (td,))[0][0] <= 100 + 4,
@@ -263,8 +264,11 @@ ok(r["moved"] == pr["n"] > 0 and len(moved) >= r["moved"], f"Bir bosishda {r['mo
 ok(all(m[2] == mv_due.get(m[0], m[2]) for m in moved), "Taqsimlashda muddat (SLA) o'zgarmadi")
 ok(all((m[1] == "tyutor" and m[4] == "kunduzgi") or (m[1] == "sirtqi" and m[4] == "sirtqi") for m in moved if m[1] != "registrator_xodim"),
    "Kunduzgi — guruh tyutoriga, sirtqi — Sirtqi bo'limga")
-ok(all("tyutori qo'ng'iroq" in json.loads(m[3])["say"][0] for m in moved if m[1] == "tyutor") and
-   all("Sirtqi bo'limidan" in json.loads(m[3])["say"][0] for m in moved if m[1] == "sirtqi"), "4. O'tkazilgan qo'ng'iroq skripti yangi so'zlovchi nomidan")
+# so'zlovchi: odatiy skriptda 1-qator (salomlashish), otrabotka eslatmasida 2-qator «(Qo'ng'iroq: guruh tyutori.)» — qaysi qo'ng'iroqlar
+# navbatdan oshishi kun vaqtiga bog'liq, shuning uchun ikkala shakl ham tekshiriladi
+spk = lambda m: " ".join(json.loads(m[3])["say"][:2])
+ok(all("tyutori qo'ng'iroq" in spk(m) or "Qo'ng'iroq: guruh tyutori" in spk(m) for m in moved if m[1] == "tyutor") and
+   all("Sirtqi bo'limidan" in spk(m) for m in moved if m[1] == "sirtqi"), "4. O'tkazilgan qo'ng'iroq skripti yangi so'zlovchi nomidan")
 tq = ty2.get("/api/ops/tasks?kind=qongiroq").json()
 ok(all(gid_of(t["student_id"]) in tg24 and t["can_act"] for t in tq), f"3. Tyutor (#24): o'tkazilgan qo'ng'iroqlar faqat o'z guruhlaridan ({len(tq)} ta), bajara oladi")
 xo, sir = S(43), S(27)
@@ -367,3 +371,4 @@ ok(len(pa["why"]) >= 4 and not vv["bad"], f"«Nega?» sabablari ({len(pa['why'])
 ok("O'tish ulushi" in why and "Kurs kesimida" in why and "Fan turlari" in why, "«Nega?»: o'tish ulushi, kurs va fan turi kesimlari")
 
 print("\nNATIJA:", "HAMMASI O'TDI" if not fails else f"{fails} TA XATO")
+sys.exit(1 if fails else 0)

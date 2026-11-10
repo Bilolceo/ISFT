@@ -81,8 +81,10 @@ hist = dict(q("""SELECT gr.course, COUNT(DISTINCT g.semester) FROM grades g JOIN
 ok(1 not in hist and hist.get(4) == 6 and hist.get(2) == 2, f"3. O'tgan semestrlar: 1-kursda yo'q, 2-kursda 2 ta, 4-kursda 6 ta {hist}")
 ok(q1("SELECT MAX(sem_no) FROM grades g JOIN students s ON s.id=g.student_id JOIN groups_ gr ON gr.id=s.group_id WHERE gr.course=4 AND gr.level='bakalavr'") == 7,
    "3. 4-kurs: 6 ta yakunlangan semestr + joriy 7-semestr")
-badg = [n for n, c in q("SELECT name, course FROM groups_ g WHERE EXISTS(SELECT 1 FROM students s WHERE s.group_id=g.id AND s.status='faol')")
-        if f"-{AR.intake_year(c) % 100:02d}" not in n]   # bitirgan (tarixiy) guruhlar hisobga olinmaydi
+GRAD_COHORT = f"-{(AR.intake_year(2) - 1) % 100:02d}01"   # academic_flows.seed_graduates: kechikkan magistr bitiruvchilari (2-kurs, bir yil oldingi qabul)
+badg = [n for n, c, lv in q("SELECT name, course, level FROM groups_ g WHERE EXISTS(SELECT 1 FROM students s WHERE s.group_id=g.id AND s.status='faol')")
+        if f"-{AR.intake_year(c) % 100:02d}" not in n
+        and not (lv == "magistr" and n.startswith("MAG-") and n.endswith(GRAD_COHORT))]   # bitirgan (tarixiy) guruhlar hisobga olinmaydi
 ok(not badg, f"3. Guruh kodi — qabul yili: 1-kurs …-26xx, 4-kurs …-23xx (mos kelmagan: {badg[:3]})")
 
 # --- o'rinlar: har darajada RANK va jami ---

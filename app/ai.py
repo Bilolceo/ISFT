@@ -14,6 +14,7 @@ Til modeli manzili (faqat institut nazoratidagi server — shaxsiy ma'lumot O'zb
 Hech qanday bulut AI provayderi standart holatda ulanmagan."""
 import json, os, re, time, datetime as dt
 import httpx
+from . import clock
 from . import services as S, db
 from .rbac import AccessDenied, Ctx, audit
 
@@ -308,7 +309,7 @@ async def answer(con, ctx: Ctx, q: str):
     if len(payload) > 1800:   # katta JSON promptni sekinlashtiradi — faktlar yetarli
         payload = "(faktlar yetarli)"
     hints = " ".join(HINTS[k] for k in data if k in HINTS)
-    sys = SYSTEM.format(inst="ISFT instituti", today=S.TODAY.isoformat(), who=ctx.user["full_name"], role=ctx.role.title, scope=ctx.scope_label(con))
+    sys = SYSTEM.format(inst="ISFT instituti", today=clock.today().isoformat(), who=ctx.user["full_name"], role=ctx.role.title, scope=ctx.scope_label(con))
     msgs = [{"role": "system", "content": sys},
             {"role": "user", "content": f"SAVOL: {q}\n\nASOSIY FAKTLAR (tekshirilgan, aynan shu raqamlarni ishlat):\n{fallback_answer(data, [])}\n\nQO'SHIMCHA TAFSILOT (JSON, faqat kerak bo'lsa):\n{payload}\n\nRUXSAT BERILMAGAN: {denied or 'yoq'}\n\nTAVSIYA UCHUN NAMUNALAR (shulardan eng mosini tanla, o'zgartirmasdan yoki qisqartirib yoz): {hints or 'umumiy holatga qarab'}"}]
     try:
@@ -324,7 +325,7 @@ def _parse_date(s):
     if not s: return None
     try:
         if re.match(r"\d{4}-\d{2}-\d{2}", s): return dt.date.fromisoformat(s[:10]).isoformat()
-        p = re.split(r"[./]", s); d, m = int(p[0]), int(p[1]); y = int(p[2]) if len(p) > 2 else (S.TODAY.year if m >= S.TODAY.month - 1 else S.TODAY.year + 1)
+        p = re.split(r"[./]", s); d, m = int(p[0]), int(p[1]); y = int(p[2]) if len(p) > 2 else (clock.today().year if m >= clock.today().month - 1 else clock.today().year + 1)
         if y < 100: y += 2000
         return dt.date(y, m, d).isoformat()
     except ValueError:
@@ -339,7 +340,7 @@ async def extract_tasks_result(transcript: str) -> dict:
         try:
             out = await llm_once([{"role": "system", "content":
                 "Sen majlis kotibisan. Bayonnomadan aniq topshiriqlarni ajrat. Har biri uchun: assignee (kim mas'ul — lavozim yoki ism), "
-                f"text (nima qilish kerak, qisqa buyruq shaklida), due (YYYY-MM-DD; bugun {S.TODAY.isoformat()}; ko'rsatilmagan bo'lsa bugundan 14 kun keyin: {(S.TODAY + dt.timedelta(days=14)).isoformat()}). "
+                f"text (nima qilish kerak, qisqa buyruq shaklida), due (YYYY-MM-DD; bugun {clock.today().isoformat()}; ko'rsatilmagan bo'lsa bugundan 14 kun keyin: {(clock.today() + dt.timedelta(days=14)).isoformat()}). "
                 'Faqat JSON: {"tasks":[{"assignee":"","text":"","due":""}]}'},
                 {"role": "user", "content": transcript}], fmt="json")
             tasks = json.loads(out).get("tasks", [])
@@ -357,7 +358,7 @@ async def extract_tasks_result(transcript: str) -> dict:
             m = WHO_RE.match(sent)
             if m and ACTION_RE.search(m["text"]):   # muddatsiz, lekin aniq topshiriq ("... bir hafta ichida yopish")
                 days = 7 if "hafta" in m["text"].lower() else 14
-                out.append({"assignee": m["who"].strip(), "text": m["text"].strip().rstrip("."), "due": (S.TODAY + dt.timedelta(days=days)).isoformat()})
+                out.append({"assignee": m["who"].strip(), "text": m["text"].strip().rstrip("."), "due": (clock.today() + dt.timedelta(days=days)).isoformat()})
     return {"tasks": out, "source": "qoida"}
 
 WHO_RE = re.compile(r"^(?P<who>[A-ZА-Я][\w'ʻ’\- ]{2,60}?)\s*:\s*(?P<text>.+)$")

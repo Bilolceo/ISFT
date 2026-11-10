@@ -39,7 +39,8 @@ Logda va `last_error` maydonida bot tokeni har doim `***` bilan yashiriladi.
 | `ISFT_CORE_RESEED` | `1` | `start.sh`: seed versiyasi o'zgarsa demo bazani qayta yaratish. `0` bo'lsa seed hech qachon avtomatik ishlamaydi (4-bo'lim) |
 | `PORT` | `8000` | HTTP port. Railway o'zi beradi |
 | `TZ` | `start.sh`: `Asia/Tashkent` | Jarayon soat zonasi. Tizimda zoneinfo bo'lmasa `UZT-5` (UTC+5) ishlatiladi |
-| `ISFT_CORE_TZ` | `Asia/Tashkent` | Ilova ichidagi vaqt zonasi: bot jadvali, kamera voqealari |
+| `ISFT_CORE_TZ` | `Asia/Tashkent` | Institut vaqti (`app/clock.py`): barcha sanalar va vaqt belgilari, «bugun», muddatlar, bot jadvali, kamera voqealari. Server zonasiga (`TZ`) bog'liq emas; tzdata bo'lmasa UTC+5 |
+| `ISFT_CORE_FAKE_TODAY` | yo'q | Demo/test: «bugun»ni `YYYY-MM-DD` ga qotirish (soat — haqiqiy). Seed ham shu sanaga suradi — server va seed bir xil qiymat bilan ishga tushsin. Ishlab chiqarishda qo'ymang |
 | `ISFT_CORE_PUBLIC_URL` | avtomatik (lokal IP) | QR havolalari uchun ochiq manzil, masalan `https://isft-production.up.railway.app` |
 
 ### Kirish va demo
