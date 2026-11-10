@@ -39,7 +39,8 @@ USERS = {1: "kengash", 2: "rektor", 3: "prorektor_oquv", 11: "buxgalteriya", 25:
          17: "Registrator rahbari", 18: "akademik", 20: "kotib", 21: "IT rahbari", 22: "IT muhandisi", 23: "call-markaz",
          24: "tyutor (fak2)", 31: "kafedra (Biznes boshqaruvi)", 12: "kadrlar", 16: "xo'jalik", 40: "devonxona", 42: "xarid"}
 # sillabus — app/syllabus.py; buyruq — app/orders.py (yagona joy); murojaat — app/service.py navbatlari; xodim — app/staff_absence.py
-SOURCES = {"majlis", "portal", "markaz", "buyruq", "murojaat", "xodim", "agent", "sillabus"}
+SOURCES = {"majlis", "portal", "markaz", "buyruq", "murojaat", "xodim", "agent", "sillabus",
+           "moliya", "kadrlar", "ilmiy", "xalqaro", "yoshlar", "amaliyot", "harakat", "tekshiruv", "talaba", "devon", "qabul", "rejalar", "it_req"}   # app/pending.py manbalari
 BUCKETS = ["overdue", "today", "week", "later", "none"]
 PEND = ("yangi", "o'qilgan")
 LEADERS = {"rektor", "prorektor_oquv", "prorektor_ilmiy", "prorektor_moliya", "prorektor_yoshlar"}
@@ -104,6 +105,8 @@ for uid, (c, d) in DATA.items():
     u = user(uid); role = u["role"]; me = u["unit"]
     for it in d["items"]:
         L = it["link"]
+        if it["source"] not in ("majlis", "portal", "markaz", "buyruq", "murojaat", "xodim", "agent", "sillabus"):
+            ok(bool(L.get("view") or L.get("href")), f"#{uid} {it['id']}: yangi modul havolasi bor ({it['source']})"); continue   # app/pending.py manbalari
         if L["view"] == "portal":
             t = one("SELECT id, from_unit, from_user, status FROM portal_threads WHERE id=?", (L["thread"],))
             ok(t is not None and t[3] == "ochiq", f"#{uid} {it['id']}: portal yozishmasi #{L['thread']} mavjud va ochiq")
