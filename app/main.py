@@ -299,7 +299,12 @@ async def status():
         b = {k: v for k, v in BOT.status().items() if k in ("enabled", "running", "username", "mode", "note", "last_error", "error_at", "started_at", "next_brief", "next_portal")}
     except Exception as e:
         b = {"enabled": False, "running": False, "username": None, "last_error": type(e).__name__}
-    return {"llm": a["ai"], "model": ai.MODEL, "ai": a, "bot": b, "db": str(db.DB_PATH.name),
+    try:
+        from . import taqdimot as _TQ
+        tq = _TQ.status()
+    except Exception as e:
+        tq = {"engine": None, "error": type(e).__name__}
+    return {"llm": a["ai"], "model": ai.MODEL, "ai": a, "bot": b, "taqdimot": tq, "db": str(db.DB_PATH.name),
             "students": db.one(con, "SELECT COUNT(*) n FROM students")["n"],
             "audit": db.one(con, "SELECT COUNT(*) n FROM audit_log")["n"]}
 
@@ -480,4 +485,8 @@ from . import yoshlar as YJ   # Yoshlar ishlari: hamkor yotoqxonalar (ariza → 
 YJ.init(con)
 YJ.bind(con, ctx)
 app.include_router(YJ.router)
+from . import taqdimot as TQD   # Taqdimot: o'qituvchi materiali (.docx/.pdf/.txt) → reja (Claude API yoki AI siz) → ISFT shablonida .pptx
+TQD.init(con)
+TQD.bind(con, ctx)
+app.include_router(TQD.router)
 app.mount("/", StaticFiles(directory=ROOT / "static", html=True), name="static")

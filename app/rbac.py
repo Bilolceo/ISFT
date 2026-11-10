@@ -39,6 +39,8 @@ LABELS = {KPI: "Umumiy KPI", ACADEMIC: "O'zlashtirish va davomat", STUDENTS: "Ta
           FLOWS: "Talaba harakati: sessiya, apellyatsiya, ko'chirish, ISFT granti, bitiruv"}
 PRACTICE = "practice"            # talabalar amaliyoti: bazalar, davrlar, biriktirish, hisobot va baho (app/amaliyot.py) — kirish moduldagi jadval bo'yicha
 LABELS[PRACTICE] = "Talabalar amaliyoti: bazalar, biriktirish, hisobot va baho"
+PRESENT = "presentations"         # o'qituvchi taqdimotlari: material → reja (AI/shablon) → ISFT shablonida .pptx (app/taqdimot.py) — kirish moduldagi jadval bo'yicha
+LABELS[PRESENT] = "Taqdimot tayyorlash (o'qituvchi): material, reja, .pptx"
 
 @dataclass(frozen=True)
 class Role:

@@ -67,11 +67,12 @@ def env_for(data: Path, args):
              PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8")
     e.setdefault("ISFT_CORE_TZ", "Asia/Tashkent")
     e.pop("TELEGRAM_BOT_TOKEN", None)            # testda bot ishga tushmasin
-    for k in ("ISFT_CORE_DEMO_TOOLS",):          # testlar standart (prod) sozlamani kutadi
+    for k in ("ISFT_CORE_DEMO_TOOLS", "ISFT_CORE_PRES_FAKE", "ISFT_CORE_PRES_DAILY"):   # testlar standart (prod) sozlamani kutadi
         e.pop(k, None)
     if not args.llm:
         e["ISFT_CORE_LLM_URL"] = "http://127.0.0.1:9"   # LLM yo'q — qoidaviy zaxira javoblar (CI bilan bir xil)
         e.pop("ISFT_CORE_LLM_API", None); e.pop("ISFT_CORE_LLM_KEY", None)
+        e.pop("ANTHROPIC_API_KEY", None)                # Taqdimot: Claude chaqirilmaydi — AI siz (shablon) rejim sinovdan o'tadi
     if args.fake_today:
         e["ISFT_CORE_FAKE_TODAY"] = args.fake_today
     return e
