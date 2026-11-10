@@ -3,7 +3,8 @@ const $ = s => document.querySelector(s);
 document.head.insertAdjacentHTML("beforeend", '<link rel="stylesheet" href="chat.css">');
 document.head.insertAdjacentHTML("beforeend", '<link rel="stylesheet" href="panel.css">');
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const fmt = n => typeof n === "number" ? n.toLocaleString("ru-RU").replace(/,/g, " ") : n;
+/* ru-RU: minglik ajratuvchi — bo'shliq, o'nlik — vergul → nuqta (avval vergul bo'shliqqa aylanib, 89,2 → «89 2» bo'lib qolardi) */
+const fmt = n => typeof n === "number" ? n.toLocaleString("ru-RU").replace(/,/g, ".") : n;
 const mln = x => Math.abs(x) >= 1e9 ? (x/1e9).toFixed(2)+" mlrd" : (x/1e6).toFixed(1)+" mln";
 let ME = null, DASH = null, selUser = null;
 
@@ -24,6 +25,28 @@ async function busy(btn, fn, label = "…") {
 }
 const errCard = v => `<div class="card locked"><div class="lk-ic">${ico("alert", 22)}</div><b>Ma'lumotni yuklab bo'lmadi</b><span class="tiny">Server bilan aloqa uzildi yoki ichki xatolik</span><button class="btn sm" style="margin-top:8px" onclick="go('${v}')">${ico("refresh", 16)} Qayta urinish</button></div>`;
 function toast(t) { const el = $("#toast"); el.textContent = t; el.classList.remove("hidden"); clearTimeout(toast.t); toast.t = setTimeout(() => el.classList.add("hidden"), 4200); }
+/* Qaytarib bo'lmaydigan amal — ikki bosqichli tasdiq (yagona naqsh): birinchi bosishda tugma `label` holatiga o'tadi (ms davomida),
+   ikkinchi bosishda asl ko'rinishi tiklanadi va true qaytadi. Ishlatish: b.onclick = () => { if (!arm(b, "Ha, imzolash")) return; busy(b, …); } */
+function arm(btn, label = "Tasdiqlaysizmi?", ms = 4000) {
+  if (!btn) return false;
+  const reset = () => { clearTimeout(btn._armT); delete btn.dataset.armed; btn.innerHTML = btn._armOld; btn.classList.toggle("primary", !!btn._armP); btn.classList.remove("armed"); };
+  if (btn.dataset.armed) { reset(); return true; }
+  btn.dataset.armed = 1; btn._armOld = btn.innerHTML; btn._armP = btn.classList.contains("primary");
+  btn.innerHTML = `${ico("alert", 15)}${esc(label)}`; btn.classList.add("primary", "armed"); btn.title = btn.title || "Tasdiqlash uchun yana bir marta bosing";
+  btn._armT = setTimeout(() => { if (btn.isConnected && btn.dataset.armed) reset(); }, ms);
+  return false;
+}
+/* Bekor qilish imkoniyatli bildirishnoma: `commit` ms dan keyin bajariladi; "Bekor qilish" bosilsa — bajarilmaydi (onUndo chaqiriladi) */
+function undoToast(text, commit, {ms = 5000, onUndo = null} = {}) {
+  let el = $("#undoToast");
+  if (!el) { el = document.createElement("div"); el.id = "undoToast"; el.className = "toast undo-toast"; el.setAttribute("role", "status"); document.body.appendChild(el); }
+  if (undoToast.pending) { const p = undoToast.pending; undoToast.pending = null; clearTimeout(p.t); p.commit(); }   /* oldingisi darhol bajariladi */
+  const job = {commit: () => Promise.resolve().then(commit).catch(e => { if (!["auth", "denied"].includes(e?.message)) toast("Xatolik yuz berdi — qayta urinib ko'ring"); })};
+  el.innerHTML = `<span>${esc(text)}</span><button class="btn sm" type="button">Bekor qilish</button>`; el.classList.remove("hidden");
+  el.querySelector("button").onclick = () => { if (undoToast.pending !== job) return; clearTimeout(job.t); undoToast.pending = null; el.classList.add("hidden"); onUndo && onUndo(); };
+  job.t = setTimeout(() => { if (undoToast.pending === job) { undoToast.pending = null; el.classList.add("hidden"); job.commit(); } }, ms);
+  undoToast.pending = job;
+}
 
 /* ---------- ikonkalar (lucide uslubida, inline SVG) ---------- */
 const ICONS = {
@@ -171,41 +194,60 @@ async function boot() {
   if (typeof navLayout === "function") navLayout(ME.role_key);   /* nav.js: lavozimga ko'ra menyu tartibi */
   const NAV_HIDE_AGENTS = !(["rektor", "kengash", "kotib"].includes(ME.role_key) || ME.role_key.startsWith("prorektor_"));
   document.querySelector('#nav a[data-v="agents"]')?.classList.toggle("hidden", NAV_HIDE_AGENTS);
-  const NAV_NEED = {service: ["facilities", "requests", "youth"], spaces: ["spaces"], cams: ["spaces"], audit: ["audit"], ops: ["ops"], tasks: ["tasks"], reports: ["reports"]};
+  const NAV_NEED = {service: ["facilities", "requests", "youth", "procurement"], spaces: ["spaces"], cams: ["spaces"], audit: ["audit"], ops: ["ops"], tasks: ["tasks"], reports: ["reports"]};
   /* tor vazifali lavozimlar uchun keraksiz bo'limlar yashiriladi (server baribir ruxsatni tekshiradi) */
   const NAV_HIDE = {call_center: ["chat", "reports", "documents", "docs", "rbac"], tyutor: ["reports", "docs"], kengash: ["cams"]};
   document.querySelectorAll("#nav a").forEach(a => { if (a.dataset.v === "agents") return; const need = NAV_NEED[a.dataset.v]; a.classList.toggle("hidden", (!!need && !need.some(x => ME.allow.includes(x))) || (NAV_HIDE[ME.role_key] || []).includes(a.dataset.v)); });
   document.querySelector('#nav a[data-v="accounts"]')?.classList.toggle("hidden", !["it_head", "rektor"].includes(ME.role_key));   /* accounts.js: AT boshlig'i (boshqaruv), rektor (ko'rish) */
-  document.querySelector('#nav a[data-v="orders"]')?.classList.toggle("hidden", !["talabalar", "registrator_xodim", "sirtqi", "malumotlar_bazasi", "prorektor_oquv", "rektor"].includes(ME.role_key));   /* orders.js: Buyruqlar */
+  document.querySelector('#nav a[data-v="orders"]')?.classList.toggle("hidden", !["talabalar", "registrator_xodim", "sirtqi", "malumotlar_bazasi", "prorektor_oquv", "rektor", "kadrlar", "devonxona"].includes(ME.role_key));   /* orders.js: Buyruqlar — talabalar va xodimlar buyruqlari, devonxona reyestri */
   document.querySelector('#nav a[data-v="staffabs"]')?.classList.toggle("hidden", !["kadrlar", "kafedra", "akademik", "rektor", "prorektor_oquv", "oqituvchi"].includes(ME.role_key));   /* staffabs.js: xodimlar ta'tili */
   document.querySelector('#nav a[data-v="syllabus"]')?.classList.toggle("hidden", !["akademik", "kafedra", "oqituvchi", "prorektor_oquv", "rektor"].includes(ME.role_key));   /* syllabus.js: O'quv dasturlari */
   document.querySelector('#nav a[data-v="reyting"]')?.classList.toggle("hidden", !["talabalar", "registrator_xodim", "akademik", "rektor", "prorektor_oquv", "imtihon", "malumotlar_bazasi", "sirtqi", "kafedra", "tyutor", "oqituvchi", "kengash", "prorektor_ilmiy", "prorektor_moliya", "prorektor_yoshlar", "sifat"].includes(ME.role_key));   /* reyting.js: Reyting (ruxsat — app/reyting.py FULL/SCOPED/AGG) */
+  document.querySelector('#nav a[data-v="flows"]')?.classList.toggle("hidden", !["talabalar", "registrator_xodim", "akademik", "imtihon", "kafedra", "sirtqi", "buxgalteriya", "rektor", "prorektor_oquv"].includes(ME.role_key));   /* flows.js: Talaba harakati (ruxsat — app/academic_flows.py TABS) */
   if (typeof camsNav === "function") camsNav();   /* cams.js: navbat zonasi mas'ullari (qabul, kassa) o'z navbatini ko'radi */
   document.querySelectorAll("#nav .nav-h").forEach(h => { let n = h.nextElementSibling, any = false; while (n && n.tagName === "A") { any ||= !n.classList.contains("hidden"); n = n.nextElementSibling; } h.classList.toggle("hidden", !any); });
   status(); badges();
   go("panel");
 }
+/* AI holati (/api/status → ai): AIS.tools — {chat, extract, contract, translate, reply}: "ai" | "qoida" | null (mavjud emas) */
+let AIS = null;
 async function status() {
+  const chip = $("#aiChip");
+  /* «AI faol / Tahlil rejimi» belgisi — faqat tizim ma'muri (AT boshlig'i) va rektor uchun; boshqalar uchun shovqin */
+  const showChip = ["it_head", "rektor"].includes(ME?.role_key);
+  if (chip) chip.classList.toggle("hidden", !showChip);
   try {
     const s = await (await fetch("/api/status")).json();
-    const d = $("#llmDot"); d.className = "dot " + (s.llm ? "on" : "calm");
-    $("#aiTxt").textContent = s.llm ? "AI faol" : "Tahlil rejimi";
-    $("#aiChip").title = s.llm ? `Mahalliy AI faol: ${s.model} · ma'lumot institutdan chiqmaydi` : "Raqamlar va xulosalar kod bilan hisoblanadi; mahalliy AI ulansa matn ravonlashadi";
+    AIS = s.ai || {ai: !!s.llm, mode: s.llm ? "ai" : "tahlil", model: s.model, tools: {}};
+    if (!showChip) return;
+    const d = $("#llmDot"); d.className = "dot " + (AIS.ai ? "on" : "calm");
+    $("#aiTxt").textContent = AIS.ai ? "AI faol" : "Tahlil rejimi";
+    const tl = Object.entries(AIS.tools || {}).map(([k, v]) => `${({chat: "suhbat", extract: "bayonnoma", contract: "shartnoma", translate: "tarjima", reply: "javob xati"})[k] || k}: ${v === "ai" ? "AI" : v === "qoida" ? "qoida asosida" : "mavjud emas"}`).join(", ");
+    chip.title = AIS.ai ? `AI faol: ${AIS.model || ""}${AIS.local ? " (mahalliy — ma'lumot institutdan chiqmaydi)" : ""}${tl ? ` · ${tl}` : ""}`
+      : `Tahlil rejimi: til modeli ulanmagan — raqamlar va xulosalar qoidalar asosida kod bilan hisoblanadi, natijalar to'g'ri, faqat matn qisqaroq.${AIS.reason ? ` ${AIS.reason}` : ""}${tl ? ` · ${tl}` : ""}`;
+    chip.setAttribute("aria-label", chip.title);
   } catch (e) {}
 }
-/* menyudagi raqamli belgilar: e'tibor talab qiladigan ishlar */
+/* menyudagi raqamli belgilar — YAGONA QOIDA: «sizdan harakat kutayotgan ishlar» soni (sahifadagi soni bilan teng).
+   set(view, n, tip): tip — raqam nimani sanashini tushuntiradi (sichqoncha ostida va ekran o'quvchisi uchun). */
 async function badges() {
-  const set = (v, n) => { const a = document.querySelector(`#nav a[data-v="${v}"]`); if (!a) return; a.querySelector(".nb")?.remove(); if (n > 0) a.insertAdjacentHTML("beforeend", `<span class="nb">${n}</span>`); };
-  if (ME.allow.includes("tasks")) try { const t = await J("/api/section/tasks"); set("tasks", t.overdue); } catch (e) {}
-  if (["rektor", "kotib"].includes(ME.role_key) || ME.role_key.startsWith("prorektor_")) try { const a = await J("/api/agents"); set("agents", a.pending.filter(p => p.can_approve).length); } catch (e) {}
-  try { const r = await J("/api/docs/registry"); set("documents", r.filter(x => x.status === "loyiha").length); } catch (e) {}
-  if (typeof portalBadge === "function") portalBadge(set);   /* portal.js: o'qilmagan xatlar */
-  if (typeof myworkBadge === "function") myworkBadge(set);   /* mywork.js: muddati o'tgan + bugungi ishlarim */
-  if (typeof ordersBadge === "function") ordersBadge(set);   /* orders.js: imzo / kelishuv kutayotgan buyruqlar */
+  const set = (v, n, tip = "") => {
+    const a = document.querySelector(`#nav a[data-v="${v}"]`); if (!a) return; a.querySelector(".nb")?.remove();
+    if (n > 0) { a.insertAdjacentHTML("beforeend", `<span class="nb" title="${esc(tip)}" aria-label="${esc(tip || n + " ta")}">${n}</span>`); }
+  };
+  if (ME.allow.includes("tasks")) try {
+    const t = await J("/api/section/tasks"), mine = t.tasks.filter(x => x.mine && !["bajarildi", "qoralama"].includes(x.status)), late = mine.filter(x => x.overdue).length;
+    set("tasks", mine.length, `Sizga yoki bo'limingizga tegishli bajarilmagan topshiriqlar: ${mine.length} ta${late ? ` (shundan ${late} tasi muddati o'tgan)` : ""}`);
+  } catch (e) {}
+  if (["rektor", "kotib"].includes(ME.role_key) || ME.role_key.startsWith("prorektor_")) try { const a = await J("/api/agents"), n = a.pending.filter(p => p.can_approve).length; set("agents", n, `Sizning tasdig'ingizni kutayotgan AI agent takliflari: ${n} ta`); } catch (e) {}
+  /* Hujjatlar markazida imzo navbati yo'q — buyruqlar imzosi «Buyruqlar»da */
+  if (typeof portalBadge === "function") portalBadge(set);   /* portal.js */
+  if (typeof myworkBadge === "function") myworkBadge(set);   /* mywork.js: sahifadagi «Jami ish» */
+  if (typeof ordersBadge === "function") ordersBadge(set);   /* orders.js: imzo / kelishuv / qaytarilgan / jurnal */
   if (ME.allow.includes("ops") && !["rektor", "kengash", "prorektor_yoshlar"].includes(ME.role_key))
-    try { const o = await J("/api/ops/summary"), mine = (o.tasks.find(t => t.role === (ME.role_key === "prorektor_oquv" ? "_" : ME.role_key)) || {}); set("ops", mine.late || 0); } catch (e) {}
-  if (ME.allow.some(a => ["facilities", "requests", "youth"].includes(a)))
-    try { const o = await J("/api/svc/overview"); set("service", (o.requests?.incidents || []).filter(i => i.status === "ochiq" && !i.notified_at).length + (o.facilities?.overdue || 0)); } catch (e) {}
+    try { const o = await J("/api/ops/summary"), mine = (o.tasks.find(t => t.role === (ME.role_key === "prorektor_oquv" ? "_" : ME.role_key)) || {}); set("ops", mine.late || 0, `Talabalar markazi: navbatingizdagi kechikkan ishlar — ${mine.late || 0} ta`); } catch (e) {}
+  if (ME.allow.some(a => ["facilities", "requests", "youth", "procurement"].includes(a)))
+    try { const o = await J("/api/svc/overview"); set("service", o.action?.n || 0, o.action?.tip || ""); } catch (e) {}
 }
 document.querySelectorAll("#nav a").forEach(a => a.onclick = e => { e.preventDefault(); if (a.dataset.v === "tasks") { DEC.open = null; if (typeof DIR !== "undefined") DIR.open = null; } go(a.dataset.v); });
 $("#menuBtn").onclick = () => $("#app").classList.toggle("nav-open");
@@ -218,7 +260,7 @@ function go(v) {
   document.querySelectorAll(".view").forEach(s => s.classList.add("hidden"));
   $("#v-" + v).classList.remove("hidden");
   window.scrollTo({top: 0});
-  const fn = ({panel: renderPanel, chat: renderChat, tasks: renderTasks, reports: renderReports, docs: renderDocs, documents: renderDocuments, service: renderService, ops: renderOps, spaces: renderSpaces, rbac: renderRbac, audit: renderAudit, agents: typeof renderAgents === "function" ? renderAgents : null, portal: typeof renderPortal === "function" ? renderPortal : null, cams: typeof renderCams === "function" ? renderCams : null, mywork: typeof renderMywork === "function" ? renderMywork : null, accounts: typeof renderAccounts === "function" ? renderAccounts : null, syllabus: typeof renderSyllabus === "function" ? renderSyllabus : null, staffabs: typeof renderStaffabs === "function" ? renderStaffabs : null, orders: typeof renderOrders === "function" ? renderOrders : null, reyting: typeof renderReyting === "function" ? renderReyting : null})[v];
+  const fn = ({panel: renderPanel, chat: renderChat, tasks: renderTasks, reports: renderReports, docs: renderDocs, documents: renderDocuments, service: renderService, ops: renderOps, spaces: renderSpaces, rbac: renderRbac, audit: renderAudit, agents: typeof renderAgents === "function" ? renderAgents : null, portal: typeof renderPortal === "function" ? renderPortal : null, cams: typeof renderCams === "function" ? renderCams : null, mywork: typeof renderMywork === "function" ? renderMywork : null, accounts: typeof renderAccounts === "function" ? renderAccounts : null, syllabus: typeof renderSyllabus === "function" ? renderSyllabus : null, staffabs: typeof renderStaffabs === "function" ? renderStaffabs : null, orders: typeof renderOrders === "function" ? renderOrders : null, reyting: typeof renderReyting === "function" ? renderReyting : null, flows: typeof renderFlows === "function" ? renderFlows : null})[v];
   Promise.resolve().then(fn).catch(e => { if (e?.message === "auth") return; $("#v-" + v).innerHTML = e?.message === "denied" ? locked("Bu bo'lim") : errCard(v); });
 }
 
@@ -368,7 +410,7 @@ const pnClusters = cs => `<div class="pn-clus">${cs.slice(0, 3).map(c => `<div c
   ${c.worst ? `<div class="tiny muted">Eng past: <b class="nowrap">${esc(c.worst.name)}</b> — ${c.worst.gpa_prev} → ${c.worst.gpa}${c.worst.attendance != null ? `, davomat ${c.worst.attendance}%` : ""}</div>` : ""}</div>`).join("")}</div>`;
 function pnAsk(q) { go("chat"); setTimeout(() => { try { ask(q); } catch (e) {} }, 60); }
 function pnAskHtml() {
-  const qs = (SUGG[ME.role_key] || ["Umumiy holat qanday?", "Mening topshiriqlarim qaysilar?"]).filter(q => !/pasport/i.test(q)).slice(0, 4);
+  const qs = (SUGG[ME.role_key] || SUGG_DEF).slice(0, 4);
   return `<section class="card pn-ask" aria-label="ISFT Core'dan so'rash">
     <div class="pn-ask-h"><span class="pn-ask-av">${ico("spark", 18)}</span><div class="pn-ask-t"><b>ISFT Core</b><small>Institut ma'lumotlari bo'yicha savol bering</small></div>
       <span class="pn-ok">${ico("checkc", 14)}Raqamlar manbadan tekshiriladi</span></div>
@@ -384,27 +426,88 @@ function pnAgentHtml(ag) {
     <div class="pn-ag-h"><span class="pn-ag-ic">${ic}</span><div class="pn-ag-t"><b>AI agent · ${esc(p.agent_name)}</b><small>${p.can_approve ? "Tasdiqlashingizni kutmoqda" : "Tasdiq kutmoqda"}${typeof agTime === "function" && p.created_at ? " · " + agTime(p.created_at) : ""}</small></div>
       ${ps.length > 1 ? `<span class="pn-ag-n" title="Jami tasdiq kutayotgan takliflar">${ps.length} ta</span>` : ""}</div>
     <p class="pn-ag-title">${esc(p.title)}</p>${meta ? `<p class="pn-ag-meta">${meta}</p>` : ""}
-    <div class="pn-ag-a">${p.can_approve ? `<button class="btn sm primary" data-pag-ok="${p.id}">${ico("check", 16)}Tasdiqlash</button>` : ""}<button class="btn sm" data-pag-view="${p.id}">${ico("eye", 16)}Ko'rish</button>
+    <div class="pn-ag-a"><button class="btn sm${p.can_approve ? " primary" : ""}" data-pag-view="${p.id}" title="Taklif tafsilotlari ochiladi — tasdiqlash o'sha oynada">${ico("eye", 16)}${p.can_approve ? "Ko'rib tasdiqlash" : "Ko'rish"}</button>
       ${ps.length > 1 ? `<button class="btn sm ghost pn-ag-all" onclick="go('agents')">Barchasi${ico("arrow", 14)}</button>` : ""}</div></section>`;
 }
 function pnBindHero(el) {
   el.querySelectorAll("[data-pq]").forEach(b => b.onclick = () => pnAsk(b.dataset.pq));
-  el.querySelectorAll("[data-pag-view]").forEach(b => b.onclick = () => { try { AGS.open.add(+b.dataset.pagView); } catch (e) {} go("agents"); });
-  el.querySelectorAll("[data-pag-ok]").forEach(b => b.onclick = () => busy(b, async () => {
-    const r = await J(`/api/agents/actions/${b.dataset.pagOk}/approve`, {method: "POST"});
-    toast(r.result || "Tasdiqlandi"); await renderPanel(); if (typeof badges === "function") badges();
-  }, "Bajarilmoqda…"));
+  /* AI taklifi paneldan to'g'ridan-to'g'ri tasdiqlanmaydi: avval AI agentlar oynasida tafsilot (preview), tasdiq — o'sha yerda ikki bosqichda */
+  el.querySelectorAll("[data-pag-view]").forEach(b => b.onclick = () => {
+    const id = +b.dataset.pagView;
+    try { AGS.open.add(id); } catch (e) {}
+    if (typeof XT !== "undefined" && XT.openLink) XT.openLink({view: "agents", action: id}); else go("agents");
+  });
 }
 const pnH = (i, t) => `${ico(i, 16)}<span>${t}</span>`;
 
+/* ---------- lavozim ish stollari (app/desks.py): strategik — KPI, sifat — akademik sifat, marketing — qabul, yuridik — shartnomalar ---------- */
+const DESK_ICO = {strategik: "chart", sifat: "checkc", marketing: "users", yuridik: "shield"};
+function deskInd(i) {
+  const num = x => Number.isInteger(x) ? fmt(x) : String(x);   /* fmt ru-RU o'nlik vergulni bo'shliqqa aylantiradi — kasr sonlar o'zicha */
+  const v = i.value == null ? "—" : `${typeof i.value === "number" ? num(i.value) : esc(i.value)}${i.unit && i.value != null ? i.unit : ""}`;
+  const good = i.delta == null || i.delta === 0 ? "" : (i.delta > 0) === (i.good !== "down") ? "good" : "bad";
+  return `<div class="card desk-i" title="${esc([i.tip, i.source && "Manba: " + i.source].filter(Boolean).join(" · "))}"><div class="l">${esc(i.label)}</div>
+    <div class="v">${v}${i.delta != null && i.delta !== 0 ? `<span class="desk-d ${good}">${i.delta > 0 ? "+" : "−"}${num(Math.abs(i.delta))}</span>` : ""}</div><div class="s">${esc(i.sub || "")}</div></div>`;
+}
+const pctCell = (v, bad) => v == null ? "—" : `<span class="${bad ? "bad" : ""}">${v}%</span>`;
+function deskHtml(d) {
+  const rep = (d.reports || []).map(r => `<a class="btn sm" href="${esc(r.href)}" download>${ico("download", 15)}${esc(r.title)}</a>`).join("");
+  let body = "";
+  if (d.kind === "strategik") body = card("Fakultetlar kesimida", tbl(["Fakultet", "#Talaba", "#Ball", "#Davomat", "#Kontrakt", "#Ariza", "#Qabul qilindi"],
+    d.by_faculty.map(f => [esc(f.name), fmt(f.n), f.gpa ?? "—", f.att == null ? "—" : f.att + "%", pctCell(f.contract, f.contract != null && f.contract < 80), fmt(f.applied ?? 0), fmt(f.enrolled ?? 0)]), {nw: [0]}));
+  else if (d.kind === "sifat") {
+    const row = r => [esc(r.name), fmt(r.n), r.gpa ?? "—", r.delta == null ? "—" : delta(r.delta), r.att == null ? "—" : r.att + "%", pctCell(r.below, r.below >= 5), pctCell(r.excellent)];
+    const hd = x => [x, "#Talaba", "#Ball", "#O'zgarish", "#Davomat", "#O'zlashtirmagan", "#A'lochi"];
+    body = `<div class="grid g2">${card("Fakultetlar kesimida", tbl(hd("Fakultet"), d.by_faculty.map(row), {nw: [0]}))}${card("Kurslar kesimida", tbl(hd("Kurs"), d.by_course.map(r => row({...r, name: r.name + "-kurs"})), {nw: [0]}))}</div>` +
+      (d.syllabus?.total ? card("O'quv dasturlari (sillabuslar) holati", `<div class="ops-strip" style="margin:0">${d.syllabus.by_status.map(x => `<span class="chip-s">${esc(x.label)}: <b>${x.n}</b></span>`).join("")}${d.syllabus.overdue ? `<span class="chip-s">Muddati o'tgan: <b class="bad">${d.syllabus.overdue}</b></span>` : ""}</div>`) : "");
+  } else if (d.kind === "marketing") {
+    const wk = d.weekly || [];
+    body = `<div class="grid g2">${card("Qabul voronkasi va haftalik dinamika", `<div class="ops-strip" style="margin:0 0 10px">${d.funnel.map(f => `<span class="chip-s">${esc(f.status)}: <b>${fmt(f.n)}</b></span>`).join("")}</div>` +
+        (wk.length ? `<p class="tiny muted" style="margin:0 0 6px">Haftalik arizalar (oxirgi ${wk.length} hafta, hafta boshi)</p>` + bars(wk, {label: w => dmy(w.start), value: w => w.n, fmtv: v => fmt(v)}) : ""))}` +
+      card("Yo'nalishlar: arizalar va konversiya", bars(d.by_direction, {label: r => `${r.direction} · ${r.conv ?? 0}%`, value: r => r.applied, fmtv: v => fmt(v), top: 8}) + `<p class="tiny muted">Yo'nalish · konversiya (talaba bo'lganlar ulushi) · ariza soni</p>`) + `</div>` +
+      card("Fakultetlar kesimida", tbl(["Fakultet", "#Ariza", "#Talaba bo'ldi", "#Konversiya"], (d.by_faculty || []).map(f => [esc(f.name), fmt(f.applied), fmt(f.enrolled), (f.conv ?? 0) + "%"]), {nw: [0]}));
+  } else if (d.kind === "yuridik") {
+    const B = {otgan: ["muddati o'tgan", "gray"], "60": ["60 kun ichida", "high"], "180": ["180 kun ichida", "mid"], amalda: ["amalda", "low"]};
+    const only = PNL.legalAll ? d.agreements : d.agreements.filter(a => a.need_review);
+    body = card(`Shartnomalar reyestri <span class="tag ${only.length ? "mid" : "low"}">${d.agreements.filter(a => a.need_review).length} ta xulosa kutmoqda</span>`,
+      `<div class="row-actions" style="margin:0 0 10px"><button class="btn sm" data-legal-all>${PNL.legalAll ? "Faqat xulosa kutayotganlar" : `Barchasi (${d.agreements.length})`}</button>
+        <button class="btn sm" onclick="DOCSV.mode='contract';go('docs')">${ico("search", 15)}Shartnoma matnini tekshirish</button></div>` +
+      (only.length ? `<div class="desk-legal">${only.map(a => `<div class="dl-row${a.need_review ? " need" : ""}" data-pid="${a.id}">
+        <div class="dl-main"><b>${esc(a.name)}</b><span class="tiny muted">${esc(a.kind)} · imzolangan ${dmy(a.signed)} · tugaydi ${dmy(a.expires)}</span>
+          <span class="tiny"><span class="tag ${B[a.bucket][1]}">${a.days_left < 0 ? B.otgan[0] : a.days_left + " kun qoldi"}</span>${a.review ? ` <span class="muted">Xulosa: ${esc(a.review.label)}${a.review.note ? ` — «${esc(a.review.note)}»` : ""} · ${dmy(a.review.at)}</span>` : ` <span class="muted">yuridik xulosa yo'q</span>`}</span></div>
+        <div class="dl-act"><select class="sel-sm" aria-label="Xulosa">${Object.entries(d.statuses).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("")}</select>
+          <input class="dl-note" maxlength="600" placeholder="Izoh (e'tiroz yoki tugatishda majburiy)" aria-label="Izoh"><button class="btn sm primary" data-legal>Saqlash</button></div></div>`).join("")}</div>`
+        : `<p class="muted">${ico("checkc", 16)} Xulosa kutayotgan shartnoma yo'q</p>`));
+  }
+  return `<section class="desk desk-${d.kind}" aria-label="${esc(d.title)}"><div class="desk-h"><h3 class="pn-h">${pnH(DESK_ICO[d.kind] || "chart", esc(d.title))}</h3><div class="row-actions">${rep}</div></div>
+    <div class="grid g3 desk-inds">${d.indicators.map(deskInd).join("")}</div>${body}
+    ${d.note ? `<details class="pg-info"><summary>${ico("info", 14)}Ma'lumot manbasi va cheklovlar</summary><p class="tiny muted">${esc(d.note)}</p></details>` : ""}</section>`;
+}
+function deskBind(el, d) {
+  el.querySelector("[data-legal-all]")?.addEventListener("click", () => { PNL.legalAll = !PNL.legalAll; renderPanel(); });
+  el.querySelectorAll("[data-legal]").forEach(b => b.onclick = () => busy(b, async () => {
+    const row = b.closest("[data-pid]"), st = row.querySelector("select").value, note = row.querySelector(".dl-note").value.trim();
+    if (["etiroz", "tugatish"].includes(st) && note.length < 5) { toast("E'tiroz yoki tugatish uchun izoh yozing"); row.querySelector(".dl-note").focus(); return; }
+    await J(`/api/desk/legal/${row.dataset.pid}`, {method: "POST", body: JSON.stringify({status: st, note})});
+    toast("Yuridik xulosa saqlandi"); renderPanel();
+  }));
+}
+/* yuklanish skeleti — «Yuklanmoqda…» o'rniga sahifa shakli (sekin so'rovlarda ham joy sakramaydi) */
+const skelCard = (lines = 3, cls = "") => `<div class="card skel-card ${cls}" aria-hidden="true"><i class="skel skel-h"></i>${Array.from({length: lines}, (_, i) => `<i class="skel" style="width:${92 - i * 14}%"></i>`).join("")}</div>`;
+const skelPanel = () => `<div class="head pn-head"><div><h2>Assalomu alaykum, ${esc(ME.greet || ME.role)}</h2><span class="muted">${dmy(ME.today)} · ma'lumot yuklanmoqda…</span></div></div>
+  <div class="grid g4 pn-kpis" role="status" aria-label="Ko'rsatkichlar yuklanmoqda">${skelCard(2, "skel-kpi").repeat(4)}</div><div class="grid g2" style="margin-top:14px">${skelCard(4)}${skelCard(4)}</div>`;
+const DESK_ROLES = ["strategik", "sifat", "marketing", "yuridik"];   /* app/desks.py — lavozim ish stoli panelda */
 async function renderPanel() {
-  const el = $("#v-panel"); el.innerHTML = `<p class="muted">Yuklanmoqda…</p>`;
+  const el = $("#v-panel"); el.innerHTML = skelPanel();
   const full = !(ME.level >= 3 || ME.role_key === "kotib"), safe = p => Promise.resolve(p).catch(() => null);
-  const [dash, briefH, decL, opsS, agD] = await Promise.all([J("/api/dashboard"),
+  const desk = DESK_ROLES.includes(ME.role_key);
+  const [dash, briefH, decL, opsS, agD, deskD, mw] = await Promise.all([J("/api/dashboard"),
     typeof briefCardHtml === "function" ? safe(briefCardHtml()) : "",
     full && ME.level <= 2 ? safe(J("/api/dec/list")) : null,
     ME.allow.includes("ops") ? safe(J("/api/ops/summary")) : null,
-    full ? safe(J("/api/agents")) : null]);
+    full ? safe(J("/api/agents")) : null,
+    desk ? safe(J("/api/desk")) : null,
+    full ? null : safe(J("/api/mywork"))]);
   DASH = dash;
   const P = DASH.panels, L = ME.labels;
   let h = `<div class="head pn-head"><div><h2>Assalomu alaykum, ${esc(ME.greet || ME.role)}</h2><span class="muted">${ME.scope === "Butun institut" ? "" : esc(ME.scope) + " · "}${dmy(ME.today)} · ma'lumot institut serveridan</span></div></div>`;
@@ -414,8 +517,9 @@ async function renderPanel() {
   K.forEach(k => { if (head.length < 4 && !head.includes(k)) head.push(k); });
   const rest = K.filter(k => !head.includes(k));
   const kh = k => kpiHtml(k, P, K);
-  h += `<div class="grid g4 pn-kpis">${head.map(kh).join("")}</div>`;
-  if (rest.length) h += `<details class="pn-kmore"${PNL.kpi ? " open" : ""} ontoggle="PNL.kpi=this.open"><summary>${ico("chart", 16)}<span>Barcha ko'rsatkichlar</span><span class="muted">+${rest.length}</span></summary><div class="grid g4 pn-kpis">${rest.map(kh).join("")}</div></details>`;
+  if (deskD && deskD.kind) h += deskHtml(deskD);
+  else h += `<div class="grid g4 pn-kpis">${head.map(kh).join("")}</div>`;
+  if (rest.length && !(deskD && deskD.kind)) h += `<details class="pn-kmore"${PNL.kpi ? " open" : ""} ontoggle="PNL.kpi=this.open"><summary>${ico("chart", 16)}<span>Barcha ko'rsatkichlar</span><span class="muted">+${rest.length}</span></summary><div class="grid g4 pn-kpis">${rest.map(kh).join("")}</div></details>`;
 
   /* --- ISFT Core savollari + eng yuqoridagi AI agent taklifi (login sahifasidagi va'da) --- */
   const agH = pnAgentHtml(agD);
@@ -427,8 +531,8 @@ async function renderPanel() {
     const o = opsS, by = {}; o.by_rule.forEach(r => { by[r.rule] = (by[r.rule] || 0) + r.n; });
     crit = o.by_rule.filter(r => r.level >= 2).reduce((a, r) => a + r.n, 0);
     const late = o.tasks.reduce((a, t) => a + (t.late || 0), 0), open = o.tasks.reduce((a, t) => a + t.n, 0);
-    opsCard = `<div class="card"><div class="head" style="margin-bottom:8px"><h3 style="margin:0" class="pn-h">${pnH("cap", "Talabalar bilan ishlash markazi")}</h3><button class="btn sm" onclick="OPSV.student=null;go('ops')">Ochish →</button></div>
-      <div class="ops-strip" style="margin:0"><span class="chip-s" title="Ochiq holatlar: ${fmt(crit)} ta kritik/jiddiy (bitta talabada bir nechta bo'lishi mumkin)">Jiddiy holatdagi talabalar: <b class="bad">${fmt(o.serious_students ?? crit)}</b></span>${Object.entries(OPS_RULES).map(([k, v]) => by[k] ? `<span class="chip-s">${v}: <b>${by[k]}</b></span>` : "").join("")}
+    opsCard = `<div class="card"><div class="head" style="margin-bottom:8px"><h3 style="margin:0" class="pn-h">${pnH("cap", "Talabalar markazi")}</h3><button class="btn sm" onclick="OPSV.student=null;go('ops')">Ochish →</button></div>
+      <div class="ops-strip" style="margin:0"><span class="chip-s" title="Ochiq holatlar: ${fmt(crit)} ta kritik/jiddiy (bitta talabada bir nechta bo'lishi mumkin)">O'qishda xavf (talaba): <b class="bad">${fmt(o.serious_students ?? crit)}</b></span>${Object.entries(OPS_RULES).map(([k, v]) => by[k] ? `<span class="chip-s">${v}: <b>${by[k]}</b></span>` : "").join("")}
       <span class="chip-s">Ochiq topshiriqlar: <b>${open}</b>${late ? ` · <span class="bad">${late} kechikkan</span>` : ""}</span><span class="chip-s">7 kunda yopildi: <b>${o.closed_7d}</b></span></div>
       ${["rektor", "kengash"].includes(ME.role_key) ? `<p class="tiny muted pn-note">${ico("shield", 14)}<span>Rahbariyat uchun faqat jamlangan raqamlar — talabalar ro'yxati registrator va tyutorlarda.</span></p>` : ""}</div>`;
   }
@@ -452,7 +556,7 @@ async function renderPanel() {
        minglab "kritik" holatlar ro'yxati emas (ular tyutor va registrator ishida) */
     if (opsS) {
       const lateT = (opsS.tasks || []).reduce((a, t) => a + (t.late || 0), 0), ser = opsS.serious_students;
-      acts.push(`<button class="pn-act${lateT ? " bad" : ""}" onclick="OPSV.student=null;go('ops')" title="Talabalar markazi: ijrochilar muddatida bajarmagan vazifalar. Jiddiy holatdagi talabalar bilan tyutor va Registrator ofisi ishlamoqda.">${ico("cap", 16)}<span>Talabalar markazi</span><b>${lateT ? fmt(lateT) : "✓"}</b><em class="n">${lateT ? "ta vazifa kechikkan" : "kechikkan vazifa yo'q"}${ser != null ? ` · ${fmt(ser)} talaba jiddiy holatda` : ""}</em></button>`);
+      acts.push(`<button class="pn-act${lateT ? " bad" : ""}" onclick="OPSV.student=null;go('ops')" title="Talabalar markazi: ijrochilar muddatida bajarmagan vazifalar. Jiddiy holatdagi talabalar bilan tyutor va Registrator ofisi ishlamoqda.">${ico("cap", 16)}<span>Talabalar markazi: kechikkan vazifalar</span><b>${lateT ? fmt(lateT) : "✓"}</b>${ser != null ? `<em class="n">o'qishda xavf: ${fmt(ser)} talaba</em>` : ""}</button>`);
     }
     const camK = ME.allow.includes("spaces") && DASH.kpis.find(k => k.key === "kameralar");   /* cams.js — Kameralar va xavfsizlik */
     if (camK) acts.push(`<button class="pn-act cm-pa${camK.bad ? " bad" : ""}" onclick="go('cams')" title="${esc(camK.sub || "")}">${ico("cctv", 16)}<span>Kameralar: P1/P2 bugun</span><b>${fmt(camK.value)}</b>${(camK.offline ?? +(String(camK.sub).match(/(\d+) kamera oflayn/) || [])[1]) ? `<em>${camK.offline ?? String(camK.sub).match(/(\d+) kamera oflayn/)[1]} kamera oflayn</em>` : ""}</button>`);
@@ -472,7 +576,7 @@ async function renderPanel() {
 
   /* --- kartalar: [tab, html] yoki [tab, null, bo'lim nomi] (yopiq) --- */
   const cards = [], add = (t, html) => cards.push({t, html}), lock = (t, name) => cards.push({t, html: locked(name), locked: name});
-  if (P.mygroups) add("oquv", card("Mening guruhlarim", tbl(["Guruh", "Fan", "#Talaba", "#O'rt. ball", "#O'tgan sem.", "#Qarzdor (<40)"], P.mygroups.map(g => [esc(g.grp), esc(g.subject), g.n, g.avg_score, (g.prev_score - g.avg_score > 5 ? `<span class="bad">${g.prev_score}</span>` : g.prev_score), g.failing ? `<span class="bad">${g.failing}</span>` : 0]), {nw: [0], top: 8})));
+  if (P.mygroups) add("oquv", card("Mening guruhlarim", tbl(["Guruh", "Fan", "#Talaba", "#Oraliq (o'rt., 30)", "#Guruh o'tgan sem. (100)", "#Oraliq < 12"], P.mygroups.map(g => [esc(g.grp), esc(g.subject), g.n, g.avg_score ?? "—", g.prev_score ?? "—", g.failing ? `<span class="bad">${g.failing}</span>` : 0]), {nw: [0], top: 8})));
   if (P.academic) {
     const a = P.academic, dg = a.declining_groups, fac = same(dg, g => g.faculty), kurs = same(dg, g => g.course);
     const hd = ["Guruh", ...(fac == null ? ["Fakultet"] : []), ...(kurs == null ? ["#Kurs"] : []), "#Ball", "#O'zgarish", "#Davomat"];
@@ -544,12 +648,13 @@ async function renderPanel() {
     /* bo'lim/fakultet darajasi: faqat ruxsat etilgan kartalar, tablarsiz */
     if (opsCard) h += `<div style="margin-top:14px">${opsCard}</div>`;
     const shown = cards.filter(c => !c.locked).map(c => c.html);
-    if (P.tasks) {
-      const mine = P.tasks.tasks.filter(t => t.mine && t.status !== "bajarildi");
-      shown.unshift(card("Mening topshiriqlarim", mine.length ? tbl(["Topshiriq", "Muddat", ""], mine.slice(0, 6).map(t => [esc(t.text),
-        !t.due ? `<span class="unsaid">aytilmagan</span>` : t.overdue ? `<b class="bad">${dtm(t.due_at || t.due)}</b>` : dtm(t.due_at || t.due),
-        t.decision ? `<button class="btn sm" onclick="openDecision(${t.meeting_id})">Ochish</button>` : ""]), {nw: [1]}) : `<p class="muted">Ochiq topshiriq yo'q ✓</p>`,
-        `<button class="btn sm" onclick="DEC.open=null;go('tasks')">Barchasi →</button>`));
+    if (mw && mw.items) {   /* «Mening vazifalarim» sahifasidagi bilan bir xil ro'yxat (app/mywork.py) — eng yaqin muddatlilari */
+      const it = mw.items.slice(0, 6), n = mw.counts?.total || 0;
+      PNL.mw = it;
+      shown.unshift(card(`Mening vazifalarim${n ? ` <span class="tag ${mw.counts.overdue ? "high" : "gray"}" title="Sizdan harakat kutayotgan ishlar${mw.counts.overdue ? `; ${mw.counts.overdue} tasi muddati o'tgan` : ""}">${n}</span>` : ""}`,
+        it.length ? `<div class="pn-mwl">${it.map((x, i) => `<button type="button" class="pn-mwi" data-mwi="${i}"><span class="pn-mwt">${esc(x.title)}</span><span class="tiny ${x.overdue ? "bad" : "muted"}">${x.due ? (x.overdue ? "muddati o'tgan · " : "") + dtm(x.due) : esc(x.status || "")}</span></button>`).join("")}</div>`
+          : `<p class="muted">Sizdan kutilayotgan ish yo'q ✓</p>`,
+        `<button class="btn sm" onclick="go('mywork')">Barchasi →</button>`));
     }
     if (ME.role_key === "kotib")
       shown.unshift(card(pnH("file", "Majlis materiali"), `<p class="tiny">Majlis yozuvini ISFT Core'ga bering: bayonnoma qoralamasi va topshiriqlar tayyorlanadi, tasdiqlagach bo'limlar navbatiga tushadi.</p><button class="btn primary" onclick="DEC.open=null;go('tasks')">Boshlash →</button>`));
@@ -559,9 +664,9 @@ async function renderPanel() {
       shown.push(card(pnH("camera", "Auditoriyalar bandligi"), `<p class="tiny">Kameralardan faqat odamlar soni: hozir qaysi xona band, qaysi biri bo'sh turibdi.</p><button class="btn" onclick="go('spaces')">Ochish →</button>`));
     h += `<div class="grid g2" style="margin-top:14px">${shown.join("")}</div>`;
   } else {
-    const open = cards.filter(c => !c.locked), lockedNames = cards.filter(c => c.locked).map(c => c.locked);
+    /* ruxsat yo'q kartalar umuman ko'rsatilmaydi (yopiq ro'yxat ham — shovqin); ruxsatlar «Ruxsat darajalari»da */
+    const open = cards.filter(c => !c.locked), lockNote = "";
     const tabs = PANEL_TABS.filter(([k]) => open.some(c => c.t === k));
-    const lockNote = lockedNames.length ? `<p class="tiny muted pn-note pn-locked">${ico("lock", 14)}<span>Lavozimingiz uchun yopiq: ${lockedNames.map(esc).join(", ")}</span></p>` : "";
     if (open.length <= 4 || tabs.length < 2) h += `<div class="grid g2" style="margin-top:14px">${open.map(c => c.html).join("")}</div>${lockNote}`;
     else {
       if (!tabs.some(([k]) => k === PNL.tab)) PNL.tab = tabs[0][0];
@@ -572,28 +677,42 @@ async function renderPanel() {
   el.innerHTML = h;
   pnBindHero(el);
   el.querySelectorAll("[data-open]").forEach(b => b.onclick = () => openDecision(+b.dataset.open));
+  el.querySelectorAll("[data-mwi]").forEach(b => b.onclick = () => { const x = (PNL.mw || [])[+b.dataset.mwi]; if (!x) return; if (typeof mwOpen === "function") mwOpen(x.link); else if (typeof XT !== "undefined") XT.openLink(x.link); });
+  if (deskD && deskD.kind) deskBind(el, deskD);
 }
 
 /* ---------- chat ---------- */
+/* Tayyor savollar — faqat lavozim ruxsati doirasidagi mavzular (ruxsat yo'q savol tavsiya qilinmaydi) */
 const SUGG = {
-  rektor: ["Qaysi yo'nalishda ortda qolyapmiz?", "O'zlashtirish nega pasaydi?", "Kontrakt tushumi yil oxiriga qancha bo'ladi?", "Kengash topshiriqlari bajarilyaptimi?", "Kommunal xarajatlar nega oshdi?", "Xodimlarning pasport ma'lumotlarini ber"],
-  kengash: ["Institutning umumiy holati qanday?", "Byudjet ijrosi qanday?", "Xavf ostidagi talabalar ro'yxatini ber"],
-  prorektor_oquv: ["Qaysi guruhlarda o'zlashtirish pasaygan?", "Xavf ostidagi talabalar kimlar?", "GPA qanday hisoblanadi?", "Byudjet xarajatlari qanday?"],
-  prorektor_ilmiy: ["Scopus maqolalar bo'yicha qaysi kafedra ortda?", "Qaysi xalqaro shartnomalar tugayapti?", "Talabalar baholarini ko'rsat"],
+  rektor: ["Qaysi yo'nalishda ortda qolyapmiz?", "O'zlashtirish nega pasaydi?", "Kontrakt tushumi yil oxiriga qancha bo'ladi?", "Kengash topshiriqlari bajarilyaptimi?", "Kommunal xarajatlar nega oshdi?"],
+  kengash: ["Byudjet ijrosi qanday?", "Kontrakt tushumi qanday?", "Kengash topshiriqlari bajarilyaptimi?", "Qaysi xalqaro shartnomalar tugayapti?"],
+  prorektor_oquv: ["Qaysi guruhlarda o'zlashtirish pasaygan?", "Xavf ostidagi talabalar kimlar?", "GPA qanday hisoblanadi?", "Qabul holati qanday?"],
+  prorektor_ilmiy: ["Scopus maqolalar bo'yicha qaysi kafedra ortda?", "Qaysi xalqaro shartnomalar tugayapti?", "Magistratura holati qanday?"],
   ilmiy_bolim: ["Scopus maqolalar bo'yicha qaysi kafedra ortda?", "2025 yildan beri maqolasi yo'q o'qituvchilar", "Magistratura holati qanday?"],
-  prorektor_moliya: ["Qaysi xarajat moddasi rejadan oshgan?", "Kontrakt qarzi eng ko'p guruhlar?", "Talabalar o'zlashtirishi qanday?"],
-  prorektor_yoshlar: ["Yotoqxona holati qanday?", "Hal qilinmagan murojaatlar bormi?", "Byudjet qancha?"],
-  kafedra: ["Kafedramda ilmiy faoliyat qanday?", "Qaysi guruhlarda muammo bor?", "Boshqa kafedralar bilan solishtir: moliya"],
-  oqituvchi: ["Mening guruhlarimda kim qiynalyapti?", "Kafedra byudjetini ko'rsat"],
+  prorektor_moliya: ["Qaysi xarajat moddasi rejadan oshgan?", "Kontrakt tushumi qanday?", "Kommunal xarajatlar nega oshdi?"],
+  prorektor_yoshlar: ["Yotoqxona holati qanday?", "Hal qilinmagan murojaatlar bormi?", "Topshiriqlar muddatida bajarilyaptimi?"],
+  kafedra: ["Kafedramda ilmiy faoliyat qanday?", "Qaysi guruhlarda muammo bor?", "Xavf ostidagi talabalar kimlar?"],
+  oqituvchi: ["Mening guruhlarimda kim qiynalyapti?", "Yakuniy nazoratga kim kiritiladi?", "O'tish bali necha?"],
+  tyutor: ["Xavf ostidagi talabalar kimlar?", "Qaysi guruhlarda muammo bor?", "O'tish bali necha?"],
   buxgalteriya: ["Kommunal xarajatlar nega oshdi?", "Kontrakt tushumi qanday?"],
   talabalar: ["Qanday masalada registratorga murojaat qilaman?", "Xavf ostidagi talabalar kimlar?", "O'tish bali necha?"],
+  registrator_xodim: ["Qanday masalada registratorga murojaat qilaman?", "Yakuniy nazoratga kim kiritiladi?", "O'tish bali necha?"],
   akademik: ["Akademik faoliyatni boshqarish bo'limi vazifalari?", "Yakuniy nazoratga kim kiritiladi?", "Qaysi guruhlarda o'zlashtirish pasaygan?"],
   imtihon: ["Yakuniy nazoratga kim kiritiladi?", "O'tish bali necha?", "Qaysi guruhlarda o'zlashtirish pasaygan?"],
   sirtqi: ["Sirtqi bo'lim nima ish qiladi?", "Kredit nima?", "Dars soat nechida boshlanadi?"],
   malumotlar_bazasi: ["Ma'lumotlar bazasi bo'limi vazifalari?", "GPA qanday hisoblanadi?", "Qaysi guruhlarda o'zlashtirish pasaygan?"],
+  strategik: ["Topshiriqlar muddatida bajarilyaptimi?", "Qaysi topshiriqlar muddati o'tgan?"],
+  sifat: ["Qaysi guruhlarda o'zlashtirish pasaygan?", "GPA qanday hisoblanadi?", "O'tish bali necha?"],
+  marketing: ["Qabul holati qanday?", "Qaysi yo'nalishga ariza ko'p?"],
+  qabul: ["Qabul holati qanday?", "Qaysi yo'nalishga ariza ko'p?"],
+  yuridik: ["Qaysi xalqaro shartnomalar tugayapti?", "Menga berilgan topshiriqlar qaysilar?"],
+  xalqaro: ["Qaysi xalqaro shartnomalar tugayapti?", "Xalqaro hamkorlar qaysilar?"],
+  magistratura: ["Magistratura holati qanday?", "Menga berilgan topshiriqlar qaysilar?"],
+  kotib: ["Topshiriqlar muddatida bajarilyaptimi?", "Qaysi topshiriqlar muddati o'tgan?"],
 };
+const SUGG_DEF = ["Menga berilgan topshiriqlar qaysilar?", "Muddati o'tgan topshiriqlar bormi?"];
 function renderChat() {
-  const s = SUGG[ME.role_key] || ["Umumiy holat qanday?", "Mening topshiriqlarim qaysilar?"];
+  const s = SUGG[ME.role_key] || SUGG_DEF;
   const sg = $("#suggest");
   sg.classList.remove("open");
   sg.innerHTML = `<button class="sg-toggle" type="button" aria-expanded="false">${ico("spark", 15)}<span>Tayyor savollar</span><span class="sg-chev">${ico("arrow", 14)}</span></button>
@@ -746,8 +865,9 @@ const dtm = s => { if (!s) return ""; if (s.length <= 10) return dmy(s); const d
 const hm = s => { const d = new Date(s); return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; };
 const dueHtml = t => t.due ? `<b class="${t.overdue ? "bad" : ""}">${dtm(t.due)}</b>${t.due_text ? `<span class="said">majlisda: «${esc(t.due_text)}»</span>` : ""}` : `<span class="unsaid">aytilmagan</span>`;
 const whoHtml = t => t.assignee_name ? esc(t.assignee_name) : `<span class="unsaid">${t.status === "qoralama" ? "aytilmagan" : "biriktirilmagan"}</span>`;
-function openDecision(id) { DEC.open = id; DEC.sig = ""; if (typeof DIR !== "undefined") DIR.open = null; go("tasks"); }
-function closeDecision() { DEC.open = null; clearInterval(DEC.timer); go("tasks"); }
+/* taskId — havola aniq topshiriqqa ({view: "tasks", meeting, task}): qaror ochilgach shu karta ko'rsatiladi va belgilanadi */
+function openDecision(id, taskId) { DEC.open = id; DEC.focus = taskId || null; DEC.sig = ""; if (typeof DIR !== "undefined") DIR.open = null; go("tasks"); }
+function closeDecision() { DEC.open = null; DEC.focus = null; clearInterval(DEC.timer); go("tasks"); }
 
 async function renderTasks() {
   clearInterval(DEC.timer);
@@ -757,9 +877,14 @@ async function renderTasks() {
   try { [t, L] = await Promise.all([J("/api/section/tasks"), J("/api/dec/list")]); }
   catch (e) { if (e.message === "denied") { el.innerHTML = locked("Majlis topshiriqlari"); return; } throw e; }
   const isKotib = ME.role_key === "kotib", lead = ["rektor", "kengash"].includes(ME.role_key);
+  /* demo vositalari (qarorlarni o'chirish) — faqat server ISFT_CORE_DEMO_TOOLS=1 bilan ishga tushirilgan bo'lsa */
+  if ((isKotib || ME.role_key === "rektor") && !DEC.cap) try { DEC.cap = await J("/api/dec/capabilities"); } catch (e) {}
+  const demoTools = !!DEC.cap?.demo_tools && (isKotib || ME.role_key === "rektor");
+  /* bo'limsiz eski topshiriqlar server ishga tushganda yagona oqimga o'tkaziladi (decisions.migrate_legacy) — bu ro'yxat odatda bo'sh;
+     bir bosishli «Bajarildi» yo'q: topshiriq qaror kartasida ijrochi tomonidan natija bilan yakunlanadi, rektor qabul qiladi yoki qaytaradi */
   const old = t.tasks.filter(x => !x.decision && !x.directive);
   let h = `<div class="head"><div><h2>Majlislar va topshiriqlar</h2><span class="muted">${t.tasks.length} ta topshiriq · ${t.done} bajarilgan · ${t.overdue ? `<b class="bad">${t.overdue} muddati o'tgan</b>` : "muddati o'tgan yo'q"}</span></div>
-    ${isKotib || ME.role_key === "rektor" ? `<button class="btn ghost sm" id="decReset" title="Demo ssenariysida yaratilgan qarorlarni o'chiradi va LMS hodisasi xabarini bekor qiladi">${ico("refresh", 16)} Demoni qayta boshlash</button>` : ""}</div>`;
+    ${demoTools ? `<button class="btn ghost sm" id="decReset" title="Demo vositasi (ISFT_CORE_DEMO_TOOLS=1): demo ssenariysida yaratilgan qarorlarni o'chiradi va LMS hodisasi xabarini bekor qiladi">${ico("refresh", 16)} Demoni qayta boshlash</button>` : ""}</div>`;
   if (isKotib) h += await newMeetingCard();
   if (typeof dirSection === "function") h += await dirSection();   /* «Men bergan topshiriqlar» */
   if (L.queue) h += queueCard(L.queue);
@@ -770,12 +895,12 @@ async function renderTasks() {
     `<span class="tiny">${esc(x.meeting)}<br><span class="muted">${dmy(x.meeting_date)}</span></span>`, esc(x.assignee), esc(x.text),
     !x.due ? `<span class="unsaid">aytilmagan</span>` : x.overdue ? `<b class="bad">${dmy(x.due)}<br><span class="tiny">${-x.days} kun o'tdi</span></b>` : `${dmy(x.due)}<br><span class="tiny muted">${x.status === "bajarildi" ? "" : x.days === 0 ? "bugun" : x.days + " kun qoldi"}</span>`,
     `<span class="tag ${x.status === "bajarildi" ? "low" : x.overdue ? "high" : "mid"}">${x.overdue ? "muddati o'tgan" : esc(x.status)}</span>`,
-    (lead || x.assignee_role === ME.role_key) && x.status !== "bajarildi" ? `<button class="btn sm" data-done="${x.id}">${ico("check", 16)} Bajarildi</button>` : ""]))}</div>`;
+    x.meeting_id ? `<button class="btn sm" data-open="${x.meeting_id}" data-otask="${x.id}">Ochish →</button>` : ""]))}</div>`;
   el.innerHTML = h;
-  el.querySelectorAll("[data-done]").forEach(b => b.onclick = () => busy(b, async () => { await J(`/api/tasks/${b.dataset.done}/status`, {method: "POST", body: JSON.stringify({status: "bajarildi"})}); toast("Belgilandi"); renderTasks(); }));
-  el.querySelectorAll("[data-open]").forEach(b => b.onclick = () => openDecision(+b.dataset.open));
+  el.querySelectorAll("[data-open]").forEach(b => b.onclick = () => openDecision(+b.dataset.open, +b.dataset.otask || null));
   bindAssign(el, renderTasks);
-  if ($("#decReset")) $("#decReset").onclick = () => busy($("#decReset"), async () => { const r = await J("/api/dec/demo-reset", {method: "POST"}); toast(`Demo qayta boshlandi (${r.removed} ta qaror o'chirildi)`); renderTasks(); badges(); });
+  if ($("#decReset")) $("#decReset").onclick = () => { const b = $("#decReset"); if (!arm(b, "Ha, demo qarorlarini o'chirish")) return;
+    busy(b, async () => { const r = await J("/api/dec/demo-reset", {method: "POST"}); toast(`Demo qayta boshlandi (${r.removed} ta qaror o'chirildi)`); renderTasks(); badges(); }); };
   if (isKotib) bindNewMeeting();
   if (typeof dirBind === "function") dirBind(el);
 }
@@ -784,7 +909,7 @@ function decRow(d) {
   const done = d.tasks.filter(t => t.status === "bajarildi").length;
   return `<div class="dec-row"><div class="dec-row-h"><div><b>${esc(d.title)}</b><span class="muted tiny"> · ${dmy(d.date)} · ${d.status === "qoralama" ? `<span class="tag mid">qoralama</span>` : `${done}/${d.tasks.length} bajarildi`}</span></div>
     <button class="btn sm ${d.status === "qoralama" ? "primary" : ""}" data-open="${d.id}">${d.status === "qoralama" ? "Tahrirlash" : "Ochish"} →</button></div>
-    ${d.tasks.map(t => `<div class="dec-line"><span class="dl-unit">${esc(t.unit_name || "bo'lim aytilmagan")}</span><span class="dl-who">${whoHtml(t)}</span>${dstTag(t)}
+    ${d.tasks.map(t => `<div class="dec-line"><span class="dl-unit">${esc(t.unit_name || "bo'lim aytilmagan")}</span><span class="dl-who">${whoHtml(t)}</span><span class="dl-tags">${dstTag(t)}${reviewTag(t)}</span>
       <span class="dl-res">${t.result ? esc(t.result.length > 110 ? t.result.slice(0, 110) + "…" : t.result) : t.blocked ? `<span class="muted">${esc(t.dep?.unit_name || "")} natijasi kutilmoqda</span>` : ""}</span></div>`).join("")}</div>`;
 }
 
@@ -793,7 +918,7 @@ function queueCard(q) {
   return `<div class="card" style="margin-top:14px"><h3>${ico(UNIT_ICO[q.unit] || "tasks")} ${q.head ? `${esc(q.unit_name)} navbati` : "Menga biriktirilgan topshiriqlar"} <span class="tag ${open.length ? "mid" : "low"}">${open.length} ochiq</span></h3>
     ${q.head && q.duties && q.duties.length ? `<p class="tiny muted" style="margin:-4px 0 10px">Bo'lim vazifalari (akademik qoidalar taqdimoti): ${esc(q.duties.join("; "))}.</p>` : ""}
     ${q.tasks.length ? `<div class="dec-list">${q.tasks.map(t => `<div class="dec-row"><div class="dec-row-h"><div><b>${esc(t.text)}</b><div class="tiny muted">${esc(t.meeting)} · ${dmy(t.meeting_date)}</div></div>
-      <button class="btn sm primary" ${t.directive ? `data-dopen="${t.id}"` : `data-open="${t.meeting_id}"`}>Ochish →</button></div>
+      <button class="btn sm primary" ${t.directive ? `data-dopen="${t.id}"` : `data-open="${t.meeting_id}" data-otask="${t.id}"`}>Ochish →</button></div>
       <div class="kv"><span>Muddat</span><span>${dueHtml(t)}</span><span>Holat</span><span>${t.directive && typeof dirTag === "function" ? dirTag(t) + (t.progress && t.progress.total ? ` <span class="tiny muted">· taqsimlangan: ${t.progress.done}/${t.progress.total} bajarildi</span>` : "") : dstTag(t)}${t.blocked ? ` <span class="tiny muted">· ${esc(t.dep.unit_name)} natijasi kutilmoqda</span>` : ""}</span>
       <span>Ijrochi</span><span>${t.can_assign ? assignSel(t, q.staff) : whoHtml(t)}</span></div></div>`).join("")}</div>` : `<p class="muted">Navbat bo'sh.</p>`}</div>`;
 }
@@ -850,11 +975,17 @@ async function renderDecision(id, silent) {
   hydrateIcons(el);
   if (silent) window.scrollTo({top: scroll});
   const box = el.querySelector(".chat-msgs"); if (box) box.scrollTop = 1e9;
+  if (!silent && DEC.focus) {   /* aniq topshiriqqa havola (bildirishnoma, «Mening vazifalarim») — karta ko'rsatiladi va belgilanadi */
+    const card = el.querySelector(`.dec-task[data-tid="${DEC.focus}"]`); DEC.focus = null;
+    if (card) { card.scrollIntoView({block: "center", behavior: "smooth"}); card.classList.add("dec-focus"); setTimeout(() => card.classList.remove("dec-focus"), 2600); }
+  }
   clearInterval(DEC.timer);
   if (!d.can_edit) DEC.timer = setInterval(() => { if (DEC.open === id && !$("#v-tasks").classList.contains("hidden")) renderDecision(id, true).catch(() => {}); }, 6000);
 }
 const backBtn = () => `<button class="btn ghost sm" onclick="closeDecision()" style="margin-bottom:10px">← Barcha qarorlar</button>`;
-const srcBadge = d => d.source === "demo" ? `<span class="tag mid" title="Namunaviy matn, ovozdan olinmagan">Manba: demo transkript</span>` : `<span class="tag gray">Manba: qo'lda kiritilgan matn</span>`;
+const srcBadge = d => d.source === "demo" ? `<span class="tag mid" title="Namunaviy matn, ovozdan olinmagan">Manba: demo transkript</span>`
+  : d.source === "arxiv" ? `<span class="tag gray" title="Avval rol bo'yicha kiritilgan majlis topshiriqlari — bo'limlarga bog'lanib, yagona ijro oqimiga o'tkazilgan">Manba: avvalgi majlis yozuvi</span>`
+  : `<span class="tag gray">Manba: qo'lda kiritilgan matn</span>`;
 
 function draftHtml(d) {
   /* bo'limlar — Portal org_units bilan bitta reestr (server tartibida), guruhlab: Rahbariyat / Bo'limlar / Fakultet tyutorlari / Kafedralar */
@@ -898,7 +1029,9 @@ function bindDraft(d) {
     toast(r.already ? "Bu qaror avval tasdiqlangan — yangi topshiriq yaratilmadi" : `Tasdiqlandi: ${live.length} ta topshiriq bo'limlar navbatiga yuborildi`);
     DEC.sig = ""; renderDecision(d.id); badges();
   }, "Yuborilmoqda…");
-  $("#dDrop").onclick = () => busy($("#dDrop"), async () => { await J(`/api/dec/${d.id}`, {method: "DELETE"}); toast("Qoralama o'chirildi"); closeDecision(); });
+  /* qaytarib bo'lmaydi — ikki bosqichli tasdiq */
+  $("#dDrop").onclick = () => { const b = $("#dDrop"); if (!arm(b, "Ha, qoralamani o'chirish")) return;
+    busy(b, async () => { await J(`/api/dec/${d.id}`, {method: "DELETE"}); toast("Qoralama o'chirildi"); closeDecision(); }); };
 }
 
 function decisionHtml(d) {
@@ -906,7 +1039,7 @@ function decisionHtml(d) {
   const units = [...new Set(d.tasks.map(t => t.unit_name).filter(Boolean))].join(" ↔ ");
   const done = d.tasks.filter(t => t.status === "bajarildi").length;
   return backBtn() + `<div class="head"><div><h2>${esc(d.title)}</h2><span class="muted">${dmy(d.date)} · <span class="tag ${done === d.tasks.length ? "low" : "gray"}">Tasdiqlangan · ${done}/${d.tasks.length} bajarildi</span> ${srcBadge(d)}</span>
-    <div class="tiny muted" style="margin-top:4px">Tasdiqladi: ${esc(d.confirmed_by || "")} · ${dtm(d.confirmed_at)}</div></div></div>
+    <div class="tiny muted" style="margin-top:4px">${d.source === "arxiv" ? "Avvalgi majlis · ijrochi natija bilan yakunlaydi, rektor qabul qiladi yoki qaytaradi" : `Tasdiqladi: ${esc(d.confirmed_by || "")} · ${dtm(d.confirmed_at)}`}</div></div></div>
   ${d.incident ? `<div class="src-note">${ico("wrench", 15)} <span>Bog'liq hodisa (Murojaatlar va nosozliklar): <b>${esc(d.incident.title)}</b> · ${d.incident.n} ta murojaat · ${d.incident.notified_at ? `<span class="good">talabalarga xabar yuborilgan (${dtm(d.incident.notified_at)})</span>` : `<span class="bad">talabalarga hali xabar berilmagan</span>`}</span></div>` : ""}
   <div class="dec-grid">
     <div class="dec-tasks">${d.tasks.map((t, i) => taskCard(d, t, i)).join("")}</div>
@@ -923,7 +1056,7 @@ function decisionHtml(d) {
 function taskCard(d, t, i) {
   const notifyBox = d.incident && t.unit === "registrator" && !d.incident.notified_at;
   return `<div class="card dec-task ${t.status === "bajarildi" ? "done" : ""}" data-tid="${t.id}">
-    <div class="dt-h"><span class="dt-unit">${ico(UNIT_ICO[t.unit] || "tasks", 16)} ${esc(t.unit_name || "Bo'lim aytilmagan")}</span>${dstTag(t)}</div>
+    <div class="dt-h"><span class="dt-unit">${ico(UNIT_ICO[t.unit] || "tasks", 16)} ${esc(t.unit_name || "Bo'lim aytilmagan")}</span><span class="dt-tags">${dstTag(t)}${reviewTag(t)}</span></div>
     <p class="dt-text">${i + 1}. ${esc(t.text)}</p>
     <div class="kv"><span>Mas'ul</span><span>${t.can_assign ? assignSel(t, d.staff) : whoHtml(t)}</span>
       <span>Muddat</span><span>${dueHtml(t)}</span>
@@ -931,6 +1064,10 @@ function taskCard(d, t, i) {
     </div>
     ${t.dep && t.dep.result && t.can_act ? `<div class="res dep-res"><div class="res-h">${esc(t.dep.unit_name)} natijasi</div>${esc(t.dep.result)}</div>` : ""}
     ${t.result ? `<div class="res"><div class="res-h">${t.status === "bajarildi" ? "Natija" : "Oraliq natija"} · ${esc(t.result_by || "")} · ${dtm(t.result_at)}</div>${esc(t.result)}</div>` : ""}
+    ${t.review === "qaytarildi" && t.status !== "bajarildi" && t.review_note ? `<div class="res ret"><div class="res-h">Qayta ishlashga qaytarildi · ${esc(t.review_by || "")} · ${dtm(t.review_at)}</div>${esc(t.review_note)}</div>` : ""}
+    ${t.can_review ? `<div class="act rev"><textarea class="f-rnote" rows="2" placeholder="Izoh (qaytarishda majburiy)…" aria-label="Izoh"></textarea>
+      <div class="row-actions"><button class="btn sm primary" data-accept="${t.id}">${ico("check", 15)} Natijani qabul qilish</button>
+      <button class="btn sm" data-return="${t.id}">${ico("undo", 15)} Qayta ishlashga qaytarish</button></div></div>` : ""}
     ${t.can_act && t.status !== "bajarildi" ? `<div class="act">
       ${t.status === "yangi" ? `<button class="btn sm" data-start="${t.id}">${ico("play", 16)} Ishni boshlash</button>` : ""}
       <textarea class="f-res" rows="3" placeholder="${t.unit === "registrator" ? "Talabalarga xabar matni…" : "Tekshiruv natijasi: sabab, nima qilindi, holat…"}">${t.status === "jarayonda" && t.result ? esc(t.result) : ""}</textarea>
@@ -942,9 +1079,20 @@ function taskCard(d, t, i) {
     </div>` : ""}
   </div>`;
 }
+/* natijani qabul qilish holati (yagona yakunlash oqimi: ijrochi natija bilan yakunlaydi → rektor qabul qiladi yoki qaytaradi) */
+const reviewTag = t => t.status === "bajarildi" && t.review === "kutilmoqda" ? ` <span class="tag mid" title="Ijrochi yakunladi — rektor qabul qiladi yoki qaytaradi">Qabul kutilmoqda</span>`
+  : t.status === "bajarildi" && t.review === "qabul" && t.review_by ? ` <span class="tag low" title="${esc(t.review_by)} · ${esc(dtm(t.review_at))}">Qabul qilindi</span>`
+  : t.review === "qaytarildi" && t.status !== "bajarildi" ? ` <span class="tag high">Qaytarildi</span>` : "";
 function bindDecision(d) {
   const el = $("#v-tasks"), re = () => { DEC.sig = ""; renderDecision(d.id); badges(); };
   bindAssign(el, re);
+  const review = (b, decision) => busy(b, async () => {
+    const note = b.closest(".dec-task").querySelector(".f-rnote").value.trim();
+    if (decision === "qaytarish" && !note) { b.closest(".dec-task").querySelector(".f-rnote").focus(); return toast("Qaytarish sababini yozing"); }
+    await J(`/api/dec/task/${b.dataset.accept || b.dataset.return}/review`, {method: "POST", body: JSON.stringify({decision, note})});
+    toast(decision === "qabul" ? "Natija qabul qilindi" : "Qayta ishlashga qaytarildi — ijrochiga bildirishnoma yuborildi"); re(); });
+  el.querySelectorAll("[data-accept]").forEach(b => b.onclick = () => review(b, "qabul"));
+  el.querySelectorAll("[data-return]").forEach(b => b.onclick = () => review(b, "qaytarish"));
   const post = (tid, body) => J(`/api/dec/task/${tid}/update`, {method: "POST", body: JSON.stringify(body)});
   el.querySelectorAll("[data-start]").forEach(b => b.onclick = () => busy(b, async () => { await post(b.dataset.start, {status: "jarayonda"}); toast("Holat: jarayonda"); re(); }));
   el.querySelectorAll("[data-save]").forEach(b => b.onclick = () => busy(b, async () => {
@@ -965,26 +1113,29 @@ function bindDecision(d) {
   });
 }
 
-/* ---------- Talabalar bilan ishlash markazi ----------
+/* ---------- Talabalar markazi ----------
    Qoidalar va ruxsatlar serverda (app/student_ops.py); bu yerda faqat ko'rsatish va natija kiritish. */
-const OPSV = {page: 30, tab: null, rule: "", level: 0, q: "", kind: "", student: null, sum: null, review: null};
+const OPSV = {page: 30, tab: null, rule: "", level: 0, q: "", kind: "", student: null, sum: null, review: null, grp: "", course: 0, late: false, role: "", sel: new Set()};
 const OPS_RULES = {kontrakt: "Kontrakt", davomat: "Davomat", akademik: "O'zlashtirish", hujjat: "Hujjat", tatil: "Akademik ta'til", otrabotka: "Otrabotka"};
 const OPS_LVL = {1: ["Diqqat", "mid"], 2: ["Kritik", "high"], 3: ["Jiddiy", "high"]};
 const OPS_KIND = {qongiroq: "Qo'ng'iroq", suhbat: "Suhbat", hujjat: "Hujjat so'rash", xat: "Ogohlantirish xati", buyruq: "Buyruq loyihasi"};
 const OPS_KIND_ICO = {qongiroq: "phone", suhbat: "chat", hujjat: "file", xat: "mail", buyruq: "report"};
-const OPS_ROLE = {call_center: "Call-markaz", tyutor: "Tyutor", talabalar: "Registrator ofisi", sirtqi: "Sirtqi bo'lim"};
+const OPS_ROLE = {call_center: "Call-markaz", tyutor: "Tyutor", talabalar: "Registrator ofisi", sirtqi: "Sirtqi bo'lim", registrator_xodim: "Registrator ofisi xodimi"};
 const OPS_REASON = {sababsiz: "Sababsiz", kasallik: "Kasallik", komandirovka: "Komandirovka", mehnat_tatili: "Mehnat ta'tili", oilaviy: "Oilaviy"};
 const OPS_DOC = {tasdiqlangan: ["tasdiqlangan", "low"], kutilmoqda: ["kutilmoqda", "mid"], yoq: ["yo'q", "high"]};
+/* navbat bilan ishlaydigan lavozimlar: sahifa navbatdan boshlanadi, tushuntirishlar bitta «Qanday ishlaydi» havolasida */
+const OPS_OPER = ["call_center", "tyutor", "registrator_xodim", "talabalar", "sirtqi"];
 const som = x => fmt(Math.round(x)) + " so'm";
 const lvlTag = l => `<span class="tag ${OPS_LVL[l][1]}">${OPS_LVL[l][0]}</span>`;
 const isAgg = () => ["rektor", "kengash", "prorektor_yoshlar"].includes(ME.role_key);
+const opsOper = () => OPS_OPER.includes(ME.role_key);
 function factText(rule, f) {
-  if (rule === "kontrakt") return `${esc(f.installment)} (${f.pct}%): ${som(f.need_now)} yetishmaydi · ${f.days < 0 ? `<b class="bad">${-f.days} kun o'tdi</b>` : `<b class="bad">${f.days} kun qoldi</b>`}`;
+  if (rule === "kontrakt") return `${esc(f.installment)} (${f.pct}%): ${som(f.need_now)} yetishmaydi · ${f.days < 0 ? `<b class="bad">${-f.days} kun o'tdi</b>` : `${f.days} kun qoldi`}`;
   if (rule === "davomat") return `${f.hours} soat sababsiz${f.next ? ` · ${f.next} soatdan oshsa — hayfsan` : " · hayfsan chegarasidan oshgan"}`;
-  if (rule === "akademik") return `JPA ${f.gpa5}${f.gpa_ok ? " (yetarli)" : ""} · ${f.fails.length} ta fandan o'tmagan: ${esc(f.fails.map(x => x.subject).join(", "))}`;
+  if (rule === "akademik") return `GPA (5) ${f.gpa5 ?? "—"}${f.gpa_ok ? " (yetarli)" : ""} · ${f.fails.length} ta akademik qarz${f.fails.length ? ": " + esc(f.fails.map(x => x.subject).join(", ")) : ""}${(f.oraliq_low || []).length ? ` · oraliq < 12: ${esc(f.oraliq_low.map(x => x.subject).join(", "))}` : ""}`;
   if (rule === "hujjat") return `${f.items.length} ta sababli qoldirish hujjati kutilmoqda${f.items.some(i => i.late) ? ` · <b class="bad">muddat o'tdi</b>` : ""}`;
   if (rule === "tatil") return `Ta'til ${dmy(f.end)}da tugaydi · ${f.days < 0 ? `<b class="bad">${-f.days} kun o'tdi</b>` : f.days + " kun qoldi"}`;
-  if (rule === "otrabotka") return `${esc(f.subject)}: muddat ${dtm(f.due_at)} · ${f.hours_left < 0 ? `<b class="bad">${-Math.round(f.hours_left)} soat o'tdi</b>` : `<b class="bad">${Math.round(f.hours_left)} soat qoldi</b>`}`;
+  if (rule === "otrabotka") return `${esc(f.subject)}: muddat ${dtm(f.due_at)} · ${f.hours_left < 0 ? `<b class="bad">${-Math.round(f.hours_left)} soat o'tdi</b>` : `${Math.round(f.hours_left)} soat qoldi`}`;
   return "";
 }
 
@@ -992,79 +1143,179 @@ async function renderOps() {
   const el = $("#v-ops");
   el.innerHTML = `<p class="muted">Yuklanmoqda…</p>`;
   OPSV.sum = await J("/api/ops/summary");
+  const op = opsOper(), RGok = !!window.RG, rk = ME.role_key;
   /* kafedra, buxgalteriya, imtihon — faqat o'qish (o'z ko'lami/qoidalari); buxgalteriyaga otrabotka yo'q.
-     Registrator ofisi va Sirtqi bo'lim (sirtqi talabalar uchun registrator) — ish stoli va imtihonga ruxsatnoma (static/registrar.js) */
-  const tabs = isAgg() ? [] : ME.role_key === "call_center" ? ["navbat"] : ME.role_key === "tyutor" ? ["navbat", "holatlar", "otrabotka", "qoidalar"]
-    : ME.role_key === "buxgalteriya" ? ["holatlar", "navbat"] : ["talabalar", "registrator_xodim", "sirtqi"].includes(ME.role_key) && window.RG ? ["stol", "holatlar", "navbat", "otrabotka", "ruxsatnoma", "qoidalar"]
+     Navbat bilan ishlaydigan lavozimlarda birinchi tab — navbat; Registrator ofisi boshlig'ida — call-markaz navbatini boshqarish ham */
+  const tabs = isAgg() ? [] : rk === "call_center" ? ["navbat"] : rk === "tyutor" ? ["navbat", "holatlar", "otrabotka", "qoidalar"]
+    : rk === "buxgalteriya" ? ["holatlar", "navbat"]
+    : rk === "talabalar" && RGok ? ["navbat", "calls", "stol", "holatlar", "otrabotka", "ruxsatnoma", "qoidalar"]
+    : ["registrator_xodim", "sirtqi"].includes(rk) && RGok ? ["navbat", "stol", "holatlar", "otrabotka", "ruxsatnoma", "qoidalar"]
     : ["holatlar", "navbat", "otrabotka", "qoidalar"];
   if (!tabs.includes(OPSV.tab)) OPSV.tab = tabs[0] || null;
-  const T = {stol: "Ish stoli", holatlar: "Holatlar", navbat: ME.role_key === "call_center" ? "Qo'ng'iroqlar navbati" : "Mening navbatim", otrabotka: "Otrabotka", ruxsatnoma: "Ruxsatnoma", qoidalar: "Qoidalar"};
-  const canRun = ["talabalar", "prorektor_oquv"].includes(ME.role_key);
-  el.innerHTML = `<div class="head"><div><h2>Talabalar bilan ishlash markazi</h2><span class="muted">Tizim o'zi aniqlagan xavf holatlari (davomat, baho, kontrakt, hujjat) — mas'ul bo'lim navbatiga topshiriq bo'lib tushadi. Talaba yozgan murojaatlar — «Murojaatlar va nosozliklar»da.</span>${pgSrc(`Manba: HEMIS (baho, davomat, buyruqlar) va buxgalteriya (kontrakt) — sinov ma'lumotlari · qoidalar har 10 daqiqada tekshiriladi${OPSV.sum.last_run ? `, oxirgisi: <b>${whenTxt(OPSV.sum.last_run)}</b>` : ""}`)}</div>
+  const mine = OPSV.sum.mine;
+  const T = {stol: "Ish stoli", holatlar: "Holatlar", navbat: rk === "call_center" ? "Qo'ng'iroqlar navbati" : `Mening navbatim${mine ? ` <span class="tag ${mine.late ? "high" : "gray"}">${fmt(mine.n)}</span>` : ""}`,
+    calls: "Call-markaz navbati", otrabotka: "Otrabotka", ruxsatnoma: "Ruxsatnoma", qoidalar: "Qoidalar"};
+  const canRun = ["talabalar", "prorektor_oquv"].includes(rk);
+  const src = pgSrc(`Manba: HEMIS (baho, davomat, buyruqlar) va buxgalteriya (kontrakt) — sinov ma'lumotlari · qoidalar har 10 daqiqada tekshiriladi${OPSV.sum.last_run ? `, oxirgisi: <b>${whenTxt(OPSV.sum.last_run)}</b>` : ""}`);
+  const intro = `Tizim o'zi aniqlagan xavf holatlari (davomat, baho, kontrakt, hujjat) — mas'ul bo'lim navbatiga topshiriq bo'lib tushadi. Talaba yozgan murojaatlar — «Murojaatlar va nosozliklar»da.`;
+  const info = `<details class="pg-info" id="opsInfo" style="margin:4px 0 10px"><summary>${ico("info", 14)}${op ? "Qanday ishlaydi: qoidalar, manba va raqamlar" : "Me'yorlar, huquqiy asos va ma'lumot manbasi"}</summary>
+      ${op ? `<p class="tiny muted">${intro}</p><div>${src}</div>` : ""}
+      <p class="tiny muted">Davomat chegaralari — institut me'yori: 30 soat sababsiz → qo'ng'iroq va ogohlantirish xati, 48 soatdan oshsa → hayfsan. Qolganlari (JPA 3.0, 2 ta fan, 3 kun, call-markaz me'yori…) — <b>institut tomonidan hali tasdiqlanmagan</b> namunaviy qiymatlar. Ma'lumotlar sun'iy (sinov bazasi).</p>
+      <p class="tiny muted">Har topshiriqning <b>muddati</b> — haqiqiy muddat (kontrakt eslatmasi — to'lov sanasidan oldin, davomat 30+ soat — 24 soat ichida); call-markaz rejasi uni o'zgartirmaydi. «Kechikkan» — faqat muddati haqiqatda o'tganlar; «rejaga ko'ra kechikadi» — navbat to'lgani uchun muddatdan keyinga rejalashtirilganlar.</p>
+      <p class="tiny muted">Bu yerdagi raqamlar — <b>holatlar</b>; bitta talabada bir nechta holat bo'lishi mumkin. Paneldagi «O'qishda xavf» — <b>talabalar</b> soni. Ogohlantirish xati — Hujjatlar markazida (ro'yxat raqami va QR bilan), buyruq loyihasi — «Buyruqlar»da tayyorlanadi.</p>
+      <div class="tiny muted" id="opsBasis"></div></details>`;
+  el.innerHTML = `<div class="head"><div><h2>Talabalar markazi</h2>${op ? "" : `<span class="muted">${intro}</span>${src}`}</div>
     <div class="row-actions">${canRun ? `<button class="btn sm" id="opsRun">${ico("refresh", 16)} Hozir tekshirish</button>` : ""}${tabs.map(t => `<button class="btn ${t === OPSV.tab ? "primary" : ""}" data-ot="${t}">${T[t]}</button>`).join("")}</div></div>
-    <div class="src-note demo" style="margin-bottom:14px">${ico("info", 15)}<span>Davomat chegaralari — institut me'yori: 30 soat sababsiz → qo'ng'iroq va ogohlantirish xati, 48 soatdan oshsa → hayfsan. Qolganlari (JPA 3.0, 2 ta fan, 3 kun…) — <b>institut tomonidan hali tasdiqlanmagan</b> namunaviy qiymatlar. Ma'lumotlar sun'iy.</span></div>
-    ${opsSummary(OPSV.sum)}<div id="opsBody" style="margin-top:14px"></div>`;
+    ${info}${op ? `<div id="opsBody"></div><div style="margin-top:14px">${opsSummary(OPSV.sum, true)}</div>` : `${opsSummary(OPSV.sum)}<div id="opsBody" style="margin-top:14px"></div>`}`;
   el.querySelectorAll("[data-ot]").forEach(b => b.onclick = () => { OPSV.tab = b.dataset.ot; OPSV.student = null; OPSV.page = 30; renderOps(); });
-  el.querySelectorAll("[data-sr]").forEach(b => b.onclick = () => { if (isAgg()) return; OPSV.rule = b.dataset.sr; OPSV.level = 0; OPSV.tab = ME.role_key === "call_center" ? "navbat" : "holatlar"; OPSV.student = null; renderOps(); });
+  bindOpsSummary(el);
   if ($("#opsRun")) $("#opsRun").onclick = () => busy($("#opsRun"), async () => { const r = await J("/api/ops/evaluate", {method: "POST"}); toast(`Tekshirildi: ${r.opened} yangi holat, ${r.closed} yopildi, ${r.tasks + r.followups} topshiriq`); renderOps(); });
   hydrateIcons(el);
   if (!OPSV.tab) { const openT = (OPSV.sum.tasks || []).reduce((a, t) => a + (t.n || 0), 0), lateT = (OPSV.sum.tasks || []).reduce((a, t) => a + (t.late || 0), 0);
     $("#opsBody").innerHTML = `<div class="card"><h3 style="margin-bottom:8px">${ico("info", 18)} Raqamlarni qanday o'qish kerak</h3>
-      <p style="margin:0 0 8px;font-size:14px;color:var(--ink-2)">Holatlar qoidalar dvigateli tomonidan avtomatik ochiladi va mas'ul bo'limlar navbatiga topshiriq bo'lib tushadi. Hozir ochiq topshiriqlar: <b>${fmt(openT)}</b>${lateT ? `, shundan kechikkan: <b>${fmt(lateT)}</b>` : ""}${openT > 10000 ? " — 10 mingdan ortiq ochiq topshiriq demo bazasida yangi ishga tushirilgan navbat natijasi" : ""}; 7 kunda yopilgan holatlar: <b>${fmt(OPSV.sum.closed_7d || 0)}</b>. Haqiqiy ishda shu yerda kunlik yopilish sur'ati kuzatiladi.</p>
-      ${OPSV.sum.calls?.total ? `<p style="margin:0 0 8px;font-size:14px;color:var(--ink-2)">Call-markaz: jami <b>${fmt(OPSV.sum.calls.total)}</b> ta qo'ng'iroq — bugungi ro'yxatda <b>${fmt(OPSV.sum.calls.today)}</b> ta (kunlik imkoniyat ${OPSV.sum.calls.capacity} ta, ${OPSV.sum.calls.operators} operator), <b>${fmt(OPSV.sum.calls.scheduled)}</b> tasi keyingi ish kunlariga rejalashtirilgan (~${OPSV.sum.calls.days} ish kuni). Hech bir holat o'chirilmaydi — navbat jiddiylik bo'yicha tartiblanadi.</p>` : ""}
+      <p style="margin:0 0 8px;font-size:14px;color:var(--ink-2)">Holatlar qoidalar dvigateli tomonidan avtomatik ochiladi va mas'ul bo'limlar navbatiga topshiriq bo'lib tushadi. Hozir ochiq topshiriqlar: <b>${fmt(openT)}</b>${lateT ? `, shundan muddati o'tgan: <b>${fmt(lateT)}</b>` : ""}; 7 kunda yopilgan holatlar: <b>${fmt(OPSV.sum.closed_7d || 0)}</b>.</p>
+      ${OPSV.sum.calls?.total ? `<p style="margin:0 0 8px;font-size:14px;color:var(--ink-2)">Call-markaz: ${esc(OPSV.sum.calls.text)}</p>` : ""}
       <p style="margin:0 0 8px;font-size:14px;color:var(--ink-2)">Bu yerdagi raqamlar — <b>holatlar</b> (kontrakt, davomat, o'zlashtirish, hujjat, ta'til, otrabotka); bitta talabada bir nechta holat bo'lishi mumkin. Paneldagi «O'qishda xavf» esa <b>talabalar</b> soni: faqat o'zlashtirish va davomat bo'yicha kritik/jiddiy holati borlar.</p>
       <p style="margin:0 0 8px;font-size:14px;color:var(--ink-2)">Rang: <b class="bad">qizil</b> — jiddiy holatlar bor, <b class="warn-t">sariq</b> — kritik, <b>qora</b> — faqat «diqqat» darajasi, <b class="good">yashil</b> — ochiq holat yo'q.</p>
       <p class="tiny muted" style="margin:0">${ico("shield", 14)} Rahbariyat uchun faqat jamlangan raqamlar. Talabalar ro'yxati, telefonlar va suhbat skriptlari — Registrator ofisi, tyutorlar va call-markazda. Har bir harakat audit jurnalida.</p></div>`; return; }
   if (OPSV.student) return opsStudent(OPSV.student);
-  ({stol: () => RG.desk(), holatlar: opsCases, navbat: opsTasks, otrabotka: opsRetakes, ruxsatnoma: () => RG.permits(), qoidalar: opsPolicy})[OPSV.tab]();
+  ({stol: () => RG.desk(), holatlar: opsCases, navbat: opsTasks, calls: opsCalls, otrabotka: opsRetakes, ruxsatnoma: () => RG.permits(), qoidalar: opsPolicy})[OPSV.tab]();
 }
-function opsSummary(s) {
+/* qoidalar kesimi: faqat lavozim ishlaydigan qoidalar (ko'lamdan tashqari qoida «0, yashil» bo'lib chiqmaydi) */
+function opsSummary(s, compact = false) {
   const by = {}; s.by_rule.forEach(r => { (by[r.rule] ||= {1: 0, 2: 0, 3: 0, n: 0}); by[r.rule][r.level] = r.n; by[r.rule].n += r.n; });
-  const cards = Object.keys(OPS_RULES).map(k => { const v = by[k] || {1: 0, 2: 0, 3: 0, n: 0};
+  const keys = Object.keys(OPS_RULES).filter(k => !s.rule_scope || s.rule_scope.includes(k));
+  const sub = v => [v[3] && `${fmt(v[3])} jiddiy`, v[2] && `${fmt(v[2])} kritik`, v[1] && `${fmt(v[1])} diqqat`].filter(Boolean).join(" · ") || "ochiq holat yo'q";
+  const cs = s.calls;
+  const tk = s.tasks.map(t => t.role === "call_center" && cs ? `<span class="chip-s" title="${esc(cs.text || "")}">Call-markaz: <b>${fmt(cs.total)}</b>${cs.late ? ` · <span class="bad">${fmt(cs.late)} kechikkan</span>` : ""}${cs.projected_late ? ` · ${fmt(cs.projected_late)} rejaga ko'ra kechikadi` : ""}</span>`
+    : `<span class="chip-s">${OPS_ROLE[t.role] || esc(t.role)}: <b>${fmt(t.n)}</b>${t.late ? ` · <span class="bad">${fmt(t.late)} kechikkan</span>` : ""}</span>`).join("");
+  const tail = s.done_today !== undefined ? `<span class="chip-s">Bugun bajarganim: <b>${s.done_today}</b></span>` : `<span class="chip-s">7 kunda yopilgan holatlar: <b>${s.closed_7d}</b></span>`;
+  if (compact) {
+    const chips = keys.map(k => { const v = by[k] || {1: 0, 2: 0, 3: 0, n: 0}; const tone = v[3] ? "bad" : v[2] ? "warn-t" : "";
+      return `<button class="chip-s" type="button" data-sr="${k}" title="${esc(sub(v))}">${OPS_RULES[k]}: <b class="${tone}">${fmt(v.n)}</b></button>`; }).join("");
+    return `<div id="opsSum"><div class="tiny muted" style="margin-bottom:6px">Holatlar (qoida bo'yicha) va navbatlar</div><div class="ops-strip" style="margin-top:0">${chips}${tk}${tail}</div></div>`;
+  }
+  const cards = keys.map(k => { const v = by[k] || {1: 0, 2: 0, 3: 0, n: 0};
     const tone = v[3] ? "bad" : v[2] ? "warn" : v.n ? "" : "good";
-    return isAgg() ? `<div class="card kpi ${tone}">` + `<div class="l">${OPS_RULES[k]}</div><div class="v">${v.n}</div><div class="s">${[v[3] && `${v[3]} jiddiy`, v[2] && `${v[2]} kritik`, v[1] && `${v[1]} diqqat`].filter(Boolean).join(" · ") || "ochiq holat yo'q"}</div></div>`
-      : `<div class="card kpi ops-k ${tone}" data-sr="${k}" role="button" tabindex="0"><div class="l">${OPS_RULES[k]}</div><div class="v">${v.n}</div>
-      <div class="s">${[v[3] && `${v[3]} jiddiy`, v[2] && `${v[2]} kritik`, v[1] && `${v[1]} diqqat`].filter(Boolean).join(" · ") || "ochiq holat yo'q"}</div></div>`; }).join("");
-  const cs = s.calls;   // call-markaz: bugungi ro'yxat (kunlik imkoniyat) + keyingi kunlarga rejalashtirilganlar
-  const tk = s.tasks.map(t => t.role === "call_center" && cs ? `<span class="chip-s" title="Kunlik imkoniyat: ${cs.capacity} ta qo'ng'iroq (${cs.operators} operator × ${cs.per_operator}); navbat ~${cs.days} ish kunida tugaydi">Call-markaz: bugun <b>${fmt(cs.today)}</b>${cs.scheduled ? ` · rejalashtirilgan <b>${fmt(cs.scheduled)}</b>` : ""}${cs.late ? ` · <span class="bad">${fmt(cs.late)} kechikkan</span>` : ""}</span>`
-    : `<span class="chip-s">${OPS_ROLE[t.role] || t.role}: <b>${t.n}</b>${t.late ? ` · <span class="bad">${t.late} kechikkan</span>` : ""}</span>`).join("");
-  return `<div class="grid g6">${cards}</div><div class="ops-strip">${tk || ""}${s.done_today !== undefined ? `<span class="chip-s">Bugun bajarganim: <b>${s.done_today}</b></span>` : `<span class="chip-s">7 kunda yopilgan holatlar: <b>${s.closed_7d}</b></span>`}</div>`;
+    return `<div class="card kpi ${isAgg() ? "" : "ops-k"} ${tone}" ${isAgg() ? "" : `data-sr="${k}" role="button" tabindex="0"`}><div class="l">${OPS_RULES[k]}</div><div class="v">${fmt(v.n)}</div><div class="s">${sub(v)}</div></div>`; }).join("");
+  return `<div id="opsSum"><div class="grid g6">${cards}</div><div class="ops-strip">${tk}${tail}</div></div>`;
+}
+function bindOpsSummary(root) {
+  root.querySelectorAll("[data-sr]").forEach(b => b.onclick = () => { if (isAgg()) return; OPSV.rule = b.dataset.sr; OPSV.level = 0;
+    OPSV.tab = ["call_center", "tyutor", "registrator_xodim", "talabalar", "sirtqi"].includes(ME.role_key) && OPSV.tab !== "holatlar" ? "navbat" : "holatlar"; OPSV.student = null; OPSV.page = 30; renderOps(); });
 }
 
 /* --- holatlar --- */
 async function opsCases() {
   const b = $("#opsBody");
-  const qs = new URLSearchParams({rule: OPSV.rule, level: OPSV.level || 0, q: OPSV.q});
+  const qs = new URLSearchParams({rule: OPSV.rule, level: OPSV.level || 0, q: OPSV.q, course: OPSV.course || 0, grp: OPSV.grp || ""});
   const rows = await J("/api/ops/cases?" + qs);
+  const rules = Object.entries(OPS_RULES).filter(([k]) => !OPSV.sum?.rule_scope || OPSV.sum.rule_scope.includes(k));
   b.innerHTML = `<div class="card"><div class="ops-filters">
-      <select id="ofRule" aria-label="Qoida"><option value="">Barcha qoidalar</option>${Object.entries(OPS_RULES).map(([k, v]) => `<option value="${k}" ${k === OPSV.rule ? "selected" : ""}>${v}</option>`).join("")}</select>
+      <select id="ofRule" aria-label="Qoida"><option value="">Barcha qoidalar</option>${rules.map(([k, v]) => `<option value="${k}" ${k === OPSV.rule ? "selected" : ""}>${v}</option>`).join("")}</select>
       <select id="ofLvl" aria-label="Daraja"><option value="0">Barcha darajalar</option><option value="2" ${OPSV.level == 2 ? "selected" : ""}>Kritik va jiddiy</option><option value="3" ${OPSV.level == 3 ? "selected" : ""}>Faqat jiddiy</option></select>
+      <select id="ofCourse" aria-label="Kurs"><option value="0">Barcha kurslar</option>${[1, 2, 3, 4, 5].map(k => `<option value="${k}" ${+OPSV.course === k ? "selected" : ""}>${k}-kurs</option>`).join("")}</select>
       <input id="ofQ" type="text" placeholder="Ism, guruh yoki HEMIS ID" value="${esc(OPSV.q)}" aria-label="Qidiruv"></div>
-    <p class="tiny muted" style="margin:8px 0">${rows.length}${rows.length >= 300 ? "+" : ""} ta ochiq holat · daraja bo'yicha tartiblangan</p>
-    ${tbl(["Talaba", "Qoida", "Daraja", "Fakt", "#Ochiq ish", ""], rows.map(r => [`<b>${esc(r.full_name)}</b><div class="tiny muted">${esc(r.grp)} · ${esc(r.faculty)}</div>`,
+    <p class="tiny muted" style="margin:8px 0">${rows.length}${rows.length >= 300 ? "+" : ""} ta ochiq holat · daraja bo'yicha tartiblangan${OPSV.grp ? ` · guruh: <b>${esc(OPSV.grp)}</b> <a href="#" id="ofGrpX">(olib tashlash)</a>` : ""}</p>
+    ${tbl(["Talaba", "Qoida", "Daraja", "Fakt", "#Ochiq ish", ""], rows.map(r => [`<b>${esc(r.full_name)}</b><div class="tiny muted">${esc(r.grp)} · ${r.course}-kurs · ${esc(r.faculty)}</div>`,
       OPS_RULES[r.rule], lvlTag(r.level), `<span class="tiny">${factText(r.rule, r.facts)}</span>`, r.open_tasks, `<button class="btn sm" data-st="${r.student_id}">Karta</button>`]))}</div>`;
   $("#ofRule").onchange = e => { OPSV.rule = e.target.value; opsCases(); };
   $("#ofLvl").onchange = e => { OPSV.level = +e.target.value; opsCases(); };
+  $("#ofCourse").onchange = e => { OPSV.course = +e.target.value; opsCases(); };
+  if ($("#ofGrpX")) $("#ofGrpX").onclick = e => { e.preventDefault(); OPSV.grp = ""; opsCases(); };
   let tmr; $("#ofQ").oninput = e => { clearTimeout(tmr); tmr = setTimeout(() => { OPSV.q = e.target.value; opsCases().then(() => { const i = $("#ofQ"); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }); }, 350); };
   b.querySelectorAll("[data-st]").forEach(x => x.onclick = () => { OPSV.student = +x.dataset.st; opsStudent(OPSV.student); });
 }
 
-/* --- navbat (topshiriqlar) --- */
+/* --- navbat (topshiriqlar): filtrlar (qoida, tur, kurs, guruh, kechikkan, mas'ul), ommaviy amallar, belgilash --- */
+function opsQS(extra = {}) {
+  return new URLSearchParams({rule: OPSV.rule, kind: OPSV.kind, grp: OPSV.grp || "", course: OPSV.course || 0, late: OPSV.late ? 1 : 0, role: OPSV.role || "", ...extra});
+}
 async function opsTasks() {
-  const b = $("#opsBody");
-  const qs = new URLSearchParams({rule: OPSV.rule, kind: OPSV.kind});
-  const rows = await J("/api/ops/tasks?" + qs);
-  const kinds = ME.role_key === "call_center" ? [] : Object.entries(OPS_KIND);
-  b.innerHTML = `<div class="ops-filters" style="margin-bottom:10px">
-      <select id="otRule" aria-label="Qoida"><option value="">Barcha qoidalar</option>${Object.entries(OPS_RULES).map(([k, v]) => `<option value="${k}" ${k === OPSV.rule ? "selected" : ""}>${v}</option>`).join("")}</select>
-      ${kinds.length ? `<select id="otKind" aria-label="Tur"><option value="">Barcha turlar</option>${kinds.map(([k, v]) => `<option value="${k}" ${k === OPSV.kind ? "selected" : ""}>${v}</option>`).join("")}</select>` : ""}
-      <span class="tiny muted">${rows.length}${rows.length >= 200 ? "+" : ""} ta ochiq topshiriq · kechikkan va jiddiylari birinchi${OPSV.sum?.calls?.scheduled && ME.role_key === "call_center" ? ` · bugungi ro'yxat: ${fmt(OPSV.sum.calls.today)} ta, qolgan ${fmt(OPSV.sum.calls.scheduled)} tasi keyingi kunlarga rejalashtirilgan` : ""}</span></div>
-    <div class="ops-tasks">${rows.length ? rows.slice(0, OPSV.page).map((t, i) => opsTaskCard(t, i === 0)).join("") : `<div class="card"><p class="muted">${ico("checkc", 16)} Navbat bo'sh</p></div>`}</div>
-    ${rows.length > OPSV.page ? `<div style="text-align:center;margin-top:12px"><button class="btn" id="otMore">Yana ko'rsatish (${Math.min(30, rows.length - OPSV.page)} ta)</button></div>` : ""}`;
+  const b = $("#opsBody"), rk = ME.role_key, cc = rk === "call_center";
+  b.innerHTML = `<p class="muted">Yuklanmoqda…</p>`;
+  const [rows, F] = await Promise.all([J("/api/ops/tasks?" + opsQS()), J("/api/ops/tasks/facets?" + opsQS())]);
+  OPSV.sel = new Set([...OPSV.sel].filter(id => rows.some(t => t.id === id)));
+  const rules = Object.entries(OPS_RULES).filter(([k]) => !OPSV.sum?.rule_scope || OPSV.sum.rule_scope.includes(k));
+  const kinds = cc ? [] : Object.entries(OPS_KIND);
+  const kn = Object.fromEntries((F.kinds || []).map(k => [k.kind, k.n]));
+  const cs = OPSV.sum?.calls;
+  /* call-markaz imkoniyati — yashirmasdan: bugun nechta qilinishi kerak, nechta kechikadi */
+  const capBar = (cc || rk === "talabalar") && cs?.total ? `<div class="src-note" style="margin-bottom:10px;${cs.shortfall_today || cs.late ? "border-color:color-mix(in srgb,var(--bad) 40%,transparent)" : ""}">${ico("phone", 15)}<span><b>Call-markaz:</b> ${esc(cs.text)}
+      ${rk === "talabalar" ? ` <a href="#" id="otCalls">Navbatni boshqarish (SMS, taqsimlash, operatorlar) →</a>` : cs.shortfall_today ? " Registrator ofisi kechikadiganlar uchun SMS eslatma yoki tyutorlarga taqsimlashni tanlaydi." : ""}</span></div>` : "";
+  const roleSel = F.roles?.length ? `<select id="otRole" aria-label="Mas'ul"><option value="">Mening navbatim (${rk === "sirtqi" ? "Sirtqi bo'lim" : "Registrator ofisi"})</option><option value="all" ${OPSV.role === "all" ? "selected" : ""}>Barcha mas'ullar</option>
+      ${F.roles.map(r => `<option value="${r.role}" ${OPSV.role === r.role ? "selected" : ""}>${OPS_ROLE[r.role] || esc(r.role)} (${fmt(r.n)})</option>`).join("")}</select>` : "";
+  const canXat = ["talabalar", "registrator_xodim", "sirtqi"].includes(rk) && (kn.xat || 0) > 0, canBuy = rk === "talabalar" && (kn.buyruq || 0) > 0 && !["call_center", "tyutor", "sirtqi"].includes(OPSV.role);
+  const page = rows.slice(0, OPSV.page), selectable = page.filter(t => t.can_act && t.kind !== "hujjat");
+  b.innerHTML = `${capBar}<div class="ops-filters" style="margin-bottom:8px">
+      ${roleSel}
+      <select id="otRule" aria-label="Qoida"><option value="">Barcha qoidalar</option>${rules.map(([k, v]) => `<option value="${k}" ${k === OPSV.rule ? "selected" : ""}>${v}</option>`).join("")}</select>
+      ${kinds.length ? `<select id="otKind" aria-label="Tur"><option value="">Barcha turlar</option>${kinds.map(([k, v]) => `<option value="${k}" ${k === OPSV.kind ? "selected" : ""}>${v}${kn[k] ? ` (${fmt(kn[k])})` : ""}</option>`).join("")}</select>` : ""}
+      <select id="otCourse" aria-label="Kurs"><option value="0">Barcha kurslar</option>${(F.courses || []).map(c => `<option value="${c.course}" ${+OPSV.course === c.course ? "selected" : ""}>${c.course}-kurs (${fmt(c.n)})</option>`).join("")}</select>
+      <select id="otGrp" aria-label="Guruh"><option value="">Barcha guruhlar (${(F.groups || []).length})</option>${(F.groups || []).map(g => `<option value="${esc(g.name)}" ${OPSV.grp === g.name ? "selected" : ""}>${esc(g.name)} (${g.n})</option>`).join("")}</select>
+      <label class="tiny" style="display:inline-flex;gap:6px;align-items:center"><input type="checkbox" id="otLate" ${OPSV.late ? "checked" : ""}> faqat kechikkan</label></div>
+    <p class="tiny muted" style="margin:0 0 10px"><b>${fmt(F.n)}</b> ta ochiq topshiriq${F.late ? ` · <span class="bad">${fmt(F.late)} tasining muddati o'tgan</span>` : " · muddati o'tgani yo'q"}${F.later ? ` · ${fmt(F.later)} tasi keyingi kunlarga rejalashtirilgan` : ""} · muddat va jiddiylik bo'yicha tartiblangan</p>
+    ${canXat || canBuy ? `<div class="row-actions" style="margin-bottom:10px">${canXat ? `<button class="btn sm" data-bulk="xat">${ico("mail", 15)} ${fmt(kn.xat)} ta ogohlantirish xati — ommaviy tayyorlash</button>` : ""}
+      ${canBuy ? `<button class="btn sm" data-bulk="buyruq">${ico("report", 15)} ${fmt(kn.buyruq)} ta buyruq loyihasi — Buyruqlarga</button>` : ""}</div><div id="opsBulk"></div>` : ""}
+    ${selectable.length ? `<div class="card" id="otSelBar" style="padding:10px 14px;margin-bottom:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+      <label class="tiny" style="display:inline-flex;gap:6px;align-items:center"><input type="checkbox" id="otAll"> Ko'rinayotganlarni belgilash</label>
+      <span class="tiny muted" id="otSelN">Tanlangan: 0</span>
+      <input type="text" id="otSelNote" placeholder="Natija izohi (majburiy)" maxlength="1000" aria-label="Natija izohi" style="flex:1 1 200px;min-width:0;padding:8px 10px;border:1px solid var(--line-2);border-radius:10px;background:var(--surface)">
+      <button class="btn sm primary" id="otSelDo" disabled>Tanlanganlarni bajarildi deb belgilash</button></div>` : ""}
+    <div class="ops-tasks">${rows.length ? page.map((t, i) => opsTaskCard(t, i === 0)).join("") : `<div class="card"><p class="muted">${ico("checkc", 16)} Navbat bo'sh</p></div>`}</div>
+    ${rows.length > OPSV.page ? `<div style="text-align:center;margin-top:12px"><button class="btn" id="otMore">Yana ko'rsatish (${Math.min(30, rows.length - OPSV.page)} ta)</button></div>` : ""}
+    ${F.n > rows.length ? `<p class="tiny muted" style="text-align:center">Ro'yxatda birinchi ${rows.length} ta; qolganlarini filtr bilan toping.</p>` : ""}`;
+  /* huquqiy asos — har kartada takrorlanmaydi: sahifaning yagona «Qanday ishlaydi» ma'lumotida */
+  const basis = [...new Set(rows.flatMap(t => t.script?.basis || []))], bx = $("#opsBasis");
+  if (bx) bx.innerHTML = basis.length ? `<b>Asos (navbatdagi ishlar bo'yicha):</b><ul style="margin:4px 0 0;padding-left:18px">${basis.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : "";
+  const re = () => { OPSV.page = 30; opsTasks(); };
   if ($("#otMore")) $("#otMore").onclick = () => { OPSV.page += 30; opsTasks(); };
-  $("#otRule").onchange = e => { OPSV.rule = e.target.value; OPSV.page = 30; opsTasks(); };
-  if ($("#otKind")) $("#otKind").onchange = e => { OPSV.kind = e.target.value; OPSV.page = 30; opsTasks(); };
+  if ($("#otCalls")) $("#otCalls").onclick = e => { e.preventDefault(); OPSV.tab = "calls"; renderOps(); };
+  $("#otRule").onchange = e => { OPSV.rule = e.target.value; re(); };
+  if ($("#otKind")) $("#otKind").onchange = e => { OPSV.kind = e.target.value; re(); };
+  if ($("#otRole")) $("#otRole").onchange = e => { OPSV.role = e.target.value; OPSV.grp = ""; re(); };
+  $("#otCourse").onchange = e => { OPSV.course = +e.target.value; OPSV.grp = ""; re(); };
+  $("#otGrp").onchange = e => { OPSV.grp = e.target.value; re(); };
+  $("#otLate").onchange = e => { OPSV.late = e.target.checked; re(); };
+  b.querySelectorAll("[data-bulk]").forEach(x => x.onclick = () => opsBulk(x.dataset.bulk));
+  const syncSel = () => { const n = OPSV.sel.size; if ($("#otSelN")) $("#otSelN").textContent = `Tanlangan: ${n}`; if ($("#otSelDo")) $("#otSelDo").disabled = !n; };
+  b.querySelectorAll(".ot-sel").forEach(x => { x.checked = OPSV.sel.has(+x.dataset.id); x.onchange = () => { x.checked ? OPSV.sel.add(+x.dataset.id) : OPSV.sel.delete(+x.dataset.id); syncSel(); }; });
+  if ($("#otAll")) $("#otAll").onchange = e => { b.querySelectorAll(".ot-sel").forEach(x => { x.checked = e.target.checked; e.target.checked ? OPSV.sel.add(+x.dataset.id) : OPSV.sel.delete(+x.dataset.id); }); syncSel(); };
+  if ($("#otSelDo")) $("#otSelDo").onclick = () => busy($("#otSelDo"), async () => {
+    const note = $("#otSelNote").value.trim(); if (note.length < 3) { $("#otSelNote").focus(); return toast("Natija izohini yozing (kamida 3 belgi)"); }
+    const r = await J("/api/ops/tasks/bulk-outcome", {method: "POST", body: JSON.stringify({ids: [...OPSV.sel], note})});
+    toast(`${r.done} ta topshiriq bajarildi deb belgilandi${r.skipped.length ? ` · ${r.skipped.length} tasi o'tkazib yuborildi (${esc(r.skipped[0].why)})` : ""}`);
+    OPSV.sel.clear(); opsTasks(); refreshOpsSummary();
+  });
+  syncSel();
   bindTaskActions(b, () => { opsTasks(); refreshOpsSummary(); });
+  hydrateIcons(b);
+}
+/* ommaviy xatlar (bitta DOCX paket / ZIP, hujjatlar reyestrida) va buyruq loyihalari (Buyruqlar moduli) — avval ko'rib chiqish */
+async function opsBulk(kind) {
+  const box = $("#opsBulk"); if (!box) return;
+  const body = {kind, rule: OPSV.rule, grp: OPSV.grp || "", course: +OPSV.course || 0};
+  box.innerHTML = `<div class="card"><p class="muted">Ko'rib chiqish tayyorlanmoqda…</p></div>`;
+  const p = await J("/api/ops/bulk/preview", {method: "POST", body: JSON.stringify(body)});
+  if (!p.n) { box.innerHTML = `<div class="card"><p class="muted">Bu filtr bo'yicha bajarishingiz mumkin bo'lgan topshiriq yo'q.</p></div>`; return; }
+  box.innerHTML = `<div class="card" style="margin-bottom:12px"><div class="head" style="margin-bottom:6px"><div><h3 style="margin:0">${kind === "xat" ? "Ogohlantirish xatlari — ommaviy" : "Buyruq loyihalari — ommaviy"}: ${fmt(p.n)} ta</h3>
+      <span class="tiny muted">${kind === "xat" ? "Har bir xat hujjatlar reyestrida o'z ro'yxat raqami va QR bilan; shablon bo'yicha bitta birlashtirilgan DOCX" + (p.zip ? ", hammasi — ZIP" : "") : "Har tur bo'yicha BITTA buyruq loyihasi talabalar ro'yxati bilan — Buyruqlar bo'limida rektor imzosiga yuboriladi"}</span></div>
+      <button class="btn ghost sm" id="bkX">Yopish</button></div>
+    ${tbl(["Hujjat", "#Soni", "Qanday"], p.packets.map(x => [esc(x.title), fmt(x.n), `<span class="tiny">${esc(x.how)}</span>`]))}
+    ${p.sample ? `<p class="tiny" style="margin:8px 0 4px"><b>Namuna:</b> ${esc(p.sample.student)} (${esc(p.sample.grp)}) — ${esc(p.sample.title)}: ${esc(p.sample.facts)}</p>` : ""}
+    <details><summary class="tiny muted">Birinchi ${p.students.length} ta talaba</summary><ul class="tiny" style="margin:4px 0 0;padding-left:18px">${p.students.map(s => `<li>${esc(s.name)} · ${esc(s.grp)} · ${esc(s.title)}</li>`).join("")}</ul></details>
+    ${p.cant ? `<p class="tiny muted">${fmt(p.cant)} tasi sizning vakolatingizda emas — kiritilmaydi.</p>` : ""}
+    <div class="row-actions" style="margin-top:10px"><button class="btn primary" id="bkGo">${kind === "xat" ? `${fmt(p.n)} ta xatni tayyorlash` : `${p.packets.length} ta buyruq loyihasini yaratish`}</button></div><div id="bkRes"></div></div>`;
+  $("#bkX").onclick = () => { box.innerHTML = ""; };
+  $("#bkGo").onclick = () => busy($("#bkGo"), async () => {
+    const r = await J("/api/ops/bulk/run", {method: "POST", body: JSON.stringify(body)});
+    $("#bkRes").innerHTML = `<div class="res" style="margin-top:10px"><b>Tayyor: ${fmt(r.n)} ta</b>${r.skipped?.length ? ` · ${r.skipped.length} tasi o'tkazib yuborildi` : ""}<br>
+      ${r.files.map(f => `<a href="/api/docs/file/${encodeURIComponent(f.file)}">${ico("download", 15)} ${esc(f.title)} — ${fmt(f.n)} ta (${esc(f.first)} … ${esc(f.last)}), .docx</a>`).join("<br>")}
+      ${r.zip ? `<br><a href="/api/ops/bulk/${r.batch}/zip">${ico("download", 15)} Hammasi bitta ZIP (${esc(r.zip)})</a>` : ""}
+      ${r.orders.map(o => `<a href="#" onclick="go('orders');return false">${esc(o.title)}: loyiha #${o.order_id} (${fmt(o.n)} ta talaba) — Buyruqlar bo'limida ochish</a>`).join("<br>")}</div>`;
+    $("#bkGo").disabled = true; hydrateIcons(box); toast(`Ommaviy: ${fmt(r.n)} ta tayyorlandi`); refreshOpsSummary();
+  }, "Tayyorlanmoqda…");
+  hydrateIcons(box);
 }
 function opsTaskCard(t, openScript = false) {
   const sc = t.script || {};
@@ -1077,15 +1328,19 @@ function opsTaskCard(t, openScript = false) {
     : t.kind === "hujjat" ? `<div class="ops-out"><input type="text" class="f-note" placeholder="Izoh: qanday hujjat, raqami" maxlength="1000" aria-label="Izoh">
       <div class="row-actions"><button class="btn sm primary" data-out="hujjat_keldi">Hujjat keldi</button><button class="btn sm" data-out="hujjat_yoq">Hujjat yo'q</button></div></div>`
     : ["xat", "buyruq"].includes(t.kind) ? `<div class="ops-out">${t.kind === "buyruq" && t.rule === "davomat" ? `<input type="text" class="f-reason" placeholder="Sabab (bo'sh qolsa — sababsiz soatlar bo'yicha avtomatik)" maxlength="300" aria-label="Sabab">` : ""}
-      <div class="row-actions"><button class="btn sm primary" data-docgen>${ico("folder", 15)} Hujjatni tayyorlash</button><span class="tiny muted">Hujjatlar markazida ro'yxat raqami va QR bilan</span></div></div>`
+      <div class="row-actions"><button class="btn sm primary" data-docgen>${ico("folder", 15)} ${t.kind === "buyruq" ? "Buyruq loyihasini tayyorlash" : "Xatni tayyorlash"}</button></div></div>`
     : `<div class="ops-out"><input type="text" class="f-note" placeholder="Suhbat natijasi" maxlength="1000" aria-label="Izoh"><div class="row-actions"><button class="btn sm primary" data-out="bajarildi">Bajarildi</button></div></div>`;
+  /* faqat muddati haqiqatda o'tgan topshiriq «kechikdi» (qizil); rejaga ko'ra kechikadigani — alohida, kulrang izoh */
+  const when = `muddat ${dtm(t.due_at)}${t.scheduled ? ` · reja: ${dmy(t.planned_on)}` : ""}`;
+  const sel = t.can_act && t.kind !== "hujjat" && OPSV.tab === "navbat" && !OPSV.student;
   return `<div class="card ops-task ${t.late ? "late" : ""}" data-tid="${t.id}">
-    <div class="ot-h"><span class="ot-kind ic-t">${ico(OPS_KIND_ICO[t.kind] || "file", 16)}${OPS_KIND[t.kind] || esc(t.kind)}</span>${lvlTag(t.level)}<span class="tiny ${t.late ? "bad" : "muted"}">${t.scheduled ? `rejalashtirilgan: ${dmy(t.planned_on)}` : `muddat ${dtm(t.due_at)}`}${t.late ? " · kechikdi" : ""}</span></div>
-    <div class="ot-title"><b>${esc(t.title)}</b></div>
-    <div class="ot-st"><a href="#" data-st="${t.student_id}">${esc(t.full_name)}</a> · ${esc(t.grp)} · ${esc(t.faculty)}${t.phone ? ` · <span class="phone">${esc(t.phone)}</span>` : ""}</div>
+    <div class="ot-h">${sel ? `<input type="checkbox" class="ot-sel" data-id="${t.id}" aria-label="Belgilash">` : ""}<span class="ot-kind ic-t">${ico(OPS_KIND_ICO[t.kind] || "file", 16)}${OPS_KIND[t.kind] || esc(t.kind)}</span>${lvlTag(t.level)}
+      <span class="tiny ${t.late ? "bad" : "muted"}">${when}${t.late ? " · muddati o'tdi" : t.will_be_late ? " · rejaga ko'ra kechikadi" : ""}</span></div>
+    <div class="ot-title"><b>${esc(t.title)}</b>${t.assignee_role && t.assignee_role !== ME.role_key && OPS_ROLE[t.assignee_role] && ME.role_key !== "call_center" ? ` <span class="tag gray">${OPS_ROLE[t.assignee_role]}</span>` : ""}</div>
+    <div class="ot-st"><a href="#" data-st="${t.student_id}">${esc(t.full_name)}</a> · ${esc(t.grp)}${t.course ? ` · ${t.course}-kurs` : ""} · ${esc(t.faculty)}${t.study_form && t.study_form !== "kunduzgi" ? ` · ${esc(t.study_form)}` : ""}${t.phone ? ` · <span class="phone">${esc(t.phone)}</span>` : ""}</div>
     <div class="tiny" style="margin-top:4px">${factText(t.rule, t.facts)}</div>
-    ${sc.say ? `<details class="script" ${openScript ? "open" : ""}><summary>Nima deyish kerak</summary><ol>${sc.say.map(x => `<li>${esc(x)}</li>`).join("")}</ol>
-      ${sc.tone?.length ? `<div class="tiny muted"><b>Muomala:</b> ${esc(sc.tone.join(" "))}</div>` : ""}${sc.basis?.length ? `<div class="tiny muted"><b>Asos:</b> ${esc(sc.basis.join(" "))}</div>` : ""}</details>` : ""}
+    ${sc.say ? `<details class="script" ${openScript ? "open" : ""}><summary>${t.kind === "qongiroq" ? "Nima deyish kerak" : t.kind === "suhbat" ? "Suhbat rejasi" : "Yo'riqnoma"}</summary><ol>${sc.say.map(x => `<li>${esc(x)}</li>`).join("")}</ol>
+      ${sc.tone?.length ? `<div class="tiny muted"><b>Muomala:</b> ${esc(sc.tone.join(" "))}</div>` : ""}</details>` : ""}
     ${acts}</div>`;
 }
 function bindTaskActions(root, after) {
@@ -1095,18 +1350,67 @@ function bindTaskActions(root, after) {
     const body = {outcome: out, note: card.querySelector(".f-note")?.value || ""};
     if (out === "vada") { body.promise_date = card.querySelector(".f-pd").value; if (!body.promise_date) return toast("Va'da sanasini tanlang"); }
     const r = await J(`/api/ops/tasks/${card.dataset.tid}/outcome`, {method: "POST", body: JSON.stringify(body)});
-    toast(r.rescheduled ? `Javob bermadi — ertaga qayta (${r.attempts}/3)` : r.escalated ? "3 marta javob bermadi — tyutorga topshirildi" : out === "vada" ? `Va'da qayd etildi: ${dmy(body.promise_date)} — muddat o'tsa tizim qayta eslatadi` : "Natija saqlandi");
+    toast(r.rescheduled ? `Javob bermadi — ertaga qayta (${r.attempts}/3)` : r.escalated ? "3 marta javob bermadi — yuzma-yuz suhbatga topshirildi" : out === "vada" ? `Va'da qayd etildi: ${dmy(body.promise_date)} — muddat o'tsa tizim qayta eslatadi` : "Natija saqlandi");
     after();
   }));
   root.querySelectorAll(".ops-task [data-docgen]").forEach(btn => btn.onclick = () => busy(btn, async () => {
     const card = btn.closest(".ops-task");
     const r = await J(`/api/ops/tasks/${card.dataset.tid}/document`, {method: "POST", body: JSON.stringify({reason: card.querySelector(".f-reason")?.value || ""})});
     card.querySelector(".ops-out").innerHTML = `<div class="res" style="margin-top:8px"><b>${esc(r.title)}</b> · ${esc(r.reg_no)}${r.status === "loyiha" ? " · rektor imzosini kutadi" : ""}<br>
-      <a href="/api/docs/file/${encodeURIComponent(r.file)}">${ico("download", 16)} .docx yuklab olish</a></div>`;
+      ${r.file ? `<a href="/api/docs/file/${encodeURIComponent(r.file)}">${ico("download", 16)} .docx yuklab olish</a>` : r.order_id ? `<a href="#" onclick="go('orders');return false">Buyruqlar bo'limida ochish (#${r.order_id})</a>` : ""}</div>`;
     toast(`Tayyor: ${r.reg_no}`); refreshOpsSummary();
   }, "Tayyorlanmoqda…"));
 }
-async function refreshOpsSummary() { try { OPSV.sum = await J("/api/ops/summary"); const g = document.querySelector("#v-ops .grid.g6"); if (g) { const w = document.createElement("div"); w.innerHTML = opsSummary(OPSV.sum); g.nextElementSibling?.remove(); g.replaceWith(...w.children); $("#v-ops").querySelectorAll("[data-sr]").forEach(b => b.onclick = () => { OPSV.rule = b.dataset.sr; OPSV.tab = "holatlar"; OPSV.student = null; renderOps(); }); } badges(); } catch (e) {} }
+async function refreshOpsSummary() {
+  try { OPSV.sum = await J("/api/ops/summary"); const g = $("#opsSum");
+    if (g) { const w = document.createElement("div"); w.innerHTML = opsSummary(OPSV.sum, opsOper()); g.replaceWith(w.firstElementChild); bindOpsSummary($("#v-ops")); }
+    badges(); } catch (e) {}
+}
+
+/* --- Call-markaz navbatini boshqarish (Registrator ofisi boshlig'i): haqiqiy kechikish, muqobil yo'llar, operatorlar me'yori --- */
+async function opsCalls() {
+  const b = $("#opsBody"); b.innerHTML = `<p class="muted">Yuklanmoqda…</p>`;
+  const d = await J("/api/ops/calls/plan"), s = d.summary, A = s.alternatives || {};
+  b.innerHTML = `<div class="card" style="margin-bottom:12px;${s.shortfall_today || s.projected_late ? "border-color:color-mix(in srgb,var(--bad) 40%,transparent)" : ""}">
+      <h3 style="margin:0 0 6px">${ico("phone", 18)} Call-markaz: imkoniyat va muddatlar</h3><p style="margin:0;font-size:14px">${esc(s.text)}</p>
+      <div class="ops-strip"><span class="chip-s">Jami navbat: <b>${fmt(s.total)}</b></span><span class="chip-s">Bugungi ro'yxat: <b>${fmt(s.today)}</b></span>
+        <span class="chip-s">Muddati o'tgan: <b class="${s.late ? "bad" : ""}">${fmt(s.late)}</b></span><span class="chip-s">Rejaga ko'ra kechikadi: <b class="${s.projected_late ? "bad" : ""}">${fmt(s.projected_late)}</b></span>
+        <span class="chip-s">Reja ufqi: <b>${s.last_day ? dmy(s.last_day) : "—"}</b> (~${s.days} ish kuni)</span></div></div>
+    <div class="grid g2" style="align-items:start">
+      <div class="card"><h3>Muddat va jiddiylik bo'yicha</h3>${tbl(["Turi", "#Soni", "Muddat", "#O'tgan", "#Kechikadi"], s.groups.map(g => [esc(g.label), fmt(g.n),
+          `<span class="tiny">${dtm(g.first_due)}${g.last_due !== g.first_due ? ` … ${dtm(g.last_due)}` : ""}</span>`, g.late ? `<b class="bad">${fmt(g.late)}</b>` : "0", g.proj ? `<b class="bad">${fmt(g.proj)}</b>` : "0"]))}
+        <h3 style="margin-top:14px">Kunlar bo'yicha reja</h3>${tbl(["Kun", "#Qo'ng'iroq", "#Muddatidan keyin"], d.plan.map(p => [dmy(p.day), fmt(p.n), p.late ? `<span class="bad">${fmt(p.late)}</span>` : "0"]))}</div>
+      <div>
+        <div class="card" style="margin-bottom:12px"><h3>${ico("mail", 18)} 1. Kontrakt eslatmasi — ommaviy SMS / Telegram</h3>
+          <p class="tiny muted" style="margin:0 0 8px">To'lov sanasi hali o'tmagan (past jiddiylik) <b>${fmt(A.sms || 0)}</b> ta eslatma qo'ng'irog'ini bitta xabar bilan almashtirish. To'lanmasa, sana o'tgach qo'ng'iroq qaytadan navbatga tushadi.</p>
+          ${d.can_plan && A.sms ? `<div class="row-actions"><button class="btn sm" data-ntf="sms">SMS (${fmt(A.sms)} ta)</button><button class="btn sm" data-ntf="telegram">Telegram (${fmt(A.sms)} ta)</button></div>` : ""}<div id="clNtf"></div></div>
+        <div class="card" style="margin-bottom:12px"><h3>${ico("users", 18)} 2. Kechikadiganlarni taqsimlash</h3>
+          <p class="tiny muted" style="margin:0 0 8px">Rejaga ko'ra muddatidan keyin qilinadigan <b>${fmt(A.overflow || 0)}</b> ta qo'ng'iroq (kontrakt eslatmasidan tashqari). Tyutorga — o'z guruhi talabalari (sirtqi — Sirtqi bo'limga), har biriga kuniga ≤ ${A.tutor_capacity}; Registrator xodimiga — kuniga ≤ ${A.staff_capacity}. Muddat o'zgarmaydi.</p>
+          ${d.can_plan && A.overflow ? `<div class="row-actions"><button class="btn sm" data-rd="tyutor">Tyutorlarga (${A.tutors} nafar)</button><button class="btn sm" data-rd="registrator_xodim">Registrator xodimiga (${A.staff} nafar)</button></div>` : ""}<div id="clRd"></div></div>
+        <div class="card"><h3>${ico("wrench", 18)} 3. Operatorlar va kunlik me'yor</h3>
+          ${tbl(["Operator", "#Kuniga", "Faol"], d.operators.map(o => [esc(o.short || o.full_name), d.can_plan ? `<input type="number" min="0" max="300" value="${o.capacity}" data-cap="${o.id}" aria-label="Kunlik me'yor" style="width:80px;padding:6px 8px;border:1px solid var(--line-2);border-radius:8px;background:var(--surface)">` : o.capacity,
+            d.can_plan ? `<input type="checkbox" data-act="${o.id}" ${o.active ? "checked" : ""} aria-label="Faol">` : (o.active ? "ha" : "yo'q")]))}
+          ${d.can_plan ? `<div class="row-actions" style="margin-top:8px"><button class="btn sm primary" id="clSave">Saqlash va qayta rejalashtirish</button></div>` : ""}
+          <p class="tiny muted" style="margin:8px 0 0">Kunlik imkoniyat — faol operatorlar me'yorlari yig'indisi (hozir ${fmt(s.capacity)} ta). Yangi operator — «Akkauntlar» bo'limida «Call-markaz operatori» lavozimi bilan qo'shiladi; navbat operatorlarga me'yoriga mutanosib taqsimlanadi.</p></div>
+      </div></div>`;
+  const confirmBox = (box, html, run) => { box.innerHTML = `<div class="res" style="margin-top:8px">${html}<div class="row-actions" style="margin-top:8px"><button class="btn sm primary">Tasdiqlash</button><button class="btn sm ghost">Bekor</button></div></div>`;
+    const [ok, no] = box.querySelectorAll("button"); no.onclick = () => { box.innerHTML = ""; }; ok.onclick = () => busy(ok, run); };
+  b.querySelectorAll("[data-ntf]").forEach(x => x.onclick = () => busy(x, async () => {
+    const ch = x.dataset.ntf, p = await J("/api/ops/calls/notify", {method: "POST", body: JSON.stringify({channel: ch, preview: true})});
+    confirmBox($("#clNtf"), `<b>${fmt(p.n)} ta ${esc(p.channel)} eslatma</b>${p.no_phone ? ` (${p.no_phone} tasida telefon yo'q)` : ""}<div class="tiny" style="margin:6px 0">Namuna: «${esc(p.sample || "")}»</div><div class="tiny muted">${esc(p.gateway)} ${esc(p.effect)}</div>`,
+      async () => { const r = await J("/api/ops/calls/notify", {method: "POST", body: JSON.stringify({channel: ch, preview: false})}); toast(`${fmt(r.sent)} ta ${r.channel} eslatma navbatga yozildi`); refreshOpsSummary(); opsCalls(); });
+  }));
+  b.querySelectorAll("[data-rd]").forEach(x => x.onclick = () => busy(x, async () => {
+    const tg = x.dataset.rd, p = await J("/api/ops/calls/redistribute", {method: "POST", body: JSON.stringify({target: tg, preview: true})});
+    confirmBox($("#clRd"), p.n ? `<b>${fmt(p.n)} ta qo'ng'iroq o'tkaziladi</b>: ${p.by_role.map(r => `${esc(r.label)} — ${fmt(r.n)}`).join(", ")}. Shundan keyin ham ${fmt(p.left)} tasi navbatda qoladi.` : "O'tkaziladigan qo'ng'iroq yo'q (me'yor to'lgan yoki mos talaba yo'q).",
+      async () => { if (!p.n) return; const r = await J("/api/ops/calls/redistribute", {method: "POST", body: JSON.stringify({target: tg, preview: false})}); toast(`${fmt(r.moved)} ta qo'ng'iroq o'tkazildi`); refreshOpsSummary(); opsCalls(); });
+  }));
+  if ($("#clSave")) $("#clSave").onclick = () => busy($("#clSave"), async () => {
+    const items = d.operators.map(o => ({user_id: o.id, capacity: +b.querySelector(`[data-cap="${o.id}"]`).value || 0, active: b.querySelector(`[data-act="${o.id}"]`).checked}));
+    await J("/api/ops/calls/operators", {method: "POST", body: JSON.stringify({items})}); toast("Me'yor saqlandi — navbat qayta rejalashtirildi"); refreshOpsSummary(); opsCalls();
+  });
+  hydrateIcons(b);
+}
 
 /* --- talaba kartasi --- */
 async function opsStudent(sid) {
@@ -1116,22 +1420,22 @@ async function opsStudent(sid) {
   const back = `<button class="btn ghost sm" id="opsBack" style="margin-bottom:10px">← Ortga</button>`;
   if (d.limited) {
     b.innerHTML = back + `<div class="card"><h3>${esc(s.full_name)}</h3><p class="muted">${esc(s.grp)} · ${esc(s.faculty)} · <span class="phone">${esc(s.phone)}</span></p>
-      <p class="tiny muted">Call-markaz uchun faqat qo'ng'iroq topshiriqlari ko'rinadi.</p></div><div class="ops-tasks" style="margin-top:14px">${d.tasks.map(t => opsTaskCard({...t, full_name: s.full_name, grp: s.grp, faculty: s.faculty, phone: s.phone, rule: "", facts: {}, late: t.due_at < new Date().toISOString()})).join("")}</div>`;
+      <p class="tiny muted">Call-markaz uchun faqat qo'ng'iroq topshiriqlari ko'rinadi.</p></div><div class="ops-tasks" style="margin-top:14px">${d.tasks.map(t => opsTaskCard({...t, full_name: s.full_name, grp: s.grp, faculty: s.faculty, phone: s.phone, rule: "", facts: {}})).join("")}</div>`;
     $("#opsBack").onclick = () => { OPSV.student = null; renderOps(); }; bindTaskActions(b, () => opsStudent(sid)); return;
   }
   const open = d.cases.filter(c => c.status === "ochiq");
   b.innerHTML = back + `<div class="card ops-hero"><div><h3 style="margin:0">${esc(s.full_name)}</h3>
       <div class="muted tiny">${esc(s.grp)} · ${s.course}-kurs · ${esc(s.faculty)} · HEMIS ${esc(s.hemis_id)}${s.phone ? ` · <span class="phone">${esc(s.phone)}</span>` : ""} · holati: ${esc(s.status)}</div></div>
       <div class="ops-facts"><div><span>Sababsiz</span><b class="${f.unexcused >= 30 ? "bad" : ""}">${f.unexcused} soat</b></div><div><span>Sababli</span><b>${f.excused} soat</b></div>
-      <div><span>JPA (5 ballik)</span><b class="${f.gpa5 < 3 ? "bad" : ""}">${f.gpa5 ?? "—"}</b></div><div><span>Qarzdor fan</span><b class="${f.fails.length ? "bad" : ""}">${f.fails.length}</b></div>
+      <div><span>GPA (5), kumulyativ</span><b class="${f.gpa5 != null && f.gpa5 < 3 ? "bad" : ""}">${f.gpa5 ?? "—"}</b></div><div><span>Akademik qarz</span><b class="${f.fails.length ? "bad" : ""}">${f.fails.length}</b></div>
       <div><span>Kontrakt qarzi</span><b class="${d.debt > 0 ? "bad" : ""}">${s.payment_type === "kontrakt" ? som(d.debt) : "grant"}</b></div></div></div>
     <div class="dec-grid">
       <div class="dec-tasks">
         <div class="card"><h3>Ochiq holatlar (${open.length})</h3>${open.length ? open.map(c => `<div class="dec-line"><span class="dl-unit">${OPS_RULES[c.rule]}</span><span>${lvlTag(c.level)}</span><span class="tiny muted">${dtm(c.opened_at)}</span><span class="dl-res">${factText(c.rule, c.facts)}</span></div>`).join("") : `<p class="muted"><span class="good">${ico("checkc", 16)}</span> Ochiq holat yo'q</p>`}</div>
-        <div class="card"><h3>Topshiriqlar</h3><div class="ops-tasks">${d.tasks.filter(t => t.status === "yangi").map(t => opsTaskCard({...t, full_name: s.full_name, grp: s.grp, faculty: s.faculty, phone: s.phone, rule: (d.cases.find(c => c.id === t.case_id) || {}).rule, facts: (d.cases.find(c => c.id === t.case_id) || {}).facts || {}, late: t.due_at < new Date().toISOString()})).join("") || `<p class="muted">Ochiq topshiriq yo'q</p>`}</div>
+        <div class="card"><h3>Topshiriqlar</h3><div class="ops-tasks">${d.tasks.filter(t => t.status === "yangi").map(t => opsTaskCard({...t, full_name: s.full_name, grp: s.grp, faculty: s.faculty, phone: s.phone, rule: (d.cases.find(c => c.id === t.case_id) || {}).rule, facts: (d.cases.find(c => c.id === t.case_id) || {}).facts || {}})).join("") || `<p class="muted">Ochiq topshiriq yo'q</p>`}</div>
           ${d.tasks.some(t => t.status !== "yangi") ? `<details style="margin-top:10px"><summary class="tiny muted">Yopilgan topshiriqlar (${d.tasks.filter(t => t.status !== "yangi").length})</summary>${tbl(["Topshiriq", "Natija", "Sana"], d.tasks.filter(t => t.status !== "yangi").map(t => [esc(t.title), esc((t.outcome || "") + (t.note ? " — " + t.note : "") + (t.doc_reg ? " · " + t.doc_reg : "")), dtm(t.done_at)]))}</details>` : ""}</div>
-        <div class="card"><h3>O'zlashtirish (joriy semestr)</h3>${tbl(["Fan", "#Ball", ""], f.grades.map(g => [esc(g.subject), `<b class="${g.score < 40 ? "bad" : ""}">${g.score}</b>`,
-          g.score < 40 && d.can_retake && !d.retakes.some(r => r.subject === g.subject && ["berildi", "topshirildi"].includes(r.status)) ? `<button class="btn sm" data-rt="${esc(g.subject)}">Otrabotka varaqasi</button>` :
+        <div class="card"><h3>O'zlashtirish: akademik qarzlar va joriy oraliq nazorat</h3>${tbl(["Fan", "Natija", ""], f.grades.map(g => [esc(g.subject), `<b class="${(g.fail ?? g.score < 40) ? "bad" : ""}">${esc(String(g.shown ?? g.score))}</b>`,
+          (g.fail ?? g.score < 40) && d.can_retake && !d.retakes.some(r => r.subject === g.subject && ["berildi", "topshirildi"].includes(r.status)) ? `<button class="btn sm" data-rt="${esc(g.subject)}">Otrabotka varaqasi</button>` :
           (d.retakes.find(r => r.subject === g.subject) ? (rt => rt.status === "berildi" && window.RG ? RG.cd(rt) : `<span class="tiny muted">otrabotka: ${esc(rt.status)}</span>`)(d.retakes.find(r => r.subject === g.subject)) : "")]))}</div>
         <div class="card"><h3>Dars qoldirishlar</h3>${tbl(["Sana", "#Soat", "Sabab", "Hujjat"], d.absences.map(a => [`${dmy(a.start)}${a.end !== a.start ? "–" + dmy(a.end) : ""}`, a.hours, OPS_REASON[a.reason] || a.reason,
           a.doc_status ? `<span class="tag ${OPS_DOC[a.doc_status][1]}">${OPS_DOC[a.doc_status][0]}</span>` : "—"]))}</div>
@@ -1190,8 +1494,12 @@ const REP = [["brifing", "Rahbariyat uchun haftalik brifing", "KPI, ogohlantiris
   ["ilmiy", "Ilmiy salohiyat hisoboti", "Nashrlar, kafedralar reytingi, grantlar", "science"]];
 function renderReports() {
   const ok = k => ME.allow.includes("reports") && (k === "reports" || ME.allow.includes(k));
-  $("#v-reports").innerHTML = `<div class="head"><div><h2>Tahliliy hisobotlar</h2><span class="muted">Rahbariyat uchun Word hisobotlar, bir tugmada — faqat ruxsatingiz doirasida. Rasmiy hujjat (buyruq, ma'lumotnoma) — «Hujjatlar markazi»da.</span><span id="repSrc"></span></div></div>
-  <div class="grid g2">${REP.map(([k, t, d, res]) => ok(res) ? `<div class="card"><h3>${ico("report", 18)} ${t}</h3><p class="muted">${d}</p><a class="btn primary" href="/api/report/${k}" download>Yuklab olish (.docx)</a></div>` : locked(t)).join("")}</div>`;
+  /* ruxsat yo'q hisobotlar ko'rsatilmaydi («Lavozimingiz uchun ruxsat yo'q» kartalari — shovqin) */
+  const mine = REP.filter(([, , , res]) => ok(res));
+  const desk = DESK_ROLES.includes(ME.role_key) && ME.role_key !== "yuridik" ? `<div class="card"><h3>${ico("chart", 18)} Ish stoli jadvali (CSV)</h3><p class="muted">Boshqaruv panelidagi ko'rsatkichlar va kesim jadvali — Excel uchun</p><a class="btn" href="/api/desk/export.csv" download>Yuklab olish (.csv)</a></div>` : "";
+  $("#v-reports").innerHTML = `<div class="head"><div><h2>Tahliliy hisobotlar</h2><span class="muted">Word hisobotlar, bir tugmada — faqat ruxsatingiz doirasida. Rasmiy buyruqlar — «Buyruqlar»da, ma'lumotnomalar — «Hujjatlar markazi»da.</span><span id="repSrc"></span></div></div>
+  <div class="grid g2">${mine.map(([k, t, d]) => `<div class="card"><h3>${ico("report", 18)} ${t}</h3><p class="muted">${d}</p><a class="btn primary" href="/api/report/${k}" download>Yuklab olish (.docx)</a></div>`).join("")}${desk}</div>
+  ${!mine.length && !desk ? `<div class="card"><p class="muted">Lavozimingiz uchun tahliliy hisobot yo'q.</p></div>` : ""}`;
   syncInfo().then(s => { const e = $("#repSrc"); if (e) e.outerHTML = pgSrc(`Manba: HEMIS va buxgalteriya (sinov ma'lumotlari)${s.updated ? ` · yangilandi <b>${whenTxt(s.updated)}</b>` : ""} · hisobot yuklab olingan paytdagi holat bo'yicha tuziladi`); }).catch(() => {});
 }
 
@@ -1199,17 +1507,27 @@ function renderReports() {
 const DOCSAMPLE = {translate: `Dear Colleagues,\n\nFollowing our recent meeting, we would like to propose extending our Memorandum of Understanding for another five years and adding a joint summer school in Data Science for 20 students from each side. Please let us know if ISFT could host the first edition in July 2027.\n\nBest regards,\nInternational Office, Partner University (sample)`,
   contract: `HAMKORLIK SHARTNOMASI\n3.2. Institut har chorakda 45 000 000 so'm miqdorida litsenziya to'lovini oldindan to'laydi.\n4.1. Pudratchi shartnomani 10 kunlik ogohlantirish bilan bir tomonlama bekor qilishi mumkin.\n5.3. Loyiha davomida yaratilgan barcha dasturiy ta'minot va ma'lumotlar Pudratchining mulki hisoblanadi.\n6.1. To'lov 5 kundan ortiq kechiktirilsa, har bir kun uchun 0,5% penya undiriladi, umumiy summa cheklanmagan.\n8.2. Nizolar Pudratchi joylashgan joydagi sudda ko'riladi.`,
   reply: `Dear ISFT team,\nWe are interested in sending 6 exchange students to your Finance programme for the spring 2027 semester. Could you confirm available courses in English and accommodation options?\nKind regards, Partner University (sample)`};
+const DOCSV = {mode: null};   /* boshqa sahifadan ochilganda tanlangan rejim (masalan, yuridik ish stoli → «Shartnoma») */
+const DOC_SRC = {ai: "", qoida: "Qoida asosida (AI o'chiq)"};
 function renderDocs() {
+  const tools = AIS?.tools || {}, reason = AIS?.reason || "AI hozir mavjud emas";
+  /* tool: "ai" | "qoida" | null — null bo'lsa tugma o'chiq, sababi ko'rsatiladi */
+  const tb = (m, i, t) => { const st = m in tools ? tools[m] : "ai", off = st == null;
+    return `<button class="btn${DOCSV.mode === m ? " primary" : ""}" data-m="${m}"${off ? ` disabled title="${esc(reason)}"` : st === "qoida" ? ` title="Qoida asosida ishlaydi (AI o'chiq)"` : ""}>${ico(i, 16)} ${t}${st === "qoida" ? ` <span class="tag gray">qoida</span>` : ""}</button>`; };
   $("#v-docs").innerHTML = `<div class="head"><div><h2>Tarjima va shartnoma yordamchisi</h2><span class="muted">Xorijiy xat tarjimasi, shartnomadagi xavfli bandlar va javob loyihasi. Matn institut serverida qayta ishlanadi — tashqariga chiqmaydi. Bo'limlararo xatlar — «Portal»da.</span><span id="docAi"></span></div></div>
   <div class="card"><div class="row-actions" style="margin-bottom:10px">
-    <button class="btn" data-m="translate">${ico("globe", 16)} Tarjima qilish</button><button class="btn" data-m="contract">${ico("scale", 16)} Shartnomani tekshirish</button><button class="btn" data-m="reply">${ico("mail", 16)} Javob loyihasi</button>
+    ${tb("translate", "globe", "Tarjima qilish")}${tb("contract", "scale", "Shartnomani tekshirish")}${tb("reply", "mail", "Javob loyihasi")}
     <span class="muted tiny" style="align-self:center">Namuna: <a href="#" data-s="translate">xat</a> · <a href="#" data-s="contract">shartnoma</a> · <a href="#" data-s="reply">so'rov</a></span></div>
   <textarea id="docText">${esc(DOCSAMPLE.contract)}</textarea><div id="docRes" class="res muted">Natija shu yerda chiqadi.</div></div>`;
-  fetch("/api/status").then(r => r.json()).then(s => { const e = $("#docAi"); if (e) e.outerHTML = pgSrc(s.llm ? `Mahalliy AI faol: <b>${esc(s.model)}</b>` : "Mahalliy AI modeli hozir ishga tushmagan — natija chiqmaydi (administrator: <b>ollama serve</b>)", s.llm ? "server" : "alert"); }).catch(() => {});
+  const aiNote = () => { const e = $("#docAi"); if (!e || !AIS) return; const off = Object.values(AIS.tools || {}).some(v => v == null);
+    e.outerHTML = pgSrc(AIS.ai ? `AI faol${AIS.local ? " (mahalliy)" : ""}: <b>${esc(AIS.model || "")}</b>` : `${esc(AIS.reason || "Tahlil rejimi")}${off ? " O'chiq tugmalar ustiga olib boring — sababi ko'rsatiladi." : ""}`, AIS.ai ? "server" : "info"); };
+  if (AIS) aiNote(); else status().then(() => { if ($("#docAi")) renderDocs(); });
   document.querySelectorAll("[data-s]").forEach(a => a.onclick = e => { e.preventDefault(); $("#docText").value = DOCSAMPLE[a.dataset.s]; });
   document.querySelectorAll("[data-m]").forEach(b => b.onclick = async () => {
-    const res = $("#docRes"); res.className = "res"; res.textContent = "ISFT Core tahlil qilmoqda…";
-    try { const r = await J("/api/doc", {method: "POST", body: JSON.stringify({text: $("#docText").value, mode: b.dataset.m})}); res.innerHTML = rich(r.result); }
+    const res = $("#docRes"); res.className = "res"; res.textContent = "ISFT Core tahlil qilmoqda…"; DOCSV.mode = b.dataset.m;
+    try { const r = await J("/api/doc", {method: "POST", body: JSON.stringify({text: $("#docText").value, mode: b.dataset.m})});
+      if (r.ai === false && !r.source) { res.className = "res muted"; res.textContent = r.reason || "Bu vosita hozir mavjud emas"; return; }
+      res.innerHTML = (r.source === "qoida" ? `<span class="tag gray" style="margin-bottom:6px">${DOC_SRC.qoida}</span><br>` : "") + rich(r.result || ""); }
     catch (e) { res.textContent = e.message === "denied" ? "Ruxsat yo'q" : "Xatolik"; }
   });
 }
@@ -1246,7 +1564,7 @@ const DOCSTATE = {cat: null, sel: null};
 const STATUS_TXT = {berilgan: "berilgan", loyiha: "imzo kutmoqda", imzolangan: "imzolangan", bekor: "bekor qilingan"};
 async function renderDocuments() {
   const el = $("#v-documents");
-  el.innerHTML = `<div class="head"><div><h2>Hujjatlar markazi</h2><span class="muted">Rasmiy hujjat chiqarish: ma'lumotnoma, buyruq, qaydnoma va xat — bazadan to'ldiriladi, ISFT blankida, ro'yxat raqami va QR bilan. Tahliliy hisobotlar — «Hisobotlar»da.</span></div></div><div id="docCat"></div><div id="docForm"></div><div id="docReg"></div>`;
+  el.innerHTML = `<div class="head"><div><h2>Hujjatlar markazi</h2><span class="muted">Rasmiy hujjat chiqarish: ma'lumotnoma, qaydnoma va xat — bazadan to'ldiriladi, ISFT blankida, ro'yxat raqami va QR bilan. Buyruqlar (talabalar va xodimlar) — «Buyruqlar» bo'limida; tahliliy hisobotlar — «Hisobotlar»da.</span></div></div><div id="docCat"></div><div id="docForm"></div><div id="docReg"></div>`;
   DOCSTATE.cat = await J("/api/docs/catalog");
   const cats = [...new Set(DOCSTATE.cat.map(t => t.cat))];
   const mine = DOCSTATE.cat.filter(t => t.allowed).length;
@@ -1333,18 +1651,21 @@ async function docForm(t) {
 async function docRegistry() {
   const rows = await J("/api/docs/registry");
   const isR = ME.role_key === "rektor";
+  /* buyruqlar imzosi — faqat «Buyruqlar» bo'limida (yagona joy); bu yerda imzo navbati yo'q */
   const wait = rows.filter(r => r.status === "loyiha").length;
+  const ordNav = !document.querySelector('#nav a[data-v="orders"]')?.classList.contains("hidden");
   $("#docReg").innerHTML = `<div class="card" style="margin-top:16px"><div class="head" style="margin-bottom:10px"><div><h3 style="margin:0">Hujjatlar jurnali (reyestr)</h3>
-    <span class="tiny muted">${isR ? "Institut bo'yicha barcha hujjatlar" : "Siz tayyorlagan hujjatlar"} · ${rows.length} ta${wait ? ` · <b class="bad">${wait} ta imzo kutmoqda</b>` : ""}</span></div></div>
+    <span class="tiny muted">${isR ? "Institut bo'yicha barcha hujjatlar" : "Siz tayyorlagan hujjatlar"} · ${rows.length} ta${wait ? ` · ${wait} ta loyiha` : ""}</span></div>
+    ${ordNav ? `<button class="btn sm" data-go-orders>${ico("file", 16)} Buyruqlar (imzo va kelishuv)</button>` : ""}</div>
     ${rows.length ? tbl(["Raqam", "Hujjat", "Kim haqida / kimga", "Muallif", "Sana", "Holat", ""], rows.map(r => [
       `<b>${esc(r.reg_no)}</b>`, esc(r.title), esc(r.holder), `<span class="tiny">${esc(r.creator_role)}</span>`, `<span class="tiny">${dmy(r.created_at)} ${esc(r.created_at.slice(11, 16))}</span>`,
       `<span class="status ${r.status}">${STATUS_TXT[r.status] || r.status}</span>`,
       `<div style="display:flex;gap:6px;flex-wrap:wrap"><a class="btn sm" title="Yuklab olish" aria-label="Yuklab olish" href="/api/docs/file/${encodeURIComponent(r.file)}">${ico("download", 16)}</a>
        <a class="btn sm" title="QR tekshiruv sahifasi" target="_blank" aria-label="QR tekshiruv" href="/verify/${encodeURIComponent(r.verify_code)}">${ico("search", 16)}</a>
-       ${isR && r.status === "loyiha" ? `<button class="btn sm primary" data-sign="${r.id}">${ico("pen", 16)} Imzolash</button>` : ""}
+       ${r.status === "loyiha" && ordNav ? `<button class="btn sm" data-go-orders title="Buyruq loyihalari «Buyruqlar» bo'limida imzolanadi">${ico("pen", 16)} Buyruqlarda</button>` : ""}
        ${r.status !== "bekor" ? `<button class="btn sm" data-cancel="${r.id}" title="Bekor qilish" aria-label="Bekor qilish">${ico("x", 16)}</button>` : ""}</div>`]))
     : `<p class="muted">Hali hujjat tayyorlanmagan. Yuqoridan shablon tanlang.</p>`}</div>`;
-  document.querySelectorAll("[data-sign]").forEach(b => b.onclick = () => busy(b, async () => { await J(`/api/docs/${b.dataset.sign}/sign`, {method: "POST"}); toast("Buyruq imzolandi — QR tekshiruvda «imzolangan» ko'rinadi"); docRegistry(); }));
+  document.querySelectorAll("[data-go-orders]").forEach(b => b.onclick = () => { if (typeof OR !== "undefined") { OR.id = null; OR.tab = "reg"; OR.f.status = ""; } go("orders"); });
   /* bekor qilish qaytarib bo'lmaydi — ikki bosqichli tasdiq */
   document.querySelectorAll("[data-cancel]").forEach(b => b.onclick = () => {
     if (!b.dataset.armed) { b.dataset.armed = 1; b.textContent = "Bekor qilinsinmi?"; b.classList.add("primary"); setTimeout(() => { if (b.isConnected) { delete b.dataset.armed; b.innerHTML = ico("x", 16); b.classList.remove("primary"); } }, 3500); return; }
@@ -1354,9 +1675,10 @@ async function docRegistry() {
 
 
 /* ---------- Murojaatlar va nosozliklar (avval «Xizmat markazi»): QR nosozliklar · murojaatlar · tadbir qatnashuvi ---------- */
-const SVC = {tab: null, data: null};
-const SVC_TABS = {facilities: "Nosozliklar (QR)", requests: "Murojaatlar va hodisalar", events: "Tadbir qatnashuvi"};
-const SVC_TABS_ICO = {facilities: "wrench", requests: "mail", events: "gift"};
+/* SVC.focus — havoladan kelgan qator (rq12 / tk5 / pr3) ajratiladi; SVC.queue === "unit" — faqat mening navbatim */
+const SVC = {tab: null, data: null, focus: null, queue: null};
+const SVC_TABS = {facilities: "Nosozliklar (QR)", requests: "Murojaatlar va hodisalar", procurement: "Xarid so'rovlari", events: "Tadbir qatnashuvi"};
+const SVC_TABS_ICO = {facilities: "wrench", requests: "mail", procurement: "file", events: "gift"};
 const ago = iso => { const m = Math.max(0, Math.round((Date.now() - new Date(iso)) / 60000)); if (m < 1) return "hozir"; return m < 60 ? `${m} daq. oldin` : m < 1440 ? `${Math.round(m/60)} soat oldin` : `${Math.round(m/1440)} kun oldin`; };
 const st = s => `<span class="status ${({"hal qilindi": "imzolangan", "javob berildi": "berilgan", "jarayonda": "loyiha", "ochiq": "bekor"})[s] || ""}" style="${s === "ochiq" ? "text-decoration:none" : ""}">${esc(s)}</span>`;
 async function renderService() {
@@ -1366,13 +1688,17 @@ async function renderService() {
   const tabs = SVC.data.tabs;
   if (!tabs.length) { el.innerHTML = `<div class="head"><div><h2>Murojaatlar va nosozliklar</h2></div></div>` + locked("Murojaatlar va nosozliklar — xo'jalik, murojaatlar va tadbirlar mas'ullari uchun"); return; }
   if (!tabs.includes(SVC.tab)) SVC.tab = tabs[0];
-  el.innerHTML = `<div class="head"><div><h2>Murojaatlar va nosozliklar</h2><span class="muted">Kelib tushgan murojaatlar, xonadagi QR orqali nosozliklar va tadbir qatnashuvi. Tizim tasniflaydi va bir xillarini birlashtiradi — qarorni mas'ul xodim qabul qiladi.</span></div>
-    <div class="row-actions">${tabs.map(t => `<button class="btn ${t === SVC.tab ? "primary" : ""}" data-t="${t}">${ico(SVC_TABS_ICO[t], 16)} ${SVC_TABS[t]}</button>`).join("")}</div></div><div id="svcBody"></div>`;
-  el.querySelectorAll("[data-t]").forEach(b => b.onclick = () => { SVC.tab = b.dataset.t; renderService(); });
-  ({facilities: svcFacilities, requests: svcRequests, events: svcEvents})[SVC.tab](SVC.data[SVC.tab]);
+  const lead = ME.role_key === "it_staff" ? "AT bo'limi navbatidagi va sizga biriktirilgan murojaatlar: «Olindi» — o'zingizga olasiz, «Hal qilindi» — yopasiz."
+    : ME.role_key === "xarid" ? "Xo'jalik bo'limi «Xarid kerak» deb belgilagan nosozliklar bo'yicha xarid so'rovlari."
+    : "Kelib tushgan murojaatlar, xonadagi QR orqali nosozliklar va tadbir qatnashuvi. Tizim tasniflaydi va bir xillarini birlashtiradi — qarorni mas'ul xodim qabul qiladi.";
+  el.innerHTML = `<div class="head"><div><h2>Murojaatlar va nosozliklar</h2><span class="muted">${lead}</span></div>
+    ${tabs.length > 1 ? `<div class="row-actions">${tabs.map(t => `<button class="btn ${t === SVC.tab ? "primary" : ""}" data-t="${t}">${ico(SVC_TABS_ICO[t], 16)} ${SVC_TABS[t]}</button>`).join("")}</div>` : ""}</div><div id="svcBody"></div>`;
+  el.querySelectorAll("[data-t]").forEach(b => b.onclick = () => { SVC.tab = b.dataset.t; SVC.focus = null; SVC.queue = null; renderService(); });
+  ({facilities: svcFacilities, requests: svcRequests, procurement: svcProcurement, events: svcEvents})[SVC.tab](SVC.data[SVC.tab]);
 }
 function svcFacilities(f) {
-  const kp = [["Ochiq nosozliklar", f.open, `${f.rooms} ta xonada QR stiker`], ["24 soatdan oshgan", f.overdue, "javobsiz qolgan", f.overdue > 0],
+  const canProc = ME.role_key === "xojalik" && ME.allow.includes("procurement");
+  const kp =[["Ochiq nosozliklar", f.open, `${f.rooms} ta xonada QR stiker`], ["24 soatdan oshgan", f.overdue, "javobsiz qolgan", f.overdue > 0],
               ["O'rtacha hal qilish", f.avg_hours != null ? f.avg_hours + " soat" : "—", "so'nggi 60 kun"], ["Takror xabarlar birlashtirildi", f.dup_saved, "bir muammo — bitta ish"]];
   let h = `<div class="grid g4">${kp.map(k => `<div class="card kpi ${k[3] ? "bad" : ""}"><div class="l">${k[0]}</div><div class="v">${k[1]}</div><div class="s">${k[2]}</div></div>`).join("")}</div>`;
   h += `<div class="grid g2" style="margin-top:14px">`;
@@ -1380,25 +1706,58 @@ function svcFacilities(f) {
   h += card(`${ico("qr", 18)} QR qanday ishlaydi`, `<ol class="tiny" style="margin:0;padding-left:18px;line-height:1.8"><li>Har xonaga QR stiker yopishtiriladi</li><li>Talaba yoki o'qituvchi skanerlaydi → xona <b>avtomatik</b> aniqlanadi</li><li>Muammo turini tanlaydi, xohlasa rasm qo'shadi — 15 soniya</li><li>Shu muammo allaqachon yozilgan bo'lsa — yangi ish ochilmaydi, «+1 tasdiq» bo'ladi</li></ol>
     <div class="row-actions" style="margin-top:10px"><a class="btn primary" href="/svc/qr-sheet" target="_blank">${ico("printer", 16)} QR stikerlarni chop etish</a><a class="btn" href="${esc(f.tickets[0] ? "/q/" + f.tickets[0].room_code : "#")}" target="_blank">${ico("smartphone", 16)} Talaba sahifasini ko'rish</a></div>`);
   h += `</div>`;
-  h += `<div class="card" style="margin-top:14px"><div class="head" style="margin-bottom:8px"><h3 style="margin:0">Nosozliklar navbati</h3><span class="tiny muted">${f.by_building.map(b => `${esc(b.building)}: ${b.n}`).join(" · ")}</span></div>` +
-    tbl(["#", "Xona", "Jihoz / izoh", "#Xabar", "Kelgan", "Holat", "Amal"], f.tickets.slice(0, 40).map(t => [t.id, esc(t.room),
-      `<b>${esc(t.item)}</b><br><span class="tiny muted">${esc(t.text)}${t.photo ? ` · <a href="/api/svc/photo/${esc(t.photo)}" target="_blank">${ico("camera", 14)} rasm</a>` : ""}</span>`,
+  h += `<div class="card" style="margin-top:14px"><div class="head" style="margin-bottom:8px"><div><h3 style="margin:0">Nosozliklar navbati</h3>${(n => n ? `<span class="tiny"><b class="bad">${n} ta yangi</b> — «Olindi» kutilmoqda (menyudagi raqam)</span>` : "")(f.tickets.filter(t => t.status === "yangi").length)}</div><span class="tiny muted">${f.by_building.map(b => `${esc(b.building)}: ${b.n}`).join(" · ")}</span></div>` +
+    tbl(["#", "Xona", "Jihoz / izoh", "#Xabar", "Kelgan", "Holat", "Amal"], svcPick(f.tickets, 40, t => `tk${t.id}`).map(t => [`<span data-row="tk${t.id}">${t.id}</span>`, esc(t.room),
+      `<b>${esc(t.item)}</b><br><span class="tiny muted">${esc(t.text)}${t.photo ? ` · <a href="/api/svc/photo/${esc(t.photo)}" target="_blank">${ico("camera", 14)} rasm</a>` : ""}${t.procurement_id ? ` · <b>Xarid X-${String(t.procurement_id).padStart(4, "0")}</b>` : ""}</span>`,
       t.reports > 1 ? `<b>${t.reports}</b>` : 1, `<span class="${t.overdue ? "bad" : ""}">${ago(t.created_at)}</span>`, st(t.status),
-      t.status === "hal qilindi" ? `<span class="tiny muted">${t.hours} soatda</span>` : `<div class="row-actions">${t.status === "yangi" ? `<button class="btn sm" data-tk="${t.id}" data-s="jarayonda">Olindi</button>` : ""}<button class="btn sm primary" data-tk="${t.id}" data-s="hal qilindi">${ico("check", 16)} Hal qilindi</button></div>`])) + `</div>`;
+      t.status === "hal qilindi" ? `<span class="tiny muted">${t.hours} soatda</span>` : `<div class="row-actions">${t.status === "yangi" ? `<button class="btn sm" data-tk="${t.id}" data-s="jarayonda">Olindi</button>` : ""}<button class="btn sm primary" data-tk="${t.id}" data-s="hal qilindi">${ico("check", 16)} Hal qilindi</button>${canProc && !t.procurement_id ? `<button class="btn sm ghost" data-proc="${t.id}" title="Ta'mirlab bo'lmaydi — Xarid bo'limiga so'rov">Xarid kerak</button>` : ""}</div>`])) + `</div>`;
   $("#svcBody").innerHTML = h;
   document.querySelectorAll("[data-tk]").forEach(b => b.onclick = () => busy(b, async () => {
     await J(`/api/svc/tickets/${b.dataset.tk}/status`, {method: "POST", body: JSON.stringify({status: b.dataset.s})}); toast("Holat yangilandi"); renderService();
   }));
+  /* «Xarid kerak» — ikki bosqichli: so'rov Xarid bo'limi navbatiga tushadi */
+  document.querySelectorAll("[data-proc]").forEach(b => b.onclick = () => { if (!arm(b, "Xaridga yuborilsinmi?")) return; busy(b, async () => {
+    const r = await J(`/api/svc/tickets/${b.dataset.proc}/procure`, {method: "POST", body: JSON.stringify({})}); toast(`Xarid so'rovi ${r.number} Xarid bo'limiga yuborildi`); renderService();
+  }); });
+}
+/* navbatdan birinchi n tasi + havoladan kelgan qator (ro'yxat oxirida bo'lsa ham ko'rinsin) */
+function svcPick(rows, n, key) { const out = rows.slice(0, n); const f = SVC.focus && rows.find(x => key(x) === SVC.focus); if (f && !out.includes(f)) out.unshift(f); return out; }
+/* Xarid so'rovlari: Xarid bo'limi holatni yuritadi, xo'jalik va moliya prorektori — ko'radi */
+function svcProcurement(p) {
+  const kp = [["Ochiq so'rovlar", p.open, "yetkazilmagan"], ["Yangi", p.new, "ko'rib chiqilmagan", p.new > 0], ["Buyurtma berilgan", p.ordered, "yetkazib berish kutilmoqda"],
+              ["Taxminiy summa", p.sum ? mln(p.sum) + " so'm" : "—", "ochiq so'rovlar bo'yicha"]];
+  let h = `<div class="grid g4">${kp.map(k => `<div class="card kpi ${k[3] ? "bad" : ""}"><div class="l">${k[0]}</div><div class="v">${k[1]}</div><div class="s">${k[2]}</div></div>`).join("")}</div>`;
+  const nxt = {"yangi": "ko'rib chiqilmoqda", "ko'rib chiqilmoqda": "buyurtma berildi", "buyurtma berildi": "yetkazildi"};
+  h += `<div class="card" style="margin-top:14px"><h3>Xarid so'rovlari navbati</h3>` + (p.items.length ? tbl(["№", "Xona / jihoz", "Izoh", "Soni", "Kelgan", "Holat", "Amal"], svcPick(p.items, 60, x => `pr${x.id}`).map(x => [
+    `<b data-row="pr${x.id}">X-${String(x.id).padStart(4, "0")}</b>`, `${esc(x.room)}<br><span class="tiny muted">${esc(x.item)}</span>`, `<span class="tiny">${esc(x.text || "")}${x.note ? `<br><i>${esc(x.note)}</i>` : ""}</span>`,
+    x.qty, `<span class="tiny">${ago(x.created_at)}<br>${esc(x.created_by_name || "")}</span>`, st(x.status),
+    p.can_status && nxt[x.status] ? `<div class="row-actions"><button class="btn sm primary" data-pr="${x.id}" data-s="${esc(nxt[x.status])}">${esc(nxt[x.status][0].toUpperCase() + nxt[x.status].slice(1))}</button>${x.status !== "buyurtma berildi" ? `<button class="btn sm ghost" data-pr="${x.id}" data-s="rad etildi">Rad etish</button>` : ""}</div>` : ""]))
+    : `<p class="muted">Xarid so'rovi yo'q. Xo'jalik bo'limi nosozliklar navbatida «Xarid kerak» belgilasa — shu yerga tushadi.</p>`) + `</div>`;
+  $("#svcBody").innerHTML = h;
+  document.querySelectorAll("[data-pr]").forEach(b => b.onclick = () => { if (b.dataset.s === "rad etildi" && !arm(b, "Rad etilsinmi?")) return; busy(b, async () => {
+    await J(`/api/svc/procurement/${b.dataset.pr}/status`, {method: "POST", body: JSON.stringify({status: b.dataset.s})}); toast("Holat yangilandi"); renderService(); if (typeof badges === "function") badges();
+  }); });
 }
 function svcRequests(r) {
   const open = r.incidents.filter(i => i.status === "ochiq");
   const kp = [["Ochiq murojaatlar", r.open_total, r.scope], ["Faol hodisalar", open.length, open.length ? "umumiy nosozlik" : "yo'q", open.length > 0],
               ["Hodisaga birlashtirildi", r.grouped, "alohida javob shart emas"], ["Yakka ochiq murojaatlar", r.open_single, "mas'ulga yo'naltirilgan"]];
   let h = `<div class="grid g4">${kp.map(k => `<div class="card kpi ${k[3] ? "bad" : ""}"><div class="l">${k[0]}</div><div class="v">${k[1]}</div><div class="s">${esc(k[2])}</div></div>`).join("")}</div>`;
+  /* mening navbatim (menyu belgisi bilan bir xil): menga biriktirilgan + bo'limim navbatidagi hech kim olmaganlar */
+  const Q = r.queue || {mine: [], unit: []}, qIds = new Set([...Q.mine, ...Q.unit]);
+  const reqRow = x => [`<span data-row="rq${x.id}">${x.number}</span>`, esc(x.text),
+    `<span class="ctag" style="font-size:10.5px;padding:2px 8px;border-radius:20px;background:var(--accent-soft);color:var(--accent)">${esc(x.category)}</span><br><span class="tiny muted">→ ${esc(x.unit)}${x.assignee_name ? ` · <b>${x.mine ? "sizda" : esc(x.assignee_name)}</b>` : ""}</span>`,
+    esc(x.channel), ago(x.created_at), st(x.status),
+    ["hal qilindi", "javob berildi"].includes(x.status) ? "" : `<div class="row-actions">${x.status === "yangi" ? `<button class="btn sm" data-rq="${x.id}" data-s="jarayonda">Olindi</button>` : ""}<button class="btn sm primary" data-rq="${x.id}" data-s="hal qilindi">${ico("check", 16)} Hal qilindi</button>${r.staff?.length && x.unit === "Axborot texnologiyalari bo'limi" ? `<select class="sel-sm" data-asg="${x.id}" aria-label="Muhandisga biriktirish"><option value="">Biriktirish…</option>${r.staff.map(s => `<option value="${s.id}" ${s.id === x.assignee_user ? "selected" : ""}>${esc(s.name)}</option>`).join("")}</select>` : ""}</div>`];
+  if (qIds.size) {
+    const mine = r.requests.filter(x => qIds.has(x.id));
+    h += `<div class="card" style="margin-top:14px"><div class="head" style="margin-bottom:8px"><div><h3 style="margin:0">Mening navbatim <span class="muted">${mine.length}</span></h3><span class="tiny muted">${Q.mine.length} ta sizga biriktirilgan${Q.unit.length ? ` · ${Q.unit.length} ta ${esc(Q.unit_name || "bo'lim")} navbatida hech kim olmagan` : ""} · menyudagi raqam shu ro'yxat</span></div></div>` +
+      tbl(["№", "Matn", "Toifa → mas'ul", "Kanal", "Kelgan", "Holat", "Amal"], mine.map(reqRow)) + `</div>`;
+  }
   for (const i of open) {
     h += `<div class="card" style="margin-top:14px;border-color:rgba(194,65,12,.45)"><div class="head" style="margin-bottom:6px"><div><h3 style="margin:0"><span class="bad ic-t">${ico("alert", 18)}</span>${esc(i.title)}</h3>
       <span class="tiny muted">${i.n} ta murojaat birlashtirildi · boshlandi ${ago(i.opened_at)} · oxirgisi ${ago(i.last)} · ${esc(i.category)}</span></div>${st(i.status)}</div>
-      ${!r.can_broadcast ? `<p class="tiny muted">Bu umumiy hodisa — talabalarga xabarni talabalar bo'limi yuboradi. Sizning fakultetingizdan ${i.n} ta murojaat.</p>` : i.notified_at ? `<p class="tiny"><span class="good">${ico("checkc", 14)}</span> Talabalarga umumiy xabar yuborilgan (${ago(i.notified_at)}): <i>${esc(i.notice)}</i></p>` :
+      ${!r.can_broadcast ? `<p class="tiny muted">Bu umumiy hodisa — talabalarga xabarni Registrator ofisi yoki AT bo'limi boshlig'i yuboradi. ${ME.role_key === "it_staff" ? "Sizning navbatingizda" : "Sizning fakultetingizdan"} ${i.n} ta murojaat.</p>` : i.notified_at ? `<p class="tiny"><span class="good">${ico("checkc", 14)}</span> Talabalarga umumiy xabar yuborilgan (${ago(i.notified_at)}): <i>${esc(i.notice)}</i></p>` :
       `<p class="tiny muted">Tizim ${i.n} ta bir xil xabarni bitta hodisa deb aniqladi. Har biriga alohida javob yozish o'rniga — bitta umumiy xabar:</p>
       <textarea id="ntc${i.id}" style="min-height:90px" placeholder="Xabar loyihasi tayyorlanmoqda…"></textarea>
       <div class="row-actions" style="margin-top:8px"><button class="btn" data-ai="${i.id}">${ico("spark", 16)} AI bilan qayta yozish</button><button class="btn primary" data-send="${i.id}" disabled>${ico("send", 16)} ${i.n} kishiga yuborish</button></div>`}
@@ -1412,29 +1771,29 @@ function svcRequests(r) {
     <div class="row-actions"><a class="btn primary" href="/m" target="_blank">${ico("mail", 16)} Murojaat sahifasi (talaba ko'rinishi)</a></div>` +
     (past.length ? `<p class="tiny muted" style="margin-top:10px">Avvalgi hodisalar: ${past.map(i => `${esc(i.title)} — ${i.n} ta murojaat, ${ago(i.opened_at)}`).join("; ")}</p>` : ""));
   h += `</div>`;
-  const singles = r.requests.filter(x => !x.incident_id).slice(0, 30);
-  h += `<div class="card" style="margin-top:14px"><h3>Murojaatlar navbati</h3>` + tbl(["№", "Matn", "Toifa → mas'ul", "Kanal", "Kelgan", "Holat", "Amal"], singles.map(x => [x.number, esc(x.text),
-    `<span class="ctag" style="font-size:10.5px;padding:2px 8px;border-radius:20px;background:var(--accent-soft);color:var(--accent)">${esc(x.category)}</span><br><span class="tiny muted">→ ${esc(x.unit)}</span>`,
-    esc(x.channel), ago(x.created_at), st(x.status),
-    ["hal qilindi", "javob berildi"].includes(x.status) ? "" : `<div class="row-actions">${x.status === "yangi" ? `<button class="btn sm" data-rq="${x.id}" data-s="jarayonda">Olindi</button>` : ""}<button class="btn sm primary" data-rq="${x.id}" data-s="hal qilindi" title="Hal qilindi" aria-label="Hal qilindi">${ico("check", 16)}</button></div>`])) +
+  const singles = SVC.queue === "unit" ? [] : svcPick(r.requests.filter(x => !x.incident_id && !qIds.has(x.id)), 30, x => `rq${x.id}`);
+  if (singles.length) h += `<div class="card" style="margin-top:14px"><h3>${qIds.size ? "Boshqa murojaatlar" : "Murojaatlar navbati"}</h3>` + tbl(["№", "Matn", "Toifa → mas'ul", "Kanal", "Kelgan", "Holat", "Amal"], singles.map(reqRow)) +
     `<p class="tiny muted">Toifa va mas'ul — tizim taklifi; xodim o'zgartirishi mumkin.</p></div>`;
   $("#svcBody").innerHTML = h;
+  document.querySelectorAll("[data-asg]").forEach(s => s.onchange = async () => { if (!s.value) return; s.disabled = true; try { await J(`/api/svc/requests/${s.dataset.asg}/assign`, {method: "POST", body: JSON.stringify({user_id: +s.value})}); toast("Murojaat biriktirildi"); renderService(); } catch (e) { s.disabled = false; } });
   if (r.can_broadcast) for (const i of open.filter(i => !i.notified_at))
     J(`/api/svc/incidents/${i.id}/draft`, {method: "POST"}).then(j => { const t = $("#ntc" + i.id); if (t) { t.value = j.text; const s = document.querySelector(`[data-send="${i.id}"]`); if (s) s.disabled = false; } }).catch(() => {});
   document.querySelectorAll("[data-ai]").forEach(b => b.onclick = () => busy(b, async () => {
     const j = await J(`/api/svc/incidents/${b.dataset.ai}/draft?ai_=1`, {method: "POST"}); const t = $("#ntc" + b.dataset.ai); if (t) t.value = j.text;
   }, ico("spark", 16) + " AI yozmoqda… (15–25 s)"));
+  /* qaytarib bo'lmaydigan amallar — ikki bosqichli tasdiq (app.js arm) */
   document.querySelectorAll("[data-send]").forEach(b => b.onclick = () => {
     const text = ($("#ntc" + b.dataset.send).value || "").trim();
     if (text.length < 20) return toast("Xabar matni juda qisqa");
+    if (!arm(b, `Ha, ${b.textContent.trim()}`)) return;
     busy(b, async () => {
       const j = await J(`/api/svc/incidents/${b.dataset.send}/notify`, {method: "POST", body: JSON.stringify({text})});
-      toast(`Umumiy xabar ${j.answered} ta murojaatga javob sifatida yozildi`); renderService();
+      toast(`Umumiy xabar ${j.answered} ta murojaatga javob sifatida yozildi`); renderService(); if (typeof badges === "function") badges();
     }, "Yuborilmoqda…");
   });
-  document.querySelectorAll("[data-res]").forEach(b => b.onclick = () => busy(b, async () => { const j = await J(`/api/svc/incidents/${b.dataset.res}/resolve`, {method: "POST"}); toast(`Hodisa yopildi, ${j.closed} ta murojaat hal qilindi`); renderService(); }));
+  document.querySelectorAll("[data-res]").forEach(b => b.onclick = () => { if (!arm(b, "Ha, hodisani yopish va barcha murojaatlarni hal qilish")) return; busy(b, async () => { const j = await J(`/api/svc/incidents/${b.dataset.res}/resolve`, {method: "POST"}); toast(`Hodisa yopildi, ${j.closed} ta murojaat hal qilindi`); renderService(); if (typeof badges === "function") badges(); }); });
   document.querySelectorAll("[data-show]").forEach(b => b.onclick = () => $("#incList" + b.dataset.show).classList.toggle("hidden"));
-  document.querySelectorAll("[data-rq]").forEach(b => b.onclick = () => busy(b, async () => { await J(`/api/svc/requests/${b.dataset.rq}/status`, {method: "POST", body: JSON.stringify({status: b.dataset.s})}); toast("Holat yangilandi"); renderService(); }));
+  document.querySelectorAll("[data-rq]").forEach(b => b.onclick = () => busy(b, async () => { await J(`/api/svc/requests/${b.dataset.rq}/status`, {method: "POST", body: JSON.stringify({status: b.dataset.s})}); toast(b.dataset.s === "jarayonda" ? "Olindi — murojaat sizga biriktirildi" : "Holat yangilandi"); renderService(); if (typeof badges === "function") badges(); }));
 }
 function svcEvents(v) {
   const kp = [["O'rtacha qatnashuv", v.avg_pct != null ? v.avg_pct + "%" : "—", "ro'yxatdan o'tganlardan"], ["Doimiy qatnashchilar", v.regulars, "3+ tadbirga kelgan"],
@@ -1489,7 +1848,7 @@ async function renderSpaces(silent) {
     card(`<span class="warn-t ic-t">${ico("alert", 18)}</span>` + "Dars bor — xona bo'sh <span class='muted tiny'>— so'nggi 2 hafta · o'qituvchi ismi yashirilgan, avval o'quv bo'limi sababini aniqlaydi</span>", o.ghosts.length ? tbl(["Sana", "Para", "Xona", "Guruh · fan", ...(o.show_teacher ? ["O'qituvchi"] : []), "#Kishi"], o.ghosts.slice(0, 12).map(g => [
       `${g.date.slice(5)} <span class="tiny muted">${g.day.slice(0, 3)}</span>`, g.slot, `<span class="nowrap">${esc(g.room)}</span>`, `<span class="nowrap">${esc(g.group)}</span><br><span class="tiny muted">${esc(g.subject)}</span>`,
       ...(o.show_teacher ? [`${esc(g.teacher || "")}${g.repeat >= 3 ? ` <span class="tag high">${g.repeat} marta</span>` : ""}`] : []), g.avg])) +
-      `<p class="tiny muted">Bu ayblov emas — signal: dars boshqa xonaga ko'chgan, bekor qilingan yoki o'tmagan bo'lishi mumkin. O'quv bo'limi tekshiradi.</p>` : `<p class="muted">Holat yo'q</p>`) +
+      `<p class="tiny muted">Bu ayblov emas — signal: dars boshqa xonaga ko'chgan, bekor qilingan yoki o'tmagan bo'lishi mumkin. Akademik faoliyatni boshqarish bo'limi tekshiradi.</p>` : `<p class="muted">Holat yo'q</p>`) +
     card(`${ico("users", 18)}` + ` Sig'imdan oshgan xonalar <span class='muted tiny'>— ${o.over_pct || 110}% dan ortiq, 4 hafta</span>`, o.over.length ? tbl(["Xona", "#Sig'im", "#Necha marta", "#Eng ko'p"], o.over.map(x => [esc(x.room), x.capacity, `<span class="bad">${x.n}</span>`, x.max])) +
       `<p class="tiny muted">Odamlar soni sig'imdan ${(o.over_pct || 110) - 100}% dan ko'p oshsa qayd etiladi. Guruhni kattaroq xonaga ko'chirish — xavfsizlik va dars sifati uchun.</p>` : `<p class="muted">Yo'q</p>`) + `</div>`;
   if (typeof spcExtraHtml === "function") h += spcExtraHtml(o);   /* cams.js: optimallashtirish, dars yo'q — 20+ kishi, soatlar va binolar */

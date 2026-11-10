@@ -2,8 +2,9 @@
 
 Nima qiladi:
   * Kadrlar bo'limi xodim/o'qituvchining yo'qligini ro'yxatga oladi (tur, sanalar, izoh), asos hujjatini yuklaydi (fayl mazmuni
-    app/filecheck.py bilan tekshiriladi, data/staffabs_files/ ichida tasodifiy nom bilan, sha256) va mehnat ta'tili uchun Hujjatlar
-    markazidagi «leave_order» buyruq loyihasini yaratadi yoki mavjudini (reg. raqami bo'yicha) bog'laydi.
+    app/filecheck.py bilan tekshiriladi, data/staffabs_files/ ichida tasodifiy nom bilan, sha256) va mehnat ta'tili uchun «Buyruqlar»
+    bo'limida (app/orders.py — talabalar va xodimlar buyruqlarining yagona joyi) buyruq loyihasini yaratadi yoki mavjudini bog'laydi.
+    Eski yozuvlar (Hujjatlar markazidagi «leave_order», order_doc_id) faqat o'qish uchun ko'rsatiladi.
   * Ta'sir: dars jadvali (schedule: teacher_id, weekday 0=Du…5=Sh, slot 1..6) haftalik shablon. Yo'qlik oralig'idagi har bir sana va shu kundagi
     darslar — «o'rinbosar kerak» ro'yxati. O'rinbosar tavsiyasi: o'sha kafedra, o'sha para bo'sh, o'sha kuni yo'q emas, boshqa o'rinbosarlik yo'q;
     fan mos kelsa — birinchi. Kafedrada mos odam kam bo'lsa — boshqa kafedradan o'sha fanni o'qitadiganlar ("boshqa kafedra" belgisi bilan).
@@ -79,6 +80,12 @@ def init(con):
 def bind(con, ctx_fn):
     global _con, _ctx
     _con, _ctx = con, ctx_fn
+    ensure_order_col(con)
+
+def ensure_order_col(con):
+    """staff_absences.order_id — «Buyruqlar»dagi xodim buyrug'i (orders.id). Idempotent."""
+    if "order_id" not in {r[1] for r in con.execute("PRAGMA table_info(staff_absences)")}:
+        con.execute("ALTER TABLE staff_absences ADD COLUMN order_id INT"); con.commit()
 
 def _audit(c, action, ok=True, detail=""):
     rbac.audit(_con, c, action, RES, ok, detail)
@@ -223,7 +230,7 @@ def _view(con, c: Ctx, a: dict, dn: dict, brief=True) -> dict:
          "start": a["start"], "end": a["end"], "days": _days(s, e), "status": a["status"], "phase": phase,
          "lessons": len(L), "lessons_future": len(fut), "covered_future": sum(1 for x in fut if x["sub"]),
          "uncovered_future": sum(1 for x in fut if not x["sub"]),
-         "order": {"doc_id": a["order_doc_id"], "reg_no": a["order_reg_no"]} if a.get("order_reg_no") else None,
+         "order": _order_brief(con, a),
          "files": con.execute("SELECT COUNT(*) FROM staff_abs_files WHERE absence_id=?", (a["id"],)).fetchone()[0],
          "created_at": a["created_at"], "created_by": _brief(a["created_by_name"]),
          "note": a["note"] if priv else None, "cancel_note": a["cancel_note"] if priv else None,
@@ -232,11 +239,22 @@ def _view(con, c: Ctx, a: dict, dn: dict, brief=True) -> dict:
         v["lesson_list"] = L
         v["file_list"] = [{"id": f["id"], "name": f["name"], "size": f["size"], "ext": f["ext"], "at": f["created_at"], "by": _brief(f["uploader_name"]), "scan": f["scan"]}
                           for f in db.rows(con, "SELECT * FROM staff_abs_files WHERE absence_id=? ORDER BY id", (a["id"],))] if priv else []
-        if a.get("order_doc_id"):
+        if a.get("order_doc_id") and not a.get("order_id"):   # eski (Hujjatlar markazi) yozuvi — faqat o'qish
             d = db.one(con, "SELECT reg_no, status, file, created_by FROM documents WHERE id=?", (a["order_doc_id"],))
-            if d: v["order"] = {"doc_id": a["order_doc_id"], "reg_no": d["reg_no"], "status": d["status"],
+            if d: v["order"] = {"doc_id": a["order_doc_id"], "reg_no": d["reg_no"], "status": d["status"], "legacy": True,
                                 "file": d["file"] if (c.role.key == "rektor" or d["created_by"] == c.user["id"]) else None}
     return v
+
+ORDER_ST = {"loyiha": "loyiha", "yuborilgan": "imzo kutmoqda", "kelishilgan": "imzo kutmoqda", "imzolangan": "imzolangan", "bekor": "o'chirilgan", "bekor_qilingan": "bekor qilingan"}
+
+def _order_brief(con, a: dict) -> dict | None:
+    """Bog'langan buyruq: «Buyruqlar» (order_id) yoki eski Hujjatlar markazi yozuvi (order_doc_id)."""
+    if a.get("order_id"):
+        o = db.one(con, "SELECT id, reg_no, status, returned_note FROM orders WHERE id=?", (a["order_id"],))
+        if o: return {"order_id": o["id"], "reg_no": o["reg_no"] or f"Loyiha #{o['id']}", "status": ORDER_ST.get(o["status"], o["status"]),
+                      "raw_status": o["status"], "returned": bool(o["returned_note"] and o["status"] == "loyiha"), "link": {"view": "orders", "order": o["id"]}}
+    if a.get("order_reg_no"): return {"doc_id": a.get("order_doc_id"), "reg_no": a["order_reg_no"], "legacy": True}
+    return None
 
 PERIODS = ("current", "upcoming", "active", "past", "all")
 
@@ -394,7 +412,7 @@ class SubIn(BaseModel):
     all_dates: bool = False
 
 class OrderIn(BaseModel):
-    reg_no: str = ""        # bo'sh bo'lsa — Hujjatlar markazida yangi «leave_order» loyihasi yaratiladi
+    reg_no: str = ""        # bo'sh bo'lsa — «Buyruqlar»da yangi xodim buyrug'i (mehnat ta'tili) loyihasi; aks holda mavjud buyruq raqami (ShT-…) yoki «#id»
 
 def _dates_ok(start, end):
     try: s, e = _d(start), _d(end)
@@ -493,23 +511,50 @@ def unassign(con, c: Ctx, aid: int, sub_id: int) -> dict:
 def link_order(con, c: Ctx, aid: int, b: OrderIn, base_url: str) -> dict:
     _need_full(c, "buyruqni bog'lash", f"#{aid}")
     a = _get(con, aid)
-    if a["kind"] != "mehnat": raise HTTPException(400, "Buyruq loyihasi faqat mehnat ta'tili uchun (leave_order)")
+    if a["kind"] != "mehnat": raise HTTPException(400, "Buyruq loyihasi faqat mehnat ta'tili uchun")
     if a["status"] != "faol": raise HTTPException(409, "Yozuv bekor qilingan")
-    if (b.reg_no or "").strip():
-        d = db.one(con, "SELECT id, reg_no, params FROM documents WHERE reg_no=? AND kind='leave_order'", (b.reg_no.strip(),))
-        if not d: raise HTTPException(404, "Bu raqamli mehnat ta'tili buyrug'i topilmadi")
-        try: p = json.loads(d["params"] or "{}")
+    from . import orders as ORD
+    ensure_order_col(con); con.executescript(ORD.SCHEMA)
+    ref = (b.reg_no or "").strip()
+    if ref:
+        o = db.one(con, "SELECT * FROM orders WHERE kind='xodim_tatil' AND (reg_no=? OR ('#' || id)=?)", (ref, ref))
+        if not o: raise HTTPException(404, "Bu raqamli mehnat ta'tili buyrug'i topilmadi")
+        try: p = json.loads(o["params"] or "{}")
         except ValueError: p = {}
-        if str(p.get("staff")) != str(a["staff_id"]): raise HTTPException(400, "Buyruq boshqa xodimga tegishli")
+        if str(p.get("staff_id")) != str(a["staff_id"]): raise HTTPException(400, "Buyruq boshqa xodimga tegishli")
     else:
-        from . import documents as D
         try:
-            r = D.issue(con, c, "leave_order", {"staff": a["staff_id"], "start": a["start"], "days": _days(_d(a["start"]), _d(a["end"]))}, base_url)
+            o = ORD.draft_staff_leave(con, c, a["staff_id"], a["start"], _days(_d(a["start"]), _d(a["end"])), absence_id=aid)
         except ValueError as e:
             raise HTTPException(400, str(e))
-        d = db.one(con, "SELECT id, reg_no FROM documents WHERE reg_no=?", (r["regs"][0],))
-    con.execute("UPDATE staff_absences SET order_doc_id=?, order_reg_no=?, updated_at=? WHERE id=?", (d["id"], d["reg_no"], _now(), aid)); con.commit()
-    return {"doc_id": d["id"], "reg_no": d["reg_no"]}
+    con.execute("UPDATE staff_absences SET order_id=?, order_reg_no=?, updated_at=? WHERE id=?", (o["id"], o["reg_no"], _now(), aid)); con.commit()
+    return {"order_id": o["id"], "reg_no": o["reg_no"] or f"Loyiha #{o['id']}", "status": o["status"], "link": {"view": "orders", "order": o["id"]}}
+
+def mywork_items(c: Ctx, item) -> list[dict]:
+    """«Mening vazifalarim»: xodimlar yo'qligi bo'yicha mendan harakat kutayotganlar.
+    kafedra mudiri — o'z kafedrasidagi yo'qliklar: 14 kun ichida o'rinbosarsiz darslar; kadrlar — buyrug'i yo'q mehnat ta'tillari."""
+    m = mode(c); out = []
+    today = _today(); horizon = today + dt.timedelta(days=14)
+    if m == "kaf":
+        for a in db.rows(_con, "SELECT * FROM staff_absences WHERE department_id=? AND status='faol' AND end>=? AND start<=? ORDER BY start",
+                         (int(c.user["department_id"]), today.isoformat(), horizon.isoformat())):
+            L = [x for x in lessons(_con, a, max(today, _d(a["start"])), min(horizon, _d(a["end"]))) if not x["past"] and not x["sub"]]
+            if not L: continue
+            out.append(item("xodim", "orinbosar", f"sa{a['id']}", f"O'rinbosar tayinlang: {_short(a['full_name']) or a['full_name']} — {len(L)} ta dars",
+                            f"{KINDS.get(a['kind'], a['kind'])} · {_dmy(a['start'])}–{_dmy(a['end'])} · birinchi dars {_dmy(L[0]['date'])}",
+                            L[0]["date"], {"view": "staffabs", "absence": a["id"]}, "bolimga", "o'rinbosarsiz", None, len(L), icon="users"))
+    elif m == "full":
+        rows = db.rows(_con, "SELECT * FROM staff_absences WHERE kind='mehnat' AND status='faol' AND end>=? AND order_id IS NULL AND order_doc_id IS NULL ORDER BY start",
+                       (today.isoformat(),))
+        for a in rows:
+            out.append(item("xodim", "buyruq", f"sb{a['id']}", f"Mehnat ta'tili buyrug'i tuzilmagan: {a['full_name']}",
+                            f"{_dmy(a['start'])}–{_dmy(a['end'])} · «Buyruq loyihasi» → Buyruqlar (rektor imzosi)", a["start"],
+                            {"view": "staffabs", "absence": a["id"]}, "bolimga", "buyruqsiz", "mid", icon="file"))
+    return out
+
+def _dmy(v) -> str:
+    v = str(v or "")[:10]
+    return f"{v[8:10]}.{v[5:7]}.{v[:4]}" if len(v) == 10 else v
 
 def store_file(con, c: Ctx, aid: int, name: str, data: bytes) -> dict:
     _need_full(c, "asos hujjat yuklash", f"#{aid}")

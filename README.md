@@ -10,13 +10,19 @@ cd ~/Desktop/isft/jarvis-mvp
 ```
 So'ng brauzerda: **http://localhost:8000** · Demo parol: **Isft2026**
 
-Birinchi marta ishga tushganda virtual muhit va baza avtomatik yaratiladi. Ollama ishlab turishi va `qwen3:8b` modeli yuklangan bo'lishi kerak (`ollama pull qwen3:8b`).
+Birinchi marta ishga tushganda virtual muhit va baza avtomatik yaratiladi. To'liq AI uchun Ollama ishlab turishi va `qwen3:8b` modeli yuklangan bo'lishi kerak (`ollama pull qwen3:8b`).
+
+Til modeli bo'lmasa, tizim **«Tahlil rejimi»**da ishlaydi:
+- raqamlar, xulosalar, bayonnoma tahlili va shartnoma tekshiruvi qoidalar asosida bajariladi (`"source": "qoida"`);
+- tarjima va javob loyihasi vaqtincha o'chiriladi.
+
+Institut ichidagi boshqa serverdagi modelni ulash uchun `ISFT_CORE_LLM_URL` dan foydalaning. Bu faqat institut nazoratidagi server bo'lishi kerak: shaxsiy ma'lumot O'zbekistondan tashqariga chiqmasligi shart. Barcha sozlamalar va runbook: **`docs/ops.md`**.
 
 | Buyruq | Vazifasi |
 |---|---|
 | `./run.sh` | Serverni ishga tushirish |
 | `.venv/bin/python -m app.seed` | Demo ma'lumotlarni qaytadan yaratish (demo oldidan tavsiya etiladi) |
-| `TELEGRAM_BOT_TOKEN=... ./run.sh` | Veb + Telegram botni birga ishga tushirish |
+| `TELEGRAM_BOT_TOKEN=... ./run.sh` | Veb + Telegram bot (bot veb-jarayon ichida ishlaydi) |
 
 Tarmoqdagi boshqa qurilmadan (masalan, rektorning planshetidan) kirish: `http://<kompyuter-IP>:8000`.
 
@@ -66,10 +72,13 @@ Kundalik bo'limlar tepada, kam ishlatiladiganlari yig'iladigan guruhda (`static/
 ## Telegram botni ulash
 
 1. Telegram'da @BotFather → `/newbot` → token oling.
-2. `TELEGRAM_BOT_TOKEN=<token> ./run.sh`
+2. `TELEGRAM_BOT_TOKEN=<token> ./run.sh`. Bot veb-server jarayoni ichida ishga tushadi. Holatini `/api/status` → `bot` bo'limida ko'rasiz.
+   - Token bo'lmasa, ilova odatdagidek ishlaydi, bot esa o'chiq turadi.
+   - Bir token bilan faqat bitta poller ishlaydi (data papkasidagi fayl qulfi).
+   - Botni alohida jarayonda yuritish: `ISFT_CORE_BOT=0` qo'ying va `python -m app.bot` ni ishga tushiring.
 3. Botga yozing: `REKTOR Isft2026` (boshqa kodlar: OQUV, ILMIY, MOLIYA, YOSHLAR, REGOFIS, KAFEDRA, USTOZ, QABUL, XALQARO…).
 4. Buyruqlar: `/bugun` (kunlik brifing), `/brifing` (Word hisobot), `/topshiriqlar`, `/xatlar` (portal: muddati yaqin xatlar), `/chiqish`.
-   Portal muddat eslatmalari ish kunlari **09:00** da keladi (`ISFT_CORE_PORTAL_REMIND`). Eslatma ijrochiga, ijrochi bo'lmasa bo'lim rahbariga, yuboruvchiga va rezolyutsiya muallifiga yuboriladi.
+   Portal muddat eslatmalari ish kunlari **09:00** da (Toshkent vaqti, `ISFT_CORE_TZ`) keladi (`ISFT_CORE_PORTAL_REMIND`). Eslatma ijrochiga, ijrochi bo'lmasa bo'lim rahbariga, yuboruvchiga va rezolyutsiya muallifiga yuboriladi.
 5. Rektor yordamchisi agenti har kuni **08:00** da ulangan rahbarlarga (rektor, kengash, prorektorlar) kunlik brifing yuboradi. Vaqtni o'zgartirish: `ISFT_CORE_BRIEF_TIME=07:30`. Savollarga javob — veb-suhbatdagi agent bilan bir xil (raqamlar tekshiriladi).
 
 Buxgalteriya (`BUXGALTER`) va Kadrlar (`KADR`) botga ulana olmaydi — bu ataylab qilingan.
@@ -154,7 +163,13 @@ Backend va frontend mustaqil ko'rib chiqildi; tuzatildi: hujjat qidiruvida rol t
 Yagona sana manbai — `services.TODAY = date.today()`. Seed hikoyasi 2026-11-04 ga nisbatan yozilgan; `app/dateshift.py` seed oxirida barcha sanalarni (majlis matnlaridagi "13.10.2026", "15-noyabrgacha" ham) bugungi kunga suradi. Har kuni ertalab `python -m app.seed` — hikoya (3 ta muddati o'tgan topshiriq, 23/47 kunda tugaydigan shartnomalar) o'sha kunga moslashadi.
 
 ## Bulutga joylash (Railway) — faqat demo uchun
-`railway.json` va `start.sh` tayyor. Baza uchun `/app/data` ga Volume ulang; muhit o'zgaruvchilari: `TZ=Asia/Tashkent`,
-`ISFT_CORE_PUBLIC_URL=https://<domen>` (QR havolalari uchun). Birinchi ishga tushishda demo ma'lumotlar yaratiladi (2–3 daqiqa).
-Bulutda lokal AI (Ollama) yo'q — chat qoidaga asoslangan zaxira rejimda. Haqiqiy talaba ma'lumotlari bilan bulutga qo'yilmaydi:
-loyiha tamoyili — ma'lumot institut serverida.
+`railway.json` va `start.sh` tayyor. To'liq qo'llanma: **`docs/ops.md`** (o'zgaruvchilar, volume, Telegram tokeni, zaxira nusxa, seed qoidalari).
+
+- **Volume:** baza uchun `/app/data` ga ulang.
+- **O'zgaruvchilar:**
+  - `ISFT_CORE_PUBLIC_URL=https://<domen>` — QR havolalari uchun;
+  - `TELEGRAM_BOT_TOKEN` — bot kerak bo'lsa;
+  - `TZ` — `start.sh` o'zi `Asia/Tashkent` qo'yadi.
+- **Healthcheck:** `/healthz` (faqat baza), kutish vaqti 900 soniya.
+- **Birinchi ishga tushish:** demo ma'lumotlar yaratiladi (2–5 daqiqa). `SEED_VERSION` o'zgarsa, baza qayta yaratiladi. Bu faqat demo uchun; haqiqiy ma'lumotda `ISFT_CORE_RESEED=0` qo'ying.
+- **AI:** bulutda Ollama yo'q, shuning uchun tizim «Tahlil rejimi»da ishlaydi. Haqiqiy talaba ma'lumotlari bilan bulutga qo'yilmaydi: loyiha tamoyiliga ko'ra ma'lumot institut serverida saqlanadi.

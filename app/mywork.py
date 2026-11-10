@@ -8,8 +8,14 @@ Manbalar (yangi jadval yo'q — hammasi mavjud modullardan, ularning RBAC qoidal
              men yuborgan va muddatida javob kelmagan xatlar, men qo'ygan va ijrosi tugamagan rezolyutsiyalar.
   * markaz — Talabalar markazi navbati (student_ops: faqat o'z lavozimimga tushgan ochiq topshiriqlar, ko'lam _task_scope_sql bo'yicha);
              katta navbat tur bo'yicha bitta qatorga jamlanadi.
-  * hujjat — imzo kutayotgan buyruq loyihalari (faqat rektor imzolaydi — documents.py bilan bir xil).
-  * agent  — AI agent takliflari, tasdiqlash huquqi bo'lsa (agent_hub.can_approve); 3 tadan ko'p bo'lsa jamlanadi.
+  * buyruq — «Buyruqlar» (app/orders.py — talabalar va xodimlar buyruqlarining yagona joyi): rektor — imzo kutayotganlar, o'quv prorektori —
+             kelishuv kutayotganlar, Registrator ofisi / Kadrlar — qaytarilgan loyihalar, Devonxona — jurnalga olinmagan imzolanganlar (orders.pending).
+  * murojaat — «Murojaatlar va nosozliklar»: menga biriktirilgan murojaatlar va bo'limim navbatida hech kim olmaganlari (service.my_queue);
+             xo'jalik — ochiq nosozliklar navbati; xarid — yangi xarid so'rovlari.
+  * xodim  — xodimlar ta'tili: kafedra mudiri — o'rinbosarsiz darslar, kadrlar — buyrug'i yo'q mehnat ta'tillari (staff_absence.mywork_items).
+  * agent  — AI agent takliflari, tasdiqlash huquqi bo'lsa (agent_hub.can_approve) — har biri alohida qator (agentlar sahifasi bilan teng).
+  * sillabus — O'quv dasturlari (app/syllabus.py).
+Har bir element havolasi aniq obyektni ochadi (buyruq, murojaat, yo'qlik, taklif, topshiriq). Menyudagi raqam = shu sahifadagi «Jami ish».
 Havolalar (`link`) bildirishnomalar markazidagi bilan bir xil ko'rinishda — static/extras.js openLink() ochadi.
 """
 import datetime as dt, json
@@ -25,10 +31,11 @@ def bind(con, ctx_fn):
     global _con, _ctx
     _con, _ctx = con, ctx_fn
 
-SOURCES = ("majlis", "portal", "markaz", "hujjat", "agent", "sillabus")
+SOURCES = ("majlis", "portal", "markaz", "buyruq", "murojaat", "xodim", "agent", "sillabus")
 OPS_ROLES = ("call_center", "tyutor", "talabalar", "sirtqi")     # Talabalar markazida o'z navbati bor lavozimlar (student_ops._can_act; sirtqi — sirtqi talabalar xatlari)
 OPS_LIST_MAX = 5                                      # bundan ko'p bo'lsa — tur bo'yicha jamlanadi
 DOC_LIST_MAX = 12
+QUEUE_LIST_MAX = 5                                    # bo'lim navbati shundan ko'p bo'lsa — bitta jamlangan qator
 
 def _today() -> dt.date:
     from . import services as S
@@ -182,8 +189,9 @@ def _markaz(c: Ctx) -> list[dict]:
     now, td = dt.datetime.now().replace(microsecond=0).isoformat(timespec="seconds"), _today().isoformat()
     w = f"{OPSM._task_scope_sql(c)} AND t.assignee_role=? AND t.status='yangi'"
     act = f"COALESCE(t.planned_on,'') <= '{td}'"          # keyingi kunlarga rejalashtirilgan qo'ng'iroqlar bugungi ish emas
+    # ko'lam sharti talaba jadvaliga (s) ham murojaat qilishi mumkin (masalan, tyutor — o'z guruhlari) — har doim bog'lanadi
     rows = db.rows(_con, f"""SELECT t.kind, COUNT(*) n, SUM(t.due_at < ?) late, MIN(t.due_at) first, SUM(NOT ({act})) later
-                             FROM ops_tasks t WHERE {w} GROUP BY t.kind ORDER BY late DESC, n DESC""", (now, k))
+                             FROM ops_tasks t JOIN students s ON s.id=t.student_id WHERE {w} GROUP BY t.kind ORDER BY late DESC, n DESC""", (now, k))
     total = sum(r["n"] - (r["later"] or 0) for r in rows)
     out = []
     if 0 < total <= OPS_LIST_MAX:
@@ -200,7 +208,7 @@ def _markaz(c: Ctx) -> list[dict]:
         if n <= 0: continue
         late = r["late"] or 0
         kt = OPSM.KINDS.get(r["kind"], r["kind"]).lower()
-        first = db.one(_con, f"SELECT MIN(t.due_at) d FROM ops_tasks t WHERE {w} AND t.kind=? AND {act}", (k, r["kind"]))["d"]
+        first = db.one(_con, f"SELECT MIN(t.due_at) d FROM ops_tasks t JOIN students s ON s.id=t.student_id WHERE {w} AND t.kind=? AND {act}", (k, r["kind"]))["d"]
         out.append(_item("markaz", "navbat", f"oq{r['kind']}", f"Talabalar markazi: {n:,} ta {kt}".replace(",", " ") + (f" ({late:,} kechikkan)".replace(",", " ") if late else ""),
                          " · ".join(x for x in [OPSM.ROLE_T.get(k, "Mening navbatim") + " navbati",
                                                 f"yana {r['later']:,} tasi keyingi kunlarga rejalashtirilgan".replace(",", " ") if r["later"] else ""] if x),
@@ -209,21 +217,67 @@ def _markaz(c: Ctx) -> list[dict]:
     return out
 
 # ---------------------------------------------------------------------------------------------
-# 4. Imzo kutayotgan hujjatlar (faqat rektor — documents.py: "Buyruqlarni faqat rektor imzolaydi")
+# 4. Buyruqlar: imzo, kelishuv, qaytarilgan loyiha, devonxona jurnali (app/orders.py — yagona joy)
 # ---------------------------------------------------------------------------------------------
-def _hujjat(c: Ctx) -> list[dict]:
-    if c.role.key != "rektor": return []
-    rows = db.rows(_con, "SELECT id, reg_no, title, holder, creator_role, created_at FROM documents WHERE status='loyiha' ORDER BY id")
+def _buyruq(c: Ctx) -> list[dict]:
+    from . import orders as ORD
+    if c.role.key not in ORD.REG_READ: return []
+    pd = ORD.pending(c)
     out = []
-    for r in rows[:DOC_LIST_MAX]:
-        role = rbac.ROLES.get(r["creator_role"])
-        out.append(_item("hujjat", "imzo", f"dc{r['id']}", f"Imzo kutilmoqda: {r['title']}",
-                         " · ".join(x for x in [r["reg_no"], r["holder"], f"loyihalagan: {role.title}" if role else "", _dmy(r["created_at"])] if x),
-                         None, {"view": "documents", "reg": r["reg_no"]}, "menga", "loyiha", "mid", icon="pen"))
-    if len(rows) > DOC_LIST_MAX:
-        out.append(_item("hujjat", "imzo", "dcall", f"Yana {len(rows) - DOC_LIST_MAX} ta hujjat imzo kutmoqda", "Hujjatlar markazi → reyestr", None,
-                         {"view": "documents"}, "menga", "loyiha", "mid", len(rows) - DOC_LIST_MAX, icon="file"))
+    def who_of(p): return p.get("staff_name") if isinstance(p, dict) else None
+    for kind, rows, title, status, prio in (("imzo", pd["sign"], "Imzo kutilmoqda", "imzoda", "high"), ("kelishuv", pd["forward"], "Kelishuv kutilmoqda", "kelishuvda", "mid"),
+                                            ("qaytarilgan", pd["returned"], "Qaytarilgan loyiha", "qaytarilgan", "mid"),
+                                            ("jurnal", pd["register"], "Jurnalga ro'yxatga oling", "imzolangan", "low")):
+        for r in rows:
+            sub = " · ".join(x for x in [r.get("reg_no") or f"Loyiha #{r['id']}", r["kind_name"], who_of(r["params"]) or (f"{r['count']} ta talaba" if r.get("count") else ""),
+                                         f"«{r['returned_note']}»" if kind == "qaytarilgan" and r.get("returned_note") else "",
+                                         f"yuborilgan {_dmy(r['submitted_at'])}" if kind in ("imzo", "kelishuv") and r.get("submitted_at") else "",
+                                         f"imzolangan {_dmy(r['signed_at'])}" if kind == "jurnal" and r.get("signed_at") else ""] if x)
+            out.append(_item("buyruq", kind, f"or{kind[0]}{r['id']}", f"{title}: {r['title']}", sub, None, {"view": "orders", "order": r["id"]},
+                             "menga" if kind in ("imzo", "kelishuv", "jurnal") else "bolimga", status, prio, icon="pen" if kind == "imzo" else "file"))
     return out
+
+# ---------------------------------------------------------------------------------------------
+# 4b. Murojaatlar va nosozliklar: menga biriktirilgan + bo'limim navbati; xo'jalik nosozliklari; xarid so'rovlari
+# ---------------------------------------------------------------------------------------------
+def _murojaat(c: Ctx) -> list[dict]:
+    from . import service as SV
+    out = []
+    q = SV.my_queue(_con, c)
+    for r in q["mine"]:
+        out.append(_item("murojaat", "murojaat", f"rq{r['id']}", f"Murojaat {r['number']}: {(r['text'] or '')[:90]}",
+                         " · ".join(x for x in [r["category"], r["unit"], r["status"], r["channel"]] if x), None,
+                         {"view": "service", "tab": "requests", "request": r["id"]}, "menga", r["status"], "mid", icon="mail"))
+    un = q["unit"]
+    if 0 < len(un) <= QUEUE_LIST_MAX:
+        for r in un:
+            out.append(_item("murojaat", "murojaat", f"rq{r['id']}", f"Murojaat {r['number']}: {(r['text'] or '')[:90]}",
+                             " · ".join(x for x in [r["category"], f"{q['unit_name']} navbati — hech kim olmagan", r["channel"]] if x), None,
+                             {"view": "service", "tab": "requests", "request": r["id"]}, "bolimga", "yangi", None, icon="inbox"))
+    elif un:
+        out.append(_item("murojaat", "navbat", "rqall", f"Murojaatlar navbati: {len(un)} ta yangi murojaat",
+                         f"{q['unit_name']} · hech kim olmagan · eng eskisi {_dmy(un[0]['created_at'])}", None,
+                         {"view": "service", "tab": "requests", "queue": "unit"}, "bolimga", f"{len(un)} ta yangi", "mid", len(un), icon="inbox"))
+    if c.role.key == "xojalik" and c.can(rbac.FACILITIES):   # nosozliklar: hali hech kim olmagan (yangi)
+        t = db.rows(_con, """SELECT t.id, t.item, t.created_at, r.name room FROM tickets t JOIN rooms r ON r.id=t.room_id
+                             WHERE t.status='yangi' ORDER BY t.created_at""")
+        if 0 < len(t) <= QUEUE_LIST_MAX:
+            for x in t:
+                out.append(_item("murojaat", "nosozlik", f"tk{x['id']}", f"Nosozlik: {x['room']} — {x['item']}", f"QR orqali · kelgan {_dmy(x['created_at'])}", None,
+                                 {"view": "service", "tab": "facilities", "ticket": x["id"]}, "bolimga", "yangi", None, icon="alert"))
+        elif t:
+            out.append(_item("murojaat", "navbat", "tkall", f"Nosozliklar navbati: {len(t)} ta yangi", f"eng eskisi {_dmy(t[0]['created_at'])} · «Olindi» bosilmagan",
+                             None, {"view": "service", "tab": "facilities"}, "bolimga", f"{len(t)} ta yangi", "mid", len(t), icon="alert"))
+    if c.role.key == "xarid" and c.can(rbac.PROCUREMENT):
+        for p in db.rows(_con, "SELECT * FROM procurements WHERE status IN ('yangi','ko''rib chiqilmoqda') ORDER BY created_at"):
+            out.append(_item("murojaat", "xarid", f"pr{p['id']}", f"Xarid so'rovi X-{p['id']:04d}: {p['item']} ({p['room']})",
+                             " · ".join(x for x in [f"{p['qty']} dona", p["status"], (p["text"] or "")[:60]] if x), None,
+                             {"view": "service", "tab": "procurement", "procurement": p["id"]}, "menga", p["status"], "mid" if p["status"] == "yangi" else None, icon="file"))
+    return out
+
+def _xodim(c: Ctx) -> list[dict]:
+    from . import staff_absence as SA
+    return SA.mywork_items(c, _item)
 
 # ---------------------------------------------------------------------------------------------
 # 5. AI agentlar takliflari (extras.notifications bilan bir xil shart)
@@ -234,13 +288,9 @@ def _agent(c: Ctx) -> list[dict]:
     props = [r for r in db.rows(_con, "SELECT id, agent, title, created_at FROM agent_actions WHERE status='taklif' ORDER BY id")
              if AH.can_approve(c, r["agent"])]
     name = lambda a: AH.AG.get(a, {}).get("name", a)
-    if len(props) <= 3:
-        return [_item("agent", "taklif", f"ag{r['id']}", f"AI agent taklifi: {r['title']}", f"{name(r['agent'])} · tasdiqingizni kutmoqda · {_dmy(r['created_at'])}",
-                      None, {"view": "agents"}, "menga", "taklif", "mid", icon="spark") for r in props]
-    names = sorted({name(r["agent"]) for r in props})
-    return [_item("agent", "taklif", "agall", f"AI agentlar: {len(props)} ta taklif tasdiqingizni kutmoqda",
-                  " · ".join(names[:3]) + (f" va yana {len(names) - 3}" if len(names) > 3 else ""), None, {"view": "agents"},
-                  "menga", "taklif", "mid", len(props), icon="spark")]
+    # har bir taklif alohida (agentlar sahifasidagi «tasdiqingizni kutmoqda» soni bilan teng; havola aynan shu taklifni ochadi)
+    return [_item("agent", "taklif", f"ag{r['id']}", f"AI agent taklifi: {r['title']}", f"{name(r['agent'])} · tasdiqingizni kutmoqda · {_dmy(r['created_at'])}",
+                  None, {"view": "agents", "action": r["id"]}, "menga", "taklif", "mid", icon="spark") for r in props]
 
 # ---------------------------------------------------------------------------------------------
 # Yig'ish
@@ -249,7 +299,8 @@ def _sillabus(c: Ctx) -> list[dict]:   # O'quv dasturlari (app/syllabus.py): bir
     from . import syllabus as SY
     return SY.mywork_items(c, _item)
 
-COLLECT = [("majlis", _majlis), ("portal", _portal), ("markaz", _markaz), ("hujjat", _hujjat), ("agent", _agent), ("sillabus", _sillabus)]
+COLLECT = [("majlis", _majlis), ("portal", _portal), ("markaz", _markaz), ("buyruq", _buyruq), ("murojaat", _murojaat), ("xodim", _xodim),
+           ("agent", _agent), ("sillabus", _sillabus)]
 _PRIO_ORDER = {"high": 0, "mid": 1, "low": 2}
 _BUCKET_ORDER = {"overdue": 0, "today": 1, "week": 2, "later": 3, "none": 4}
 
@@ -280,6 +331,7 @@ def collect(c: Ctx) -> dict:
     counts = {"total": len(items), "overdue": sum(it["bucket"] == "overdue" for it in items), "today": sum(it["bucket"] == "today" for it in items),
               "week": sum(it["bucket"] == "week" for it in items), "later": sum(it["bucket"] == "later" for it in items),
               "none": sum(it["bucket"] == "none" for it in items), "units": sum(it.get("count") or 1 for it in items),
+              "badge": len(items),   # menyudagi raqam = «Jami ish» (har bir qator — mendan harakat kutayotgan bitta ish yoki jamlangan navbat)
               "by_source": {k: v for k, v in by.items() if v}}
     return {"items": items, "counts": counts, "today": today.isoformat(), "now": now.replace(microsecond=0).isoformat(timespec="seconds"),
             "partial": errors}

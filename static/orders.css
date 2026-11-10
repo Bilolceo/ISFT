@@ -199,3 +199,4 @@
   .or-card{padding:14px}
   .or-filters select{flex:1 1 100%}
 }
+.or-pend + .or-pend{margin-top:-6px}

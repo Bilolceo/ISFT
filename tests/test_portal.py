@@ -80,8 +80,10 @@ dmy = lambda d: dt.date.fromisoformat(d).strftime("%d.%m.%Y")
 dm = lambda d: dt.date.fromisoformat(d).strftime("%d.%m")
 
 rektor, pro, reg, cc, ithead, iteng, akad, sirtqi, buxg, kaf, kadr, mbaza = (S(i) for i in (2, 3, 17, 23, 21, 22, 18, 27, 11, 31, 12, 28))
+promol, kotib = S(5), S(20)
 AUDIT0 = q("SELECT COALESCE(MAX(id),0) FROM audit_log")[0][0]
 MY_THREADS, MY_DRAFTS, MY_TEMPLATES = [], [], []   # (client, id)
+DIRS_TO_DROP = []                                  # test yaratgan topshiriqlar (oxirida bazadan o'chiriladi)
 ORG_RESTORE = {}     # bo'lim kaliti → asl {"head_user", "curator"} (test oxirida qaytariladi)
 
 def new_thread(c, tag, to, due=None, body=None, **kw):
@@ -106,6 +108,12 @@ def cleanup():
         print(f"  tuzilma «{key}» asl holiga qaytarildi: {r.status_code} {orig}")
     for c, tid in MY_TEMPLATES:
         c.delete(f"/api/portal/templates/{tid}")
+    con = sqlite3.connect(DB, timeout=30)       # test fayllari test xatlariga ilova qilingan bo'lsa — ilova yozuvi olib tashlanadi (fayl o'chirilishi uchun)
+    con.execute("DELETE FROM portal_attach WHERE file_id IN (SELECT id FROM portal_files WHERE name LIKE ?)", (f"%{U}%",))
+    for did in DIRS_TO_DROP:
+        for tb in ("task_log", "task_msgs"): con.execute(f"DELETE FROM {tb} WHERE task_id=?", (did,))
+        con.execute("DELETE FROM tasks WHERE id=? OR parent_id=?", (did, did))
+    con.commit(); con.close()
     for fid, uid in q("SELECT id, uploader_id FROM portal_files WHERE name LIKE ? ORDER BY version DESC", (f"%{U}%",)):
         c = {17: reg, 23: cc, 18: akad}.get(uid)
         if c: print(f"  test fayli #{fid} o'chirildi: {c.delete(f'/api/portal/files/{fid}').status_code}")
@@ -276,12 +284,14 @@ def main():
     ok(post(akad, "/api/portal/threads", {"subject": "x", "body": "x", "to": ["akademik"]}).status_code == 400, "faqat o'z bo'limiga xat: 400")
     ok(post(akad, "/api/portal/threads", {"subject": " ", "body": "x", "to": ["talabalar"]}).status_code == 400, "mavzusiz xat: 400")
     ok(post(akad, "/api/portal/threads", {"subject": "x", "body": "x", "to": ["nomalum"]}).status_code == 400, "noma'lum bo'lim: 400")
-    for c, n in ((reg, 17), (cc, 23)):
-        it = item(c, T1, "inbox", "unread")
-        ok(it is not None and it["unread"] and it["my_status"] == "yangi" and it["role"] == "to", f"{n}: T1 kiruvchida o'qilmagan, holat yangi")
+    it = item(reg, T1, "inbox", "unread")
+    ok(it is not None and it["unread"] and it["my_status"] == "yangi" and it["role"] == "to", "17: T1 kiruvchida o'qilmagan, holat yangi")
+    # bo'lim xodimi (rahbar emas) — bo'limning butun pochtasini emas, faqat shaxsan unga tegishli xatlarni ko'radi
+    c23 = lst(cc)["counts"]
+    ok(item(cc, T1) is None and item(cc, T1, "inbox", "unread") is None, "23 (Call-markaz, bo'lim xodimi): biriktirilmagan bo'lim xati kiruvchida yo'q")
+    ok(cc.get(f"/api/portal/threads/{T1}").status_code == 403, "23: biriktirilmagan bo'lim xatini ocha olmaydi (403)")
+    ok(c23["member_only"] is True and lst(reg)["counts"]["member_only"] is False, "counts.member_only: 23 — xodim, 17 — rahbar")
     detail(reg, T1)
-    it23 = item(cc, T1, "inbox", "unread")
-    ok(it23 is not None and it23["unread"], "17 ochgandan keyin 23 uchun T1 hali o'qilmagan")
     ok(not has(reg, T1, "inbox", "unread") and item(reg, T1)["unread"] is False, "17 uchun endi o'qilgan")
     d = detail(reg, T1); r = rcp(d, "talabalar")
     ok(r["status"] == "o'qilgan" and (r["read_by"] or "").startswith("Baratov"), f"qabul qiluvchi holati o'qilgan, read_by = {r['read_by']}")
@@ -294,10 +304,13 @@ def main():
     print("— 3. Ijrochi tayinlash —")
     ok(post(cc, f"/api/portal/threads/{T1}/assign", {"user_id": 17}).status_code == 403, "23 boshqa xodimga (17) tayinlay olmaydi (403)")
     ok(post(akad, f"/api/portal/threads/{T1}/assign", {"user_id": 18}).status_code == 403, "yuboruvchi bo'lim ijrochi tayinlay olmaydi (403)")
+    ok(post(cc, f"/api/portal/threads/{T1}/reply", {"body": "x"}).status_code == 403, "23 biriktirilmagan xatga javob yoza olmaydi (403)")
+    r = post(reg, f"/api/portal/threads/{T1}/assign", {"user_id": 23})
+    ok(r.status_code == 200 and r.json()["assignee"] == "Rahimova N.", "17 (rahbar) xatni 23 ga biriktirdi")
+    it23 = item(cc, T1, "inbox", "unread")
+    ok(it23 is not None and it23["unread"], "biriktirilgandan keyin 23 kiruvchisida T1 (17 ochgan bo'lsa ham 23 uchun o'qilmagan)")
     p23 = detail(cc, T1)["perms"]
-    ok(p23["can_take"] and not p23["can_assign"], "23: can_take bor, can_assign yo'q")
-    r = post(cc, f"/api/portal/threads/{T1}/assign", {"user_id": 23})
-    ok(r.status_code == 200 and r.json()["assignee"] == "Rahimova N.", "23 xatni o'z ijrosiga oldi")
+    ok(not p23["can_take"] and not p23["can_assign"] and p23["can_reply"], "23: can_reply bor; can_take (allaqachon o'zida), can_assign yo'q")
     m = item(cc, T1, "inbox", "mine")
     ok(m is not None and m["assigned_to_me"] and m["assignee_name"] == "Rahimova N.", "23: flt=mine da T1, assigned_to_me")
     ok(not has(reg, T1, "inbox", "mine"), "17: flt=mine da T1 yo'q")
@@ -504,6 +517,8 @@ def main():
     ok(reg.delete(f"/api/portal/drafts/{DID}").status_code == 404, "boshqa xodim qoralamani o'chira olmaydi (404)")
     T3, _ = new_thread(akad, "T3 qoralamadan", ["talabalar"], draft_id=DID)
     detail(reg, T3)
+    ok(post(cc, f"/api/portal/threads/{T3}/reply", {"body": "x"}).status_code == 403, "23 (xodim) biriktirilmagan T3 ga javob yoza olmaydi (403)")
+    ok(post(reg, f"/api/portal/threads/{T3}/assign", {"user_id": 23}).status_code == 200, "17 T3 ni 23 ga biriktirdi")
     ok(post(cc, f"/api/portal/threads/{T3}/reply", {"body": f"Hamkasb javobi ({STAMP})"}).status_code == 200, "23 T3 ga javob yozdi")
     # dizayn: "o'qilmagan" = boshqa BO'LIMdan kelgan yangi xabar (hamkasb javobi — "bizniki", kiruvchi emas); o'qilganlik esa xodim bo'yicha
     ok(item(reg, T3)["unread"] is False, "hamkasb (23) javobi 17 uchun kiruvchi xat hisoblanmaydi (o'qilmagan emas)")
@@ -580,7 +595,7 @@ def main():
     ok(r.status_code == 200 and r.json()["name"] == f"x_{U}.txt", f"'../../x_{U}.txt' → nom tozalandi: {r.json().get('name')}")
     FID2 = r.json()["id"]
     st = q("SELECT name, stored FROM portal_files WHERE id=?", (FID2,))[0]
-    files_dir = ROOT / "data" / "portal_files"
+    files_dir = Path(os.environ.get("ISFT_CORE_FILES_DIR") or Path(os.environ.get("ISFT_CORE_DATA_DIR") or ROOT / "data") / "portal_files")
     ok(st[0] == f"x_{U}.txt" and "/" not in st[1] and not (ROOT.parent / f"x_{U}.txt").exists() and not (ROOT / f"x_{U}.txt").exists(),
        "bazada xavfsiz nom, fayl papkadan tashqariga yozilmadi")
     if files_dir.is_dir(): ok((files_dir / st[1]).is_file(), "fayl portal_files ichida")
@@ -589,6 +604,26 @@ def main():
     rl = rektor.get("/api/portal/files").json()
     ok(any(x["id"] == FID for x in rl["items"]), "rektor (rahbariyat) faylni ko'radi")
     ok(not any(x["id"] == FID for x in buxg.get("/api/portal/files").json()["items"]), "11 ro'yxatida yo'q")
+    # prorektorlar — faqat kuratorlikdagi bo'limlar fayllari (+ o'zi ishtirok etgan yozishmalar ilovalari); rektor — hammasi
+    ok(any(x["id"] == FID for x in pro.get("/api/portal/files").json()["items"]) and pro.get(f"/api/portal/files/{FID}/download").status_code == 200,
+       "o'quv prorektori: kuratorlikdagi Registrator ofisi faylini ko'radi")
+    ok(not any(x["id"] == FID for x in promol.get("/api/portal/files").json()["items"]) and promol.get(f"/api/portal/files/{FID}/download").status_code == 403,
+       "moliya prorektori: kuratorligidan tashqari bo'lim faylini ko'rmaydi (403)")
+    # faqat egasi bo'lim qayta ulashadi: Registrator fayli → Akademik bo'limga xat orqali ulashildi; Akademik uni Buxgalteriyaga ulasha olmaydi
+    TS, _ = new_thread(reg, "TS ulashma", ["akademik"], file_ids=[FID])
+    ok(akad.get(f"/api/portal/files/{FID}/download").status_code == 200, "xat ilovasi qabul qiluvchiga ulashildi (18 yuklab oladi)")
+    r = post(akad, "/api/portal/threads", {"subject": f"Qayta ulashish {STAMP}", "body": "x", "to": ["buxgalteriya"], "file_ids": [FID]})
+    ok(r.status_code == 403 and "egasi" in r.json().get("detail", ""), "begona faylni boshqa bo'limga qayta ulashish rad etildi (403)")
+    ok(buxg.get(f"/api/portal/files/{FID}/download").status_code == 403, "buxgalteriyaga ulashma yaratilmadi")
+    ok(post(akad, f"/api/portal/threads/{TS}/reply", {"body": "Fayl qayta ilova qilindi", "file_ids": [FID]}).status_code == 200,
+       "ishtirokchilarda allaqachon bor faylni javobga ilova qilish mumkin")
+    # xat qaytarib olinsa — shu xat yaratgan ulashma ham o'chadi
+    TR_, _ = new_thread(reg, "TR qaytarib olish ulashma", ["sirtqi"], file_ids=[FID])
+    ok(sirtqi.get(f"/api/portal/files/{FID}/download").status_code == 200, "Sirtqi bo'limga ilova orqali ulashildi")
+    ok(post(reg, f"/api/portal/threads/{TR_}/recall", {"note": "test"}).status_code == 200, "17 xatni qaytarib oldi")
+    ok(sirtqi.get(f"/api/portal/files/{FID}/download").status_code == 403 and not q("SELECT 1 FROM portal_shares WHERE file_id=? AND unit='sirtqi'", (FID,)),
+       "qaytarib olingan xat yaratgan ulashma o'chirildi (27 endi yuklab ololmaydi)")
+    ok(akad.get(f"/api/portal/files/{FID}/download").status_code == 200, "boshqa xat orqali yaratilgan ulashma saqlanib qoldi")
     au = q("SELECT COUNT(*) FROM audit_log WHERE id>? AND resource='portal' AND action='portal: fayl rad etildi' AND allowed=0", (AUDIT0,))[0][0]
     ok(au >= 4, f"rad etilgan yuklashlar auditda ({au})")
 
@@ -657,14 +692,46 @@ def main():
     r = akad.put("/api/portal/drafts", json={"subject": d["subject"], "body": d["messages"][0]["body"], "to": [x["unit"] for x in d["recalled"]["recipients"]], "due": D3})
     ok(r.status_code == 200, "qaytarilgan xatdan qoralama yaratildi"); MY_DRAFTS.append((akad, r.json()["id"]))
     T7, REF7 = new_thread(akad, "T7 o'qilgan", ["talabalar"])
-    detail(cc, T7)                     # 23 (talabalar xodimi) o'qidi
+    detail(reg, T7)                    # 17 (talabalar rahbari) o'qidi
     ok(detail(akad, T7)["perms"]["can_recall"] is False, "o'qilgandan keyin perms.can_recall = false")
     r = post(akad, f"/api/portal/threads/{T7}/recall")
     ok(r.status_code == 409 and r.json()["detail"] == "Xat o'qilgan — qaytarib bo'lmaydi. Yozishmani yopishingiz mumkin.", "o'qilgan xatni qaytarish 409 (aniq matn)")
-    ok(has(cc, T7) and q("SELECT status FROM portal_threads WHERE id=?", (T7,))[0][0] == "ochiq", "rad etilgan qaytarish yozishmani o'zgartirmadi")
+    ok(has(reg, T7) and q("SELECT status FROM portal_threads WHERE id=?", (T7,))[0][0] == "ochiq", "rad etilgan qaytarish yozishmani o'zgartirmadi")
     T8, _ = new_thread(akad, "T8 rezolyutsiyali", ["talabalar"])
     ok(post(rektor, f"/api/portal/threads/{T8}/resolve", {"text": "Ko'rib chiqilsin", "units": ["buxgalteriya"]}).status_code == 200, "T8 ga rezolyutsiya (o'qilmasdan)")
     ok(post(akad, f"/api/portal/threads/{T8}/recall").status_code == 409, "rezolyutsiya qo'yilgan xatni qaytarish 409")
+
+    # ============================================================== 15b. Bo'lim xodimi: Rektorat kotibi
+    print("— 15b. Rektorat kotibi — faqat shaxsan unga tegishli xatlar —")
+    TK, _ = new_thread(akad, "TK rektoratga", ["rektorat"])
+    ok(has(rektor, TK) and not has(kotib, TK) and kotib.get(f"/api/portal/threads/{TK}").status_code == 403,
+       "rektoratga kelgan xat: rektor (rahbar) ko'radi, kotib (xodim) — yo'q (403)")
+    ok(post(rektor, f"/api/portal/threads/{TK}/assign", {"user_id": 20}).status_code == 200 and has(kotib, TK), "rektor kotibga biriktirdi — kotib ko'radi")
+    ok(kotib.get("/api/portal/summary").json()["action"] >= 1, "kotib: «ishim» hisoblagichida biriktirilgan xat")
+    TK2, _ = new_thread(kotib, "TK2 kotibdan", ["akademik"])
+    ok(has(kotib, TK2, "sent"), "kotib o'zi yuborgan xatni ko'radi")
+
+    # ============================================================== 15c. «Ma'lumot so'rovi» → topshiriq (directives)
+    print("— 15c. Ma'lumot so'rovi → topshiriq —")
+    u18 = akad.get("/api/portal/units").json()
+    ok("kaf2" in u18["directive_units"] and "buxgalteriya" not in u18["directive_units"], "Akademik bo'lim: topshiriq beriladigan bo'limlar — kafedralar")
+    r = post(akad, "/api/portal/threads", {"subject": f"Ma'lumot so'rovi test {STAMP}", "body": "O'qituvchilar yuklamasi bo'yicha ma'lumot bering.",
+                                          "to": ["kaf2", "buxgalteriya"], "kind": "sorov", "due": D5})
+    ok(r.status_code == 200 and r.json()["id"] and len(r.json()["directives"]) == 1 and r.json()["directives"][0]["unit"] == "kaf2",
+       "so'rov: kafedraga — topshiriq, vakolatdan tashqari Buxgalteriyaga — xat")
+    TSQ, DSQ = r.json()["id"], r.json()["directives"][0]["id"]; MY_THREADS.append(TSQ)
+    row = q("SELECT origin, unit, issuer_user, src, status, due_at FROM tasks WHERE id=?", (DSQ,))[0]
+    ok(row[0] == "topshiriq" and row[1] == "kaf2" and row[2] == 18 and row[3] == f"portal:{TSQ}" and row[5].startswith(D5), "topshiriq: kaf2, bergan 18, manba portal:<xat>")
+    ok([x["unit"] for x in detail(akad, TSQ)["recipients"]] == ["buxgalteriya"] and detail(akad, TSQ)["directives"][0]["id"] == DSQ,
+       "xatda faqat Buxgalteriya qabul qiluvchi; topshiriq xatga bog'langan")
+    ok(kaf.get(f"/api/dir/{DSQ}").status_code == 200 and any(x["link"] == {"view": "tasks", "directive": DSQ} for x in kaf.get("/api/mywork").json()["items"]),
+       "kafedra mudiri (#31) topshiriqni ochadi va «Mening vazifalarim»da ko'radi")
+    ok(post(kaf, f"/api/dir/{DSQ}/status", {"status": "bajarildi", "result": "Ma'lumot ilova qilindi"}).status_code == 200
+       and post(akad, f"/api/dir/{DSQ}/review", {"decision": "qabul"}).status_code == 200, "kafedra natija yubordi, Akademik bo'lim qabul qildi")
+    r = post(buxg, "/api/portal/threads", {"subject": f"So'rov vakolatsiz {STAMP}", "body": "x", "to": ["talabalar"], "kind": "sorov"})
+    ok(r.status_code == 200 and r.json()["id"] and not r.json()["directives"], "vakolati yo'q bo'lim so'rovi — oddiy xat (topshiriq yaratilmaydi)")
+    MY_THREADS.append(r.json()["id"])
+    DIRS_TO_DROP.append(DSQ)
 
     # ============================================================== 16. Muddatni o'zgartirish
     print("— 16. Muddatni o'zgartirish —")

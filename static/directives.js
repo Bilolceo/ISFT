@@ -146,6 +146,8 @@ async function renderDirective(id, silent) {
   const scroll = silent ? window.scrollY : 0;
   el.innerHTML = dirHtml(d);
   dirBindView(d);
+  const sb = document.getElementById("dirSrc");
+  if (sb) sb.onclick = () => { const l = d.tree.source.link; clearInterval(DIR.timer); DIR.open = null; if (typeof XT !== "undefined" && XT.openLink) XT.openLink(l); else go(l.view); };
   hydrateIcons(el);
   if (silent) window.scrollTo({top: scroll});
   else { const f = el.querySelector(".dir-node.focus"); if (f && d.focus !== d.root) f.scrollIntoView({block: "center"}); }
@@ -159,7 +161,10 @@ function dirHtml(d) {
   const all = dirFlat(d.tree), root = d.tree, byId = Object.fromEntries(all.map(n => [n.id, n]));
   const ev = [...d.log.map(l => ({...l, k: "log"})), ...d.msgs.map(m => ({...m, k: "msg"}))].sort((a, b) => a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0);
   const canMsg = all.length > 0;
-  return dirBack() + `<div class="head"><div><h2>${esc(root.title)}</h2><span class="muted">${esc(root.issuer_label)} · ${dtm(root.created_at)}${d.parent_hidden ? " · <span class='tiny'>yuqori topshiriqning bir qismi</span>" : ""}</span></div></div>
+  /* manba: O'quv dasturlari (kafedra so'rovi) yoki Portal (ma'lumot so'rovi) — o'sha joyga qaytish havolasi */
+  const src = root.source ? `<div class="dir-src"><span class="tag gray">${ico(root.source.kind === "syl" ? "book" : "mail", 13)} ${esc(root.source.label)}</span>${root.source.link
+    ? `<button type="button" class="btn ghost sm" id="dirSrc">${root.source.kind === "syl" ? "So'rovni ochish" : "Xatni ochish"} →</button>` : ""}</div>` : "";
+  return dirBack() + `<div class="head"><div><h2>${esc(root.title)}</h2><span class="muted">${esc(root.issuer_label)} · ${dtm(root.created_at)}${d.parent_hidden ? " · <span class='tiny'>yuqori topshiriqning bir qismi</span>" : ""}</span>${src}</div></div>
   <div class="dec-grid dir-grid">
     <div class="dir-tree">${dirNode(d, root)}</div>
     <div class="dec-side">

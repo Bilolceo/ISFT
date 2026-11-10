@@ -5,8 +5,10 @@ Talabalar markazi (app/student_ops.py) ustiga qo'shimcha — yangi qoidalar dvig
     davomat (30 soat → call-markaz + ogohlantirish xati; 48 soatdan oshsa → hayfsan loyihasi; davom etsa → «chetlashtirishga tayyor»),
     o'zlashtirish (JPA yetarli, lekin ≥2 qarzdor fan — baribir ogohlantirish), otrabotka muddatlari (yashil/sariq/qizil), akademik ta'til.
     Har bosqichda: kim ishlaydi, nima deyiladi, umumiy huquqiy asos («manba aniqlashtiriladi» — qaror raqamlari o'ylab topilmaydi).
-  * Imtihonga kirish ruxsatnomasi: faktlardan tekshiruv (ochiq otrabotka, akademik qarz, oraliq nazorat, sababsiz soatlar,
-    kontrakt jadvali yoki muddat uzaytirilgani) — guruh bo'yicha kim ruxsat oladi / kim yo'q va nima uchun.
+  * Imtihonga kirish ruxsatnomasi (qishki sessiya): faktlardan tekshiruv — ochiq otrabotka, yakunlangan semestrlardagi akademik qarz,
+    JORIY semestrning haqiqiy oraliq nazorat bali (≥ 12 / 30; fan tanlanmasa — barcha fanlar), joriy semestrdagi sababsiz soatlar,
+    kontrakt jadvali yoki muddat uzaytirilgani — guruh bo'yicha kim ruxsat oladi / kim yo'q va nima uchun.
+  * Hayfsan: «Chetlashtirishga tayyor» bosqichi faqat hayfsani qayd etilgan («amalda») talabalarni ko'rsatadi (discipline jadvali).
   * Shaxsiy grafik: talabaning barcha qarzlari bo'yicha muddatli reja (QR: kim, qachon, qaysi xodim bergan).
   * Otrabotka skani: yuklanganda o'qiladi (registrar_scan) — ro'yxat raqami → otrabotka, imzo bor/yo'q, ball; demo skan generatori.
 Sirtqi bo'lim — xuddi shu ishlarni faqat sirtqi ta'lim talabalari uchun bajaradi (ko'lam student_ops._scope_sql / documents._sscope).
@@ -31,6 +33,10 @@ CREATE INDEX IF NOT EXISTS ix_defer_st ON contract_deferments(student_id);
 
 def init(con):
     con.executescript(SCHEMA); con.commit()
+    try:   # mavjud bazada ham: baholar modeli ustunlari, yangi jadvallar (intizom, tyutor biriktirmasi) va yangi standart qoidalar
+        OPS.ensure_schema(con); OPS.ensure_policy(con)
+    except Exception as e:
+        print("registrar: sxema/qoidalar:", e)
     try:
         seed(con)
     except Exception as e:   # demo ma'lumot ilovani to'xtatmasin
@@ -62,32 +68,39 @@ def permit_check(con, sid, subject=None) -> dict:
     P = OPS.policy(con)
     s = db.one(con, "SELECT id, full_name, hemis_id, status, payment_type, contract_amount, paid_amount, study_form FROM students WHERE id=?", (sid,))
     if not s: raise ValueError("Talaba topilmadi")
-    pass_ = int(P["pass_score"])
+    cur = AR.CURRENT_SEMESTER
     checks = []
     def add(key, label, ok, detail=""): checks.append({"key": key, "label": label, "ok": bool(ok), "detail": detail})
     add("holat", "Talaba maqomi — faol", s["status"] == "faol", "" if s["status"] == "faol" else f"maqomi: {s['status']}")
-    rt = db.rows(con, "SELECT subject, status, due_at FROM retakes WHERE student_id=? AND status IN ('berildi','topshirildi')", (sid,))
+    rt = db.rows(con, "SELECT subject, status, due_at, kind FROM retakes WHERE student_id=? AND status IN ('berildi','topshirildi')", (sid,))
     add("otrabotka", "Ochiq otrabotka yo'q", not rt,
-        "; ".join(f"«{r['subject']}» — {'varaqa qaytarilmagan' if r['status'] == 'berildi' else 'baho tasdiqlanmagan'}" for r in rt))
-    prev = db.rows(con, f"SELECT subject, score FROM grades WHERE student_id=? AND semester=0 AND score<{pass_} ORDER BY subject", (sid,))
-    add("qarz", "O'tgan semestrdan akademik qarz yo'q", not prev, "; ".join(f"«{g['subject']}» ({g['score']} ball)" for g in prev))
+        "; ".join(f"«{r['subject']}» — {'varaqa qaytarilmagan' if r['status'] == 'berildi' else 'natija tasdiqlanmagan'}" for r in rt))
+    debts = OPS._debts(con, sid)
+    add("qarz", "Yakunlangan semestrlardan akademik qarz yo'q", not debts,
+        "; ".join(f"«{g['subject']}» ({g['score']} ball, {AR.SEMESTER_SHORT.get(g['semester'], '')})" for g in debts))
+    curg = db.rows(con, "SELECT subject, oraliq FROM grades WHERE student_id=? AND semester=? ORDER BY subject", (sid, cur))
     if subject:
-        g = db.one(con, "SELECT score FROM grades WHERE student_id=? AND subject=? AND semester=1", (sid, subject))
+        g = next((x for x in curg if x["subject"] == subject), None)
         if not g:
-            add("oraliq", f"«{subject}» fani o'quv rejasida", False, "talabada bu fan yo'q")
+            add("oraliq", f"«{subject}» fani joriy semestr o'quv rejasida", False, "talabada bu fan yo'q")
         else:
-            o, _ = AR.split_score(g["score"], f"{s['hemis_id']}|{subject}")
-            add("oraliq", f"Oraliq nazorat ≥ {AR.ORALIQ_MIN} ball («{subject}»)", o >= AR.ORALIQ_MIN, f"oraliq: {o} ball")
+            add("oraliq", f"Oraliq nazorat ≥ {AR.ORALIQ_MIN} / {AR.ORALIQ_MAX} («{subject}»)", AR.admitted(g["oraliq"]),
+                f"oraliq: {g['oraliq'] if g['oraliq'] is not None else 'kiritilmagan'} / {AR.ORALIQ_MAX}")
+    elif s["status"] == "faol":
+        low = [x for x in curg if not AR.admitted(x["oraliq"])]
+        add("oraliq", f"Oraliq nazorat ≥ {AR.ORALIQ_MIN} / {AR.ORALIQ_MAX} — barcha fanlar ({len(curg)})", curg and not low,
+            ("; ".join(f"«{x['subject']}» — {x['oraliq'] if x['oraliq'] is not None else 'kiritilmagan'} / {AR.ORALIQ_MAX}" for x in low)
+             if low else f"eng past: {min(x['oraliq'] for x in curg)} / {AR.ORALIQ_MAX}" if curg else "joriy semestr baholari yo'q"))
     unx = OPS.student_facts(con, sid)["unexcused"]
-    lim = int(P.get("permit_att_hours", P["att_reprimand_hours"]))
-    add("davomat", f"Sababsiz qoldirilgan soatlar {lim} dan oshmagan", unx <= lim, f"{unx} soat")
+    lim = int(P.get("permit_att_hours", P["att_reprimand_hours"])) if s["study_form"] != "sirtqi" else OPS.att_limits(P, "sirtqi")["reprimand"]
+    add("davomat", f"Joriy semestrda sababsiz qoldirilgan soatlar {lim} dan oshmagan", unx <= lim, f"{unx} soat")
     if s["payment_type"] == "kontrakt" and (s["contract_amount"] or 0) > 0:
         need, short_, inst = contract_need(con, s)
         dfr = deferment(con, sid) if short_ else None
         add("kontrakt", "Kontrakt to'lovi jadval bo'yicha", short_ == 0 or bool(dfr),
             "" if short_ == 0 else (f"muddat uzaytirilgan: {dfr['until']}gacha" if dfr else f"{inst['label'] if inst else 'jadval'} bo'yicha {OPS._money(short_)} yetishmaydi"))
     else:
-        add("kontrakt", "Kontrakt to'lovi jadval bo'yicha", True, "grant asosida")
+        add("kontrakt", "Kontrakt to'lovi jadval bo'yicha", True, "ISFT granti asosida")
     bad = [c for c in checks if not c["ok"]]
     return {"student_id": sid, "full_name": s["full_name"], "eligible": not bad, "checks": checks,
             "reasons": [f"{c['label']}: {c['detail']}" if c["detail"] else c["label"] for c in bad]}
@@ -105,12 +118,13 @@ def gen_exam_permit(I, p):
                          else f"Tanlangan {len(res)} nafar talabadan hech biri talablarga javob bermaydi")
     for s, r in ok:
         I.page(s["full_name"], title=f"Imtihonga kirish ruxsatnomasi{': ' + subject if subject else ''}")
-        B.title(I.doc, "IMTIHONGA KIRISH RUXSATNOMASI", f"{D.ACAD_YEAR} o'quv yili, kuzgi semestr sessiyasi" + (f" · «{subject}»" if subject else " · barcha fanlar"))
+        B.title(I.doc, "IMTIHONGA KIRISH RUXSATNOMASI", f"{AR.SEMESTERS[AR.CURRENT_SEMESTER]} — yakuniy nazorat (qishki sessiya)" + (f" · «{subject}»" if subject else " · barcha fanlar"))
         B.table(I.doc, ["Ma'lumot", ""], [("Talaba", s["full_name"]), ("HEMIS ID", s["hemis_id"]), ("Fakultet / guruh", f"{s['faculty']} · {s['grp']} ({s['course']}-kurs)"),
                                           ("Ta'lim shakli", D.FORM_UZ.get(s.get("study_form"), "kunduzgi"))], widths=[5, 12], size=10.5)
         B.table(I.doc, ["Tekshiruv", "Natija"], [(c["label"], "✓ " + (c["detail"] or "talabga javob beradi")) for c in r["checks"]], widths=[9, 8], size=9.5)
-        B.para(I.doc, "Ruxsatnoma ISFT Core tizimidagi faktlar (HEMIS baholari, davomat, otrabotkalar, buxgalteriya ma'lumoti) asosida berildi va joriy "
-                      "sessiya davomida amal qiladi. Imtihon oluvchi QR-kod orqali haqiqiyligini tekshiradi.", size=10.5)
+        B.para(I.doc, "Ruxsatnoma ISFT Core tizimidagi faktlar (HEMIS: joriy semestr oraliq nazorat ballari va davomati, yakunlangan semestrlar "
+                      "natijalari, otrabotkalar, buxgalteriya ma'lumoti) asosida berildi va joriy sessiya davomida amal qiladi. "
+                      "Imtihon oluvchi QR-kod orqali haqiqiyligini tekshiradi.", size=10.5)
         B.signature(I.doc, *D.signer(I.con, I.ctx))
         I.qr()
 
@@ -129,26 +143,28 @@ def gen_personal_schedule(I, p):
     for r in rt:
         if r["status"] == "berildi":
             items.append((min(deadline, max(today, dt.date.fromisoformat(r["due_at"][:10]))), f"«{r['subject']}»: otrabotka varaqasini o'qituvchiga imzolatib qaytarish", "Talaba → Registrator ofisi"))
-    done = {r["subject"] for r in db.rows(I.con, "SELECT subject FROM retakes WHERE student_id=? AND status='tasdiqlandi'", (s["id"],))}
-    fails = [g for g in db.rows(I.con, f"SELECT subject, score FROM grades WHERE student_id=? AND semester=1 AND score<{pass_} ORDER BY subject", (s["id"],))
-             if g["subject"] not in open_subj | done]
-    step = max(2, (deadline - today).days // max(1, len(fails) + 1))
-    for i, g in enumerate(fails, 1):
-        items.append((min(deadline, today + dt.timedelta(days=step * i)), f"«{g['subject']}» ({g['score']} ball): otrabotka varaqasini olish va qayta topshirish", "Talaba, o'qituvchi"))
-    for g in db.rows(I.con, f"SELECT subject, score FROM grades WHERE student_id=? AND semester=0 AND score<{pass_} ORDER BY subject", (s["id"],)):
-        items.append((deadline, f"O'tgan semestr akademik qarzi: «{g['subject']}» ({g['score']} ball)", "Talaba, kafedra"))
+    debts = [g for g in OPS._debts(I.con, s["id"]) if g["subject"] not in open_subj]
+    low = [g for g in OPS.student_facts(I.con, s["id"])["oraliq_low"] if g["subject"] not in open_subj]
+    todo = [(f"«{g['subject']}» ({g['score']} ball, {AR.SEMESTER_SHORT.get(g['semester'], '')}): akademik qarz — otrabotka varaqasini olish va qayta topshirish",
+             "Talaba, o'qituvchi → Registrator ofisi") for g in debts]
+    todo += [(f"«{g['subject']}»: oraliq nazorat {g['oraliq'] if g['oraliq'] is not None else 'kiritilmagan'} / {AR.ORALIQ_MAX} — "
+              f"yakuniyga kirish uchun kamida {AR.ORALIQ_MIN} ball (otrabotka)", "Talaba, o'qituvchi") for g in low]
+    step = max(2, (deadline - today).days // max(1, len(todo) + 1))
+    for i, (txt, who) in enumerate(todo, 1):
+        items.append((min(deadline, today + dt.timedelta(days=step * i)), txt, who))
     if s["payment_type"] == "kontrakt" and (s["contract_amount"] or 0) > 0:
         need, short_, inst = contract_need(I.con, s)
         if short_:
             dfr = deferment(I.con, s["id"])
             due = dt.date.fromisoformat(dfr["until"]) if dfr else min(deadline, today + dt.timedelta(days=5))
             items.append((due, f"Kontrakt to'lovi: {OPS._money(short_)} ({inst['label'] if inst else 'jadval'})" + (" — muddat uzaytirilgan" if dfr else ""), "Talaba → buxgalteriya"))
-    pend = db.rows(I.con, "SELECT reason, end, hours FROM absences WHERE student_id=? AND doc_status='kutilmoqda'", (s["id"],))
+    pend = db.rows(I.con, "SELECT reason, end, hours FROM absences WHERE student_id=? AND doc_status='kutilmoqda' AND semester=?", (s["id"], AR.CURRENT_SEMESTER))
     if pend:
         items.append((today + dt.timedelta(days=int(P["medical_doc_days"])), f"Sababli qoldirish hujjati ({sum(a['hours'] for a in pend)} soat) — tasdiqlovchi hujjatni topshirish", "Talaba → tyutor"))
     unx = OPS.student_facts(I.con, s["id"])["unexcused"]
     if unx >= P["att_call_hours"]:
-        items.append((today + dt.timedelta(days=3), f"Sababsiz qoldirilgan {unx} soat: tyutor bilan suhbat va tushuntirish xati", "Talaba, tyutor"))
+        items.append((today + dt.timedelta(days=3), f"Joriy semestrda sababsiz qoldirilgan {unx} soat: tyutor bilan suhbat, tushuntirish xati, "
+                      "qoldirilgan mashg'ulotlarni otrabotka qilish", "Talaba, tyutor"))
     if not items: raise ValueError("Talabada yopiladigan qarz yo'q — shaxsiy grafik kerak emas")
     items.sort(key=lambda x: x[0])
     reg, _ = I.page(s["full_name"], title="Shaxsiy grafik (qarzlarni yopish rejasi)")
@@ -181,9 +197,10 @@ def _stages(P):
              say=["To'lov qachon amalga oshirilishini aniq sana bilan kelishing; va'dani tizimga kiriting — muddat o'tsa tizim o'zi qayta eslatadi.",
                   "Bo'lib to'lash yoki muddat uzaytirish kerak bo'lsa — buxgalteriya va Registrator ofisiga yo'naltiring (uzaytirilsa ruxsatnomaga ta'sir qilmaydi)."],
              basis=B["kontrakt"]),
-        dict(key="kontrakt_otgan", chain="kontrakt", title="To'lov muddati o'tgan", who="Call-markaz → Registrator (ota-onaga xat)",
+        dict(key="kontrakt_otgan", chain="kontrakt", title="To'lov muddati o'tgan", who="Call-markaz → Registrator (qarzdorlik xati)",
              sql="oc.rule='kontrakt' AND oc.level=3",
-             say=["Muddat o'tganini va qarz summasini aniq ayting; ota-onaga rasmiy xat yuborilishini ogohlantiring.",
+             say=["Muddat o'tganini va qarz summasini aniq ayting; rasmiy xat yuborilishini ogohlantiring (kunduzgi bakalavr — ota-onaga, "
+                  "sirtqi / masofaviy / magistratura talabasi — o'ziga).",
                   "Sessiyaga qo'yish va imtihonga ruxsatnoma to'lov (yoki rasmiy uzaytirish) bo'lmaguncha berilmasligini tushuntiring."],
              basis=B["kontrakt"]),
         dict(key="davomat_30", chain="davomat", title=f"{call} soat sababsiz: qo'ng'iroq + ogohlantirish xati", who="Call-markaz + Registrator ofisi",
@@ -191,24 +208,30 @@ def _stages(P):
              say=[f"Sababsiz qoldirilgan soatlarni aniq ayting; {rep} soatdan oshsa hayfsan e'lon qilinishini tushuntiring.",
                   "Kasallik yoki xizmat safari bo'lsa — hujjatni 3 kun ichida tyutorga topshirsin; ogohlantirish xatiga imzo qo'ydiring."],
              basis=B["davomat"]),
-        dict(key="davomat_hayfsan", chain="davomat", title=f"{rep} soatdan oshdi: hayfsan loyihasi", who="Registrator ofisi + tyutor suhbati",
-             sql=f"oc.rule='davomat' AND oc.level=3 AND CAST(json_extract(oc.facts,'$.hours') AS INT) < {expel}",
-             say=["Hayfsan buyrug'i loyihasini tayyorlang (rektor imzosi) va tyutor suhbatini o'tkazing.",
-                  f"Sababsiz qoldirish davom etib {expel} soatga yetsa — talabalar safidan chetlashtirish masalasi ko'riladi."],
+        dict(key="davomat_hayfsan", chain="davomat", title=f"{rep} soatdan oshdi: hayfsan", who="Registrator ofisi + tyutor suhbati",
+             sql=f"oc.rule='davomat' AND oc.level=3 AND (CAST(json_extract(oc.facts,'$.hours') AS INT) < {EXPEL_SQL.format(expel=expel)} OR NOT {HAYFSAN_SQL})",
+             say=["Hayfsan e'lon qilish to'g'risida taqdimnoma tayyorlang (rektor imzolaydi — hayfsan qayd etiladi) va tyutor suhbatini o'tkazing.",
+                  f"Hayfsan e'lon qilingandan keyin ham sababsiz qoldirish davom etib {expel} soatga yetsa — talabalar safidan chetlashtirish masalasi ko'riladi."],
              basis=B["davomat"]),
         dict(key="chetlashtirish", chain="yakun", title="Chetlashtirishga tayyor", who="Registrator ofisi → rektor",
-             sql=(f"((oc.rule='davomat' AND oc.level=3 AND CAST(json_extract(oc.facts,'$.hours') AS INT) >= {expel}) OR "
+             sql=(f"((oc.rule='davomat' AND oc.level=3 AND CAST(json_extract(oc.facts,'$.hours') AS INT) >= {EXPEL_SQL.format(expel=expel)} AND {HAYFSAN_SQL}) OR "
                   f"(oc.rule='kontrakt' AND oc.level=3 AND CAST(json_extract(oc.facts,'$.days') AS INT) <= -{cexp} AND EXISTS "
                   f"(SELECT 1 FROM ops_tasks tx WHERE tx.case_id=oc.id AND tx.kind='xat' AND tx.status='bajarildi')))"),
-             say=["Zinapoyaning barcha bosqichlari o'tilgan: qo'ng'iroq, ogohlantirish xati, hayfsan (davomat) yoki ota-onaga xat (kontrakt).",
-                  "Buyruq loyihasidan oldin talaba bilan oxirgi yuzma-yuz suhbat va tushuntirish xatini oling; hujjatlar to'plamini tekshiring."],
+             say=["Zinapoyaning barcha bosqichlari o'tilgan: qo'ng'iroq, ogohlantirish xati, e'lon qilingan hayfsan (davomat) yoki qarzdorlik xati (kontrakt).",
+                  "Buyruq loyihasidan oldin talaba bilan oxirgi yuzma-yuz suhbat va tushuntirish xatini oling; hujjatlar to'plamini tekshiring. "
+                  "Chetlashtirish buyrug'i — Buyruqlar bo'limida."],
              basis=B["davomat"] + B["kontrakt"][:1]),
-        dict(key="akademik_jpa_ok", chain="akademik", title=f"JPA yetarli, lekin ≥ {int(P['fails_warn'])} qarzdor fan", who="Tyutor + Registrator ofisi",
-             sql="oc.rule='akademik' AND json_extract(oc.facts,'$.gpa_ok') IN (1, 'true')",
-             say=["Umumiy JPA yetarli bo'lsa ham, qarzdor fanlar keyingi kursga o'tishga to'sqinlik qiladi — otrabotka varaqasini olishni kelishing."],
+        dict(key="akademik_diqqat", chain="akademik", title="Diqqat: 1 ta akademik qarz yoki 1 fandan oraliq < 12", who="Tyutor",
+             sql="oc.rule='akademik' AND oc.level=1",
+             say=["Qarzni yoki past oraliq nazoratni sessiyagacha yopish rejasini kelishing — otrabotka varaqasi Registrator ofisida beriladi."],
              basis=B["akademik"]),
-        dict(key="akademik_jpa_past", chain="akademik", title=f"JPA {P['gpa_min']} dan past", who="Tyutor + Registrator ofisi",
-             sql="oc.rule='akademik' AND json_extract(oc.facts,'$.gpa_ok') IN (0, 'false')",
+        dict(key="akademik_jpa_ok", chain="akademik", title=f"GPA (5) yetarli, lekin ≥ {int(P['fails_warn'])} qarz yoki past oraliq", who="Tyutor + Registrator ofisi",
+             sql="oc.rule='akademik' AND oc.level>=2 AND json_extract(oc.facts,'$.gpa_ok') IN (1, 'true')",
+             say=["Kumulyativ GPA yetarli bo'lsa ham, akademik qarzlar keyingi kursga o'tishga, past oraliq esa yakuniy nazoratga kirishga to'sqinlik "
+                  "qiladi — otrabotka varaqasini olishni kelishing."],
+             basis=B["akademik"]),
+        dict(key="akademik_jpa_past", chain="akademik", title=f"Kumulyativ GPA (5) {P['gpa_min']} dan past", who="Tyutor + Registrator ofisi",
+             sql="oc.rule='akademik' AND oc.level>=2 AND json_extract(oc.facts,'$.gpa_ok') IN (0, 'false')",
              say=["Qiyinchilik sababini aniqlang; shaxsiy grafik tuzib, qarzlarni yopish muddatlarini yozma kelishing."],
              basis=B["akademik"]),
         dict(key="tatil_oldin", chain="tatil", title=f"Akademik ta'til tugashiga ≤ {int(P['leave_warn_days'])} kun", who="Call-markaz",
@@ -217,9 +240,12 @@ def _stages(P):
              basis=B["tatil"]),
         dict(key="tatil_qaytish", chain="tatil", title="Ta'tildan qaytish: buyruq loyihasi", who="Registrator ofisi",
              sql="oc.rule='tatil' AND oc.level>=2",
-             say=["Ariza kelgach «Ta'tildan qaytish» buyrug'i loyihasini tayyorlang (talabalar harakati: qayta tiklash)."],
+             say=["Ariza kelgach «Ta'tildan qaytish» buyrug'i loyihasini Buyruqlar bo'limida tayyorlang (topshiriqdagi «Hujjat tayyorlash» — loyihani o'sha yerda yaratadi)."],
              basis=B["tatil"]),
     ]
+
+EXPEL_SQL = "COALESCE(CAST(json_extract(oc.facts,'$.expel') AS INT), {expel})"   # sirtqi — sessiyaga mutanosib chegara (faktlarda)
+HAYFSAN_SQL = "EXISTS (SELECT 1 FROM discipline d WHERE d.student_id=oc.student_id AND d.kind='hayfsan' AND d.status='amalda')"
 
 def _stage_where(c: Ctx):
     return f"oc.status='ochiq' AND {OPS._scope_sql(c)} AND {OPS._rule_sql(c)}"
@@ -245,7 +271,8 @@ def desk(c: Ctx):
             continue
         h = (dt.datetime.fromisoformat(r["due_at"]) - now).total_seconds() / 3600
         tones["overdue" if h < 0 else OPS.retake_tone(h)] += 1
-    return {"stages": out, "retakes": tones, "policy": {k: P[k] for k in ("att_call_hours", "att_letter_hours", "att_reprimand_hours", "att_expel_hours",
+    S = OPS.att_limits(P, "sirtqi")
+    return {"stages": out, "retakes": tones, "sirtqi_limits": S, "policy": {k: P[k] for k in ("att_call_hours", "att_letter_hours", "att_reprimand_hours", "att_expel_hours",
                                                                           "contract_critical_days", "contract_expel_days", "leave_warn_days", "retake_days", "fails_warn", "gpa_min")},
             "scope": "Sirtqi ta'lim talabalari" if c.role.key == "sirtqi" else "Butun institut",
             "verified": [r["key"] for r in db.rows(_con, "SELECT key FROM ops_policy WHERE verified=1 AND key NOT LIKE '\\_%' ESCAPE '\\'")]}
@@ -276,15 +303,16 @@ def seed(con, base_url="http://localhost:8000/"):
     now = _now()
     taken = {(r[0], r[1]) for r in con.execute("SELECT student_id, subject FROM retakes")}
     def cand(form, n):
-        rows = db.rows(con, f"""SELECT g.student_id, g.subject, g.teacher_id, g.score FROM grades g JOIN students s ON s.id=g.student_id
-                               WHERE g.semester=1 AND g.score<{pass_} AND s.status='faol' AND s.study_form=? ORDER BY g.student_id LIMIT 200""", (form,))
+        rows = db.rows(con, f"""SELECT g.student_id, g.subject, g.teacher_id, g.score, g.semester FROM grades g JOIN students s ON s.id=g.student_id
+                               WHERE {AR.debt_where('g')} AND s.status='faol' AND s.study_form=? ORDER BY g.student_id LIMIT 200""", (form,))
         rows = [r for r in rows if (r["student_id"], r["subject"]) not in taken]
         R.shuffle(rows); return rows[:n]
     def mk(c, ctx_, hours):
         due = now + dt.timedelta(hours=hours); issued = due - dt.timedelta(days=int(OPS.policy(con)["retake_days"]))
-        cur = con.execute("""INSERT INTO retakes(student_id,subject,teacher_id,reason,status,issued_at,due_at,score_old,created_by)
-                             VALUES(?,?,?,?,?,?,?,?,?)""", (c["student_id"], c["subject"], c["teacher_id"], "Qarzdor fan (o'tish balidan past)",
-                                                          "berildi", _iso(issued), _iso(due), c["score"], ctx_.user["id"]))
+        cur = con.execute("""INSERT INTO retakes(student_id,subject,teacher_id,reason,status,issued_at,due_at,score_old,created_by,semester,kind)
+                             VALUES(?,?,?,?,?,?,?,?,?,?,?)""", (c["student_id"], c["subject"], c["teacher_id"],
+                                                          f"{OPS.RETAKE_REASON['qarz']} ({AR.SEMESTER_SHORT.get(c['semester'], '')})",
+                                                          "berildi", _iso(issued), _iso(due), c["score"], ctx_.user["id"], c["semester"], "qarz"))
         rid = cur.lastrowid; OPS._issue_sheet(con, ctx_, rid, base_url)
         OPS._log(con, None, None, c["student_id"], ctx_, "otrabotka varaqasi berildi", f"{c['subject']} · demo")
         return rid
@@ -314,7 +342,29 @@ def seed(con, base_url="http://localhost:8000/"):
     con.execute("INSERT OR REPLACE INTO ops_policy(key,value,label,verified) VALUES('_seed_registrar',1,'Registrator demo ma''lumoti',1)")
     con.commit()
     OPS.evaluate(con)
+    seed_discipline(con, R)
     return True
+
+def seed_discipline(con, R=None):
+    """Demo: tizimdan oldin (qog'ozda) e'lon qilingan hayfsanlar — 60+ soat sababsiz qoldirganlarning ko'pchiligida; 48–60 soatda —
+    ba'zilarida taqdimnoma rektorga yuborilgan («loyiha»). Idempotent: hayfsan yozuvi bo'lsa qayta qo'shilmaydi."""
+    if con.execute("SELECT 1 FROM discipline LIMIT 1").fetchone(): return 0
+    R = R or random.Random(20261109)
+    P, today = OPS.policy(con), dt.date.today()
+    rows = []
+    for r in db.rows(con, """SELECT student_id, CAST(json_extract(facts,'$.hours') AS INT) h, json_extract(facts,'$.expel') expel FROM ops_cases
+                             WHERE rule='davomat' AND status='ochiq' AND level=3 ORDER BY student_id"""):
+        h = r["h"] or 0
+        st = "amalda" if h >= int(r["expel"] or 72) - 12 and R.random() < 0.8 else "loyiha" if R.random() < 0.3 else None
+        if not st: continue
+        when = dt.datetime.combine(today - dt.timedelta(days=R.randint(3, 20)), dt.time(R.randint(9, 17), R.randint(0, 59)))
+        rows.append((r["student_id"], "hayfsan", f"joriy semestrda {h} soat dars sababsiz qoldirilgani (hayfsan chegarasidan oshgan)",
+                     h, AR.CURRENT_SEMESTER, None, st, _iso(when), None, _iso(when + dt.timedelta(days=2)) if st == "amalda" else None,
+                     "demo: tizimga qadar qog'ozda rasmiylashtirilgan" if st == "amalda" else "demo: taqdimnoma rektor imzosida"))
+    con.executemany("""INSERT INTO discipline(student_id,kind,reason,hours,semester,doc_reg,status,created_at,created_by,signed_at,note)
+                       VALUES(?,?,?,?,?,?,?,?,?,?,?)""", rows)
+    con.commit()
+    return len(rows)
 
 def demo_info(con, r):
     s = db.one(con, """SELECT s.full_name, s.hemis_id, g.name grp, f.name faculty FROM students s JOIN groups_ g ON g.id=s.group_id
@@ -355,7 +405,8 @@ def api_permits(request: Request, group: int, subject: str = ""):
     c = C(request); _need(c, REG, "imtihonga ruxsatnoma: guruh tekshiruvi", "⛔ Ruxsatnomani Registrator ofisi (sirtqi talabalarga — Sirtqi bo'lim) beradi.")
     from . import documents as D
     g = D._group(_con, c, group)
-    subj = [r["subject"] for r in db.rows(_con, "SELECT DISTINCT gr.subject FROM grades gr JOIN students s ON s.id=gr.student_id WHERE s.group_id=? AND gr.semester=1 ORDER BY 1", (group,))]
+    subj = [r["subject"] for r in db.rows(_con, "SELECT DISTINCT gr.subject FROM grades gr JOIN students s ON s.id=gr.student_id WHERE s.group_id=? AND gr.semester=? ORDER BY 1",
+                                          (group, AR.CURRENT_SEMESTER))]
     subject = subject.strip()[:120]
     if subject and subject not in subj: raise HTTPException(400, "Guruhda bunday fan yo'q")
     rows = [permit_check(_con, s["id"], subject or None) for s in db.rows(_con, f"SELECT s.id FROM students s WHERE s.group_id=? AND {D._sscope(c, 's')} ORDER BY s.full_name", (group,))]
@@ -367,6 +418,18 @@ def api_permit(sid: int, request: Request, subject: str = ""):
     c = C(request); _need(c, REG, "imtihonga ruxsatnoma: tekshiruv", "⛔ Ruxsatnomani Registrator ofisi (sirtqi talabalarga — Sirtqi bo'lim) beradi.")
     OPS._student_row(c, sid)
     return permit_check(_con, sid, subject.strip()[:120] or None)
+
+@router.get("/api/registrar/discipline")
+def api_discipline(request: Request, student_id: int = 0, status: str = ""):
+    """Intizomiy choralar (hayfsan) yozuvlari — boshqa modullar (masalan, Buyruqlar) uchun ochiq ma'lumot. Ko'lam — Talabalar markazi ko'lami."""
+    c = C(request); _need(c, DESK_VIEW, "intizomiy choralar ro'yxati", "⛔ Intizomiy choralar — Registrator ofisi va Sirtqi bo'lim uchun.")
+    w, a = [OPS._scope_sql(c, "s")], []
+    if student_id: w.append("d.student_id=?"); a.append(int(student_id))
+    if status in OPS.DISC_STATUS: w.append("d.status=?"); a.append(status)
+    rows = db.rows(_con, f"""SELECT d.*, s.full_name, s.hemis_id, g.name grp FROM discipline d JOIN students s ON s.id=d.student_id
+                             JOIN groups_ g ON g.id=s.group_id WHERE {' AND '.join(w)} ORDER BY d.id DESC LIMIT 500""", a)
+    for r in rows: r["status_label"] = OPS.DISC_STATUS.get(r["status"], r["status"])
+    return {"rows": rows, "statuses": OPS.DISC_STATUS}
 
 class DeferIn(BaseModel):
     student_id: int

@@ -24,8 +24,12 @@ def academic_overview(con, ctx: Ctx, quiet=False):
     rows = db.rows(con, f"""SELECT {by} AS name, COUNT(*) n, ROUND(AVG(s.gpa),1) gpa, ROUND(AVG(s.gpa_prev),1) gpa_prev,
         ROUND(AVG(s.attendance),1) attendance FROM students s JOIN groups_ g ON g.id=s.group_id JOIN faculties f ON f.id=s.faculty_id
         WHERE {sc} AND s.status='faol' GROUP BY 1 ORDER BY 1""")
-    for r in rows: r["delta"] = round(r["gpa"] - r["gpa_prev"], 1)
-    total = db.one(con, f"SELECT COUNT(*) n, ROUND(AVG(gpa),1) gpa, ROUND(AVG(gpa_prev),1) gpa_prev, ROUND(AVG(attendance),1) attendance FROM students s WHERE {sc} AND status='faol'")
+    # gpa / gpa_prev — o'rtacha ball (100): oxirgi va undan oldingi yakunlangan semestr (academic_rules.refresh_student_metrics, baholardan).
+    # 1-kurslarda yakunlangan semestr yo'q (NULL) — o'rtachaga kirmaydi; faqat 1-kurslardan iborat guruh qatori ko'rsatilmaydi.
+    rows = [r for r in rows if r["gpa"] is not None]
+    for r in rows: r["delta"] = round(r["gpa"] - r["gpa_prev"], 1) if r["gpa_prev"] is not None else None
+    total = db.one(con, f"""SELECT COUNT(*) n, ROUND(AVG(gpa),1) gpa, ROUND(AVG(gpa_prev),1) gpa_prev, ROUND(AVG(attendance),1) attendance,
+                            COUNT(gpa) n_scored FROM students s WHERE {sc} AND status='faol'""")
     # keskin (4 balldan ko'p) pasaygan guruhlar — hammasi; panelda eng ko'p pasaygan 8 tasi
     drops = db.rows(con, f"""SELECT g.name, g.course, f.name faculty, COUNT(*) n, ROUND(AVG(s.gpa),1) gpa, ROUND(AVG(s.gpa_prev),1) gpa_prev,
         ROUND(AVG(s.gpa)-AVG(s.gpa_prev),1) delta, ROUND(AVG(s.attendance),1) attendance, SUM(s.gpa) gsum, SUM(s.gpa_prev) psum
@@ -34,6 +38,8 @@ def academic_overview(con, ctx: Ctx, quiet=False):
     for r in drops: r["delta"] = round(r["gpa"] - r["gpa_prev"], 1)   # ko'rsatilgan ikki raqamdan — "57.6 dan 46.2 ga (−11.4)" doim mos
     drops.sort(key=lambda r: (r["delta"], r["name"]))
     return {"scope": ctx.scope_label(con), "total": total, "breakdown": rows, "breakdown_by": "fakultet" if by == "f.name" else "guruh",
+            "metric": {"label": AR.SCORE_LABEL, "def": AR.SCORE_DEF, "sem": AR.SEMESTER_SHORT[AR.RATING_SEMESTER],
+                       "prev_sem": AR.SEMESTER_SHORT[AR.RATING_SEMESTER - 1]},
             "declining_groups": [{k: v for k, v in r.items() if k not in ("gsum", "psum")} for r in drops[:8]],
             "declining_count": len(drops), "declining_clusters": decline_clusters(drops)}
 
@@ -67,67 +73,66 @@ def decline_text(c):
     return (f"{c['faculty']}, {c['course']}-kurs: {c['groups']} ta guruhda o'rtacha ball keskin pasaygan — {c['gpa_prev']} dan {c['gpa']} ga "
             f"({_num(c['delta'])}; guruhlar bo'yicha {rng}); eng ko'p: {w['name']} — {w['gpa_prev']} dan {w['gpa']} ga{att}")
 
-# Ball bo'yicha xavf chegaralari institut shkalasiga bog'langan: o'tish bali 40 («3»); 47 dan past — «3» zonasining quyi qismi.
-LOW_SCORE = AR.PASS + 7
-RISK_LABEL = "O'qishda xavf"
-RISK_DEF = ("o'zlashtirish (JPA / qarzdor fanlar) yoki davomat (sababsiz soatlar) bo'yicha «kritik» yoki «jiddiy» ochiq holati bor faol talabalar; "
-            "kontrakt qarzi bu songa kirmaydi")
-RISK_DEF_PRELIM = ("dastlabki baho (Talabalar markazi holatlari hali hisoblanmagan): ball, davomat va ball pasayishi bo'yicha xavf darajasi 40+ bo'lgan "
-                   "faol talabalar; kontrakt qarzi bu songa kirmaydi. Markaz qoidalari ishga tushgach (bir necha daqiqa) aniq raqam chiqadi")
+# «O'qishda xavf» — YAGONA ta'rif (academic_rules.RISK_DEF): faol talaba, o'zlashtirish yoki davomat bo'yicha holati «kritik»/«jiddiy».
+# Daraja Talabalar markazi qoidalari (student_ops) — academic_rules.akademik_level / davomat_level — bilan hisoblanadi; panel,
+# ogohlantirishlar, Talabalar markazi (serious_students / metrics.at_risk) va agent bir xil sonni ko'radi. Kontrakt qarzi kirmaydi.
+RISK_LABEL = AR.RISK_LABEL
+RISK_DEF = AR.RISK_DEF
+RISK_DEF_PRELIM = RISK_DEF + " (holatlar jadvali hali to'lmagan — xuddi shu qoidalar bilan baholardan va davomatdan to'g'ridan-to'g'ri hisoblandi)"
+LV = {2: "kritik", 3: "jiddiy"}
 
-def risk_score(s, contract=True):
-    r = 0
-    if s["gpa"] < AR.PASS: r += 45
-    elif s["gpa"] < LOW_SCORE: r += 25
-    att = s["attendance"]            # masofaviy ta'limda auditoriya davomati yo'q (None) — hisobga olinmaydi
-    if att is not None and att < 70: r += 30
-    elif att is not None and att < 80: r += 15
-    if s["gpa"] - s["gpa_prev"] < -10: r += 15
-    if contract and s["contract_amount"] and s["paid_amount"] / s["contract_amount"] < 0.5: r += 15
-    return min(100, r)
+def _risk_value(levels: dict) -> int:
+    """Saralash uchun 0–100: eng yuqori daraja (kritik 60, jiddiy 80) + ikkala yo'nalishda ham bo'lsa 15."""
+    return min(100, 20 * (max(levels.values()) + 1) + (15 if len(levels) > 1 else 0))
+
+def _reason_text(rule, f):
+    if rule == "akademik":
+        parts = []
+        if f.get("fails"): parts.append(f"akademik qarz: {len(f['fails'])} ta fan")
+        if f.get("oraliq_low"): parts.append(f"oraliq < {AR.ORALIQ_MIN}: {len(f['oraliq_low'])} ta fan")
+        if f.get("gpa5") is not None and not f.get("gpa_ok", True): parts.append(f"GPA (5) {f['gpa5']}")
+        return ", ".join(parts) or "o'zlashtirish"
+    return f"sababsiz {f.get('hours')} soat (joriy semestr)"
 
 _RISK_CACHE: dict = {}
 RISK_TTL = 15        # soniya: bitta panel so'rovi (KPI + ogohlantirishlar + panel) uchta to'liq hisob o'rniga bittasini qiladi
 
-def _reasons(r):
-    reasons = []
-    if r["gpa"] < LOW_SCORE: reasons.append(f"past ball ({r['gpa']})")
-    if r["attendance"] is not None and r["attendance"] < 80: reasons.append(f"davomat {r['attendance']}%")
-    if r["gpa"] - r["gpa_prev"] < -10: reasons.append(f"ball {r['gpa_prev']} dan {r['gpa']} ga pasaygan")
-    if r["contract_amount"] and r["paid_amount"] / r["contract_amount"] < .5: reasons.append("kontrakt qarzi")
-    return ", ".join(reasons)
-
 def _risk_core(con, sc: str):
     """(faol talabalar soni, xavfdagilar [ro'yxat, xavf bo'yicha saralangan], model hisoblanganmi). Qisqa muddat keshlanadi."""
-    import time
+    import time, json
     hit = _RISK_CACHE.get(sc)
     if hit and time.monotonic() - hit[0] < RISK_TTL: return hit[1]
-    rows = db.rows(con, f"""SELECT s.id, s.full_name, s.hemis_id, g.name grp, g.course, f.name faculty, s.gpa, s.gpa_prev, s.attendance,
-        s.contract_amount, s.paid_amount FROM students s JOIN groups_ g ON g.id=s.group_id JOIN faculties f ON f.id=s.faculty_id
-        WHERE {sc} AND s.status='faol'""")
-    # Yagona xavf modeli: Talabalar markazi qoidalar dvigateli (ops_cases) — panel, suhbat va markaz bir xil raqamni ko'radi
-    ops, evaluated = {}, False
+    rows = db.rows(con, f"""SELECT s.id, s.full_name, s.hemis_id, g.name grp, g.course, f.name faculty, s.gpa, s.gpa_prev, s.attendance
+        FROM students s JOIN groups_ g ON g.id=s.group_id JOIN faculties f ON f.id=s.faculty_id WHERE {sc} AND s.status='faol'""")
+    sig, evaluated = {}, False
     try:
-        # holatlar dvigateli kamida bir marta ishlaganmi (ochiq holat 0 ta bo'lsa ham model — yagona)
         evaluated = con.execute("SELECT 1 FROM ops_cases LIMIT 1").fetchone() is not None
         if evaluated:
-            for x in con.execute("SELECT student_id, rule, level FROM ops_cases WHERE status='ochiq' AND rule IN ('akademik','davomat') AND level>=2"):
-                ops.setdefault(x[0], []).append((x[1], x[2]))
-    except sqlite3.OperationalError:     # jadval hali yo'q (yangi baza) — dastlabki baho
+            for sid, rule, lvl, facts in con.execute(f"""SELECT student_id, rule, level, facts FROM ops_cases WHERE status='ochiq'
+                                                         AND rule IN ('akademik','davomat') AND level>={AR.AT_RISK_LEVEL}"""):
+                sig.setdefault(sid, {})[rule] = (lvl, json.loads(facts or "{}"))
+    except sqlite3.OperationalError:     # jadval hali yo'q (yangi baza)
         evaluated = False
-    if evaluated:
-        LV = {2: "kritik", 3: "jiddiy"}
-        risky = [r for r in rows if r["id"] in ops]
-        for r in risky:
-            r["risk"] = max(risk_score(r), 20 * max(l for _, l in ops[r["id"]]))
-            extra = ", ".join(f"{'o' + chr(39) + 'zlashtirish' if k == 'akademik' else 'davomat'} ({LV.get(l, l)})" for k, l in ops[r["id"]])
-            base = _reasons(r)
-            r["reasons"] = (base + ", " if base else "") + extra
-    else:
-        risky = [r for r in rows if risk_score(r, contract=False) >= 40]
-        for r in risky:
-            r["risk"] = risk_score(r); r["reasons"] = _reasons(r)
-    risky.sort(key=lambda x: -x["risk"])
+    if not evaluated:                    # xuddi shu qoidalar — baholar va davomatdan to'g'ridan-to'g'ri
+        from . import student_ops as OPS
+        try:
+            P = OPS.policy(con)
+            for sid, (lvl, f) in OPS.akademik_signals(con, P, f"s.status='faol' AND {sc}").items():
+                if lvl >= AR.AT_RISK_LEVEL: sig.setdefault(sid, {})["akademik"] = (lvl, f)
+            for sid, h, form in con.execute(f"""SELECT a.student_id, SUM(a.hours), s.study_form FROM absences a JOIN students s ON s.id=a.student_id
+                                          WHERE s.status='faol' AND {sc} AND {OPS._unexcused_sql(P, TODAY)} GROUP BY a.student_id"""):
+                lvl = OPS.davomat_level(h, P, form)
+                if lvl >= AR.AT_RISK_LEVEL: sig.setdefault(sid, {})["davomat"] = (lvl, {"hours": h})
+        except sqlite3.OperationalError:
+            pass
+    risky = [r for r in rows if r["id"] in sig]
+    for r in risky:
+        x = sig[r["id"]]
+        r["risk"] = _risk_value({k: v[0] for k, v in x.items()})
+        r["reasons"] = "; ".join(f"{'o' + chr(39) + 'zlashtirish' if k == 'akademik' else 'davomat'} ({LV.get(v[0], v[0])}): {_reason_text(k, v[1])}"
+                                 for k, v in sorted(x.items()))
+        if r["gpa"] is None: r["gpa"] = "—"   # 1-kurs: yakunlangan semestr yo'q
+    risky.sort(key=lambda x: (-x["risk"], x["full_name"]))
     res = (len(rows), risky, evaluated)
     if len(_RISK_CACHE) > 64: _RISK_CACHE.clear()
     _RISK_CACHE[sc] = (time.monotonic(), res)
@@ -149,18 +154,20 @@ def at_risk_students(con, ctx: Ctx, limit=15, quiet=False):
     if ctx.aggregate_only(STUDENTS):
         out["note"] = "Shaxsiy ma'lumotlar bu darajaga faqat jamlangan shaklda chiqadi"
     else:
-        # kesh buzilmasin — nusxa; moliyaviy maydonlar tashqariga chiqmaydi
-        out["students"] = [{k: v for k, v in r.items() if k not in ("contract_amount", "paid_amount")} for r in risky[:limit]]
+        out["students"] = [dict(r) for r in risky[:limit]]   # kesh buzilmasin — nusxa
     return out
 
 def teacher_groups(con, ctx: Ctx, quiet=False):
     _g(con, ctx, ACADEMIC, "o'z guruhlari", quiet)
     if ctx.role.scope != "o'qituvchi":
         return None
-    return db.rows(con, f"""SELECT g.name grp, tg.subject, SUM(gr.semester=1) n, ROUND(AVG(CASE WHEN gr.semester=1 THEN gr.score END),1) avg_score,
-        ROUND(AVG(CASE WHEN gr.semester=0 THEN gr.score END),1) prev_score,
-        SUM(gr.semester=1 AND gr.score<{AR.PASS}) failing FROM teacher_groups tg JOIN groups_ g ON g.id=tg.group_id
-        LEFT JOIN grades gr ON gr.teacher_id=tg.teacher_id AND gr.subject=tg.subject AND gr.student_id IN (SELECT id FROM students WHERE group_id=g.id)
+    # Joriy semestr: yakuniy nazorat hali o'tmagan — oraliq nazorat (30 ballik) o'rtachasi va 12 dan pastlar (yakuniyga kirmaydi).
+    # «O'tgan sem.» — guruhning oxirgi yakunlangan semestrdagi o'rtacha bali (100, barcha fanlar; fanlar semestrma-semestr farq qiladi).
+    cur, prv = AR.CURRENT_SEMESTER, AR.RATING_SEMESTER
+    return db.rows(con, f"""SELECT g.name grp, tg.subject, COUNT(gr.student_id) n, ROUND(AVG(gr.oraliq),1) avg_score, {AR.ORALIQ_MAX} max_score,
+        (SELECT ROUND(AVG(x.score),1) FROM grades x JOIN students sx ON sx.id=x.student_id WHERE sx.group_id=g.id AND x.semester={prv}) prev_score,
+        SUM(COALESCE(gr.oraliq,0) < {AR.ORALIQ_MIN}) failing FROM teacher_groups tg JOIN groups_ g ON g.id=tg.group_id
+        LEFT JOIN grades gr ON gr.subject=tg.subject AND gr.semester={cur} AND gr.student_id IN (SELECT id FROM students WHERE group_id=g.id AND status='faol')
         WHERE tg.teacher_id=? GROUP BY g.id, tg.subject""", (ctx.user["teacher_id"],))
 
 # ---------- Moliya ----------
@@ -302,8 +309,9 @@ def alerts(con, ctx: Ctx):
             out.append({"level": "high", "area": "O'quv", "text": decline_text(c)})
     r = safe(at_risk_students)
     if r and r["count"]:
-        out.append({"level": "mid", "area": "Talabalar", "text": f"O'qishda xavf: {r['count']:,} nafar talaba".replace(",", " ") +
-                    f" — o'zlashtirish yoki davomat bo'yicha kritik/jiddiy holat (eng ko'p: {r['by_group'][0]['group']} — {r['by_group'][0]['count']} nafar)"})
+        out.append({"level": "mid", "area": "Talabalar", "text": f"{RISK_LABEL}: {r['count']:,} nafar talaba".replace(",", " ") +
+                    f" — o'zlashtirish (akademik qarz, past oraliq) yoki joriy semestr davomati bo'yicha kritik/jiddiy holat"
+                    f" (eng ko'p: {r['by_group'][0]['group']} — {r['by_group'][0]['count']} nafar)"})
     c = safe(contracts_summary)
     if c:
         w = c["worst_groups"][0]
@@ -379,16 +387,17 @@ def kpis(con, ctx: Ctx):
                                WHERE {sc} AND s.status='faol' AND s.attendance IS NOT NULL GROUP BY g.course ORDER BY g.course""")
         out += [_k("talabalar", "Faol talabalar", f"{t['n']:,}".replace(",", " "), sub, "HEMIS", sync,
                    [frm[f] for f, _ in forms], "bars", [lbl for _, lbl in forms]),
-                # semestrlar bo'yicha o'rtacha ball (talabalar kartasidagi gpa_prev → gpa) — qiymat bilan bir xil manba
-                _k("ball", "O'rtacha ball", t["gpa"], f"o'tgan semestr: {t['gpa_prev']}", "HEMIS", sync,
-                   [t["gpa_prev"], t["gpa"]], "line", ["bahorgi semestr", "kuzgi semestr"], trend=round(t["gpa"] - t["gpa_prev"], 1)),
+                # o'rtacha ball (100): oxirgi yakunlangan semestr (Reyting → umumiy ko'rinish bilan bir xil son); avvalgisi — undan oldingi semestr
+                _k("ball", AR.SCORE_LABEL, t["gpa"], f"{AR.SEMESTER_SHORT[AR.RATING_SEMESTER]} · avvalgi semestr: {t['gpa_prev']}", "HEMIS (baholar)", sync,
+                   [t["gpa_prev"], t["gpa"]], "line", [AR.SEMESTER_SHORT[AR.RATING_SEMESTER - 1], AR.SEMESTER_SHORT[AR.RATING_SEMESTER]],
+                   trend=round(t["gpa"] - t["gpa_prev"], 1) if t["gpa"] is not None and t["gpa_prev"] is not None else None),
                 _k("davomat", "Davomat", f"{t['attendance']}%", "kunduzgi va sirtqi (masofaviy — onlayn)", "HEMIS", sync,
                    [r["a"] for r in att], "bars", [f"{r['course']}-kurs" for r in att])]
     r = safe(at_risk_students)
     if r:
         last = db.one(con, "SELECT value FROM ops_policy WHERE key='_last_run'") if db.one(con, "SELECT 1 x FROM sqlite_master WHERE name='ops_policy'") else None
         upd = dt.datetime.fromtimestamp(last["value"]).replace(microsecond=0).isoformat() if last else sync
-        out.append(_k("oqishda_xavf", RISK_LABEL, r["count"], f"{round(100*r['count']/max(1,r['of']),1)}% talaba · o'zlashtirish yoki davomat",
+        out.append(_k("oqishda_xavf", RISK_LABEL, r["count"], f"{round(100*r['count']/max(1,r['of']),1)}% faol talaba · o'zlashtirish yoki davomat (kritik/jiddiy)",
                       "Talabalar markazi qoidalari (HEMIS baholari va davomati)", upd, [r["count"], r["of"]], "ring", bad=True))
     c = safe(contracts_summary)
     if c:

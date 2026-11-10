@@ -1,5 +1,5 @@
 """Seed'ni boyitish: majlis bayonnomalari, har bir lavozimga topshiriqlar, tadbirlar, murojaatlar,
-qo'shimcha hamkorlar/grantlar, 2-semestr baholari va 3 haftalik audit tarixi.
+qo'shimcha hamkorlar/grantlar va 3 haftalik audit tarixi (baholar tarixi — app/seed.py).
 seed.run() ichidan chaqiriladi. HIKOYA saqlanadi: muddati o'tgan topshiriqlar aynan 3 ta."""
 import datetime as dt
 from . import db
@@ -127,7 +127,7 @@ DENIED = [("oqituvchi", "finance"), ("oqituvchi", "hr"), ("qabul", "payroll"), (
           ("akademik", "payroll"), ("prorektor_yoshlar", "finance"), ("xalqaro", "students"), ("kengash", "hr"), ("magistratura", "finance")]
 
 
-def run(con, R, TODAY, teachers):
+def run(con, R, TODAY, teachers, old_rows=0):
     c = con.cursor()
     for mid, txt in TRANSCRIPTS.items():
         c.execute("UPDATE meetings SET transcript=? WHERE id=?", (txt, mid))
@@ -154,11 +154,9 @@ def run(con, R, TODAY, teachers):
                    R.choice([120, 250, 380, 520, 760, 1100]) * 1_000_000,
                    R.choices(["bajarilmoqda", "ariza berilgan", "yakunlangan", "rad etilgan"], [5, 4, 3, 2])[0], R.choice([2025, 2026])))
 
-    # o'tgan (bahorgi) semestr baholari: gpa_prev atrofida — dinamikani ko'rsatish uchun
-    for s in db.rows(con, "SELECT id, gpa_prev FROM students"):
-        for g in db.rows(con, "SELECT subject, teacher_id FROM grades WHERE student_id=? AND semester=1", (s["id"],)):
-            c.execute("INSERT INTO grades VALUES(?,?,?,?,?)", (s["id"], g["subject"], g["teacher_id"],
-                      int(max(8, min(100, R.gauss(s["gpa_prev"], 7)))), 0))
+    # O'tgan semestrlar baholari endi app/seed.py da (o'quv rejasi bo'yicha ko'p semestrli tarix) yaratiladi. Bu yerda faqat avvalgi
+    # «bahorgi semestr» bloki chaqirgan tasodifiy sonlar soni saqlanadi — keyingi demo ma'lumotlar (audit tarixi) o'zgarmasligi uchun.
+    for _ in range(old_rows): R.gauss(0, 1)
 
     # 3 haftalik audit tarixi (eng yangisi oxirida bo'lishi uchun vaqt bo'yicha tartiblab yoziladi)
     users = {u["role"]: u for u in db.rows(con, "SELECT id, full_name, role FROM users")}

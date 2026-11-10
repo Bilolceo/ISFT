@@ -30,9 +30,8 @@ def letter(score):
     return _band(score)[2]
 
 def split_score(score: int, key: str):
-    """Yakuniy ballni oraliq (≤30) + yakuniy (≤70) ga ajratadi — qaydnoma uchun, deterministik.
-    O'tgan talabada ikkala nazorat ham minimal chegaradan past emas; o'tmaganda oraliq imkon qadar 12 dan
-    kam emas (yakuniyga kiritilgan), yakuniy esa 28 dan past chiqadi — jami har doim bazadagi ball bilan bir xil."""
+    """Yakuniy ballni oraliq (≤30) + yakuniy (≤70) ga ajratadi — FAQAT demo baholarni yaratishda (app/seed.py) ishlatiladi.
+    Bazada oraliq va yakuniy alohida saqlanadi (grades.oraliq, grades.yakuniy) — hujjatlar va reyting ularni o'qiydi, qayta bo'lmaydi."""
     r = random.Random(key)
     want = round(score * ORALIQ_MAX / 100 + r.uniform(-3, 3))
     if score >= PASS:
@@ -42,9 +41,70 @@ def split_score(score: int, key: str):
     o = max(lo, min(hi, want))
     return o, score - o
 
+def admitted(oraliq) -> bool:
+    """Yakuniy nazoratga kiritiladimi: oraliq nazoratdan kamida 12 / 30 ball."""
+    return oraliq is not None and oraliq >= ORALIQ_MIN
+
+# ---------------- akademik taqvim ----------------
+# grades.semester — o'quv davri (semestr) kodi, talabadan qat'i nazar bir xil:
+#    1 — JORIY semestr (2026-2027 kuzgi): faqat joriy/oraliq nazorat ballari bor, yakuniy nazorat (qishki sessiya) hali o'tmagan;
+#    0 — oxirgi yakunlangan semestr (2025-2026 bahorgi), -1 — 2025-2026 kuzgi, ... -5 — 2023-2024 kuzgi (hozirgi 4-kurs 1-semestri).
+# Talabaning dastur semestri (1..8 bakalavr, 1..4 magistr): sem_no = 2·kurs − 2 + kod. 1-kursda o'tgan semestr YO'Q;
+# 4-kursda 6 ta yakunlangan semestr + joriy 7-semestr.
+ACAD_YEAR_START = 2026            # joriy o'quv yili: 2026-2027
+CURRENT_SEMESTER = 1
+OLDEST_SEMESTER = -5
+PROGRAM_SEMESTERS = {"bakalavr": 8, "magistr": 4}
+BACHELOR_CREDITS, MASTER_CREDITS = 240, 120
+PROGRAM_CREDITS = {"bakalavr": BACHELOR_CREDITS, "magistr": MASTER_CREDITS}
+SEMESTER_CREDITS = 30             # har semestr o'quv rejasida 30 kredit (240 / 8, 120 / 4)
+
+def term_year(t: int) -> int:
+    """Semestr kodi → o'quv yilining boshlanish yili (1 → 2026, 0 → 2025, -1 → 2025, -2 → 2024 ...)."""
+    return ACAD_YEAR_START + (t - 1) // 2
+
+def term_season(t: int) -> str:
+    return "kuzgi" if t % 2 == 1 else "bahorgi"
+
+def term_dates(t: int):
+    """(boshlanish, tugash) ISO sanalari: kuzgi — 1 sentabr..31 yanvar, bahorgi — 1 fevral..30 iyun."""
+    y = term_year(t)
+    return (f"{y}-09-01", f"{y + 1}-01-31") if t % 2 == 1 else (f"{y + 1}-02-01", f"{y + 1}-06-30")
+
+def sem_no(course: int, t: int) -> int:
+    """Talabaning dastur semestri raqami (≤ 0 — o'sha davrda hali o'qimagan)."""
+    return 2 * int(course) - 2 + t
+
+def term_of(course: int, n: int) -> int:
+    return n - 2 * int(course) + 2
+
+ACAD_SCHEMA = """
+CREATE TABLE IF NOT EXISTS curriculum(id INTEGER PRIMARY KEY, direction TEXT, level TEXT, sem_no INT, subject TEXT, credits INT);
+CREATE INDEX IF NOT EXISTS ix_curr ON curriculum(direction, level, sem_no);
+CREATE TABLE IF NOT EXISTS grade_attempts(id INTEGER PRIMARY KEY, student_id INT, subject TEXT, semester INT, attempt INT, kind TEXT,
+  oraliq INT, yakuniy INT, score INT, at TEXT, counted INT, retake_id INT, by_user INT, note TEXT);
+CREATE INDEX IF NOT EXISTS ix_ga_st ON grade_attempts(student_id, semester, subject);
+CREATE INDEX IF NOT EXISTS ix_grades_student ON grades(student_id, semester);
+CREATE INDEX IF NOT EXISTS ix_grades_teacher ON grades(teacher_id);
+"""
+GRADE_COLS = [("oraliq", "INT"), ("yakuniy", "INT"), ("credits", "INT"), ("sem_no", "INT"), ("attempts", "INT DEFAULT 1")]
+
+def ensure_schema(con):
+    """Baholar modeli: grades — har fan × semestr uchun HISOBDAGI natija (ball, oraliq, yakuniy, kredit, dastur semestri, urinishlar soni);
+    grade_attempts — urinishlar tarixi (asl urinish + qayta topshirish / otrabotka, qaysi biri hisobga olingani);
+    curriculum — o'quv rejasi. Joriy semestrda grades.score NULL (yakuniy nazorat hali o'tmagan), faqat oraliq bor."""
+    have = {r[1] for r in con.execute("PRAGMA table_info(grades)").fetchall()}
+    for col, ty in GRADE_COLS:
+        if col not in have: con.execute(f"ALTER TABLE grades ADD COLUMN {col} {ty}")
+    con.executescript(ACAD_SCHEMA)
+    con.commit()
+
+def intake_year(course: int) -> int:
+    """Qabul yili: 1-kurs — 2026, 4-kurs — 2023 (guruh kodi va ma'lumotnomadagi o'qish muddati shundan)."""
+    return ACAD_YEAR_START - int(course) + 1
+
 # ---------------- kredit va GPA ----------------
 CREDIT_HOURS, CREDIT_AUD, CREDIT_SELF = 30, 12, 18
-BACHELOR_CREDITS, MASTER_CREDITS = 240, 120
 GPA_FORMULA = "GPA = Σ(kredit × baho) / Σ kredit"
 CREDIT_NOTE = f"1 kredit = {CREDIT_HOURS} soat ({CREDIT_AUD} soat auditoriya + {CREDIT_SELF} soat mustaqil ta'lim)"
 
@@ -64,22 +124,27 @@ def gpa(items):
     cr = sum(k for k, _ in items)
     return ratio2(sum(k * g for k, g in items), cr) if cr else None
 
-# Fan krediti: o'quv dasturida (syl_items.credits — «O'quv dasturlari» moduli) ko'rsatilgan bo'lsa o'sha, aks holda standart.
-# Standart 6 kredit — taqdimotdagi GPA misolidagi fan krediti (quyida GPA_EXAMPLE); transkript va reyting bir xil manbadan oladi.
+# Fan krediti — o'quv rejasidan (curriculum: yo'nalish × daraja × dastur semestri × fan → kredit, app/seed.py). Baho qatoriga ham
+# yoziladi (grades.credits) — reyting, transkript va GPA shu qiymatni oladi. O'quv rejasida topilmasa (eski baza) — standart.
 CREDIT_DEFAULT = 6
-CREDIT_SOURCE_SYL, CREDIT_SOURCE_DEFAULT = "o'quv dasturi", "standart"
+CREDIT_SOURCE_SYL, CREDIT_SOURCE_DEFAULT = "o'quv rejasi", "standart"
 
 def subject_credits(con) -> dict:
-    """{fan: kredit} — o'quv dasturlaridan (bir fanga bir nechta kafedra dasturi bo'lsa — eng ko'p uchragan qiymat).
-    Ro'yxatda yo'q fan uchun CREDIT_DEFAULT ishlatiladi (credit_of)."""
-    try:
-        rows = con.execute("""SELECT subject, credits FROM (SELECT subject, credits, COUNT(*) n FROM syl_items
-                              WHERE credits IS NOT NULL AND credits > 0 GROUP BY subject, credits) ORDER BY subject, n DESC, credits DESC""").fetchall()
-    except Exception:   # yangi bazada syl_items hali bo'lmasligi mumkin
-        return {}
-    out = {}
-    for subj, cr in rows: out.setdefault(subj, int(cr))
-    return out
+    """{fan: kredit} — o'quv rejasidan (bir fan bir nechta yo'nalishda turlicha bo'lsa — eng ko'p uchragan qiymat);
+    o'quv rejasi jadvali bo'lmasa — o'quv dasturlaridan (syl_items). Ro'yxatda yo'q fan uchun CREDIT_DEFAULT (credit_of)."""
+    for sql in ("""SELECT subject, credits FROM (SELECT subject, credits, COUNT(*) n FROM curriculum WHERE credits>0 GROUP BY subject, credits)
+                   ORDER BY subject, n DESC, credits DESC""",
+                """SELECT subject, credits FROM (SELECT subject, credits, COUNT(*) n FROM syl_items
+                   WHERE credits IS NOT NULL AND credits > 0 GROUP BY subject, credits) ORDER BY subject, n DESC, credits DESC"""):
+        try:
+            rows = con.execute(sql).fetchall()
+        except Exception:   # yangi bazada jadval hali bo'lmasligi mumkin
+            continue
+        if rows:
+            out = {}
+            for subj, cr in rows: out.setdefault(subj, int(cr))
+            return out
+    return {}
 
 def credit_of(credits: dict, subject: str) -> int:
     return credits.get(subject, CREDIT_DEFAULT)
@@ -176,14 +241,16 @@ LOCAL_DEPTS = {
 # ---------------- reyting (app/reyting.py — «Reyting» moduli) ----------------
 RATING_TITLE = ("Oliy ta'lim muassasasi talabalarining o'zlashtirish ko'rsatkichlarini reyting baholash "
                 "avtomatlashtirilgan tizimi")
-# grades.semester: 0 — yakunlangan (o'tgan) semestr, 1 — joriy semestr (app/documents.py transkripti bilan bir xil)
-SEMESTERS = {0: "2025-2026 o'quv yili, bahorgi semestr", 1: "2026-2027 o'quv yili, kuzgi semestr"}
-SEMESTER_SHORT = {0: "2025-26 · bahorgi", 1: "2026-27 · kuzgi"}
-CURRENT_SEMESTER = 1
+# Semestrlar (yuqoridagi akademik taqvim): reyting faqat YAKUNLANGAN semestrlar bo'yicha (yakuniy ball bor); joriy semestrda
+# faqat oraliq nazorat — u reytingga kirmaydi (Talabalar markazi va imtihonga ruxsatnomada ishlatiladi).
+SEMESTERS = {t: f"{term_year(t)}-{term_year(t) + 1} o'quv yili, {term_season(t)} semestr" for t in range(CURRENT_SEMESTER, OLDEST_SEMESTER - 1, -1)}
+SEMESTER_SHORT = {t: f"{term_year(t)}-{str(term_year(t) + 1)[2:]} · {term_season(t)}" for t in SEMESTERS}
+COMPLETED_SEMESTERS = [t for t in SEMESTERS if t < CURRENT_SEMESTER]      # 0, -1, ... -5 (yangisi birinchi)
+RATING_SEMESTER = CURRENT_SEMESTER - 1    # reyting standart semestri: oxirgi yakunlangan (2025-2026 bahorgi)
 # Tartiblash (birinchisi asosiy, keyingilari — teng kelganda): hammasi kamayish tartibida
 RATING_ORDER = [("gpa", "Semestr GPA (5 ballik, kredit bilan tortilgan)", 2),
                 ("avg_score", "O'rtacha ball (100 ballik, fanlar bo'yicha oddiy o'rtacha)", 2),
-                ("attendance", "Davomat, % (joriy semestr; qayd etilmagan — oxirida)", 1)]
+                ("attendance", "Davomat, % (oxirgi yakunlangan semestr reytingida — joriy davomat; qayd etilmagan — oxirida)", 1)]
 RATING_LEVELS = [("group", "Guruh"), ("course", "Kurs"), ("direction", "Yo'nalish"), ("faculty", "Fakultet"), ("institute", "Institut")]
 RATING_LEVEL_NOTE = {"group": "o'quv guruhi ichida", "course": "bir xil daraja (bakalavr/magistr) va kursdagi barcha talabalar orasida",
                      "direction": "bir xil yo'nalish va darajadagi barcha kurslar orasida", "faculty": "fakultet bo'yicha",
@@ -204,5 +271,56 @@ def percentile(rank: int, n: int) -> int:
     if not rank or not n: return None
     return max(1, min(100, -(-rank * 100 // n)))
 
-RATING_FORMULA = (f"{GPA_FORMULA}; baho — 100 ballik balldan ({SCALE_TEXT}). Kredit — o'quv dasturidan, "
-                  f"ko'rsatilmagan bo'lsa {CREDIT_DEFAULT} kredit.")
+RATING_FORMULA = (f"{GPA_FORMULA}; baho — 100 ballik yakuniy balldan ({SCALE_TEXT}). Kredit — o'quv rejasidan "
+                  f"(har semestr {SEMESTER_CREDITS} kredit), ko'rsatilmagan bo'lsa {CREDIT_DEFAULT} kredit.")
+
+# =====================================================================================================
+# YAGONA TA'RIFLAR — panel (KPI), Talabalar markazi, Reyting, hujjatlar va call-markaz shu yerdan oladi
+# =====================================================================================================
+SCORE_LABEL = "O'rtacha ball (100)"     # fanlar bo'yicha 100 ballik yakuniy ballarning oddiy o'rtachasi
+GPA_LABEL = "GPA (5)"                    # 5 ballik baho, kredit bilan tortilgan: Σ(kredit × baho) / Σ kredit
+SCORE_DEF = (f"{SCORE_LABEL}: oxirgi yakunlangan semestr ({SEMESTERS[RATING_SEMESTER]}) fanlari bo'yicha 100 ballik yakuniy "
+             "ballarning o'rtachasi (qayta topshirilgan bo'lsa — hisobdagi urinish). 1-kurs talabalarida hali yakunlangan semestr yo'q.")
+# students.gpa / students.gpa_prev — HISOBLANGAN qiymatlar (refresh_student_metrics): oxirgi va undan oldingi yakunlangan semestrning
+# o'rtacha bali (100). Qo'lda o'zgartirilmaydi; baho o'zgarsa (otrabotka tasdiqlansa) qayta hisoblanadi.
+
+# O'zlashtirish holati (Talabalar markazi «akademik» qoidasi) — darajalar:
+FAILS_WARN, GPA_MIN = 2, 3.0           # ops_policy dagi standart qiymatlar (fails_warn, gpa_min)
+DEBTOR_LABEL = "Akademik qarzdor"
+DEBTOR_DEF = (f"yakunlangan semestr(lar)dan kamida bitta fani o'zlashtirilmagan (hisobdagi yakuniy ball {PASS} dan past va qayta "
+              "topshirish bilan yopilmagan) faol talaba")
+RISK_LABEL = "O'qishda xavf"
+AT_RISK_LEVEL = 2                       # «kritik» va «jiddiy»
+RISK_DEF = ("faol talaba, o'zlashtirish yoki davomat bo'yicha holati «kritik»/«jiddiy»: kamida "
+            f"{FAILS_WARN} ta akademik qarz yoki kumulyativ GPA {GPA_MIN} dan past yoki joriy semestrda {FAILS_WARN} va undan ko'p fandan "
+            f"oraliq nazorat {ORALIQ_MIN} balldan past, yoki joriy semestrda 30+ soat (sirtqi — sessiya soatlariga mutanosib, 16+) sababsiz "
+            "qoldirilgan dars. Kontrakt qarzi bu songa kirmaydi")
+
+def akademik_level(debts: int, gpa5, oraliq_low: int, fails_warn=FAILS_WARN, gpa_min=GPA_MIN) -> int:
+    """0 — holat yo'q; 1 — diqqat (1 ta qarz yoki 1 ta fandan oraliq < 12); 2 — kritik (≥ fails_warn qarz, kumulyativ GPA < gpa_min,
+    ≥ fails_warn fandan oraliq < 12 yoki qarz + past oraliq birga); 3 — jiddiy (≥ fails_warn + 2 qarz)."""
+    fw = int(fails_warn)
+    if debts >= fw + 2: return 3
+    if debts >= fw or (gpa5 is not None and gpa5 < gpa_min) or oraliq_low >= fw or (debts and oraliq_low): return 2
+    if debts or oraliq_low: return 1
+    return 0
+
+def davomat_level(h, call=30, letter=30, reprimand=48) -> int:
+    """Joriy semestrdagi sababsiz soatlar zinapoyasi: hayfsan — chegaradan OSHSA (48 → 49+), xat va qo'ng'iroq — chegaraga yetsa (30+)."""
+    if h > reprimand: return 3
+    if h >= letter: return 2
+    if h >= call: return 1
+    return 0
+
+def debt_where(alias="g") -> str:
+    """Akademik qarz (SQL sharti): yakunlangan semestrdagi hisobdagi ball o'tish balidan past."""
+    return f"{alias}.semester < {CURRENT_SEMESTER} AND {alias}.score IS NOT NULL AND {alias}.score < {PASS}"
+
+def refresh_student_metrics(con, ids=None) -> int:
+    """students.gpa / gpa_prev ni baholardan qayta hisoblaydi (o'rtacha ball (100): oxirgi va undan oldingi yakunlangan semestr).
+    Reyting keshidagi avg_score bilan bir xil formula (ratio2) — panel KPI va reyting bir xil raqam ko'rsatadi."""
+    def q(t): return (f"(SELECT {ratio2_sql('SUM(x.score)', 'COUNT(*)')} FROM grades x WHERE x.student_id=students.id "
+                      f"AND x.semester={t} AND x.score IS NOT NULL)")   # 0 ta baho → 0 ga bo'lish → NULL
+    w = f" WHERE id IN ({','.join(str(int(i)) for i in ids)})" if ids else ""
+    if ids is not None and not ids: return 0
+    return con.execute(f"UPDATE students SET gpa={q(RATING_SEMESTER)}, gpa_prev={q(RATING_SEMESTER - 1)}{w}").rowcount

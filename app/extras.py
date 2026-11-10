@@ -281,8 +281,10 @@ def _visible_tasks(c: Ctx) -> list[dict]:
         return []
 
 def _task_link(t):
+    """Aniq topshiriqqa havola: ierarxik topshiriq — o'z kartasi; majlis topshirig'i (eski yoki qaror oqimidagi) — majlis + topshiriq."""
     if t.get("origin") == "topshiriq": return {"view": "tasks", "directive": t["id"]}   # app/directives.py
-    return {"view": "tasks", "meeting": t["meeting_id"]} if t.get("source") else {"view": "tasks"}
+    if t.get("meeting_id"): return {"view": "tasks", "meeting": t["meeting_id"], "task": t["id"]}
+    return {"view": "tasks", "task": t["id"]}
 
 def _search_tasks(c: Ctx, q: str) -> list[dict]:
     ql = q.lower(); out = []
@@ -424,25 +426,44 @@ def notifications(c: Ctx) -> list[dict]:
     if AH.can_view_page(c) and c.role.key != "kengash":
         props = [r for r in db.rows(_con, "SELECT id, agent, title, created_at FROM agent_actions WHERE status='taklif' ORDER BY id DESC")
                  if AH.can_approve(c, r["agent"])]
+        # 3 tagacha — har biri alohida; ko'p bo'lsa qo'ng'iroqchani to'ldirmaslik uchun bitta yozuv (soni aniq, havola — eng yangi taklifning
+        # ko'rib chiqish oynasi). «Mening vazifalarim»da esa har bir taklif alohida qator.
         if 0 < len(props) <= 3:
             for r in props:
                 items.append({"id": f"ag{r['id']}", "kind": "agent", "icon": "spark", "level": "info", "title": f"AI agent taklifi: {r['title']}",
-                              "sub": f"{AH.AG.get(r['agent'], {}).get('name', r['agent'])} · tasdiqingizni kutmoqda", "ts": _ts(r["created_at"]), "link": {"view": "agents"}})
+                              "sub": f"{AH.AG.get(r['agent'], {}).get('name', r['agent'])} · tasdiqingizni kutmoqda", "ts": _ts(r["created_at"]), "link": {"view": "agents", "action": r["id"]}})
         elif props:
             names = sorted({AH.AG.get(r["agent"], {}).get("name", r["agent"]) for r in props})
             items.append({"id": "agall", "kind": "agent", "icon": "spark", "level": "info",
                           "title": f"AI agentlar: {len(props)} ta taklif tasdiqingizni kutmoqda", "sub": " · ".join(names[:3]) + (f" va yana {len(names) - 3}" if len(names) > 3 else ""),
-                          "ts": max(_ts(r["created_at"]) for r in props), "link": {"view": "agents"}})
+                          "ts": max(_ts(r["created_at"]) for r in props), "link": {"view": "agents", "action": props[0]["id"]}})
     # --- O'quv dasturlari (app/syllabus.py): biriktirish, qaytarish, eslatma, tekshiruv va tasdiq kutayotganlar ---
     try:
         from . import syllabus as SY
         items += SY.notif_items(c)
     except Exception as e: print("notifications.syllabus:", repr(e))
-    # --- hujjatlar: imzo kutayotgan buyruq loyihalari (faqat rektor imzolaydi) ---
-    if c.role.key == "rektor":
-        for r in db.rows(_con, "SELECT id, reg_no, title, holder, created_at FROM documents WHERE status='loyiha' ORDER BY id DESC LIMIT 10"):
-            items.append({"id": f"dc{r['id']}", "kind": "hujjat", "icon": "file", "level": "warn", "title": f"Imzo kutilmoqda: {r['title']}",
-                          "sub": " · ".join(x for x in [r["reg_no"], r["holder"]] if x), "ts": _ts(r["created_at"]), "link": {"view": "documents", "reg": r["reg_no"]}})
+    # --- Buyruqlar (yagona joy): imzo / kelishuv kutayotganlar, qaytarilgan loyihalar, devonxona jurnali (orders.pending) ---
+    try:
+        from . import orders as ORD
+        if c.role.key in ORD.REG_READ:
+            pd = ORD.pending(c)
+            lab = {"sign": ("Imzo kutilmoqda", "warn", "submitted_at"), "forward": ("Kelishuv kutilmoqda", "warn", "submitted_at"),
+                   "returned": ("Buyruq loyihasi qaytarildi", "bad", "created_at"), "register": ("Devonxona jurnaliga oling", "info", "signed_at")}
+            for k, rows in pd.items():
+                t_, lvl, tsk = lab[k]
+                for r in rows[:10]:
+                    items.append({"id": f"or{k[0]}{r['id']}", "kind": "buyruq", "icon": "file", "level": lvl, "title": f"{t_}: {r['title']}",
+                                  "sub": " · ".join(x for x in [r.get("reg_no") or f"Loyiha #{r['id']}", r["kind_name"], r.get("returned_note") if k == "returned" else ""] if x),
+                                  "ts": _ts(r.get(tsk) or r["created_at"]), "link": {"view": "orders", "order": r["id"]}})
+    except Exception as e: print("notifications.orders:", repr(e))
+    # --- Murojaatlar: menga biriktirilgan ochiq murojaatlar ---
+    try:
+        from . import service as SV
+        for r in SV.my_queue(_con, c)["mine"][:10]:
+            items.append({"id": f"rq{r['id']}", "kind": "murojaat", "icon": "mail", "level": "info", "title": f"Murojaat {r['number']} sizga biriktirilgan",
+                          "sub": " · ".join(x for x in [r["category"], (r["text"] or "")[:60]] if x), "ts": _ts(r.get("taken_at") or r["created_at"]),
+                          "link": {"view": "service", "tab": "requests", "request": r["id"]}})
+    except Exception as e: print("notifications.service:", repr(e))
     now = _iso(_now())
     for it in items: it["ts"] = min(it["ts"], now)      # kelajakdagi vaqt "… oldin" deb ko'rinmasin
     items.sort(key=lambda x: x["ts"], reverse=True)
@@ -487,7 +508,7 @@ def api_calendar(request: Request, month: str = ""):
             ev.append({"id": f"m{mt['id']}", "type": "majlis", "date": d.isoformat(), "title": mt["title"],
                        "sub": " · ".join(x for x in [mt["kind"], f"{n} ta topshiriq" if n else "", "majlis qarori (ISFT Core)" if mt["source"] else ""] if x),
                        "status": mt["status"] or "o'tkazildi", "overdue": False, "done": d < today,
-                       "link": {"view": "tasks", "meeting": mt["id"]} if mt["source"] else {"view": "tasks"}})
+                       "link": {"view": "tasks", "meeting": mt["id"]}})
         for t in tl:
             due = t.get("due_at") or t.get("due"); d = _due_date(due)
             if not inr(d): continue

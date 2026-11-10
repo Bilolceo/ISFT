@@ -37,8 +37,8 @@ db = sqlite3.connect(Path(os.environ.get("ISFT_CORE_DB") or ROOT / "data" / "jar
 q = lambda sql, a=(): db.execute(sql, a).fetchall()
 q1 = lambda sql, a=(): db.execute(sql, a).fetchone()[0]
 
-reg, regx, akad, sir, kaf, oq, ken, bux, rek, pro = S(17), S(43), S(18), S(27), S(31), S(15), S(1), S(11), S(2), S(3)
-CUR, PREV = AR.CURRENT_SEMESTER, AR.CURRENT_SEMESTER - 1
+reg, regx, akad, sir, kaf, oq, ken, bux, rek, pro, ty = S(17), S(43), S(18), S(27), S(31), S(15), S(1), S(11), S(2), S(3), S(24)
+CUR, PREV = AR.RATING_SEMESTER, AR.RATING_SEMESTER - 1   # reyting — yakunlangan semestrlar (joriy semestrda faqat oraliq nazorat)
 
 print("— Qayta hisoblash va kesh —")
 r = reg.post("/api/reyting/recompute")
@@ -49,26 +49,41 @@ for who, c in (("kengash (1)", ken), ("kafedra (31)", kaf), ("o'qituvchi (15)", 
 ok(q1("SELECT COUNT(*) FROM audit_log WHERE resource='rating' AND action='reyting: qayta hisoblash' AND allowed=0") >= 5,
    "Rad etilgan qayta hisoblash so'rovlari audit jurnalida (resurs «rating»)")
 
-faol = {s for (s,) in q("SELECT DISTINCT g.student_id FROM grades g JOIN students s ON s.id=g.student_id WHERE s.status='faol' AND g.semester=?", (CUR,))}
+faol = {s for (s,) in q("SELECT DISTINCT g.student_id FROM grades g JOIN students s ON s.id=g.student_id WHERE s.status='faol' AND g.semester=? AND g.score IS NOT NULL", (CUR,))}
 cached = {s for (s,) in q("SELECT student_id FROM rating_cache WHERE semester=?", (CUR,))}
 ok(cached == faol, f"Keshda faqat faol talabalar va hammasi ({len(cached)})")
 ok(q1("SELECT COUNT(*) FROM rating_cache r JOIN students s ON s.id=r.student_id WHERE s.status!='faol'") == 0, "Akademik ta'tildagilar reytingda yo'q")
 ok(q1("SELECT COUNT(*) FROM rating_cache WHERE semester=? AND n_f>0", (CUR,)) > 0, "«F» bo'lgan talabalar reytingda qoladi (akademik qarzdor)")
 
 # --- GPA formulasi (Python'da qayta hisoblash, academic_rules) ---
-credits = AR.subject_credits(db)
 rows = q("SELECT student_id, gpa, avg_score, credits, credits_ok, n_f, min_score FROM rating_cache WHERE semester=? ORDER BY student_id LIMIT 400", (CUR,))
 bad = 0
 for sid, gpa, avg, cr, crok, nf, mn in rows:
-    gs = q("SELECT subject, score FROM grades WHERE student_id=? AND semester=?", (sid, CUR))
-    items = [(AR.credit_of(credits, s), AR.grade5(sc)[0]) for s, sc in gs]
+    gs = q("SELECT credits, score FROM grades WHERE student_id=? AND semester=? AND score IS NOT NULL", (sid, CUR))
+    items = [(k, AR.grade5(sc)[0]) for k, sc in gs]
     exp = AR.gpa(items)
     if exp != gpa or AR.ratio2(sum(sc for _, sc in gs), len(gs)) != avg or cr != sum(k for k, _ in items) \
-       or nf != sum(sc < AR.PASS for _, sc in gs) or crok != sum(AR.credit_of(credits, s) for s, sc in gs if sc >= AR.PASS) or mn != min(sc for _, sc in gs):
+       or nf != sum(sc < AR.PASS for _, sc in gs) or crok != sum(k for k, sc in gs if sc >= AR.PASS) or mn != min(sc for _, sc in gs):
         bad += 1
 ok(bad == 0, f"GPA = Σ(kredit × baho) / Σ kredit, o'rtacha ball, kreditlar, «F» soni — {len(rows)} talabada Python hisobi bilan bir xil")
-ok(q1("SELECT COUNT(*) FROM rating_credits WHERE source=?", (AR.CREDIT_SOURCE_SYL,)) == len([s for (s,) in q("SELECT subject FROM rating_credits") if s in credits]),
-   f"Kredit manbai: o'quv dasturidan {len(credits)} fan, qolganlari standart {AR.CREDIT_DEFAULT}")
+ok(q1("SELECT COUNT(*) FROM grades WHERE credits IS NULL") == 0 and q1("SELECT COUNT(*) FROM rating_credits WHERE source=?", (AR.CREDIT_SOURCE_DEFAULT,)) == 0,
+   "4. Kredit — har bir fan uchun o'quv rejasidan (taxminiy standart kredit ishlatilmaydi)")
+
+print("— 3–4. Akademik tarix va o'quv rejasi —")
+ok(q1("""SELECT COUNT(*) FROM (SELECT student_id, semester, SUM(credits) c FROM grades GROUP BY student_id, semester HAVING c != 30)""") == 0,
+   f"4. Har semestr {AR.SEMESTER_CREDITS} kredit (bakalavr 8 × 30 = {AR.BACHELOR_CREDITS}, magistr 4 × 30 = {AR.MASTER_CREDITS})")
+ok(q1("SELECT COUNT(*) FROM (SELECT direction, level, subject FROM curriculum GROUP BY 1, 2, 3 HAVING COUNT(*) > 1)") == 0 and
+   q1("SELECT COUNT(DISTINCT sem_no) FROM curriculum WHERE level='bakalavr'") == 8 and
+   q1("SELECT SUM(credits) FROM curriculum WHERE direction='Iqtisodiyot' AND level='bakalavr'") == AR.BACHELOR_CREDITS,
+   "4. O'quv rejasi: yo'nalish ichida har semestr fanlari takrorlanmaydi, bakalavriat — 240 kredit")
+hist = dict(q("""SELECT gr.course, COUNT(DISTINCT g.semester) FROM grades g JOIN students s ON s.id=g.student_id JOIN groups_ gr ON gr.id=s.group_id
+                 WHERE s.status='faol' AND gr.level='bakalavr' AND g.semester<1 GROUP BY gr.course"""))
+ok(1 not in hist and hist.get(4) == 6 and hist.get(2) == 2, f"3. O'tgan semestrlar: 1-kursda yo'q, 2-kursda 2 ta, 4-kursda 6 ta {hist}")
+ok(q1("SELECT MAX(sem_no) FROM grades g JOIN students s ON s.id=g.student_id JOIN groups_ gr ON gr.id=s.group_id WHERE gr.course=4 AND gr.level='bakalavr'") == 7,
+   "3. 4-kurs: 6 ta yakunlangan semestr + joriy 7-semestr")
+badg = [n for n, c in q("SELECT name, course FROM groups_ g WHERE EXISTS(SELECT 1 FROM students s WHERE s.group_id=g.id AND s.status='faol')")
+        if f"-{AR.intake_year(c) % 100:02d}" not in n]   # bitirgan (tarixiy) guruhlar hisobga olinmaydi
+ok(not badg, f"3. Guruh kodi — qabul yili: 1-kurs …-26xx, 4-kurs …-23xx (mos kelmagan: {badg[:3]})")
 
 # --- o'rinlar: har darajada RANK va jami ---
 cols = "student_id, semester, gpa, avg_score, attendance, group_id, course, level, direction, faculty_id, " + \
@@ -127,29 +142,59 @@ ok(GR["total"] == q1("SELECT COUNT(*) FROM rating_cache WHERE group_id=? AND sem
    sorted(r["place"]["rank"] for r in GR["rows"])[0] == 1 and all(r["place"]["n"] == GR["total"] for r in GR["rows"]), "Guruh filtri va guruh darajasidagi o'rin")
 nm = x["name"].split()[0]
 ok(any(r["id"] == x["id"] for r in reg.get("/api/reyting/list", params={"q": x["hemis_id"]}).json()["rows"]), "Qidiruv: HEMIS ID bo'yicha")
-ok(reg.get("/api/reyting/list", params={"level": "xato"}).status_code == 400 and reg.get("/api/reyting/list", params={"sem": 9}).status_code == 400,
-   "Noto'g'ri daraja/semestr — 400")
+ok(reg.get("/api/reyting/list", params={"level": "xato"}).status_code == 400 and reg.get("/api/reyting/list", params={"sem": 9}).status_code == 400
+   and reg.get("/api/reyting/list", params={"sem": AR.CURRENT_SEMESTER}).status_code == 400,
+   "Noto'g'ri daraja/semestr — 400 (joriy semestr ham: yakuniy nazorat hali o'tmagan)")
 P0 = reg.get("/api/reyting/list", params={"sem": PREV, "per": 10}).json()
-ok(P0["total"] == q1("SELECT COUNT(*) FROM rating_cache WHERE semester=?", (PREV,)) and not P0["has_prev"], "O'tgan semestr reytingi (oldingisi yo'q — o'zgarish ko'rsatilmaydi)")
+ok(P0["total"] == q1("SELECT COUNT(*) FROM rating_cache WHERE semester=?", (PREV,)) and P0["has_prev"], "O'tgan semestr reytingi (undan oldingisi ham bor)")
+P5 = reg.get("/api/reyting/list", params={"sem": AR.OLDEST_SEMESTER, "per": 10}).json()
+ok(P5["total"] > 0 and not P5["has_prev"], f"Eng eski semestr ({AR.SEMESTER_SHORT[AR.OLDEST_SEMESTER]}): {P5['total']} talaba, oldingisi yo'q")
 
 print("— Talaba kartasi —")
 C = reg.get(f"/api/reyting/student/{x['id']}").json()
 sem = next(s for s in C["semesters"] if s["sem"] == CUR)
-ok(all(g["oraliq"] + g["yakuniy"] == g["score"] and 0 <= g["oraliq"] <= AR.ORALIQ_MAX and g["letter"] == AR.letter(g["score"]) and g["grade"] == AR.grade5(g["score"])[0]
-       and g["credits"] == AR.credit_of(credits, g["subject"]) and g["teacher"] for g in sem["subjects"]),
-   f"Fanlar: ball = oraliq + yakuniy, harf, 5 baho, kredit, o'qituvchi ({len(sem['subjects'])} fan)")
-allg = q("SELECT subject, score FROM grades WHERE student_id=?", (x["id"],))
-ok(C["cumulative"]["gpa"] == AR.gpa([(AR.credit_of(credits, s), AR.grade5(sc)[0]) for s, sc in allg]) and
-   sem["gpa"] == x["gpa"], f"Semestr GPA {sem['gpa']} va kumulyativ GPA {C['cumulative']['gpa']}")
+dbcr = dict(q("SELECT subject, credits FROM grades WHERE student_id=? AND semester=?", (x["id"], CUR)))
+ok(all(((g["yakuniy"] is not None and g["oraliq"] + g["yakuniy"] == g["score"]) or (g["yakuniy"] is None and g["oraliq"] == g["score"]) or g["attempts"] > 1)
+       and 0 <= g["oraliq"] <= AR.ORALIQ_MAX and g["letter"] == AR.letter(g["score"]) and g["grade"] == AR.grade5(g["score"])[0]
+       and g["credits"] == dbcr[g["subject"]] and g["teacher"] for g in sem["subjects"]),
+   f"Fanlar: ball = oraliq + yakuniy (bazada saqlangan), harf, 5 baho, o'quv rejasi krediti, o'qituvchi ({len(sem['subjects'])} fan)")
+allg = q("SELECT credits, score FROM grades WHERE student_id=? AND semester<? AND score IS NOT NULL", (x["id"], AR.CURRENT_SEMESTER))
+ok(C["cumulative"]["gpa"] == AR.gpa([(k, AR.grade5(sc)[0]) for k, sc in allg]) and sem["gpa"] == x["gpa"]
+   and C["cumulative"]["credits_ok"] == sum(k for k, sc in allg if sc >= AR.PASS) and C["cumulative"]["program_credits"] in (AR.BACHELOR_CREDITS, AR.MASTER_CREDITS),
+   f"Semestr GPA {sem['gpa']}, kumulyativ GPA {C['cumulative']['gpa']}, kreditlar {C['cumulative']['credits_ok']} / {C['cumulative']['program_credits']}")
+ok(C["current"] and all(g["score"] if False else True for g in C["current"]["subjects"]) and all("oraliq" in g and "score" not in g for g in C["current"]["subjects"]),
+   "1. Kartada joriy semestr — faqat oraliq nazorat (yakuniy hali yo'q)")
 ok(set(sem["places"]) == {k for k, _ in AR.RATING_LEVELS} and sem["places"]["institute"]["rank"] == x["place"]["rank"] and "delta" in sem["places"]["group"],
    "O'rinlar har darajada (guruh, kurs, yo'nalish, fakultet, institut) va o'zgarish")
-ok(len(C["trend"]) == 2 and [t["sem"] for t in C["trend"]] == [PREV, CUR], "Trend: semestrlar bo'yicha")
+own = sorted({t for (t,) in q("SELECT DISTINCT semester FROM grades WHERE student_id=? AND semester<? AND score IS NOT NULL", (x["id"], AR.CURRENT_SEMESTER))})
+ok([t["sem"] for t in C["trend"]] == own and len(own) >= 2, f"Trend: talabaning barcha yakunlangan semestrlari ({len(own)})")
+f1 = q1("""SELECT s.id FROM students s JOIN groups_ g ON g.id=s.group_id WHERE g.course=1 AND g.level='bakalavr' AND s.status='faol' LIMIT 1""")
+C1 = reg.get(f"/api/reyting/student/{f1}").json()
+ok(not C1["semesters"] and C1["current"] and C1["cumulative"]["credits"] == 0, "3. 1-kurs: yakunlangan semestr yo'q, faqat joriy semestr (oraliq)")
 ak = q1("SELECT id FROM students WHERE status!='faol' LIMIT 1")
 CA = reg.get(f"/api/reyting/student/{ak}").json()
 ok(CA["ranked"] is False and all(s["places"] is None for s in CA["semesters"]), "Akademik ta'tildagi talaba: baholar ko'rinadi, reytingda emas")
 ok(reg.get("/api/reyting/student/99999999").status_code == 404, "Mavjud bo'lmagan talaba — 404")
 
+print("— 5. Yagona ta'riflar: panel, Talabalar markazi va Reyting bir xil son —")
+O = rek.get("/api/reyting/overview").json()
+kp = {k["key"]: k for k in rek.get("/api/dashboard").json()["kpis"]}
+osum = rek.get("/api/ops/summary").json()
+ok(O["sem"] == CUR and kp["ball"]["value"] == O["total"]["avg_score"] and kp["ball"]["label"] == AR.SCORE_LABEL,
+   f"5. Panel «{AR.SCORE_LABEL}» = Reyting o'rtacha ball: {kp['ball']['value']} = {O['total']['avg_score']}")
+ok(kp["oqishda_xavf"]["value"] == osum["serious_students"] == osum["metrics"]["at_risk"]["n"],
+   f"5. «{AR.RISK_LABEL}»: panel {kp['oqishda_xavf']['value']} = Talabalar markazi {osum['metrics']['at_risk']['n']}")
+ok(O["total"]["debtors_all"] == osum["metrics"]["debtors"]["n"], f"5. «{AR.DEBTOR_LABEL}»: Reyting {O['total']['debtors_all']} = Talabalar markazi {osum['metrics']['debtors']['n']}")
+ok(q1("SELECT COUNT(*) FROM students WHERE status='faol' AND gpa IS NOT NULL") == O["total"]["n"] and
+   q1(f"""SELECT COUNT(*) FROM students s WHERE gpa IS NOT NULL AND gpa != (SELECT {AR.ratio2_sql('SUM(x.score)', 'COUNT(*)')} FROM grades x
+          WHERE x.student_id=s.id AND x.semester={CUR} AND x.score IS NOT NULL)""") == 0,
+   "5. students.gpa — baholardan hisoblangan (o'rtacha ball (100), oxirgi yakunlangan semestr)")
+
 print("— Ko'lam va ruxsatlar —")
+tg = {g for (g,) in q("SELECT group_id FROM tutor_groups WHERE user_id=24")}
+Lt = ty.get("/api/reyting/list", params={"per": 200}).json()
+ok(Lt["total"] == q1(f"SELECT COUNT(*) FROM rating_cache WHERE semester=? AND group_id IN ({','.join(map(str, tg)) or 0})", (CUR,)) and all(r["group_id"] in tg for r in Lt["rows"]),
+   f"15. Tyutor (24): faqat o'ziga biriktirilgan guruhlar ({len(tg)} guruh, {Lt['total']} talaba)")
 for who, c in (("Registrator ofisi xodimi (43)", regx), ("Akademik bo'lim (18)", akad), ("Rektor (2)", rek), ("O'quv prorektori (3)", pro)):
     ok(c.get("/api/reyting/list", params={"per": 10}).json()["total"] == len(faol), f"{who}: butun institut")
 n_sir = q1("SELECT COUNT(*) FROM rating_cache WHERE semester=? AND study_form='sirtqi'", (CUR,))
@@ -179,7 +224,8 @@ Ug = kaf.get("/api/reyting/units", params={"kind": "group"}).json()
 ok(Ug["rows"] and all(r["id"] in own_groups for r in Ug["rows"]), "Kafedra mudiri: o'z guruhlari reytingi")
 
 tid = q1("SELECT teacher_id FROM users WHERE id=15")
-graded = {s for (s,) in q("SELECT DISTINCT g.student_id FROM grades g JOIN students s ON s.id=g.student_id WHERE g.teacher_id=? AND s.status='faol'", (tid,))}
+graded = {s for (s,) in q("""SELECT DISTINCT g.student_id FROM grades g JOIN students s ON s.id=g.student_id WHERE g.teacher_id=? AND s.status='faol'
+                              AND g.student_id IN (SELECT student_id FROM rating_cache WHERE semester=?)""", (tid, CUR))}   # o'zi o'qitgan, shu semestrda reytingdagilar
 Lo = oq.get("/api/reyting/list", params={"per": 200}).json()
 ok(Lo["total"] == len(graded) and all(r["id"] in graded for r in Lo["rows"]), f"O'qituvchi (15): faqat o'zi baholagan talabalar ({len(graded)})")
 notg = q1(f"SELECT student_id FROM rating_cache WHERE semester=? AND student_id NOT IN ({','.join(map(str, graded)) or 0}) LIMIT 1", (CUR,))
@@ -247,7 +293,7 @@ ok(M["pass"] == AR.PASS and M["formula"] == AR.GPA_FORMULA and [o["key"] for o i
    M["credit_default"] == AR.CREDIT_DEFAULT, "Metodika academic_rules'dan: formula, tartib, chegaralar")
 
 print("— Kesh yangilanishi (barmoq izi) —")
-sid0, subj0, sc0 = q("SELECT student_id, subject, score FROM grades WHERE semester=? LIMIT 1", (CUR,))[0]
+sid0, subj0, sc0 = q("SELECT student_id, subject, score FROM grades WHERE semester=? AND score IS NOT NULL LIMIT 1", (CUR,))[0]
 fp0 = RTM.fingerprint(db)
 db.execute("UPDATE grades SET score=? WHERE student_id=? AND subject=? AND semester=?", (sc0 + 1 if sc0 < 100 else sc0 - 1, sid0, subj0, CUR)); db.commit()
 fp1 = RTM.fingerprint(db)

@@ -122,7 +122,7 @@
 .rt-plt b small{font-size:13px;color:var(--muted);font-weight:600}
 .rt-plt>small{font-size:12px;color:var(--teal);font-weight:600}
 .rt-two{display:grid;grid-template-columns:minmax(0,1fr);gap:16px}
-.rt-spark{width:100%;max-width:380px;height:auto;display:block;overflow:visible}
+.rt-spark{width:100%;max-width:640px;height:auto;display:block;overflow:visible}
 .rt-sg{stroke:var(--line-2);stroke-dasharray:3 4;stroke-width:1}
 .rt-sl{fill:none;stroke:var(--brand);stroke-width:2.5;stroke-linejoin:round;stroke-linecap:round}
 .rt-sd{fill:var(--surface);stroke:var(--brand);stroke-width:2.5}

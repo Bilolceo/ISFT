@@ -46,6 +46,7 @@ def uid(role):
     return q("SELECT id FROM users WHERE role=? AND COALESCE(active,1)=1 ORDER BY id LIMIT 1", (role,))[0][0]
 
 reg, rek, pro, sir, mb, kad = S(uid("talabalar")), S(uid("rektor")), S(uid("prorektor_oquv")), S(uid("sirtqi")), S(uid("malumotlar_bazasi")), S(uid("kadrlar"))
+dev, xoj = S(uid("devonxona")), S(uid("xojalik"))
 T0 = time.strftime("%Y-%m-%dT%H:%M:%S")
 
 def denied_audit(action_like):
@@ -62,8 +63,30 @@ def anomaly_ids():
 
 print("— Ruxsatlar —")
 ok(httpx.get(B + "/api/orders/meta").status_code == 401, "Kirishsiz: 401")
-ok(kad.get("/api/orders/meta").status_code == 403 and kad.get("/api/orders").status_code == 403 and kad.get("/api/orders/audit/issues").status_code == 403,
-   "Kadrlar bo'limi: Buyruqlar yopiq (403)")
+ok(xoj.get("/api/orders/meta").status_code == 403 and xoj.get("/api/orders").status_code == 403 and xoj.get("/api/orders/audit/issues").status_code == 403,
+   "Xo'jalik bo'limi: Buyruqlar yopiq (403)")
+# Kadrlar — faqat xodimlar buyruqlari (talabalar ro'yxati, audit va jurnal yopiq); Devonxona — reyestr (o'qish) + jurnal, talabalar ma'lumoti yopiq
+km = J(kad.get("/api/orders/meta"))
+ok(km["caps"]["edit_staff"] and not km["caps"]["edit"] and {k["key"] for k in km["kinds"]} == {"xodim_tatil"}, "Kadrlar: faqat xodimlar buyrug'i turi (mehnat ta'tili)")
+kl = J(kad.get("/api/orders?status=&limit=200"))
+ok(kl["total"] >= 1 and all(o["kind"] == "xodim_tatil" for o in kl["items"]), f"Kadrlar: reyestrda faqat xodimlar buyruqlari ({kl['total']} ta)")
+ok(kad.get("/api/orders/audit/issues").status_code == 403 and kad.get("/api/orders/changes/log").status_code == 403 and kad.get("/api/orders/lookup/students?q=ov").status_code == 403,
+   "Kadrlar: talabalar auditi, o'zgarishlar jurnali va talaba qidiruvi yopiq (403)")
+ok(kad.post("/api/orders", json={"kind": "guruh", "students": []}).status_code == 403, "Kadrlar: talabalar buyrug'ini tuza olmaydi (403)")
+ok(reg.post("/api/orders", json={"kind": "xodim_tatil", "params": {"staff_id": 1, "date_from": "2026-12-01", "days": 21}}).status_code == 403, "Registrator: xodimlar buyrug'ini tuza olmaydi (403)")
+stf_any = q("SELECT id FROM orders WHERE kind='xodim_tatil' LIMIT 1")[0][0]
+ok(reg.get(f"/api/orders/{stf_any}").status_code == 404 and pro.get(f"/api/orders/{stf_any}").status_code == 404, "Registrator va prorektor xodimlar buyrug'ini ko'rmaydi (ko'lamdan tashqari)")
+dm = J(dev.get("/api/orders/meta"))
+ok(dm["caps"]["register"] and not dm["caps"]["edit"] and not dm["caps"]["sign"] and not dm["caps"]["students"], "Devonxona: ro'yxatga olish; loyiha, imzo va talabalar ma'lumoti yo'q")
+ok(dev.get("/api/orders?status=&limit=5").status_code == 200 and dev.get("/api/orders/audit/issues").status_code == 403 and dev.get("/api/orders/changes/log").status_code == 403,
+   "Devonxona: reyestr ochiq, talabalar auditi va o'zgarishlar jurnali yopiq")
+ok(dev.post("/api/orders", json={"kind": "guruh", "students": []}).status_code == 403 and dev.post(f"/api/orders/{stf_any}/sign").status_code == 403, "Devonxona: loyiha tuza olmaydi, imzolay olmaydi (403)")
+print("— Hujjatlar markazidan ko'chirish (yagona joy) —")
+mig = q("SELECT o.kind, o.status, d.status FROM orders o JOIN documents d ON o.source = 'Hujjatlar markazi: ' || d.reg_no")
+ok(mig and all(x[2] == "bekor" for x in mig), f"Eski buyruq loyihalari Buyruqlarga ko'chirilgan ({len(mig)} ta), Hujjatlar markazida «bekor»")
+ok(q("SELECT COUNT(*) FROM documents WHERE status='loyiha' AND kind IN ('order_student','reprimand','leave_order')")[0][0] == 0, "Hujjatlar markazida imzo kutayotgan buyruq qolmagan (ikkinchi navbat yo'q)")
+rp = J(rek.get("/api/orders/meta"))["pending"]
+ok(rp["sign"] == q("SELECT COUNT(*) FROM orders WHERE status IN ('yuborilgan','kelishilgan')")[0][0], f"Rektor: imzo navbati = talabalar + xodimlar buyruqlari ({rp['sign']} ta)")
 ok(denied_audit("buyruqlar") >= 3, "Rad etilgan urinishlar audit jurnalida (resource=orders, allowed=0)")
 m = J(reg.get("/api/orders/meta"))
 ok(m["caps"]["edit"] and not m["caps"]["sign"], "Registrator: loyiha tuzadi, imzolamaydi")
@@ -260,6 +283,32 @@ bulk = q("SELECT id, version, count FROM orders WHERE demo='bulk'")
 if bulk:
     bd = J(reg.get(f"/api/orders/{bulk[0][0]}?limit=5"))
     ok(bd["all"] > 5000 and len(bd["versions"]) >= 2, f"Demo: katta chetlashtirish ro'yxati {bd['all']} ta, {len(bd['versions'])} versiya")
+
+print("— Xodimlar buyrug'i: Kadrlar → Rektor → Devonxona —")
+st = q("SELECT id FROM staff ORDER BY id LIMIT 1")[0][0]
+so = J(kad.post("/api/orders", json={"kind": "xodim_tatil", "params": {"staff_id": st, "date_from": "2027-01-10", "days": 14}}))["id"]
+sd = J(kad.get(f"/api/orders/{so}"))
+ok(sd["staff"] and sd["order"]["params"]["date_to"] == "2027-01-23" and sd["can"]["submit"] and not sd["can"]["students"], "Kadrlar: mehnat ta'tili loyihasi (14 kun → 23.01.2027)")
+J(kad.post(f"/api/orders/{so}/submit"))
+ok(any(x["id"] == so for x in J(rek.get("/api/orders?status=imzo&limit=200"))["items"]), "Rektor: xodim buyrug'i imzo navbatida (prorektor kelishuvisiz)")
+ok(J(rek.get("/api/orders/meta"))["pending"]["sign"] >= 1 and pro.post(f"/api/orders/{so}/forward").status_code in (403, 404), "Prorektor xodim buyrug'ini kelishmaydi")
+sg = J(rek.post(f"/api/orders/{so}/sign"))
+ok(sg["reg_no"].startswith("ShT-") and q("SELECT status FROM documents WHERE reg_no=?", (sg["reg_no"],))[0][0] == "imzolangan", f"Rektor imzoladi: {sg['reg_no']}, QR tekshiruvi uchun hujjatlar reyestrida")
+dq = J(dev.get("/api/orders/meta"))["pending"]["register"]
+ok(dq >= 1 and any(x["id"] == so for x in J(dev.get("/api/orders?status=jurnal&limit=200"))["items"]), f"Devonxona: imzolangan buyruq jurnal navbatida ({dq} ta)")
+ok(reg.post(f"/api/orders/{so}/register", json={}).status_code == 403, "Registrator jurnalga ro'yxatga ola olmaydi (403)")
+J(dev.post(f"/api/orders/{so}/register", json={"note": "asl nusxa arxivda (test)"}))
+ok(dev.post(f"/api/orders/{so}/register", json={}).status_code == 400 and J(dev.get(f"/api/orders/{so}"))["related"]["journal"]["note"] == "asl nusxa arxivda (test)",
+   "Devonxona: ro'yxatga olindi (ikkinchi marta — 400), izoh saqlandi")
+ok(J(dev.get("/api/orders/meta"))["pending"]["register"] == dq - 1, "Devonxona: jurnal navbati bittaga kamaydi")
+og = J(dev.get("/api/orders/outgoing"))
+ok(og["can_add"] and og["next_no"].startswith("Ch-"), f"Chiquvchi yozishmalar jurnali: navbatdagi raqam {og['next_no']}")
+ox = J(dev.post("/api/orders/outgoing", json={"addressee": "Test vazirlik (test)", "subject": "Buyruq nusxasi (test)", "order_id": so}))
+ok(ox["out_no"] == og["next_no"] and any(m["out_no"] == ox["out_no"] for m in J(dev.get(f"/api/orders/{so}"))["related"]["outgoing"]), f"Chiquvchi xat {ox['out_no']} buyruqqa bog'landi")
+ok(dev.post("/api/orders/outgoing", json={"addressee": "x", "subject": "y"}).status_code == 400, "Chiquvchi xat: bo'sh maydon — 400")
+ok(reg.get("/api/orders/outgoing").status_code == 403 and reg.post("/api/orders/outgoing", json={"addressee": "abc", "subject": "abc"}).status_code == 403, "Registrator: chiquvchi jurnal yopiq (403)")
+ok(rek.get("/api/orders/outgoing").status_code == 200 and not J(rek.get("/api/orders/outgoing"))["can_add"], "Rektor: chiquvchi jurnalni ko'radi, yozmaydi")
+w("DELETE FROM outgoing_mail WHERE id=?", (ox["id"],))
 
 print("— Audit jurnali —")
 acts = {r[0] for r in q("SELECT action FROM audit_log WHERE resource='orders' AND allowed=1 AND ts>=?", (T0,))}

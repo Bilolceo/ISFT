@@ -237,16 +237,31 @@ try:
     U4 = t4["units"][0]["id"]
     U2 = one("SELECT id FROM syl_task_units WHERE task_id=? AND department_id=2", (TASK_ID,))[0]
     ok(C[KAF4].post(f"/api/syllabus/tasks/{TASK_ID}/units/{U2}/submit", json={"text": "begona"}).status_code == 404, "boshqa kafedra nomidan javob berib bo'lmaydi")
-    ok(any(it["source"] == "sillabus" and it["link"].get("task") == TASK_ID for it in C[KAF4].get("/api/mywork").json()["items"]), "«Mening vazifalarim»: kafedrada so'rov ishi")
+    # yagona topshiriqlar modeli: har bir kafedra qatori — topshiriq (directives), «Mening vazifalarim»ga topshiriq sifatida keladi
+    D4 = t4["units"][0].get("directive") and t4["units"][0]["directive"]["id"]
+    ok(bool(D4) and one("SELECT src, unit, issuer_unit, origin FROM tasks WHERE id=?", (D4,)) == (f"syl:{TASK_ID}", "kaf4", "akademik", "topshiriq"),
+       "kafedra qatori topshiriqqa bog'langan (src=syl:<id>, Akademik bo'lim → kaf4)")
+    D2 = one("SELECT directive_id FROM syl_task_units WHERE id=?", (U2,))[0]
+    ok(C[KAF4].get(f"/api/dir/{D4}").status_code == 200 and C[KAF4].get(f"/api/dir/{D2}").status_code == 403, "kaf4 o'z topshirig'ini ochadi, kaf2 nikini — yo'q (403)")
+    mw = C[KAF4].get("/api/mywork").json()["items"]
+    ok(any(it["link"] == {"view": "tasks", "directive": D4} for it in mw), "«Mening vazifalarim»: so'rov topshiriq sifatida (aniq havola)")
+    ok(not any(it["source"] == "sillabus" and it["link"].get("task") == TASK_ID for it in mw), "so'rov ikki marta sanalmaydi (sillabus manbasida takror yo'q)")
     ok(C[KAF4].post(f"/api/syllabus/tasks/{TASK_ID}/units/{U4}/file", params={"name": "javob.docx"}, content=make_docx([("Buxgalteriya balansi", 2, 2, 4)])).status_code == 200, "kafedra javobga DOCX ilova qildi")
     ok(C[KAF4].post(f"/api/syllabus/tasks/{TASK_ID}/units/{U4}/submit", json={"text": "Ro'yxat ilova qilindi"}).status_code == 200, "kafedra javob yubordi")
+    ok(one("SELECT status, review FROM tasks WHERE id=?", (D4,)) == ("bajarildi", "kutilmoqda"), "topshiriq: bajarildi, natija qabul kutmoqda")
+    ok(any(it["link"] == {"view": "tasks", "directive": D4} for it in C[AK].get("/api/mywork").json()["items"]), "Akademik bo'lim «Mening vazifalarim»: natijani ko'rib chiqish (aniq havola)")
     ok(C[KAF4].post(f"/api/syllabus/tasks/{TASK_ID}/units/{U4}/submit", json={"text": "yana"}).status_code == 403, "ko'rib chiqilayotgan javobni qayta yuborib bo'lmaydi")
     ok(C[KAF4].post(f"/api/syllabus/tasks/{TASK_ID}/units/{U4}/review", json={"action": "qabul"}).status_code == 403, "kafedra o'z javobini qabul qila olmaydi")
     ok(C[AK].post(f"/api/syllabus/tasks/{TASK_ID}/units/{U4}/review", json={"action": "qayta", "comment": ""}).status_code == 400, "izohsiz qaytarish rad etiladi")
     ok(C[AK].post(f"/api/syllabus/tasks/{TASK_ID}/units/{U4}/review", json={"action": "qayta", "comment": "TEST: ikki fan yetishmaydi"}).status_code == 200, "Akademik bo'lim qayta ishlashga qaytardi")
-    ok(any(n["kind"] == "sillabus" and "Qayta ishlashga" in n["title"] for n in C[KAF4].get("/api/notifications").json()["items"]), "bildirishnoma: kafedrada «Qayta ishlashga qaytarildi»")
-    ok(C[KAF4].post(f"/api/syllabus/tasks/{TASK_ID}/units/{U4}/submit", json={"text": "Tuzatildi"}).status_code == 200, "kafedra qayta javob yubordi (2-raund)")
+    ok(any("Qayta ishlashga" in n["title"] and n["link"] == {"view": "tasks", "directive": D4} for n in C[KAF4].get("/api/notifications").json()["items"]),
+       "bildirishnoma: kafedrada «Qayta ishlashga qaytarildi» (topshiriqqa aniq havola)")
+    # 2-raund — «Majlislar va topshiriqlar» oynasidan (topshiriq orqali): so'rov qatori avtomatik sinxronlanadi
+    ok(C[KAF4].post(f"/api/dir/{D4}/status", json={"status": "bajarildi", "result": "Tuzatildi"}).status_code == 200, "kafedra qayta javobni topshiriq orqali yubordi (2-raund)")
+    ok(C[AK].get(f"/api/syllabus/tasks/{TASK_ID}").json()["units"][[x["id"] for x in C[AK].get(f"/api/syllabus/tasks/{TASK_ID}").json()["units"]].index(U4)]["status"] == "topshirildi",
+       "so'rov qatori topshiriqdan sinxronlandi: ko'rib chiqilmoqda")
     ok(C[AK].post(f"/api/syllabus/tasks/{TASK_ID}/units/{U4}/review", json={"action": "qabul", "comment": "OK"}).status_code == 200, "Akademik bo'lim qabul qildi")
+    ok(one("SELECT review FROM tasks WHERE id=?", (D4,)) == ("qabul",), "topshiriq natijasi qabul qilindi (bitta holat)")
     t = C[AK].get(f"/api/syllabus/tasks/{TASK_ID}").json()
     u = next(x for x in t["units"] if x["id"] == U4)
     ok(u["status"] == "qabul" and u["round"] == 2 and [h["action"] for h in reversed(u["history"])] ==
@@ -262,17 +277,20 @@ finally:
     if TASK_ID:
         for (uid_, fp) in con.execute("SELECT id, file_path FROM syl_task_units WHERE task_id=?", (TASK_ID,)).fetchall():
             files.append(fp); con.execute("DELETE FROM syl_log WHERE ref_type='task' AND ref_id=?", (uid_,))
+        for (did,) in con.execute("SELECT id FROM tasks WHERE src=?", (f"syl:{TASK_ID}",)).fetchall():
+            for tb in ("task_log", "task_msgs"): con.execute(f"DELETE FROM {tb} WHERE task_id=?", (did,))
+            con.execute("DELETE FROM tasks WHERE id=? OR parent_id=?", (did, did))
         con.execute("DELETE FROM syl_task_units WHERE task_id=?", (TASK_ID,)); con.execute("DELETE FROM syl_tasks WHERE id=?", (TASK_ID,))
     if DOCREG:
         for (fn,) in con.execute("SELECT file FROM documents WHERE reg_no=?", (DOCREG[0],)).fetchall():
-            try: (ROOT / "data" / "docs" / fn).unlink()
+            try: (Path(os.environ.get("ISFT_CORE_DATA_DIR") or ROOT / "data") / "docs" / fn).unlink()
             except OSError: pass
         con.execute("DELETE FROM documents WHERE reg_no=?", (DOCREG[0],))
     if "old" in dir() and old: con.execute("UPDATE syl_load_plans SET params=? WHERE department_id=4", old)
     con.commit(); con.close()
     for fp in files:
         if fp:
-            try: (ROOT / "data" / "syllabus" / fp).unlink()
+            try: (Path(os.environ.get("ISFT_CORE_DATA_DIR") or ROOT / "data") / "syllabus" / fp).unlink()
             except OSError: pass
 print("\n— 5. Tozalash")
 ok(one("SELECT 1 FROM syl_items WHERE id=?", (IID,)) is None, "test sillabusi o'chirildi — demo holat o'zgarmadi")

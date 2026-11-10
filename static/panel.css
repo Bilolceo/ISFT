@@ -191,3 +191,40 @@
 .pn-cl-n.bad{color:var(--bad)}
 .pn-cl .tiny b{color:var(--ink-2)}
 @media (max-width:600px){.kc .kc-blbl span{overflow:visible;text-overflow:clip}.kc .kc-blbl{gap:2px}}
+
+/* ---------- yuklanish skeleti (app.js skelPanel/skelCard) ---------- */
+.skel{display:block;height:12px;border-radius:8px;margin:10px 0 0;background:linear-gradient(90deg,var(--surface-2) 25%,var(--line) 37%,var(--surface-2) 63%);background-size:400% 100%;animation:skelSh 1.3s ease infinite}
+.skel.skel-h{height:16px;width:46%;margin-top:0}
+.skel-card{min-height:118px}.skel-kpi{min-height:150px}
+@keyframes skelSh{0%{background-position:100% 50%}100%{background-position:0 50%}}
+@media (prefers-reduced-motion:reduce){.skel{animation:none}}
+
+/* ---------- lavozim ish stoli (app/desks.py) ---------- */
+.desk{display:flex;flex-direction:column;gap:14px;margin-bottom:14px}
+.desk-h{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.desk-h h3{margin:0}
+.desk-inds{gap:12px;grid-template-columns:repeat(auto-fill,minmax(min(210px,100%),1fr))}
+.desk-i{padding:16px 18px}
+.desk-i .l{font-size:13px;font-weight:700;color:var(--ink)}
+.desk-i .v{font-size:28px;font-weight:700;letter-spacing:-.02em;margin:4px 0 2px;font-variant-numeric:tabular-nums;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.desk-i .s{font-size:12.5px;color:var(--muted);overflow-wrap:anywhere}
+.desk-d{font-size:13px;font-weight:700;color:var(--muted)}.desk-d.good{color:var(--ok)}.desk-d.bad{color:var(--bad)}
+.desk-legal{display:flex;flex-direction:column;gap:8px}
+.dl-row{display:flex;gap:12px;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;padding:12px 14px;border:1px solid var(--line);border-radius:14px}
+.dl-row.need{border-color:var(--line-2);background:var(--surface-3)}
+.dl-main{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1 1 280px}
+.dl-act{display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1 1 300px;justify-content:flex-end}
+.dl-act .dl-note{flex:1 1 160px;min-width:0;font:inherit;font-size:13px;padding:6px 10px;border:1px solid var(--line-2);border-radius:10px;background:var(--surface);color:var(--ink)}
+.dl-act select{max-width:100%}
+/* sahifa uchun yagona ma'lumot havolasi (demo / huquqiy asos izohlari kartalarda takrorlanmaydi) */
+.pg-info{font-size:13px}
+.pg-info>summary{display:inline-flex;align-items:center;gap:6px;cursor:pointer;color:var(--muted);font-weight:600;list-style:none}
+.pg-info>summary::-webkit-details-marker{display:none}
+.pg-info[open]>summary{color:var(--ink)}
+.pg-info>p,.pg-info>div{margin:6px 0 0;max-width:900px}
+/* panel: «Mening vazifalarim» qisqa ro'yxati */
+.pn-mwl{display:flex;flex-direction:column}
+.pn-mwi{display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:9px 2px;border:0;border-bottom:1px solid var(--line);background:none;color:var(--ink);font:inherit;font-size:14px;text-align:left;cursor:pointer}
+.pn-mwi:last-child{border-bottom:0}.pn-mwi:hover .pn-mwt{color:var(--brand)}
+.pn-mwt{min-width:0;overflow-wrap:anywhere}.pn-mwi .tiny{flex:none;white-space:nowrap}
+@media (max-width:620px){.pn-mwi{flex-direction:column;gap:2px}.desk-i .v{font-size:24px}}

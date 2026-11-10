@@ -37,6 +37,7 @@ def q(sql, args=()):
 
 kadr, kaf4, kaf2, akad, rektor, pro, teacher, reg, buxg = (S(i) for i in (12, 14, 31, 18, 2, 3, 15, 17, 11))
 AUDIT0 = q("SELECT COALESCE(MAX(id),0) FROM audit_log")[0][0]
+T0 = __import__("datetime").datetime.now().isoformat(timespec="seconds")
 today = dt.date.fromisoformat(kadr.get("/api/me").json()["today"])
 mon = today + dt.timedelta(days=(7 - today.weekday()) % 7 + 21)          # 3–4 hafta keyingi dushanba
 W0, W1 = mon.isoformat(), (mon + dt.timedelta(days=4)).isoformat()    # dushanba–juma
@@ -57,8 +58,8 @@ def cleanup():
     for aid in MADE:
         r = kadr.post(f"/api/staffabs/{aid}/cancel", json={"note": "test yakuni"})
         print(f"  #{aid} bekor: {r.status_code}")
-    for did in DOCS:
-        print(f"  buyruq loyihasi #{did} bekor: {kadr.post(f'/api/docs/{did}/cancel').status_code}")
+    for oid in DOCS:   # «Buyruqlar»dagi test loyihasi o'chiriladi (versiya/jurnal saqlanadi)
+        print(f"  buyruq loyihasi #{oid} o'chirildi: {kadr.post(f'/api/orders/{oid}/delete').status_code}")
     # izsiz qoldirish: faqat shu test belgisi bor yozuvlar (asos fayllari diskdan ham)
     con = sqlite3.connect(DB, timeout=30)
     try:
@@ -197,11 +198,19 @@ def main():
     ok(rM.json()["lessons"] == 0, "dars o'tmaydigan xodim: ta'sir 0")
     ok(kaf2.post(f"/api/staffabs/{M}/order", json={}).status_code == 403, "kafedra: buyruq 403")
     ok(kadr.post(f"/api/staffabs/{M}/order", json={"reg_no": "ShT-00/9999"}).status_code == 404, "mavjud bo'lmagan buyruq — 404")
-    r = kadr.post(f"/api/staffabs/{M}/order", json={}); ok(r.status_code == 200 and r.json()["reg_no"].startswith("ShT-"), f"buyruq loyihasi yaratildi: {r.json()}")
-    DOCS.append(r.json()["doc_id"])
+    # mehnat ta'tili buyrug'i — «Buyruqlar» bo'limida (talabalar va xodimlar buyruqlarining yagona joyi), Hujjatlar markazida emas
+    r = kadr.post(f"/api/staffabs/{M}/order", json={}); ok(r.status_code == 200 and r.json()["order_id"] and r.json()["link"] == {"view": "orders", "order": r.json()["order_id"]},
+                                                           f"buyruq loyihasi «Buyruqlar»da yaratildi: {r.json()}")
+    OID = r.json()["order_id"]; DOCS.append(OID)
+    ok(q("SELECT kind, status FROM orders WHERE id=?", (OID,))[0] == ("xodim_tatil", "loyiha"), "orders: xodim_tatil, «loyiha»")
+    ok(not q("SELECT 1 FROM documents WHERE kind='leave_order' AND created_at>=? AND status='loyiha'", (T0,)), "Hujjatlar markazida yangi buyruq loyihasi yaratilmadi")
     o = kadr.get(f"/api/staffabs/{M}").json()["order"]
-    ok(o["status"] == "loyiha" and o["file"], "buyruq: «loyiha», DOCX kadrlarga ochiq")
-    ok(kadr.post(f"/api/staffabs/{A}/order", json={"reg_no": r.json()["reg_no"]}).status_code == 400, "boshqa xodim buyrug'ini bog'lash — 400")
+    ok(o["raw_status"] == "loyiha" and o["link"]["order"] == OID, "yo'qlik kartasida buyruq holati va Buyruqlarga havola")
+    od = kadr.get(f"/api/orders/{OID}").json()
+    ok(od["staff"] and od["order"]["params"]["staff_id"] == st_m["id"] and od["order"]["params"]["date_from"] == W0, "Buyruqlar: xodim va sanalar to'g'ri")
+    ok(kadr.post(f"/api/staffabs/{A}/order", json={"reg_no": f"#{OID}"}).status_code == 400, "boshqa xodim buyrug'ini bog'lash — 400")
+    mw = kadr.get("/api/mywork").json()["items"]
+    ok(not any(it["link"].get("absence") == M for it in mw), "«Mening vazifalarim»: buyrug'i bor ta'til «buyruqsiz» ro'yxatida yo'q")
 
     # ============================================================== 6. Tahlil
     print("— 6. Tahlil —")

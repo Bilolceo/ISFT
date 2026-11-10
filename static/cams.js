@@ -327,7 +327,7 @@ function spcExtraHtml(o) {
       <span class="tag high">${r.empty}/${r.scheduled} para bo'sh</span></div><p>${esc(r.advice)}</p></li>`).join("")}</ul>`
     : `<div class="cm-empty sm">${ico("checkc", 22)}<b>Optimallashtirish kerak emas</b><span>Jadvaldagi barcha xonalarda darslar o'tmoqda.</span></div>`;
   const unH = un.length ? tbl(["Sana", "Para", "Xona", "#Kishi / sig'im"], un.map(u => [`${cmDM(u.date)} <span class="tiny muted">${esc(cmDay2(u.day))}</span>`, `${u.slot}-para`, `<b class="nowrap">${esc(u.room)}</b>`, `<span class="nowrap"><b class="${u.avg > u.capacity ? "bad" : ""}">${u.avg}</b> <span class="muted">/ ${u.capacity}</span></span>`]), {top: 8})
-      + `<p class="tiny muted">Jadvalda dars yo'q, lekin xonada o'rtacha ${o.unsched_min || 20}+ kishi: qo'shimcha mashg'ulot, to'garak yoki jadvalga kiritilmagan dars. O'quv bo'limi jadvalni tekshiradi.</p>`
+      + `<p class="tiny muted">Jadvalda dars yo'q, lekin xonada o'rtacha ${o.unsched_min || 20}+ kishi: qo'shimcha mashg'ulot, to'garak yoki jadvalga kiritilmagan dars. Akademik faoliyatni boshqarish bo'limi jadvalni tekshiradi.</p>`
     : `<p class="muted">Holat yo'q</p>`;
   const hmx = Math.max(...o.hourly.map(x => x.pct), 1);
   const hourly = `<div class="cm-hcols" role="img" aria-label="Soatlar bo'yicha o'rtacha bandlik; eng band: ${[...peaks].join(", ")}">${o.hourly.map(x => `<div class="cm-hc${peaks.has(x.hour) ? " pk" : ""}" title="${x.hour}: o'rtacha ${fmt(x.people)} kishi (${x.pct}% sig'im)">

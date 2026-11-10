@@ -65,3 +65,14 @@ html.dir-lock{overflow:hidden}
   .dir-dlg{max-height:calc(100dvh - 16px);border-radius:20px}
 }
 @media (prefers-reduced-motion:reduce){.dir-ov{transition:none}}
+
+/* --- majlis qarori kartasi (app.js): aniq topshiriqqa havola, natijani qabul qilish / qaytarish --- */
+.dec-task.dec-focus{outline:2px solid var(--teal,#870037);outline-offset:2px;transition:outline-color .6s}
+.dec-task .dt-tags{display:inline-flex;gap:4px;flex-wrap:wrap;justify-content:flex-end}
+.dec-task .res.ret{border-left:3px solid var(--bad,#b42318)}
+.dec-task .act.rev{margin-top:10px}
+.dec-task .act.rev textarea{width:100%;box-sizing:border-box}
+/* topshiriq manbasi (O'quv dasturlari / Portal) */
+.dir-src{display:inline-flex;align-items:center;gap:6px;margin-top:6px}
+@media (prefers-reduced-motion:reduce){.dec-task.dec-focus{transition:none}}
+.dec-line .dl-tags{display:inline-flex;gap:4px;flex-wrap:wrap;align-items:center}

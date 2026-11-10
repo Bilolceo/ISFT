@@ -110,7 +110,7 @@ async function sylBoard(body) {
   const d = SYL.board = await sylApi(`/api/syllabus/board?${qs}`);
   const c = d.counts, all = m.role !== "kafedra" && m.role !== "oqituvchi";
   const tiles = SY_TILES.map(([k, l, i]) => `<button type="button" class="sy-tile ${k}${f.status === k ? " on" : ""}${c[k] ? "" : " zero"}" data-st="${k}" aria-pressed="${f.status === k}">
-      <span class="sy-tile-ic">${ico(i, 17)}</span><b>${c[k] || 0}</b><span>${l}</span></button>`).join("");
+      <span class="sy-tile-ic">${ico(i, 17)}</span><b>${c[k] || 0}</b><span title="${esc(l)}">${l}</span></button>`).join("");
   const deps = all ? `<div class="card sy-deps"><h3>${ico("chart")} Kafedralar kesimida <span class="muted tiny">tasdiqlangan / jami · bosib saralang</span></h3>
       <div class="sy-deplist">${d.by_dept.map(b => {
         const seg = ["tasdiqlangan", "kelishuvda", "tekshiruvda", "jarayonda", "qaytarilgan", "soralgan"].map(k => b[k] ? `<i class="${SY_ST[k]}" style="flex:${b[k]}" title="${esc(m.statuses[k])}: ${b[k]}"></i>` : "").join("");
@@ -484,7 +484,9 @@ async function sylTask(body) {
   body.innerHTML = `<div class="sy-back"><button type="button" class="btn ghost sm" id="syTBack">${ico("back", 16)} So'rovlar ro'yxati</button></div>
     <div class="card sy-head"><div class="sy-head-t"><div><h3>${esc(t.title)}</h3><div class="sy-meta"><span>${esc(t.kind_label)}</span><span>Muddat ${dmy(t.due)}</span><span>${esc(t.created_name || "")} · ${syWhen(t.created_at)}</span></div></div>
       ${isAk ? `<button type="button" class="btn sm" id="syTClose">${t.status === "ochiq" ? "So'rovni yopish" : "Qayta ochish"}</button>` : ""}</div>${t.body ? `<p class="sy-tbody">${esc(t.body)}</p>` : ""}</div>
+    <p class="sy-dirnote tiny muted">${ico("tasks", 14)}<span>Har bir kafedra uchun so'rov — <b>topshiriq</b> (yagona topshiriqlar oqimi): kafedra mudiri uni o'qituvchiga taqsimlashi mumkin, natija shu yerda yoki «Majlislar va topshiriqlar»da yuboriladi, Akademik bo'lim qabul qiladi yoki qaytaradi.</span></p>
     <div class="sy-units">${t.units.map(u => `<div class="card sy-unit" data-u="${u.id}"><div class="sy-unit-h"><b>${esc(u.department)}</b><span class="sy-u ${u.status}${u.overdue ? " over" : ""}">${esc(u.status_label)}${u.overdue ? " · muddati o'tgan" : ""}</span>${u.round ? `<small class="muted">${u.round}-raund</small>` : ""}</div>
+      ${u.directive ? `<p class="sy-dir"><button type="button" class="btn ghost sm" data-dir="${u.directive.id}">${ico("tasks", 15)} Topshiriqni ochish →</button>${u.directive.delegated ? `<small class="muted">o'qituvchiga taqsimlangan</small>` : ""}</p>` : ""}
       ${u.response ? `<div class="sy-resp"><small class="muted">Javob · ${syWhen(u.submitted_at)}</small><p>${esc(u.response)}</p></div>` : ""}
       ${u.file_name ? `<p class="sy-file">${ico("file", 15)}<a href="/api/syllabus/tasks/${t.id}/units/${u.id}/file" target="_blank" rel="noopener">${esc(u.file_name)}</a></p>` : ""}
       ${u.comment && u.status === "qayta" ? `<div class="sy-ret">${ico("alert", 16)}<div><b>Qayta ishlashga qaytarildi</b><p>${esc(u.comment)}</p></div></div>` : ""}
@@ -496,6 +498,7 @@ async function sylTask(body) {
     </div>`).join("")}</div>`;
   $("#syTBack").onclick = () => { SYL.task = null; sylTasks(body).catch(sylErr); };
   $("#syTClose")?.addEventListener("click", e => sylBusy(e.currentTarget, async () => { await sylApi(`/api/syllabus/tasks/${t.id}/close`, {}); toast(t.status === "ochiq" ? "So'rov yopildi" : "So'rov qayta ochildi"); sylTask(body); }));
+  body.querySelectorAll("[data-dir]").forEach(b => b.onclick = () => { if (typeof openDirective === "function") openDirective(+b.dataset.dir); });
   body.querySelectorAll(".sy-unit").forEach(card => {
     const uid = +card.dataset.u, base = `/api/syllabus/tasks/${t.id}/units/${uid}`;
     card.querySelector("[data-sub]")?.addEventListener("click", e => sylBusy(e.currentTarget, async () => { await sylApi(`${base}/submit`, {text: card.querySelector("[data-ans]").value}); toast("Javob Akademik bo'limga yuborildi"); sylTask(body); if (typeof badges === "function") badges(); }));

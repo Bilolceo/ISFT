@@ -1,4 +1,4 @@
-import httpx, sys
+import httpx, os, sys
 from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 B = os.environ.get("ISFT_TEST_URL", "http://127.0.0.1:8000")
@@ -6,7 +6,26 @@ def S(uid):
     c = httpx.Client(base_url=B, timeout=300); r = c.post("/api/login", json={"user_id": uid, "password": "Isft2026"}); assert r.status_code == 200; return c
 ok = lambda cond, msg: print(("✓ " if cond else "✗ XATO: ") + msg) or (cond or sys.exit(1))
 kotib, ithead, itstaff, reg, rektor, buxg = S(20), S(21), S(22), S(17), S(2), S(11)
-print(rektor.post("/api/dec/demo-reset").json())
+import sqlite3
+DBP = str(Path(os.environ.get("ISFT_CORE_DB") or ROOT / "data" / "jarvis.db"))
+
+def reset():
+    """Demo ssenariysi qarorlarini bazadan tozalash (decisions.demo_reset bilan bir xil; API'dagi demo vositasi oddiy rejimda o'chiq)."""
+    con = sqlite3.connect(DBP, timeout=30)
+    for mid, inc in con.execute("SELECT id, incident_id FROM meetings WHERE source IN ('demo','manual')").fetchall():
+        ids = [r[0] for r in con.execute("SELECT id FROM tasks WHERE meeting_id=?", (mid,))]
+        q = ",".join(map(str, ids)) or "0"
+        sent = con.execute(f"SELECT 1 FROM task_log WHERE action='talabalarga yuborildi' AND task_id IN ({q})").fetchone()
+        if inc and sent:
+            nt = con.execute("SELECT notice FROM incidents WHERE id=?", (inc,)).fetchone()
+            if nt and nt[0]: con.execute("UPDATE requests SET status='yangi', answer=NULL WHERE incident_id=? AND answer=?", (inc, nt[0]))
+            con.execute("UPDATE incidents SET notice=NULL, notified_at=NULL WHERE id=?", (inc,))
+        for tb in ("task_msgs", "task_log"): con.execute(f"DELETE FROM {tb} WHERE task_id IN ({q})")
+        con.execute(f"DELETE FROM tasks WHERE id IN ({q})"); con.execute("DELETE FROM meetings WHERE id=?", (mid,))
+    con.commit(); con.close()
+
+reset()
+ok(rektor.post("/api/dec/demo-reset").status_code == 403 and kotib.post("/api/dec/demo-reset").status_code == 403, "«Demoni qayta boshlash» oddiy rejimda o'chiq (403)")
 cap = kotib.get("/api/dec/capabilities").json(); ok(cap["audio"] is False, "ovoz: o'chiq, demo transkript bor")
 ok(ithead.post("/api/dec/draft", json={"title": "x", "transcript": cap["sample"]}).status_code == 403, "IT qoralama yarata olmaydi (403)")
 d = kotib.post("/api/dec/draft", json={"title": "Rektorat tezkor yig'ilishi", "transcript": cap["sample"], "source": "demo"}).json()
@@ -25,7 +44,7 @@ ok(e["tasks"][0]["text"].startswith("LMS'ga kirish muammosini tekshirish") and e
 # tasdiq x2
 c1 = kotib.post(f"/api/dec/{d['id']}/confirm").json(); c2 = kotib.post(f"/api/dec/{d['id']}/confirm").json()
 ok(c1["already"] is False and c2["already"] is True, "Qayta tasdiqlash: already=True")
-import sqlite3; n = sqlite3.connect(str(Path(os.environ.get("ISFT_CORE_DB") or ROOT / "data" / "jarvis.db"))).execute("SELECT COUNT(*) FROM tasks WHERE meeting_id=?", (d["id"],)).fetchone()[0]
+n = sqlite3.connect(DBP).execute("SELECT COUNT(*) FROM tasks WHERE meeting_id=?", (d["id"],)).fetchone()[0]
 ok(n == 2, f"Bazada dublikat yo'q (2 ta)")
 ok(kotib.put(f"/api/dec/{d['id']}", json={"title": "x", "minutes": "", "tasks": []}).status_code == 409, "Tasdiqlangandan keyin tahrir yo'q (409)")
 # navbat
@@ -47,7 +66,10 @@ ok(buxg.post(f"/api/dec/task/{it['id']}/msg", json={"text": "x"}).status_code ==
 ok(rektor.post(f"/api/dec/task/{it['id']}/msg", json={"text": "x"}).status_code == 403, "Rektor chatni faqat o'qiydi")
 ok(itstaff.post(f"/api/dec/task/{it['id']}/update", json={"status": "jarayonda"}).json()["ok"], "IT: ish boshlandi")
 R = "Sabab: kirish serveridagi SSL sertifikat muddati tugagan. Sertifikat yangilandi, 13:40 dan LMS'ga kirish tiklandi. 20 ta test akkaunt bilan tekshirildi."
+ok(itstaff.post(f"/api/dec/task/{it['id']}/update", json={"status": "bajarildi"}).status_code == 400, "IT natijasiz yakunlay olmaydi (400)")
 ok(itstaff.post(f"/api/dec/task/{it['id']}/update", json={"status": "bajarildi", "result": R}).json()["ok"], "IT natijani kiritdi va yakunladi")
+ok(any(x["link"] == {"view": "tasks", "meeting": d["id"], "task": it["id"]} for x in rektor.get("/api/mywork").json()["items"]), "Rektor: natija qabulini kutmoqda (aniq havola)")
+ok(ithead.post(f"/api/dec/task/{it['id']}/review", json={"decision": "qabul"}).status_code == 403, "IT boshlig'i natijani qabul qila olmaydi (faqat rektor)")
 rv = reg.get(f"/api/dec/{d['id']}").json(); rgt = [t for t in rv["tasks"] if t["id"] == rg["id"]][0]
 ok(rgt["dep"]["result"] == R and not rgt["blocked"], "Registrator IT natijasini ko'radi, bloк ochildi")
 ok(len(rv["msgs"]) == 2, "Registrator bog'langan chatni ko'radi (2 xabar)")
@@ -61,4 +83,7 @@ ok(full["tasks"][0]["assignee_name"].startswith("Nazarov") and full["incident"][
 ok(len(full["log"]) >= 6, f"Tarix: {len(full['log'])} yozuv")
 dash = rektor.get("/api/dashboard").json()
 ok(not any("LMS" in a["text"] and "xabar berilmagan" in a["text"] for a in dash["alerts"]), "Rektor ogohlantirishidan 'talabalarga xabar berilmagan' yo'qoldi")
+ok(rektor.post(f"/api/dec/task/{it['id']}/review", json={"decision": "qabul", "note": "Rahmat"}).json()["ok"], "Rektor IT natijasini qabul qildi")
+ok(rektor.get(f"/api/dec/{d['id']}").json()["tasks"][0]["review"] == "qabul", "qabul holati qaror kartasida")
+reset()
 print("\nHAMMASI O'TDI")

@@ -25,13 +25,17 @@ REQUESTS = "requests"            # yagona murojaat kartasi va hodisalar
 SPACES = "spaces"                # auditoriyalar bandligi (kamera — faqat son)
 OPS = "ops"                      # talabalar bilan ishlash markazi (holatlar, call-markaz, otrabotka)
 RATING = "rating"                # o'zlashtirish reytingi (app/reyting.py) — kirish moduldagi jadval bo'yicha, audit shu resursda
+CHANCERY = "chancery"            # devonxona: buyruqlar reyestri (o'qish), jurnalga ro'yxatga olish, chiquvchi yozishmalar (app/orders.py)
+PROCUREMENT = "procurement"      # xarid so'rovlari: xo'jalik nosozligidan xarid (app/service.py)
+FLOWS = "flows"                  # talaba harakati: sessiya jadvali, apellyatsiya, qayta o'qish, ko'chirish, ISFT granti, bitiruv (app/academic_flows.py) — kirish moduldagi jadval bo'yicha
 
 LABELS = {KPI: "Umumiy KPI", ACADEMIC: "O'zlashtirish va davomat", STUDENTS: "Talabalar kartochkasi", CONTRACTS: "Kontrakt to'lovlari",
           FINANCE: "Byudjet va xarajatlar", PAYROLL: "Ish haqi", HR: "Kadrlar shaxsiy ma'lumoti", SCIENCE: "Ilmiy faoliyat",
           INTL: "Xalqaro hamkorlik", ADMISSIONS: "Qabul", YOUTH: "Yoshlar va yotoqxona", MASTERS: "Magistratura",
           TASKS: "Majlis topshiriqlari", AUDIT: "Audit jurnali", REPORTS: "Hisobotlar",
-          FACILITIES: "Xo'jalik nosozliklari", OPS: "Talabalar bilan ishlash markazi", REQUESTS: "Murojaatlar va hodisalar", SPACES: "Auditoriyalar bandligi",
-          RATING: "O'zlashtirish reytingi"}
+          FACILITIES: "Xo'jalik nosozliklari", OPS: "Talabalar markazi", REQUESTS: "Murojaatlar va hodisalar", SPACES: "Auditoriyalar bandligi",
+          RATING: "O'zlashtirish reytingi", CHANCERY: "Devonxona: buyruqlar reyestri va chiquvchi yozishmalar", PROCUREMENT: "Xarid so'rovlari",
+          FLOWS: "Talaba harakati: sessiya, apellyatsiya, ko'chirish, ISFT granti, bitiruv"}
 
 @dataclass(frozen=True)
 class Role:
@@ -57,7 +61,7 @@ ROLES = {r.key: r for r in [
     Role("prorektor_ilmiy", "Ilmiy ishlar va innovatsiyalar bo'yicha prorektor", 2, R(KPI, SCIENCE, INTL, MASTERS, TASKS, REPORTS),
          deny_note="Talaba baholari, moliyaviy tafsilotlar"),
     # tuzilma (04.09.2024): Buxgalteriya, Xarid, Marketing, Xo'jalik va texnik bo'lim — moliya-iqtisod prorektori kuratorligida
-    Role("prorektor_moliya", "Moliya-iqtisod ishlari bo'yicha prorektor", 2, R(KPI, FINANCE, CONTRACTS, PAYROLL, TASKS, REPORTS, FACILITIES, SPACES, ADMISSIONS),
+    Role("prorektor_moliya", "Moliya-iqtisod ishlari bo'yicha prorektor", 2, R(KPI, FINANCE, CONTRACTS, PAYROLL, TASKS, REPORTS, FACILITIES, SPACES, ADMISSIONS, PROCUREMENT),
          aggregate_only=R(PAYROLL), deny_note="Talaba baholari, ilmiy faoliyat tafsilotlari"),
     # tadbirlar (Majlislar zali to'lishi — kamera signali shu yerga keladi) va talabalar bilan ishlash — jamlangan ko'rinishda
     Role("prorektor_yoshlar", "Yoshlar masalalari va ma'naviy-ma'rifiy ishlar bo'yicha birinchi prorektor", 2, R(KPI, YOUTH, TASKS, FACILITIES, SPACES, OPS, REPORTS),
@@ -77,12 +81,14 @@ ROLES = {r.key: r for r in [
     Role("buxgalteriya", "Buxgalteriya bo'limi", 3, R(FINANCE, CONTRACTS, PAYROLL, TASKS, OPS), local_only=True,
          deny_note="Talabalar markazi — faqat kontrakt holatlari (baholar va davomatsiz)"),
     Role("kadrlar", "Kadrlar bo'limi", 3, R(HR, TASKS), local_only=True),
-    Role("xojalik", "Xo'jalik va texnik bo'lim", 3, R(FACILITIES, TASKS, SPACES), deny_note="Talabalar, moliya va kadrlar ma'lumoti"),
+    Role("xojalik", "Xo'jalik va texnik bo'lim", 3, R(FACILITIES, TASKS, SPACES, PROCUREMENT), deny_note="Talabalar, moliya va kadrlar ma'lumoti"),
     Role("ilmiy_bolim", "Ilmiy tadqiqotlar, innovatsiyalar va ilmiy-pedagogik kadrlar tayyorlash bo'limi", 3, R(SCIENCE, MASTERS, TASKS),
          deny_note="Talaba baholari, moliya va kadrlar ma'lumoti"),
     Role("kotib", "Rektorat kotibi", 1, R(TASKS), deny_note="Talabalar, moliya va kadrlar ma'lumoti — kotib faqat majlis materiallari bilan ishlaydi"),
     Role("it_head", "Axborot texnologiyalari bo'limi boshlig'i", 3, R(TASKS, REQUESTS, SPACES), deny_note="Talabalar baholari, moliya va kadrlar ma'lumoti · kameralar — faqat texnik holat"),
-    Role("it_staff", "Axborot texnologiyalari bo'limi muhandisi", 3, R(TASKS), deny_note="Faqat o'ziga biriktirilgan topshiriqlar"),
+    # murojaatlar — faqat AT bo'limi navbati va o'ziga biriktirilganlari (app/service.py UNIT_ONLY); umumiy hodisa xabarini yubormaydi
+    Role("it_staff", "Axborot texnologiyalari bo'limi muhandisi", 3, R(TASKS, REQUESTS),
+         deny_note="Faqat o'ziga biriktirilgan topshiriqlar · murojaatlar — AT bo'limi navbati va o'ziga biriktirilganlari"),
     # Registrator ofisi oddiy xodimi (bo'lim a'zosi, rahbar emas — app/directives.py demo akkaunti)
     Role("registrator_xodim", "Registrator ofisi xodimi", 3, R(STUDENTS, ACADEMIC, TASKS, OPS),
          deny_note="Moliya va kadrlar ma'lumoti · topshiriqlar — faqat o'ziga berilganlari"),
@@ -91,10 +97,12 @@ ROLES = {r.key: r for r in [
     Role("strategik", "Strategik bo'lim", 3, R(KPI, REPORTS, TASKS), deny_note="Shaxsiy ma'lumotlar, moliya va kadrlar tafsiloti"),
     Role("sifat", "Sifatni ta'minlash boshqarmasi", 3, R(KPI, ACADEMIC, REPORTS, TASKS), aggregate_only=R(ACADEMIC),
          deny_note="Talabalar shaxsiy ma'lumoti, moliya va kadrlar tafsiloti — faqat jamlangan ko'rsatkichlar"),
-    Role("yuridik", "Yuridik bo'lim", 3, R(TASKS), deny_note="Talabalar, moliya va kadrlar ma'lumoti — hujjatlar Portal orqali so'raladi"),
-    Role("devonxona", "Devonxona", 3, R(TASKS), deny_note="Talabalar, moliya va kadrlar ma'lumoti"),
+    # shartnomalar ekspertizasi: xalqaro/hamkorlik shartnomalari reyestri (faqat o'qish) va «Tarjima va shartnoma» tekshiruvi
+    Role("yuridik", "Yuridik bo'lim", 3, R(INTL, TASKS), deny_note="Talabalar, moliya va kadrlar ma'lumoti — hujjatlar Portal orqali so'raladi"),
+    # buyruqlar reyestri (o'qish, imzolanganini jurnalga olish) va chiquvchi yozishmalar jurnali; talabalar bazasi, moliya, kadrlar — yo'q
+    Role("devonxona", "Devonxona", 3, R(TASKS, CHANCERY), deny_note="Talabalar bazasi, moliya va kadrlar ma'lumoti · buyruqlar — faqat reyestr (o'qish va ro'yxatga olish)"),
     Role("marketing", "Marketing bo'limi", 3, R(ADMISSIONS, TASKS), deny_note="Talabalar shaxsiy ma'lumoti, moliya va kadrlar tafsiloti"),
-    Role("xarid", "Xarid bo'limi", 3, R(TASKS), deny_note="Talabalar va kadrlar ma'lumoti"),
+    Role("xarid", "Xarid bo'limi", 3, R(TASKS, PROCUREMENT), deny_note="Talabalar va kadrlar ma'lumoti · nosozliklar — faqat xarid so'rovlari"),
     Role("tyutor", "Tyutor", 4, R(OPS, ACADEMIC, STUDENTS), scope="fakultet", deny_note="Boshqa fakultet, moliya va kadrlar ma'lumoti"),
     Role("kafedra", "Kafedra mudiri", 4, R(ACADEMIC, STUDENTS, SCIENCE, TASKS, OPS, REPORTS), scope="kafedra",
          deny_note="Boshqa kafedra, moliya va kadrlar ma'lumoti · Talabalar markazi — o'z kafedrasi, o'quv holatlari (o'qish)"),

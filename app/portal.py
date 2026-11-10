@@ -15,7 +15,7 @@ Tamoyillar:
   * Umumiy bazalar: mavjud jadvallar ustidan faqat o'qish uchun ko'rinishlar — ma'lumot takrorlanmaydi, RBAC saqlanadi.
   * Har bir yuklash, yuklab olish, xat, rezolyutsiya, yo'naltirish va eksport audit jurnaliga yoziladi (resurs "portal").
 """
-import csv, datetime as dt, io, json, mimetypes, os, re, shutil, threading, time, unicodedata, uuid, zipfile
+import csv, datetime as dt, io, json, mimetypes, os, re, shutil, sqlite3, threading, time, unicodedata, uuid, zipfile
 from pathlib import Path
 from xml.sax.saxutils import escape as _xe
 from fastapi import APIRouter, Request, HTTPException
@@ -36,7 +36,8 @@ router = APIRouter()
 _con = None
 _ctx = None
 
-CATEGORIES = ["Buyruq va me'yoriy hujjatlar", "Hisobotlar", "Moliyaviy", "O'quv-uslubiy", "Rejalar", "Shablonlar", "Yozishmalar ilovasi", "Boshqa"]
+# «O'quv-uslubiy» (eski «O'quv bo'limi» davridagi nom) → «O'quv jarayoni»: dars va nazorat jadvallari, o'quv rejalar (migrate() ko'chiradi)
+CATEGORIES = ["Buyruq va me'yoriy hujjatlar", "Hisobotlar", "Moliyaviy", "O'quv jarayoni", "Rejalar", "Shablonlar", "Yozishmalar ilovasi", "Boshqa"]
 KINDS = {"xat": "Rasmiy xat", "sorov": "Ma'lumot so'rovi", "xabarnoma": "Xabarnoma", "topshiriq": "Topshiriq"}
 PRIOS = {"oddiy": "Oddiy", "muhim": "Muhim", "shoshilinch": "Shoshilinch"}
 ALLOWED_EXT = {"pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "rtf", "txt", "csv", "png", "jpg", "jpeg", "zip"}
@@ -198,7 +199,9 @@ def unit_map(con) -> dict: return {u["key"]: u for u in units(con)}
 def _uname(um, k): return "Hamma bo'limlar" if k == "*" else (um.get(k) or {}).get("name", k)
 
 def head_user(con, unit) -> int | None:
-    r = db.one(con, "SELECT head_user FROM org_units WHERE key=?", (unit,))
+    if con is None: return None     # modul hali ulanmagan (server starti) — rahbar noma'lum
+    try: r = db.one(con, "SELECT head_user FROM org_units WHERE key=?", (unit,))
+    except sqlite3.OperationalError: return None   # bo'sh bazada org_units hali yaratilmagan (PT.init dan oldingi skanerlar)
     return r["head_user"] if r else None
 
 def is_head(c: Ctx) -> bool:
@@ -280,6 +283,8 @@ def migrate(con):
     # v2.2: javobni ko'rib chiqish (qabul / qayta ishlashga qaytarish), qoralamada talabalar ro'yxati
     _add_cols(con, "portal_recipients", [("review", "TEXT"), ("review_note", "TEXT"), ("review_at", "TEXT"), ("review_by", "TEXT"), ("returns", "INT DEFAULT 0")])
     _add_cols(con, "portal_drafts", [("students", "TEXT")])
+    _add_cols(con, "portal_shares", [("thread_id", "INT")])      # ulashma qaysi xat ilovasi orqali yaratilgan (qaytarib olishda o'chiriladi)
+    con.execute("UPDATE portal_files SET category='O''quv jarayoni' WHERE category='O''quv-uslubiy'")
     con.execute("CREATE INDEX IF NOT EXISTS ix_users_unit ON users(unit)")
     con.execute("UPDATE portal_threads SET status='ochiq' WHERE status IS NULL")
     try:
@@ -332,6 +337,8 @@ def fts_query(q: str) -> str | None:
     return " AND ".join(parts) or None
 
 def init(con):
+    global _con
+    if _con is None: _con = con     # bind() dan oldingi chaqiruvlar (agent_hub skanerlari, decisions.is_head) uchun
     FILES.mkdir(parents=True, exist_ok=True)
     migrate(con)
     try:
@@ -365,6 +372,34 @@ def _unread_sql(a="t") -> str:
 
 def _hidden_sql(a="t") -> str:
     return f"EXISTS(SELECT 1 FROM portal_hidden h WHERE h.thread_id={a}.id AND h.user_id=?)"
+
+# Bo'lim xodimi (rahbar emas): bo'limning butun pochtasi emas, faqat SHAXSAN unga tegishli yozishmalar — o'zi yuborgan, unga ijrochi
+# sifatida biriktirilgan (hozir yoki avval — tayinlash yozuvi meta.assignee) yoki o'zi yozishmada qatnashgan (xat/javob yozgan). Masalan, Call-markaz operatori (Registrator ofisi tarkibida)
+# va Rektorat kotibi bo'lim qutisini to'liq ko'rmaydi. Bo'lim rahbari — o'zgarishsiz (butun bo'lim). Rahbari yo'q bo'lim — bo'lim bo'yicha.
+def member_only(c: Ctx) -> bool:
+    hu = head_user(_con, my_unit(c))
+    return bool(hu) and hu != c.user["id"]
+
+_PERS = ("({a}.from_user={u} OR EXISTS(SELECT 1 FROM portal_recipients rpa WHERE rpa.thread_id={a}.id AND rpa.unit={m} AND rpa.assignee={u})"
+         " OR EXISTS(SELECT 1 FROM portal_msgs mpa WHERE mpa.thread_id={a}.id AND (mpa.user_id={u} AND COALESCE(mpa.kind,'xat')!='tizim'"
+         " OR mpa.kind='tizim' AND json_extract(mpa.meta,'$.assignee')={u})))")
+
+def _pers_sql(a="t") -> str:
+    """5 ta ?: xodim, bo'lim, xodim, xodim, xodim (_pers_args)."""
+    return _PERS.format(a=a, u="?", m="?").replace("{u}", "?")
+
+def _pers_args(c: Ctx) -> list:
+    uid = c.user["id"]
+    return [uid, my_unit(c), uid, uid, uid]
+
+def personal_sql(c: Ctx, a="t") -> tuple[str, list]:
+    """Ro'yxat/qidiruv/bildirishnomalar uchun qo'shimcha shart: bo'lim xodimi — faqat shaxsan unga tegishli yozishmalar; rahbar — 1=1."""
+    if not member_only(c): return "1=1", []
+    return _pers_sql(a), _pers_args(c)
+
+def personal(con, c: Ctx, t: dict) -> bool:
+    if not member_only(c): return True
+    return bool(con.execute(f"SELECT 1 FROM portal_threads t WHERE t.id=? AND {_pers_sql()}", (t["id"], *_pers_args(c))).fetchone())
 
 def _box_where(c: Ctx, box: str) -> tuple[str, list]:
     me, uid = my_unit(c), c.user["id"]
@@ -487,15 +522,19 @@ def counts(con, c: Ctx) -> dict:
     hit = _CNT.get(key)
     if hit and time.time() - hit[0] < 30: return dict(hit[1])
     p = {"me": me, "uid": uid, "today": today}
+    mo = member_only(c)
+    pers = _PERS.format(a="t", u=":uid", m=":me") if mo else "1"
     row = con.execute(f"""
-      WITH p AS (
+      WITH p0 AS (
         SELECT t.id, t.status='ochiq' AS op, t.from_unit=:me AS frm,
           t.status!='qaytarilgan' AND EXISTS(SELECT 1 FROM portal_recipients r WHERE r.thread_id=t.id AND r.unit=:me) AS rcp,
           t.status!='qaytarilgan' AND EXISTS(SELECT 1 FROM portal_watchers w WHERE w.thread_id=t.id AND w.unit=:me) AS wch,
           EXISTS(SELECT 1 FROM portal_hidden h WHERE h.thread_id=t.id AND h.user_id=:uid) AS hid,
           (SELECT COALESCE(MAX(m.id),0) FROM portal_msgs m WHERE m.thread_id=t.id AND m.unit!=:me AND COALESCE(m.kind,'xat')!='tizim')
-            > COALESCE((SELECT x.last_msg FROM portal_user_reads x WHERE x.thread_id=t.id AND x.user_id=:uid),0) AS unr
-        FROM portal_threads t)
+            > COALESCE((SELECT x.last_msg FROM portal_user_reads x WHERE x.thread_id=t.id AND x.user_id=:uid),0) AS unr,
+          {pers} AS prs
+        FROM portal_threads t),
+      p AS (SELECT id, op, frm AND prs AS frm, rcp AND prs AS rcp, wch AND prs AS wch, hid, unr FROM p0)
       SELECT COALESCE(SUM((frm OR rcp OR wch) AND unr AND op AND NOT hid),0),
              COALESCE(SUM(rcp AND unr AND op AND NOT hid),0),
              COALESCE(SUM(frm AND NOT rcp AND unr AND op AND NOT hid),0),
@@ -506,13 +545,24 @@ def counts(con, c: Ctx) -> dict:
     rc = con.execute(f"""SELECT COALESCE(SUM(r.status IN {_PEND_SQL}),0), COALESCE(SUM(r.status IN {_PEND_SQL} AND {_EFF_DUE} < :today),0),
                                 COALESCE(SUM(r.status IN {_PEND_SQL} AND r.assignee=:uid),0)
                          FROM portal_recipients r JOIN portal_threads t ON t.id=r.thread_id WHERE r.unit=:me AND t.status='ochiq'
-                           AND NOT EXISTS(SELECT 1 FROM portal_hidden h WHERE h.thread_id=t.id AND h.user_id=:uid)""", p).fetchone()
+                           AND NOT EXISTS(SELECT 1 FROM portal_hidden h WHERE h.thread_id=t.id AND h.user_id=:uid)
+                           {"AND r.assignee=:uid" if mo else ""}""", p).fetchone()
+    # «ishim» — men harakat qilishim kerak bo'lgan yozishmalar (menyu belgisi shu): menga biriktirilgan javobsiz xat, (rahbar) bo'limga kelgan
+    # biriktirilmagan xat, men ko'rib chiqishim kerak bo'lgan javob va bo'limimga qaytarilgan javob
+    act = con.execute(f"""SELECT COUNT(DISTINCT t.id) FROM portal_threads t WHERE t.status='ochiq'
+        AND NOT EXISTS(SELECT 1 FROM portal_hidden h WHERE h.thread_id=t.id AND h.user_id=:uid)
+        AND (EXISTS(SELECT 1 FROM portal_recipients r WHERE r.thread_id=t.id AND r.unit=:me AND r.status IN {_PEND_SQL}
+                    AND (r.assignee=:uid OR (r.assignee IS NULL AND :head)))
+             OR ({_REVIEW_SQL.replace("t.from_unit=?", "t.from_unit=:me" + (" AND t.from_user=:uid" if mo else "")).replace("zv.author_unit=?", "zv.author_unit=:me" + (" AND zv.author_id=:uid" if mo else ""))}))""",
+        {**p, "head": 0 if mo or head_user(con, me) != uid else 1}).fetchone()[0]
     d = {"unit": me, "unread": row[0], "inbox_unread": row[1], "sent_unread": row[2], "inbox": row[3], "sent": row[4], "archive": row[5],
          "inbox_pending": rc[0], "my_overdue": rc[1], "assigned_to_me": rc[2], "leader": is_leader(c),
          "drafts": con.execute("SELECT COUNT(*) FROM portal_drafts WHERE user_id=?", (uid,)).fetchone()[0],
-         "to_review": con.execute(f"SELECT COUNT(*) FROM portal_threads t WHERE t.status='ochiq' AND {_REVIEW_SQL}", (me, me)).fetchone()[0],
+         "to_review": con.execute(f"SELECT COUNT(*) FROM portal_threads t WHERE t.status='ochiq' AND {_REVIEW_SQL} AND {_pers_sql() if mo else '1'}",
+                                  (me, me, *(_pers_args(c) if mo else []))).fetchone()[0],
+         "action": act, "member_only": mo,
          "inbox_returned": con.execute(f"""SELECT COUNT(*) FROM portal_recipients r JOIN portal_threads t ON t.id=r.thread_id WHERE r.unit=? AND t.status='ochiq'
-                                           AND r.review='qaytarildi' AND r.status IN {_PEND_SQL}""", (me,)).fetchone()[0]}
+                                           AND r.review='qaytarildi' AND r.status IN {_PEND_SQL} {"AND r.assignee=?" if mo else ""}""", (me, *([uid] if mo else []))).fetchone()[0]}
     if is_leader(c):
         cr = con.execute(f"""SELECT COUNT(*), COALESCE(SUM(z.due IS NOT NULL AND z.due!='' AND z.due < :today),0) FROM portal_resolutions z
             JOIN portal_threads t ON t.id=z.thread_id
@@ -542,7 +592,8 @@ def list_threads(c: Ctx, box="inbox", q="", flt="all", offset=0, limit=PAGE) -> 
     w1, a1 = _box_where(c, box)
     w2, a2 = _flt_where(c, box, flt)
     w3, a3 = _q_where(q)
-    where, args = f"{w1} AND {w2} AND {w3}", [*a1, *a2, *a3]
+    w4, a4 = personal_sql(c)
+    where, args = f"{w1} AND {w2} AND {w3} AND {w4}", [*a1, *a2, *a3, *a4]
     offset = max(0, int(offset or 0)); limit = max(1, min(100, int(limit or PAGE)))
     total = _con.execute(f"SELECT COUNT(*) FROM portal_threads t WHERE {where}", args).fetchone()[0]
     ts = db.rows(_con, f"SELECT t.* FROM portal_threads t WHERE {where} ORDER BY t.updated_at DESC, t.id DESC LIMIT ? OFFSET ?", (*args, limit, offset))
@@ -663,7 +714,7 @@ def thread_detail(c: Ctx, tid: int) -> dict:
     if recalled: rs, watchers = [], []      # qaytarib olingan xat faqat yuboruvchiga (va rahbariyatga) ko'rinadi
     mine = next((r for r in rs if r["unit"] == me), None)
     sender = t["from_unit"] == me or t["from_user"] == uid
-    part = sender or bool(mine) or me in watchers
+    part = (sender or bool(mine) or me in watchers) and personal(_con, c, t)   # bo'lim xodimi — faqat shaxsan unga tegishli yozishma
     ok = part or is_leader(c)
     _audit(c, "portal: yozishmani ochish", ok, f"{t['ref_no']} {t['subject']}")
     if not ok:
@@ -744,21 +795,42 @@ def thread_detail(c: Ctx, tid: int) -> dict:
                           "new": m["id"] > reads_before and m["unit"] != me and part and (m.get("kind") or "xat") != "tizim",
                           "meta": json.loads(m["meta"]) if m.get("meta") else None, "files": att.get(m["id"], [])} for m in msgs],
             "can_reply": perms["can_reply"], "perms": perms,
+            "directives": [{"id": d["id"], "unit": d["unit"], "name": _uname(um, d["unit"] if d["unit"] != "registrator" else "talabalar"), "status": d["status"], "review": d["review"]}
+                           for d in db.rows(_con, "SELECT id, unit, status, review FROM tasks WHERE src=? ORDER BY id", (f"portal:{tid}",))],
             "role": "from" if t["from_unit"] == me else "to" if mine else "watch" if me in watchers else "observer",
             "overdue": open_ and any(r["status"] in PENDING and due_of(r) and due_of(r) < today for r in rs)}
 
 # ---------------------------------------------------------------------------------------------
 # Yozishma: yozish amallari
 # ---------------------------------------------------------------------------------------------
-def _attach(con, c: Ctx, msg_id: int, file_ids, units_to_share):
-    """Xatga fayl biriktirish: yuboruvchi ko'ra oladigan fayl bo'lsa — yozishma ishtirokchilariga ulashiladi."""
+def _has_access(con, f: dict, unit: str) -> bool:
+    return f["owner_unit"] == unit or bool(con.execute("SELECT 1 FROM portal_shares WHERE file_id=? AND unit IN ('*', ?)", (f["id"], unit)).fetchone())
+
+def can_share(c: Ctx, f: dict) -> bool:
+    """Faylni yangi bo'limlarga ulashish (qayta ulashish) — faqat egasi bo'lim (owner_unit) xodimlari."""
+    return f["owner_unit"] == my_unit(c)
+
+def _share_check(con, c: Ctx, file_ids, units_to_share):
+    """Yozishdan OLDIN: begona bo'lim fayli yangi bo'limga ulashilmaydi — ishtirokchilarda allaqachon bo'lsa, ilova qilish mumkin."""
+    for fid in list(dict.fromkeys(int(x) for x in (file_ids or [])))[:10]:
+        f = db.one(con, "SELECT * FROM portal_files WHERE id=?", (fid,))
+        if not f or not can_see_file(con, c, f) or can_share(c, f): continue
+        miss = [u for u in units_to_share if u and not _has_access(con, f, u)]
+        if miss:
+            rbac.audit(con, c, "portal: begona faylni qayta ulashish", RES, False, f"{f['name']} → {', '.join(miss)[:120]}")
+            raise HTTPException(403, f"«{f['name']}» fayli {_uname(unit_map(con), f['owner_unit'])}ga tegishli — uni boshqa bo'limlarga faqat egasi bo'lim ulasha oladi.")
+
+def _attach(con, c: Ctx, msg_id: int, file_ids, units_to_share, thread_id: int | None = None):
+    """Xatga fayl biriktirish: yuboruvchi ko'ra oladigan fayl bo'lsa — yozishma ishtirokchilariga ulashiladi (faqat egasi bo'lim yangi
+    ulashma yaratadi — _share_check). Yangi ulashma qaysi xat orqali yaratilgani (portal_shares.thread_id) saqlanadi: xat qaytarib olinsa — o'chiriladi."""
     n = 0
     for fid in list(dict.fromkeys(int(x) for x in (file_ids or [])))[:10]:
         f = db.one(con, "SELECT * FROM portal_files WHERE id=?", (fid,))
         if not f or not can_see_file(con, c, f): continue
         con.execute("INSERT OR IGNORE INTO portal_attach(msg_id,file_id) VALUES(?,?)", (msg_id, fid))
-        for u in units_to_share:
-            if u != f["owner_unit"]: con.execute("INSERT OR IGNORE INTO portal_shares(file_id,unit) VALUES(?,?)", (fid, u))
+        if can_share(c, f):
+            for u in units_to_share:
+                if u != f["owner_unit"]: con.execute("INSERT OR IGNORE INTO portal_shares(file_id,unit,thread_id) VALUES(?,?,?)", (fid, u, thread_id))
         n += 1
     return n
 
@@ -846,6 +918,7 @@ def create_thread(con, c: Ctx, body: ThreadIn, ts: str | None = None) -> int:
     kind = body.kind if body.kind in KINDS else "xat"
     prio = body.priority if body.priority in PRIOS else "oddiy"
     sids = _check_students(con, c, body.students)
+    _share_check(con, c, body.file_ids, to)
     ts = ts or _now()
     cur = con.execute("INSERT INTO portal_threads(ref_no,subject,kind,priority,due,from_unit,from_user,from_name,created_at,updated_at,status) VALUES(?,?,?,?,?,?,?,?,?,?,'ochiq')",
                       ("", subj, kind, prio, _valid_due(body.due), me, c.user["id"], c.user["full_name"], ts, ts))
@@ -854,7 +927,7 @@ def create_thread(con, c: Ctx, body: ThreadIn, ts: str | None = None) -> int:
     for u in to:
         con.execute("INSERT INTO portal_recipients(thread_id,unit,status,via) VALUES(?,?,?,'xat')", (tid, u, "yangi"))
     mid = _msg(con, c, tid, me, text, ts)
-    _attach(con, c, mid, body.file_ids, to)
+    _attach(con, c, mid, body.file_ids, to, tid)
     _put_students(con, c, tid, sids, body.student_note, ts)
     if body.draft_id: con.execute("DELETE FROM portal_drafts WHERE id=? AND user_id=?", (body.draft_id, c.user["id"]))
     con.commit(); _bump()
@@ -891,12 +964,15 @@ def _need_open(t):
 def reply(con, c: Ctx, tid: int, body: ReplyIn, ts: str | None = None) -> int:
     t = _thread(con, tid)
     me = my_unit(c)
-    if not _is_part(con, t, me):
+    if not _is_part(con, t, me) or not personal(con, c, t):
         rbac.audit(con, c, "portal: javob yozish", RES, False, t["ref_no"])
-        raise AccessDenied("⛔ Faqat yozishma ishtirokchisi bo'lgan bo'limlar javob yoza oladi.")
+        raise AccessDenied("⛔ Faqat yozishma ishtirokchisi bo'lgan bo'limlar javob yoza oladi (bo'lim xodimi — o'ziga biriktirilgan xatga).")
     _need_open(t)
     text = (body.body or "").strip()[:8000]
     if not text: raise HTTPException(400, "Javob matni bo'sh")
+    others0 = [u for u in [t["from_unit"]] + [r["unit"] for r in db.rows(con, "SELECT unit FROM portal_recipients WHERE thread_id=?", (tid,))]
+               + [r["unit"] for r in db.rows(con, "SELECT unit FROM portal_watchers WHERE thread_id=?", (tid,))] if u != me]
+    _share_check(con, c, body.file_ids, others0)
     ts = ts or _now()
     mid = _msg(con, c, tid, me, text, ts)
     # yangi javob — qayta ko'rib chiqiladi (qaytarilgan bo'lsa ham; tarix portal_reviews'da, qaytarishlar soni — returns)
@@ -904,7 +980,7 @@ def reply(con, c: Ctx, tid: int, body: ReplyIn, ts: str | None = None) -> int:
                    WHERE thread_id=? AND unit=?""", (ts, ts, c.user["full_name"], tid, me))
     others = [u for u in [t["from_unit"]] + [r["unit"] for r in db.rows(con, "SELECT unit FROM portal_recipients WHERE thread_id=?", (tid,))]
               + [r["unit"] for r in db.rows(con, "SELECT unit FROM portal_watchers WHERE thread_id=?", (tid,))] if u != me]
-    _attach(con, c, mid, body.file_ids, list(dict.fromkeys(others)))
+    _attach(con, c, mid, body.file_ids, list(dict.fromkeys(others)), tid)
     con.commit(); _bump()
     return mid
 
@@ -1124,6 +1200,7 @@ def recall(con, c: Ctx, tid: int, note: str = "") -> None:
     # ro'yxat va muddat `recalled` ustunida saqlanadi — «Tahrirlab qayta yuborish» uchun.
     con.execute("DELETE FROM portal_recipients WHERE thread_id=?", (tid,))
     con.execute("DELETE FROM portal_watchers WHERE thread_id=?", (tid,))
+    con.execute("DELETE FROM portal_shares WHERE thread_id=?", (tid,))     # shu xat orqali yaratilgan ulashmalar ham qaytariladi
     con.execute("UPDATE portal_threads SET status='qaytarilgan', due=NULL, recalled=?, closed_at=?, closed_by=?, close_note=? WHERE id=?",
                 (json.dumps(snap, ensure_ascii=False), ts, who, note, tid))
     _msg(con, c, tid, me, "Xat qaytarib olindi" + (f": {note}" if note else ""), ts, "tizim")
@@ -1503,15 +1580,28 @@ def mark_reminded(con, user_id: int, keys: list):
 # ---------------------------------------------------------------------------------------------
 # Fayllar
 # ---------------------------------------------------------------------------------------------
+FILES_ALL = ("rektor",)      # barcha bo'limlar fayllari (rektor); prorektor — kuratorlikdagi bo'limlar + o'zi ishtirok etgan yozishmalar ilovalari
+
 def can_see_file(con, c: Ctx, f: dict) -> bool:
-    if is_leader(c) or f["uploader_id"] == c.user["id"] or f["owner_unit"] == my_unit(c): return True
-    return bool(con.execute("SELECT 1 FROM portal_shares WHERE file_id=? AND unit IN ('*', ?)", (f["id"], my_unit(c))).fetchone())
+    w, a = _vis_sql(c, "f")
+    return bool(con.execute(f"SELECT 1 FROM portal_files f WHERE f.id=? AND {w}", (f["id"], *a)).fetchone())
 
 def _vis_sql(c: Ctx, alias="f") -> tuple[str, tuple]:
-    if is_leader(c): return "1=1", ()
+    if c.role.key in FILES_ALL: return "1=1", ()
     me = my_unit(c)
-    return (f"({alias}.uploader_id=? OR {alias}.owner_unit=? OR EXISTS(SELECT 1 FROM portal_shares s WHERE s.file_id={alias}.id AND s.unit IN ('*', ?)))",
-            (c.user["id"], me, me))
+    w = f"({alias}.uploader_id=? OR {alias}.owner_unit=? OR EXISTS(SELECT 1 FROM portal_shares s WHERE s.file_id={alias}.id AND s.unit IN ('*', ?))"
+    a = [c.user["id"], me, me]
+    if is_leader(c):
+        cu = curated(c)
+        if cu:
+            w += f" OR {alias}.owner_unit IN ({','.join('?' * len(cu))})"; a += cu
+        # o'zi ishtirok etgan (bo'limi yuboruvchi/qabul qiluvchi/kuzatuvchi yoki rezolyutsiya muallifi) yozishmalar ilovalari
+        w += (f" OR EXISTS(SELECT 1 FROM portal_attach pa JOIN portal_msgs pm ON pm.id=pa.msg_id JOIN portal_threads pt ON pt.id=pm.thread_id"
+              f" WHERE pa.file_id={alias}.id AND (pt.from_unit=? OR EXISTS(SELECT 1 FROM portal_recipients pr WHERE pr.thread_id=pt.id AND pr.unit=?)"
+              f" OR EXISTS(SELECT 1 FROM portal_watchers pw WHERE pw.thread_id=pt.id AND pw.unit=?)"
+              f" OR EXISTS(SELECT 1 FROM portal_resolutions pz WHERE pz.thread_id=pt.id AND pz.author_unit=?)))")
+        a += [me, me, me, me]
+    return w + ")", tuple(a)
 
 def safe_name(name: str) -> tuple[str, str]:
     n = unicodedata.normalize("NFC", str(name or "")).replace("\\", "/").split("/")[-1]
@@ -1561,7 +1651,8 @@ def list_files(c: Ctx, q="", unit="", cat="", scope="all") -> dict:
             "units": sorted([{"key": k, "name": _uname(um, k), "n": n} for k, n in fac_units.items()], key=lambda u: order.get(u["key"], 999)),
             "cats": [{"name": k, "n": fac_cats[k]} for k in CATEGORIES if k in fac_cats],
             "scopes": {"all": len(allv), "mine": sum(1 for x in allv if x["own_unit"] or x["mine"]), "shared": sum(1 for x in allv if not x["own_unit"] and not x["mine"])},
-            "categories": CATEGORIES, "max_mb": MAX_BYTES // (1024 * 1024), "leader": is_leader(c), "unit": me, "unit_name": _uname(um, me)}
+            "categories": CATEGORIES, "max_mb": MAX_BYTES // (1024 * 1024), "leader": is_leader(c), "all_files": c.role.key in FILES_ALL,
+            "curated": curated(c), "unit": me, "unit_name": _uname(um, me)}
 
 def store_file(con, c: Ctx, name: str, data: bytes, category: str, share: list[str], note: str = "", ts: str | None = None, owner_unit: str | None = None) -> dict:
     name, ext = safe_name(name)
@@ -1853,7 +1944,8 @@ def api_units(request: Request):
     return {"me": me, "groups": [{"key": k, "name": n} for k, n in GROUPS], "units": units(_con), "kinds": KINDS, "prios": PRIOS,
             "leader": is_leader(c), "can_resolve": c.role.key in RESOLVERS, "curated": curated(c), "is_head": is_head(c),
             "students": stu_full(c), "student_scope": c.scope_label(_con) if stu_full(c) else None,
-            "members": [{**m, "me": m["id"] == c.user["id"]} for m in members(_con, me)]}
+            "members": [{**m, "me": m["id"] == c.user["id"]} for m in members(_con, me)],
+            "directive_units": directive_units(c), "member_only": member_only(c)}
 
 @router.get("/api/portal/summary")
 def api_summary(request: Request):
@@ -1867,13 +1959,58 @@ def api_threads(request: Request, box: str = "inbox", q: str = "", flt: str = "a
 def api_thread(tid: int, request: Request):
     return thread_detail(C(request), tid)
 
+DIRECTIVE_KINDS = ("sorov", "topshiriq")     # «Ma'lumot so'rovi» va «Topshiriq» — vakolatdagi bo'limlarga topshiriq sifatida (directives)
+
+def directive_units(c: Ctx) -> list[str]:
+    """Shu foydalanuvchi topshiriq bera oladigan bo'limlar (Portal kalitlari) — directives.targets() bo'yicha."""
+    from . import directives as DIR, decisions as DEC
+    try: return [DEC.org_key(k) for k in DIR.targets(c)["units"]]
+    except Exception as e:
+        print("portal.directive_units:", repr(e)); return []
+
+def _send_directives(c: Ctx, body: ThreadIn, units_: list[str], thread_id: int | None) -> list[dict]:
+    """«Ma'lumot so'rovi»/«Topshiriq»: vakolatdagi har bir bo'limga topshiriq (natija, qabul/qaytarish — directives oqimi)."""
+    from . import directives as DIR, decisions as DEC
+    T = DIR.targets(c)
+    my = DEC.unit_of(c) or ("rektorat" if c.role.key in ("rektor", "kotib") else None)
+    due = _valid_due(body.due) or (S.TODAY + dt.timedelta(days=7)).isoformat()
+    if due < S.TODAY.isoformat(): raise HTTPException(400, "Muddat o'tgan sana bo'lishi mumkin emas")
+    files = DIR._check_files(c, body.file_ids, [DEC.task_key(u) for u in units_] + [my]) if body.file_ids else []
+    subj = re.sub(r"\s+", " ", body.subject or "").strip()[:200]
+    out = []; um = unit_map(_con)
+    for u in units_:
+        did = DIR.create_linked(_con, c.user["id"], my, DEC.task_key(u), subj, (body.body or "").strip()[:5000], due,
+                                body.priority if body.priority in PRIOS else "oddiy", "Javob — topshiriq natijasi sifatida (matn va/yoki ilova)",
+                                f"portal:{thread_id}" if thread_id else "portal", attach=files, on_behalf=T["on_behalf"])
+        out.append({"id": did, "unit": u, "name": _uname(um, u)})
+    return out
+
 @router.post("/api/portal/threads")
 def api_create(body: ThreadIn, request: Request):
     c = C(request)
-    tid = create_thread(_con, c, body)
-    t = db.one(_con, "SELECT ref_no, subject FROM portal_threads WHERE id=?", (tid,))
-    _audit(c, "portal: xat yuborildi", True, f"{t['ref_no']} → {', '.join(body.to)[:120]} · {t['subject']}" + (f" · talabalar: {len(body.students)} ta" if body.students else ""))
-    return {"ok": True, "id": tid, "ref_no": t["ref_no"]}
+    to = [u for u in dict.fromkeys(body.to or [])]
+    dirs, dir_to = [], []
+    if body.kind in DIRECTIVE_KINDS and not body.students:
+        allowed = set(directive_units(c))
+        dir_to = [u for u in to if u in allowed]
+    letter_to = [u for u in to if u not in dir_to]
+    tid, ref = None, None
+    if dir_to:   # bo'sh mavzu/matn — xat bilan bir xil tekshiruv
+        if not re.sub(r"\s+", " ", body.subject or "").strip(): raise HTTPException(400, "Mavzu kiritilmagan")
+        if not (body.body or "").strip(): raise HTTPException(400, "Xat matni bo'sh")
+        if body.due and _valid_due(body.due) < S.TODAY.isoformat(): raise HTTPException(400, "Muddat o'tgan sana bo'lishi mumkin emas")
+    if letter_to:
+        tid = create_thread(_con, c, body.model_copy(update={"to": letter_to}))
+        t = db.one(_con, "SELECT ref_no, subject FROM portal_threads WHERE id=?", (tid,)); ref = t["ref_no"]
+        _audit(c, "portal: xat yuborildi", True, f"{t['ref_no']} → {', '.join(letter_to)[:120]} · {t['subject']}" + (f" · talabalar: {len(body.students)} ta" if body.students else ""))
+    if dir_to:
+        try: dirs = _send_directives(c, body, dir_to, tid)
+        except Exception:
+            _con.rollback(); raise      # qisman yozilgan ulashma/topshiriq qolmasin (xat — allaqachon saqlangan)
+        if body.draft_id: _con.execute("DELETE FROM portal_drafts WHERE id=? AND user_id=?", (body.draft_id, c.user["id"]))
+        _con.commit(); _bump()
+        rbac.audit(_con, c, "topshiriq berish", rbac.TASKS, True, f"Portal ({KINDS.get(body.kind)}) → {', '.join(d['name'] for d in dirs)[:150]} · #{', #'.join(str(d['id']) for d in dirs)}")
+    return {"ok": True, "id": tid, "ref_no": ref, "directives": dirs}
 
 @router.post("/api/portal/threads/{tid}/reply")
 def api_reply(tid: int, body: ReplyIn, request: Request):
@@ -2323,9 +2460,9 @@ def seed(con, force=False):
                           LEFT JOIN teachers t ON t.id=sc.teacher_id LEFT JOIN rooms r ON r.id=sc.room_id ORDER BY sc.weekday, sc.slot, r.name LIMIT 160""")
     jrows = [[DAYS[x["weekday"]], f"{x['slot']}-para ({SLOTS.get(x['slot'], '')})", x["grp"], x["subject"], x["tch"], (x["room"] or "").split(" ·")[0]] for x in sch]
     put("jad", "akademik", "Dars_jadvali_bahorgi_semestr_loyiha.xlsx", _xlsx("Jadval", ["Kun", "Para", "Guruh", "Fan", "O'qituvchi", "Auditoriya"], jrows[:120]),
-        "O'quv-uslubiy", ["*"], "Loyiha: kafedralar takliflari asosida tuzatiladi", 120)
+        "O'quv jarayoni", ["*"], "Loyiha: kafedralar takliflari asosida tuzatiladi", 120)
     put("jad", "akademik", "Dars_jadvali_bahorgi_semestr_loyiha.xlsx", _xlsx("Jadval", ["Kun", "Para", "Guruh", "Fan", "O'qituvchi", "Auditoriya"], jrows),
-        "O'quv-uslubiy", ["*"], "2-versiya: Buxgalteriya hisobi va Menejment kafedralari takliflari kiritildi", 20)
+        "O'quv jarayoni", ["*"], "2-versiya: Buxgalteriya hisobi va Menejment kafedralari takliflari kiritildi", 20)
     put("yuk", "akademik", "Oquv_yuklama_shakli_2027.xlsx",
         _xlsx("Yuklama", ["Kafedra", "O'qituvchi", "Fan", "Guruh", "Ma'ruza (soat)", "Amaliy (soat)", "Jami"], [["", "", "", "", 0, 0, 0] for _ in range(3)]),
         "Shablonlar", ["*"], "Kafedralar to'ldiradigan shakl", 160)
@@ -2373,7 +2510,7 @@ def seed(con, force=False):
               ["Konferensiya 2026-yil dekabr oyida ISFT institutida bo'lib o'tadi.", "**Tezislarga talablar:",
                "- Hajmi: 3-5 sahifa, Times New Roman 14, interval 1,5", "- Tillar: o'zbek, rus, ingliz", "- Annotatsiya va kalit so'zlar (5-7 ta)",
                "- Adabiyotlar ro'yxati APA uslubida", "Tezislar kafedra mudiri orqali Ilmiy tadqiqotlar bo'limiga yuboriladi."]),
-        "O'quv-uslubiy", kafs + ["prorektor_ilmiy"], "Barcha kafedralar uchun", 140)
+        "O'quv jarayoni", kafs + ["prorektor_ilmiy"], "Barcha kafedralar uchun", 140)
     put("monit", "akademik", "Dars_monitoringi_noyabr_1-hafta.pdf",
         _pdf("Dars mashg'ulotlari monitoringi: noyabr, 1-hafta",
              ["Monitoring 3 fakultetning 42 ta dars mashg'ulotida o'tkazildi.", "", "**Asosiy natijalar:",
@@ -2407,7 +2544,7 @@ def seed(con, force=False):
         _xlsx("Yakuniy nazorat", ["Sana", "Vaqt", "Guruh", "Fan", "Nazorat shakli", "Mas'ul o'qituvchi"],
               [[(S.TODAY + dt.timedelta(days=44 + (i % 18))).strftime("%d.%m.%Y"), ["09:00", "11:00", "14:00"][i % 3], r["grp"], r["subject"],
                 ["yozma", "test", "og'zaki"][i % 3], r["tch"] or ""] for i, r in enumerate(yn)]),
-        "O'quv-uslubiy", faks + ["imtihon"], "Loyiha — fakultet tyutorlari takliflari bilan yakunlanadi", 48)
+        "O'quv jarayoni", faks + ["imtihon"], "Loyiha — fakultet tyutorlari takliflari bilan yakunlanadi", 48)
     put("sirtqi", "sirtqi", "Sirtqi_sessiya_chaqiruv_xati_namuna.docx",
         _docx("Sirtqi ta'lim talabasini o'quv-imtihon sessiyasiga chaqiruv xati (namuna)",
               ["Hurmatli ________________________!", "Sizni 2026-2027 o'quv yilining qishki o'quv-imtihon sessiyasiga chaqiramiz.",

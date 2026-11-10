@@ -65,6 +65,10 @@ def retire_legacy(con) -> int:
 def bind(con, ctx_fn):
     global _con, _ctx
     _con, _ctx = con, ctx_fn
+    from . import desks as DK     # lavozim ish stollari (strategik, sifat, marketing, yuridik) — shu router orqali ulanadi
+    DK.bind(con, ctx_fn)
+    if not getattr(router, "_desks", False):
+        router.include_router(DK.router); router._desks = True
 
 def _now(): return dt.datetime.now().isoformat(timespec="seconds")
 def _short(name): return (name or "").split(":", 1)[1].strip() if ":" in (name or "") else ""

@@ -133,8 +133,10 @@ async function saOpen(id, keep) {
         ${(d.file_list || []).map(f => `<a class="sa-file" href="/api/staffabs/files/${f.id}" download><span class="sa-ext">${esc(String(f.ext).toUpperCase())}</span><span><b>${esc(f.name)}</b><small>${Math.max(1, Math.round(f.size / 1024))} KB · ${esc(f.by)} · ${dmy(f.at.slice(0, 10))}</small></span>${ico("download", 15)}</a>`).join("") || `<span class="muted tiny">Hali yuklanmagan (kasallik varaqasi, buyruq, xizmat topshirig'i).</span>`}
         ${d.can_edit ? `<label class="btn sm ghost sa-up">${ico("upload", 15)}Fayl yuklash<input type="file" id="saFile" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" hidden></label>` : ""}</div>` : ""}
       ${d.kind === "mehnat" && (d.order || d.can_edit) ? `<div class="sa-blk"><div class="sa-blk-h">${ico("file", 14)}Mehnat ta'tili buyrug'i</div>
-        ${d.order ? `<div class="sa-ord"><b>${esc(d.order.reg_no)}</b>${d.order.status ? `<span class="sa-tag">${d.order.status === "imzolangan" ? "imzolangan" : d.order.status === "loyiha" ? "loyiha — rektor imzosida" : esc(d.order.status)}</span>` : ""}${d.order.file ? `<a class="btn sm ghost" href="/api/docs/file/${encodeURIComponent(d.order.file)}" download>${ico("download", 14)}DOCX</a>` : ""}</div>`
-          : `<div class="sa-ord-f"><button class="btn sm" id="saOrdNew">${ico("plus", 14)}Buyruq loyihasini yaratish</button><span class="muted tiny">yoki</span><input id="saOrdReg" placeholder="ShT-26/0001" aria-label="Buyruq raqami"><button class="btn sm ghost" id="saOrdLink">Bog'lash</button></div>`}</div>` : ""}
+        ${d.order ? `<div class="sa-ord"><b>${esc(d.order.reg_no)}</b>${d.order.status ? `<span class="sa-tag">${d.order.legacy ? "eski yozuv (Hujjatlar markazi)" : esc(d.order.status)}</span>` : ""}${d.order.returned ? `<span class="sa-tag">qaytarilgan</span>` : ""}
+            ${d.order.order_id ? `<button class="btn sm ghost" id="saOrdOpen">${ico("file", 14)}Buyruqlarda ochish</button>` : d.order.file ? `<a class="btn sm ghost" href="/api/docs/file/${encodeURIComponent(d.order.file)}" download>${ico("download", 14)}DOCX</a>` : ""}</div>`
+          : `<div class="sa-ord-f"><button class="btn sm" id="saOrdNew">${ico("plus", 14)}Buyruq loyihasini yaratish</button><span class="muted tiny">yoki</span><input id="saOrdReg" placeholder="ShT-26/0001" aria-label="Buyruq raqami"><button class="btn sm ghost" id="saOrdLink">Bog'lash</button></div>
+            <span class="muted tiny">Loyiha «Buyruqlar» bo'limida yaratiladi va u yerdan rektor imzosiga yuboriladi.</span>`}</div>` : ""}
     </div>` : ""}
     ${d.teacher ? `<div class="sa-les-h"><b>${ico("users", 15)}Dars jadvaliga ta'siri</b><span class="muted tiny">${L.length ? `${L.length} ta dars · kelgusi ${fut.length}, o'rinbosar tayinlangan ${fut.filter(x => x.sub).length}` : "Bu davrda darsi yo'q"}</span>
       ${pastN ? `<button class="pt-q sa-q" id="saPast">${showPast ? "O'tgan kunlarni yashirish" : `O'tgan kunlar (${pastN})`}</button>` : ""}</div>
@@ -170,7 +172,8 @@ function saBindDetail(d) {
     if (!r.ok) return toast(j.detail || j.message || "Fayl yuklanmadi");
     toast(`Yuklandi: ${j.name}`); saOpen(d.id, true); saRefreshItem();
   };
-  if ($("#saOrdNew")) $("#saOrdNew").onclick = () => busy($("#saOrdNew"), async () => { const r = await saApi(`/api/staffabs/${d.id}/order`, {}); if (r) { toast(`Buyruq loyihasi: ${r.reg_no} — rektor imzosiga`); saOpen(d.id, true); saRefreshItem(); } }, "…");
+  if ($("#saOrdNew")) $("#saOrdNew").onclick = () => busy($("#saOrdNew"), async () => { const r = await saApi(`/api/staffabs/${d.id}/order`, {}); if (r) { toast(`Buyruq loyihasi tuzildi (${r.reg_no}) — «Buyruqlar»da imzoga yuboring`); saOpen(d.id, true); saRefreshItem(); } }, "…");
+  if ($("#saOrdOpen")) $("#saOrdOpen").onclick = () => { if (typeof XT !== "undefined" && XT.openLink) XT.openLink({view: "orders", order: d.order.order_id}); else { if (typeof OR !== "undefined") OR.id = d.order.order_id; go("orders"); } };
   if ($("#saOrdLink")) $("#saOrdLink").onclick = () => busy($("#saOrdLink"), async () => { const v = $("#saOrdReg").value.trim(); if (!v) { $("#saOrdReg").focus(); return toast("Buyruq raqamini kiriting"); } const r = await saApi(`/api/staffabs/${d.id}/order`, {reg_no: v}); if (r) { toast(`Bog'landi: ${r.reg_no}`); saOpen(d.id, true); saRefreshItem(); } }, "…");
   saBindLessons($("#saRead"), d.id, () => { saOpen(d.id, true); saRefreshItem(); });
 }

@@ -23,7 +23,9 @@ const MW_SRC = {
   majlis: {label: "Majlis", icon: "tasks"},
   portal: {label: "Portal", icon: "mail"},
   markaz: {label: "Markaz", icon: "users", long: "Talabalar markazi"},
-  hujjat: {label: "Hujjatlar", icon: "file"},
+  buyruq: {label: "Buyruqlar", icon: "file"},
+  murojaat: {label: "Murojaatlar", icon: "mail", long: "Murojaatlar va nosozliklar"},
+  xodim: {label: "Xodimlar ta'tili", icon: "users"},
   agent: {label: "AI agentlar", icon: "spark"},
   sillabus: {label: "O'quv dasturlari", icon: "book"},
 };
@@ -87,7 +89,7 @@ function mwDraw() {
   if (MW.flt !== "all" && !srcs.includes(MW.flt)) MW.flt = "all";
   const tile = (k, label, n, cls, icon) => `<div class="mw-st ${cls}${n ? "" : " zero"}"><span class="mw-st-ic">${ico(icon, 16)}</span><b>${fmt(n)}</b><span>${label}</span></div>`;
   const who = (typeof ME !== "undefined" && ME) ? [ME.role, ME.scope && ME.scope !== "Butun institut" ? ME.scope : ""].filter(Boolean).join(" · ") : "";
-  el.innerHTML = `<div class="head"><div><h2>Mening vazifalarim</h2><span class="muted">Sizdan kutilayotgan hamma ish bitta joyda: majlis topshiriqlari, portal xatlari va rezolyutsiyalar, Talabalar markazi navbati, imzo va AI takliflari.${who ? ` <b class="mw-whoami">${esc(who)}</b>` : ""}</span></div>
+  el.innerHTML = `<div class="head"><div><h2>Mening vazifalarim</h2><span class="muted">Sizdan kutilayotgan hamma ish bitta joyda: topshiriqlar, portal xatlari va rezolyutsiyalar, Talabalar markazi navbati, buyruqlar (imzo, kelishuv, qaytarilgan), murojaatlar, xodimlar ta'tili, o'quv dasturlari va AI takliflari.${who ? ` <b class="mw-whoami">${esc(who)}</b>` : ""}</span></div>
       <div class="row-actions"><button class="btn sm" type="button" id="mwRefresh">${ico("refresh", 15)} Yangilash</button></div></div>
     <div class="mw-stats">${tile("overdue", "Muddati o'tgan", c.overdue, "bad", "alert")}${tile("today", "Bugun", c.today, "warn", "clock")}${tile("week", "Shu hafta", c.week, "", "calendar")}${tile("total", "Jami ish", c.total, "tot", "list")}</div>
     ${srcs.length > 1 ? `<div class="pn-tabs mw-tabs" role="tablist" aria-label="Manba bo'yicha saralash">
@@ -110,7 +112,10 @@ async function renderMywork() {
   mwDraw();
 }
 
-/* menyudagi raqam: muddati o'tgan + bugungi ishlar */
+/* menyudagi raqam = sahifadagi «Jami ish» (yagona qoida: sizdan harakat kutayotgan ishlar); izohda — kechikkan va bugungilar */
 async function myworkBadge(set) {
-  try { const d = await J("/api/mywork"); MW.data = d; set("mywork", d.counts.overdue + d.counts.today); } catch (e) {}
+  try {
+    const d = await J("/api/mywork"), c = d.counts; MW.data = d;
+    set("mywork", c.badge ?? c.total, `Sizdan kutilayotgan ishlar: ${c.total} ta` + (c.overdue || c.today ? ` (kechikkan ${c.overdue}, bugun ${c.today})` : ""));
+  } catch (e) {}
 }

@@ -14,14 +14,15 @@
 .sy-tab.on{background:var(--seg-on);color:var(--ink);box-shadow:0 1px 2px rgba(16,24,40,.08)}
 
 /* holat plitkalari */
-.sy-tiles{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:10px;margin-bottom:14px}
+/* yorliq so'z o'rtasida bo'linmasin ("Tayyorlanmo/qda"): ikona + son yuqorida, yorliq butun kenglikda, avtomatik ustunlar */
+.sy-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(138px,1fr));gap:10px;margin-bottom:14px}
 .sy-tile{display:grid;grid-template-columns:auto 1fr;grid-template-rows:auto auto;column-gap:10px;align-items:center;text-align:left;padding:12px 12px;border-radius:var(--r);
   background:var(--surface);border:1px solid var(--card-brd);box-shadow:var(--card-hi);min-width:0;font:inherit;color:inherit;cursor:pointer;transition:border-color .15s}
 .sy-tile:hover{border-color:var(--line-2)}
 .sy-tile.on{border-color:var(--teal);box-shadow:0 0 0 1px var(--teal) inset}
-.sy-tile-ic{grid-row:1/3;align-self:start;margin-top:2px;width:32px;height:32px;border-radius:10px;display:grid;place-items:center;background:var(--surface-2);color:var(--ink-2)}
+.sy-tile-ic{grid-row:1;align-self:center;width:32px;height:32px;border-radius:10px;display:grid;place-items:center;background:var(--surface-2);color:var(--ink-2)}
 .sy-tile b{font-size:21px;line-height:1.1;font-weight:800;color:var(--ink);font-variant-numeric:tabular-nums}
-.sy-tile>span:last-child{font-size:12px;color:var(--muted);font-weight:650;line-height:1.25;overflow-wrap:anywhere}
+.sy-tile>span:last-child{grid-column:1/-1;margin-top:6px;font-size:12px;color:var(--muted);font-weight:650;line-height:1.25;overflow-wrap:normal;word-break:normal;hyphens:manual;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sy-tile.jarayonda .sy-tile-ic{background:var(--warn-soft);color:var(--warn)}
 .sy-tile.qaytarilgan .sy-tile-ic,.sy-tile.overdue .sy-tile-ic{background:var(--bad-soft);color:var(--bad)}
 .sy-tile.tekshiruvda .sy-tile-ic{background:var(--teal-soft);color:var(--teal)}
@@ -29,7 +30,6 @@
 .sy-tile.tasdiqlangan .sy-tile-ic{background:var(--ok-soft);color:var(--ok)}
 .sy-tile.overdue:not(.zero) b{color:var(--bad)}
 .sy-tile.zero b{color:var(--muted)}
-@media (max-width:1250px){.sy-tiles{grid-template-columns:repeat(4,minmax(0,1fr))}}
 @media (max-width:620px){.sy-tiles{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
 /* holat yorliqlari */
@@ -262,3 +262,7 @@
   .sy-dep-n{grid-area:n}.sy-dep-v{grid-area:v}.sy-stack{grid-area:b}
   .sy-head-t h3{font-size:18px}
 }
+
+/* kafedra so'rovi → topshiriq havolasi */
+.sy-dirnote{display:flex;gap:6px;align-items:flex-start;margin:0 0 10px}
+.sy-dir{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:6px 0 0}

@@ -33,7 +33,7 @@
 
   /* ---------- 2) lavozimga ko'ra tartib ---------- */
   const ORDER = [...nav.children];
-  const PROMOTE = {xojalik: ["spaces", "cams"], xalqaro: ["docs"], qabul: ["cams"]};   /* shu lavozimlar uchun kundalik ish — guruhdan tashqarida */
+  const PROMOTE = {xojalik: ["spaces", "cams"], xalqaro: ["docs"], yuridik: ["docs"], qabul: ["cams"]};   /* shu lavozimlar uchun kundalik ish — guruhdan tashqarida */
   function heads() {
     nav.querySelectorAll(".nav-h").forEach(h => { let n = h.nextElementSibling, any = false; while (n && n.tagName === "A") { any ||= !n.classList.contains("hidden"); n = n.nextElementSibling; } h.classList.toggle("hidden", !any); });
   }

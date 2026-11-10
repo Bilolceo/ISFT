@@ -11,7 +11,9 @@ Tekshiradi:
   4. Skan: ro'yxat raqami bo'yicha moslashtirish, imzo bor/yo'q, ball (OCR bo'lsa); imzosiz skan belgilanadi; tasdiqlash → baho o'tadi.
   5. Imtihonga kirish ruxsatnomasi: faktlardan tekshiruv, rad etish sabablari, guruh bo'yicha, QR tekshiruvida kim/qachon.
   6. Shaxsiy grafik (QR: bergan bo'lim, xodim, vaqt). 7. Zinapoya: 30 → qo'ng'iroq + xat, 48 dan oshsa → hayfsan, ish stoli.
-  8. Akademik ta'til: ~3 oy oldin call-markaz; qaytish — buyruq loyihasi topshirig'i (buyruqlar moduli bilan bog'lanadi).
+  8. Akademik ta'til: ~3 oy oldin call-markaz; qaytish — buyruq loyihasi topshirig'i (Buyruqlar modulida loyiha yaratiladi).
+  9. Akademik model: ruxsatnoma — joriy semestrning haqiqiy oraliq bali; qarz — har qanday yakunlangan semestrdan; hayfsansiz talaba
+     «chetlashtirishga tayyor» emas; sirtqi davomat chegaralari — sessiyaga mutanosib.
 """
 import base64, datetime as dt, json, re, sqlite3, sys
 from pathlib import Path
@@ -19,9 +21,10 @@ import httpx
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from app import db as DB, student_ops as OPS, registrar as RG, registrar_scan as RS   # noqa: E402
+from app import db as DB, student_ops as OPS, registrar as RG, registrar_scan as RS, academic_rules as AR   # noqa: E402
 
 B = os.environ.get("ISFT_TEST_URL", "http://127.0.0.1:8000")
+DOCS = Path(os.environ.get("ISFT_CORE_DATA_DIR") or ROOT / "data") / "docs"   # hujjat fayllari — server bazasi bilan bir joyda
 N = [0]
 def ok(cond, msg):
     N[0] += 1
@@ -37,7 +40,8 @@ def S(uid):
 con = DB.connect()
 OPS.bind(con, None)
 q = lambda sql, a=(): con.execute(sql, a).fetchall()
-CREATED_RT, CREATED_DOCS, DEFER, GRADES = [], [], [], {}
+CREATED_RT, CREATED_DOCS, DEFER, GRADES, ORDERS = [], [], [], {}, []
+DEBT = AR.debt_where("g")
 
 def cleanup():
     """Test yaratgan yozuvlarni olib tashlaydi (hujjatlar — «bekor»)."""
@@ -47,13 +51,21 @@ def cleanup():
         for cid in cids:
             con.execute("DELETE FROM ops_tasks WHERE case_id=?", (cid,)); con.execute("DELETE FROM ops_log WHERE case_id=?", (cid,))
             con.execute("DELETE FROM ops_cases WHERE id=?", (cid,))
+        con.execute("DELETE FROM grade_attempts WHERE retake_id=?", (rid,))
         con.execute("DELETE FROM retakes WHERE id=?", (rid,))
-    for (sid, subj), sc in GRADES.items():
-        con.execute("UPDATE grades SET score=? WHERE student_id=? AND subject=? AND semester=1", (sc, sid, subj))
+    for (sid, subj, sem), (sc, orl, yak, att) in GRADES.items():
+        con.execute("UPDATE grades SET score=?, oraliq=?, yakuniy=?, attempts=? WHERE student_id=? AND subject=? AND semester=?", (sc, orl, yak, att, sid, subj, sem))
+        if att == 1: con.execute("DELETE FROM grade_attempts WHERE student_id=? AND subject=? AND semester=?", (sid, subj, sem))
+        else: con.execute("UPDATE grade_attempts SET counted=(score=?) WHERE student_id=? AND subject=? AND semester=?", (sc, sid, subj, sem))
+    if GRADES: AR.refresh_student_metrics(con, list({k[0] for k in GRADES}))
     for did in DEFER: con.execute("DELETE FROM contract_deferments WHERE id=?", (did,))
     for reg in CREATED_DOCS: con.execute("UPDATE documents SET status='bekor' WHERE reg_no=? AND status!='bekor'", (reg,))
     con.commit()
-    CREATED_RT.clear(); GRADES.clear(); DEFER.clear()
+    for oid in ORDERS:
+        try:
+            if reg.post(f"/api/orders/{oid}/delete").status_code != 200: print(f"  (test buyrug'i #{oid} o'chirilmadi)")
+        except Exception: pass
+    CREATED_RT.clear(); GRADES.clear(); DEFER.clear(); ORDERS.clear()
     try: OPS.evaluate(con)
     except Exception: pass
 
@@ -64,15 +76,15 @@ def docs_from(r):
     CREATED_DOCS.extend(regs); return regs
 
 def retake_for(client, form="kunduzgi", faculty=None):
-    """Ochiq otrabotkasi yo'q, o'tish balidan past fan — yangi varaqa (client nomidan)."""
+    """Ochiq otrabotkasi yo'q akademik qarz (yakunlangan semestrdagi o'zlashtirilmagan fan) — yangi varaqa (client nomidan)."""
     busy = {(a, b) for a, b in q("SELECT student_id, subject FROM retakes")}
     fw = f" AND s.faculty_id={int(faculty)}" if faculty else ""
-    for sid, subj, sc in q(f"""SELECT g.student_id, g.subject, g.score FROM grades g JOIN students s ON s.id=g.student_id
-                               WHERE g.semester=1 AND g.score<40 AND s.status='faol' AND s.study_form=?{fw} ORDER BY g.student_id DESC LIMIT 400""", (form,)):
+    for sid, subj, sc, sem, orl, yak, att in q(f"""SELECT g.student_id, g.subject, g.score, g.semester, g.oraliq, g.yakuniy, g.attempts FROM grades g JOIN students s ON s.id=g.student_id
+                               WHERE {DEBT} AND s.status='faol' AND s.study_form=?{fw} ORDER BY g.student_id DESC LIMIT 400""", (form,)):
         if (sid, subj) in busy: continue
         r = client.post("/api/ops/retakes", json={"student_id": sid, "subject": subj})
         if r.status_code == 200:
-            j = r.json(); CREATED_RT.append(j["id"]); GRADES.setdefault((sid, subj), sc); docs_from(j)
+            j = r.json(); CREATED_RT.append(j["id"]); GRADES.setdefault((sid, subj, sem), (sc, orl, yak, att or 1)); docs_from(j)
             return j["id"], sid, subj, sc
     raise RuntimeError("mos talaba topilmadi")
 
@@ -82,7 +94,7 @@ reg, sir, imt, ty2, cc, pro = S(17), S(27), S(8), S(24), S(23), S(3)
 try:
     # ---------------------------------------------------------------- 1. egalik
     print("— 1. Otrabotka varaqasini kim beradi —")
-    kd = q("SELECT g.student_id, g.subject FROM grades g JOIN students s ON s.id=g.student_id WHERE g.semester=1 AND g.score<40 AND s.status='faol' LIMIT 1")[0]
+    kd = q(f"SELECT g.student_id, g.subject FROM grades g JOIN students s ON s.id=g.student_id WHERE {DEBT} AND s.status='faol' LIMIT 1")[0]
     ok(imt.post("/api/ops/retakes", json={"student_id": kd[0], "subject": kd[1]}).status_code == 403, "Imtihon bo'limi otrabotka varaqasini bera olmaydi (403)")
     ok(imt.get("/api/ops/retakes").status_code == 200, "Imtihon bo'limi otrabotkalarni ko'radi (faqat o'qish)")
     ok({r["rule"] for r in imt.get("/api/ops/summary").json()["by_rule"]} <= {"akademik", "otrabotka"}, "Imtihon bo'limi: o'zlashtirish va otrabotka holatlari")
@@ -94,7 +106,7 @@ try:
     print("— 2. Sirtqi bo'lim — sirtqi talabalar registratori —")
     rid_s, sid_s, subj_s, _ = retake_for(sir, "sirtqi")
     ok(q("SELECT study_form FROM students WHERE id=?", (sid_s,))[0][0] == "sirtqi", f"Sirtqi bo'lim sirtqi talabaga varaqa berdi (#{rid_s})")
-    kd2 = q("SELECT g.student_id, g.subject FROM grades g JOIN students s ON s.id=g.student_id WHERE g.semester=1 AND g.score<40 AND s.status='faol' AND s.study_form='kunduzgi' LIMIT 1")[0]
+    kd2 = q(f"SELECT g.student_id, g.subject FROM grades g JOIN students s ON s.id=g.student_id WHERE {DEBT} AND s.status='faol' AND s.study_form='kunduzgi' LIMIT 1")[0]
     ok(sir.post("/api/ops/retakes", json={"student_id": kd2[0], "subject": kd2[1]}).status_code == 403, "Sirtqi bo'lim kunduzgi talabaga varaqa bera olmaydi (403)")
     ok(sir.get(f"/api/registrar/permit/{kd2[0]}").status_code == 403, "Sirtqi bo'lim kunduzgi talabaning ruxsatnomasini tekshira olmaydi")
     r = sir.post("/api/docs/issue", json={"key": "study_cert", "params": {"target": f"s:{kd2[0]}"}})
@@ -102,7 +114,7 @@ try:
     r = sir.post("/api/docs/issue", json={"key": "study_cert", "params": {"target": f"s:{sid_s}"}}); ok(r.status_code == 200, "Sirtqi talabaga o'qish joyidan ma'lumotnoma")
     docs_from(r.json())
     from docx import Document
-    txt = "\n".join(p.text for p in Document(str(ROOT / "data" / "docs" / r.json()["file"])).paragraphs) + "\n".join(c.text for t in Document(str(ROOT / "data" / "docs" / r.json()["file"])).tables for row in t.rows for c in row.cells)
+    txt = "\n".join(p.text for p in Document(str(DOCS / r.json()["file"])).paragraphs) + "\n".join(c.text for t in Document(str(DOCS / r.json()["file"])).tables for row in t.rows for c in row.cells)
     ok("sirtqi ta'lim shaklida" in txt and "kunduzgi ta'lim" not in txt, "Ma'lumotnoma: ta'lim shakli to'g'ri (sirtqi)")
     ok("Sirtqi bo'lim boshlig'i" in txt and "dekan" not in txt.lower(), "Imzo: Sirtqi bo'lim boshlig'i (dekan yo'q)")
     lk = sir.get("/api/docs/lookup/student?q=a").json()
@@ -156,7 +168,9 @@ try:
     ok(next(r for r in reg.get("/api/ops/retakes").json() if r["id"] == rid)["scan"]["signed"] is True, "Ro'yxatda o'qish natijasi va HEMIS bahosi bor")
     ok(ty2.post(f"/api/ops/retakes/{rid}/approve", json={"score": drawn["score"]}).status_code == 403, "Tyutor bahoni tasdiqlay olmaydi")
     ok(reg.post(f"/api/ops/retakes/{rid}/approve", json={"score": drawn["score"]}).status_code == 200, "Registrator «Tasdiqlash» — baho o'tdi")
-    ok(q("SELECT score FROM grades WHERE student_id=? AND subject=? AND semester=1", (sid, subj))[0][0] == drawn["score"], "Baho jadvali yangilandi")
+    sem_r = q("SELECT semester FROM retakes WHERE id=?", (rid,))[0][0]
+    ok(q("SELECT score FROM grades WHERE student_id=? AND subject=? AND semester=?", (sid, subj, sem_r))[0][0] == max(drawn["score"], sc0),
+       f"Baho jadvali yangilandi — o'sha semestr yozuvi ({AR.SEMESTER_SHORT[sem_r]}); past natija bahoni pasaytirmaydi")
     ok(q("SELECT status FROM ops_cases WHERE key=?", (f"{sid}:otrabotka:{rid}",))[0][0] == "yopildi", "Otrabotka holati yopildi")
     # imzosiz → belgilanadi
     rid2, sid2, subj2, _ = retake_for(reg, "kunduzgi", 2)
@@ -227,11 +241,11 @@ try:
     vp = httpx.get(f"{B}/verify/{code}").text
     ok("Shaxsiy grafik" in vp and "Baratov" in vp and "Bergan bo'lim" in vp, "Tekshiruv sahifasi: kim va qachon bergan")
     ok(q("SELECT COUNT(*) FROM ops_log WHERE student_id=? AND action='shaxsiy grafik berildi'", (sid3,))[0][0] >= 1, "Talaba tarixida qayd etildi")
-    txt = "\n".join(c.text for t in Document(str(ROOT / "data" / "docs" / r.json()["file"])).tables for row in t.rows for c in row.cells)
+    txt = "\n".join(c.text for t in Document(str(DOCS / r.json()["file"])).tables for row in t.rows for c in row.cells)
     ok(subj3 in txt, "Grafikda ochiq otrabotka bandi bor")
     clean = next((s_id for s_id, in q("""SELECT s.id FROM students s WHERE s.status='faol' AND s.payment_type='grant' AND s.study_form='kunduzgi'
-                 AND NOT EXISTS (SELECT 1 FROM grades g WHERE g.student_id=s.id AND g.score<40)
-                 AND NOT EXISTS (SELECT 1 FROM absences a WHERE a.student_id=s.id) LIMIT 1""")), None)
+                 AND NOT EXISTS (SELECT 1 FROM grades g WHERE g.student_id=s.id AND (g.score<40 OR (g.semester=1 AND COALESCE(g.oraliq,0)<12)))
+                 AND NOT EXISTS (SELECT 1 FROM absences a WHERE a.student_id=s.id AND a.semester=1) LIMIT 1""")), None)
     if clean: ok(reg.post("/api/docs/issue", json={"key": "personal_schedule", "params": {"target": f"s:{clean}"}}).status_code == 400, "Qarzi yo'q talabaga grafik kerak emas (400)")
     ok(imt.post("/api/docs/issue", json={"key": "personal_schedule", "params": {"target": f"s:{sid3}"}}).status_code == 403, "Imtihon bo'limi grafik bera olmaydi")
 
@@ -241,7 +255,13 @@ try:
     ok((P["att_call_hours"], P["att_letter_hours"], P["att_reprimand_hours"]) == (30, 30, 48), "Institut me'yori: 30 soat — qo'ng'iroq va xat, 48 dan oshsa — hayfsan")
     ok([OPS.davomat_level(h, P) for h in (29, 30, 48, 49)] == [0, 2, 2, 3], "48 soat — hali xat bosqichi; 49 — hayfsan (qat'iy «oshsa»)")
     ok({k for k, _, _ in OPS.PLAN[("davomat", 2)]} == {"qongiroq", "xat"} and {k for k, _, _ in OPS.PLAN[("davomat", 3)]} == {"buyruq", "suhbat"}, "30 soat: call-markaz + xat; >48: hayfsan loyihasi + tyutor")
-    ok(all(r[0] > 48 for r in q("""SELECT CAST(json_extract(facts,'$.hours') AS INT) FROM ops_cases WHERE rule='davomat' AND status='ochiq' AND level=3""")), "Bazadagi hayfsan holatlari — faqat 48 soatdan oshganlar")
+    SL = OPS.att_limits(P, "sirtqi")
+    ok(all(h > (SL["reprimand"] if f == "sirtqi" else 48) for h, f in q("""SELECT CAST(json_extract(facts,'$.hours') AS INT), json_extract(facts,'$.form') FROM ops_cases
+                                                                            WHERE rule='davomat' AND status='ochiq' AND level=3""")),
+       f"Bazadagi hayfsan holatlari — kunduzgi 48 dan, sirtqi {SL['reprimand']} dan oshganlar")
+    ok([OPS.davomat_level(h, P, "sirtqi") for h in (SL["call"] - 1, SL["call"], SL["reprimand"], SL["reprimand"] + 1)] == [0, 2, 2, 3] and
+       q("SELECT COUNT(*) FROM ops_cases oc JOIN students s ON s.id=oc.student_id WHERE oc.rule='davomat' AND oc.status='ochiq' AND s.study_form='sirtqi'")[0][0] > 0,
+       f"12. Sirtqi davomat chegaralari — sessiyaga mutanosib ({SL['call']} / {SL['reprimand']} / {SL['expel']} soat), holatlar ochiladi")
     ok(not q("""SELECT 1 FROM ops_cases oc WHERE oc.rule='davomat' AND oc.status='ochiq' AND oc.level=2 AND NOT EXISTS
                (SELECT 1 FROM ops_tasks t WHERE t.case_id=oc.id AND t.kind='xat') LIMIT 1"""), "Har 30+ soatli holatda ogohlantirish xati topshirig'i bor")
     dk = reg.get("/api/registrar/desk").json(); st = {s["key"]: s for s in dk["stages"]}
@@ -251,13 +271,22 @@ try:
     ok("manba aniqlashtiriladi" in basis and not re.search(r"\d+\s*-?\s*son", basis), "Huquqiy asos — umumiy, «manba aniqlashtiriladi»; qaror raqami o'ylab topilmagan")
     ok(st["kontrakt_kritik"]["n"] == q("SELECT COUNT(DISTINCT student_id) FROM ops_cases WHERE rule='kontrakt' AND level=2 AND status='ochiq'")[0][0], "Kontrakt ≤3 kun soni holatlar bilan bir xil")
     ls = reg.get("/api/registrar/stage/davomat_hayfsan").json()
-    ok(all(r["facts"]["hours"] > 48 for r in ls["rows"]), "Bir bosishda ro'yxat: hayfsan bosqichi")
+    ok(all(r["facts"]["hours"] > (SL["reprimand"] if r["study_form"] == "sirtqi" else 48) for r in ls["rows"]), "Bir bosishda ro'yxat: hayfsan bosqichi")
+    ch = reg.get("/api/registrar/stage/chetlashtirish").json()["rows"]
+    ok(all(r["rule"] != "davomat" or OPS.has_reprimand(con, r["student_id"]) for r in ch), f"11. «Chetlashtirishga tayyor» (davomat) — faqat hayfsani e'lon qilinganlar ({len(ch)})")
+    no_h = q(f"""SELECT oc.student_id FROM ops_cases oc WHERE oc.rule='davomat' AND oc.status='ochiq' AND oc.level=3
+                AND CAST(json_extract(oc.facts,'$.hours') AS INT) >= COALESCE(CAST(json_extract(oc.facts,'$.expel') AS INT), 72)
+                AND NOT EXISTS (SELECT 1 FROM discipline d WHERE d.student_id=oc.student_id AND d.status='amalda')""")
+    ok(not ({r["student_id"] for r in ch} & {x[0] for x in no_h}) and all(x[0] in {r["student_id"] for r in ls["rows"]} for x in no_h),
+       f"11. Chegaradan oshgan, lekin hayfsansiz talabalar ({len(no_h)}) — hayfsan bosqichida qoladi")
     ok(sir.get("/api/registrar/desk").json()["scope"].startswith("Sirtqi"), "Sirtqi bo'lim ish stoli — o'z ko'lamida")
     ok(pro.get("/api/registrar/desk").status_code == 200 and cc.get("/api/registrar/desk").status_code == 403, "Prorektor ko'radi, call-markazga yopiq")
     # JPA yetarli, lekin qarzdor fanlar ≥ fails_warn → baribir ogohlantirish
-    gok = q("""SELECT json_extract(facts,'$.gpa5'), json_array_length(json_extract(facts,'$.fails')) FROM ops_cases WHERE rule='akademik' AND status='ochiq'
-               AND json_extract(facts,'$.gpa_ok') IN (1,'true') LIMIT 50""")
-    ok(gok and all(g >= P["gpa_min"] and n >= P["fails_warn"] for g, n in gok) and st["akademik_jpa_ok"]["n"] > 0, f"JPA yetarli + ≥{int(P['fails_warn'])} qarzdor fan → ogohlantirish holati ({st['akademik_jpa_ok']['n']})")
+    gok = q("""SELECT json_extract(facts,'$.gpa5'), json_array_length(json_extract(facts,'$.fails')), json_array_length(json_extract(facts,'$.oraliq_low')), level
+               FROM ops_cases WHERE rule='akademik' AND status='ochiq' AND json_extract(facts,'$.gpa_ok') IN (1,'true') AND level>=2 LIMIT 80""")
+    ok(gok and all((g is None or g >= P["gpa_min"]) and AR.akademik_level(n, g, lo, P["fails_warn"], P["gpa_min"]) == lv for g, n, lo, lv in gok)
+       and st["akademik_jpa_ok"]["n"] > 0, f"GPA (5) yetarli + ≥{int(P['fails_warn'])} qarz yoki past oraliq → ogohlantirish ({st['akademik_jpa_ok']['n']})")
+    ok(st["akademik_diqqat"]["n"] > 0, f"Diqqat: 1 ta qarz yoki 1 fandan oraliq < 12 ({st['akademik_diqqat']['n']})")
 
     # ---------------------------------------------------------------- 7b. Registrator ofisi xodimi
     print("— 7b. Registrator ofisi xodimi (registrator_xodim) —")
@@ -293,6 +322,29 @@ try:
     ok(any(k == "buyruq" for k, _, _ in OPS.PLAN[("tatil", 2)]), "Qaytishga ≤7 kun: Registrator ofisiga buyruq loyihasi topshirig'i")
     sc = OPS.script("tatil", "buyruq", {"order_no": "TH-25/1", "end": dt.date.today().isoformat(), "days": 5}, {"full_name": "Test Talaba"}, P)
     ok(any("qayta tiklash" in x and "buyruqlar modulida" in x for x in sc["say"]), "Buyruq topshirig'i: «ta'tildan qaytish» loyihasi va buyruqlar moduliga bog'lanish")
+
+    # ---------------------------------------------------------------- 9. akademik model: ruxsatnoma, qarz, ta'til buyrug'i
+    print("— 9. Ruxsatnoma — joriy oraliq; ta'tildan qaytish — Buyruqlar modulida —")
+    sid9, subj9, o9 = q(f"""SELECT g.student_id, g.subject, g.oraliq FROM grades g JOIN students s ON s.id=g.student_id WHERE g.semester={AR.CURRENT_SEMESTER}
+                           AND g.oraliq < {AR.ORALIQ_MIN} AND s.status='faol' AND s.study_form='kunduzgi' LIMIT 1""")[0]
+    pc = RG.permit_check(con, sid9, subj9); oc9 = next(c for c in pc["checks"] if c["key"] == "oraliq")
+    ok(not oc9["ok"] and f"oraliq: {o9} / {AR.ORALIQ_MAX}" == oc9["detail"], f"1. Ruxsatnoma: haqiqiy joriy oraliq ({o9}/30) — «{subj9}» fanidan yakuniyga kiritilmaydi")
+    pa = RG.permit_check(con, sid9); oa = next(c for c in pa["checks"] if c["key"] == "oraliq")
+    ok(not oa["ok"] and subj9 in oa["detail"], "1. Butun sessiya ruxsatnomasi: barcha fanlar oraliqlari tekshiriladi")
+    old = q(f"""SELECT g.student_id FROM grades g JOIN students s ON s.id=g.student_id WHERE {DEBT} AND g.semester < -1 AND s.status='faol' LIMIT 1""")
+    if old:
+        po = RG.permit_check(con, old[0][0])
+        ok(any(c["key"] == "qarz" and not c["ok"] for c in po["checks"]), "2. Eski semestr (−2 va undan oldin) qarzi ham ruxsatnomani to'sadi — va otrabotka bilan yopiladi")
+    ok(not any(t["key"] in ("order_student",) for t in reg.get("/api/docs/catalog").json()) and
+       not any(t["cat"] == "Buyruqlar" for t in reg.get("/api/docs/catalog").json()), "16. Hujjatlar markazi katalogida buyruq shablonlari yo'q (Buyruqlar bo'limida)")
+    tt = next(iter(reg.get("/api/ops/tasks?rule=tatil&kind=buyruq").json()), None)
+    if tt:
+        r = reg.post(f"/api/ops/tasks/{tt['id']}/document", json={})
+        ok(r.status_code == 200 and r.json().get("order_id"), f"Ta'tildan qaytish: Buyruqlar modulida loyiha yaratildi ({r.json().get('reg_no')})")
+        if r.status_code == 200:
+            ORDERS.append(r.json()["order_id"])
+            ok([tuple(x) for x in q("SELECT kind, status FROM orders WHERE id=?", (r.json()["order_id"],))] == [("tatildan_qaytish", "loyiha")], "Buyruq turi — «ta'tildan qaytish», holati — loyiha")
+            con.execute("UPDATE ops_tasks SET status='yangi', outcome=NULL, doc_reg=NULL, done_at=NULL, done_by=NULL, note=NULL WHERE id=?", (tt["id"],)); con.commit()
 finally:
     cleanup()
 print(f"\nJami: {N[0]} tekshiruv · HAMMASI O'TDI")

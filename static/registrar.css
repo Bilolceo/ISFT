@@ -34,3 +34,7 @@
 .rg-force{display:flex;gap:8px;align-items:flex-start;margin-top:10px}.rg-force input{width:auto;margin-top:2px}
 .rg-auto{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}
 @media (max-width:640px){.rg-kv{grid-template-columns:100px minmax(0,1fr)}}
+/* talaba kartasi: intizom (hayfsan) va baholar urinishlari tarixi */
+.rg-hist .rg-disc { margin-bottom: 10px; }
+.rg-hist .rg-cnt { white-space: nowrap; }
+.rg-hist td span { white-space: nowrap; }

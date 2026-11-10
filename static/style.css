@@ -294,6 +294,12 @@ main>section:not(.hidden){animation:rise .35s var(--ease) both}
   background:var(--toast-bg);color:var(--toast-ink);font-weight:600;border:1px solid var(--toast-brd);
   -webkit-backdrop-filter:var(--glass-blur);backdrop-filter:var(--glass-blur);
   box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 16px 36px -12px rgba(0,0,0,.45);animation:rise .3s var(--ease)}
+/* bekor qilish imkoniyatli bildirishnoma (app.js undoToast) va ikki bosqichli tasdiq (app.js arm) */
+.undo-toast{display:flex;align-items:center;gap:12px;bottom:76px}
+.undo-toast .btn{flex:none}
+.btn.armed{animation:armPulse 1s var(--ease) infinite alternate}
+@keyframes armPulse{to{box-shadow:0 0 0 3px color-mix(in srgb,var(--teal,#870037) 30%,transparent)}}
+@media (prefers-reduced-motion:reduce){.btn.armed{animation:none}}
 
 /* ---------- hujjatlar markazi ---------- */
 .cat{margin:24px 0 10px;font-size:15px;font-weight:800;color:var(--ink);letter-spacing:-.01em}
@@ -391,7 +397,7 @@ table.heat tbody tr:hover{background:transparent}
 .tl-t{display:block;font-size:12px;color:var(--muted)}
 @media (max-width:640px){.dec-line{grid-template-columns:minmax(0,1fr) auto}.dec-line .dl-who{grid-column:1/-1;order:3}.kv{grid-template-columns:80px minmax(0,1fr)}}
 
-/* ===== Talabalar bilan ishlash markazi ===== */
+/* ===== Talabalar markazi ===== */
 .ops-k{cursor:pointer;transition:border-color .15s}.ops-k:hover,.ops-k:focus-visible{border-color:var(--teal);outline:none}
 .ops-strip{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
 .chip-s{display:inline-flex;align-items:center;gap:4px;font-size:12.5px;padding:6px 12px;border-radius:99px;background:var(--surface);border:1px solid var(--line)}

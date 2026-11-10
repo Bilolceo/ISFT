@@ -77,6 +77,7 @@ document.write('<link rel="stylesheet" href="/login/switcher.css">');})();
       <a href="#" data-v="syllabus" data-i="book" class="hidden">O'quv dasturlari</a>
       <a href="#" data-v="ops" data-i="users">Talabalar markazi</a>
       <a href="#" data-v="reyting" data-i="trophy" class="hidden">Reyting</a>
+      <a href="#" data-v="flows" data-i="cap" class="hidden">Talaba harakati</a>
       <a href="#" data-v="service" data-i="wrench">Murojaatlar va nosozliklar</a>
       <a href="#" data-v="staffabs" data-i="plane" class="hidden">Xodimlar ta'tili</a>
       <a href="#" data-v="reports" data-i="report">Hisobotlar</a>
@@ -99,7 +100,7 @@ document.write('<link rel="stylesheet" href="/login/switcher.css">');})();
       <img class="top-logo" src="/brand/logo-sm.png" alt="ISFT" width="40" height="36"><div class="crumb"><b id="crumb">Boshqaruv paneli</b></div>
       <div class="top-actions">
         <span class="chip" id="todayChip"></span>
-        <span class="chip ai" id="aiChip"><span id="llmDot" class="dot"></span><span id="aiTxt">AI</span></span>
+        <span class="chip ai hidden" id="aiChip" tabindex="0"><span id="llmDot" class="dot"></span><span id="aiTxt">AI</span></span>
         <button class="icon-btn" id="themeBtn" aria-label="Rejimni almashtirish" title="Yorug' / qorong'i rejim"><span data-ico="sun"></span></button>
       </div>
     </header>
@@ -130,6 +131,7 @@ document.write('<link rel="stylesheet" href="/login/switcher.css">');})();
       <section id="v-staffabs" class="view hidden"></section>
       <section id="v-syllabus" class="view hidden"></section>
       <section id="v-reyting" class="view hidden"></section>
+      <section id="v-flows" class="view hidden"></section>
     </main>
   </div>
 </div>
@@ -149,6 +151,7 @@ document.write('<link rel="stylesheet" href="/login/switcher.css">');})();
 <script src="staffabs.js"></script>
 <script src="orders.js"></script>
 <script src="reyting.js"></script>
+<script src="flows.js"></script>
 <script src="/login/switcher.js"></script>
 <script>window.LOGIN_AFTER && LOGIN_AFTER();</script>
 </body>

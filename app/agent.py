@@ -202,27 +202,82 @@ def an_rules(con, ctx, v, why):
 # ------------------------------------------------------------------------------------------------
 # Tahlil vositalari (raqamlarni kod hisoblaydi)
 # ------------------------------------------------------------------------------------------------
+# Fan turlari (o'quv rejasi tuzilmasi — app/seed.py): har semestrda fanlar boshqa, shuning uchun bir xil fanni semestrlararo solishtirib
+# bo'lmaydi. Solishtirish — guruh, kurs, fakultet va fan TURI darajasida (bir xil talabalar, ketma-ket ikki yakunlangan semestr).
+CAT_ORDER = ["Umumta'lim (ijtimoiy-gumanitar)", "Til fanlari", "Yo'nalish tayanch fanlari", "Mutaxassislik fanlari", "Umumkasbiy fanlar",
+             "Amaliyot va bitiruv ishi", "Boshqa fanlar"]
+_SUBJ_CAT: dict | None = None
+
+def subject_category(subject: str) -> str:
+    global _SUBJ_CAT
+    if _SUBJ_CAT is None:
+        from . import seed as SD
+        m = {}
+        for x in SD.FINAL_B + SD.FINAL_M: m.setdefault(x[0], CAT_ORDER[5])
+        for x in SD.GEN_LOCAL + SD.GEN_INTL: m.setdefault(x, CAT_ORDER[0])
+        for x in SD.LANG_TRACK: m.setdefault(x, CAT_ORDER[1])
+        for v in SD.SUBJECTS.values():
+            for x in v: m.setdefault(x, CAT_ORDER[2])
+        for v in list(SD.EXTRA.values()) + [SD.MASTER_POOL]:
+            for x in v: m.setdefault(x, CAT_ORDER[3])
+        for v in SD.POOL.values():
+            for x in v: m.setdefault(x, CAT_ORDER[4])
+        _SUBJ_CAT = m
+    return _SUBJ_CAT.get(subject, CAT_ORDER[6])
+
+def _pair(now_avg, prev_avg, now_pass, prev_pass):
+    """Ko'rsatilgan (yaxlitlangan) raqamlardan farq — matndagi «A dan B ga (−C)» doim mos keladi."""
+    a, b = (round(prev_avg, 1) if prev_avg is not None else None), (round(now_avg, 1) if now_avg is not None else None)
+    pa, pb = (round(prev_pass, 1) if prev_pass is not None else None), (round(now_pass, 1) if now_pass is not None else None)
+    return {"prev": a, "now": b, "drop": round(a - b, 1) if a is not None and b is not None else None,
+            "pass_prev": pa, "pass_now": pb, "pass_drop": round(pa - pb, 1) if pa is not None and pb is not None else None}
+
 def academic_drivers(con, ctx: Ctx, groups: list[dict]):
-    """Pasaygan guruhlar nega pasaygan: davomat, kontrakt bosimi, fanlar kesimi, jamlanish."""
+    """Pasaygan guruhlar nega pasaygan. Ikki oxirgi yakunlangan semestr (RATING_SEMESTER va undan oldingi) solishtiriladi — o'sha talabalar,
+    lekin fanlar har semestrda boshqa. Shuning uchun: guruhlar (pasaygan ↔ qolgan), kurs, fakultet va fan turi kesimida o'rtacha ball (100)
+    va o'tish ulushi (ball ≥ o'tish bali); davomat va kontrakt bosimi — pasaygan guruhlar ↔ qolganlar."""
     if not groups: return None
-    names = [g["name"] for g in groups]
+    names = sorted({g["name"] for g in groups})
     sc = ctx.student_scope("s")
     ph = ",".join("?" * len(names))
+    t1, t0 = AR.RATING_SEMESTER, AR.RATING_SEMESTER - 1
     coh = db.one(con, f"""SELECT COUNT(*) n, ROUND(AVG(s.attendance),1) att,
         ROUND(100.0*SUM(s.payment_type='kontrakt' AND s.contract_amount>0 AND s.paid_amount*2 < s.contract_amount)/COUNT(*),1) debt
         FROM students s JOIN groups_ g ON g.id=s.group_id WHERE {sc} AND s.status='faol' AND g.name IN ({ph})""", names)
     rest = db.one(con, f"""SELECT ROUND(AVG(s.attendance),1) att,
         ROUND(100.0*SUM(s.payment_type='kontrakt' AND s.contract_amount>0 AND s.paid_amount*2 < s.contract_amount)/COUNT(*),1) debt
         FROM students s JOIN groups_ g ON g.id=s.group_id WHERE {sc} AND s.status='faol' AND g.name NOT IN ({ph})""", names)
-    subj = db.rows(con, f"""SELECT gr.subject, ROUND(AVG(CASE WHEN gr.semester=1 THEN gr.score END),1) now_, ROUND(AVG(CASE WHEN gr.semester=0 THEN gr.score END),1) prev
-        FROM grades gr JOIN students s ON s.id=gr.student_id JOIN groups_ g ON g.id=s.group_id
-        WHERE {sc} AND g.name IN ({ph}) GROUP BY gr.subject HAVING prev IS NOT NULL""", names)
-    for r in subj: r["drop"] = round((r["prev"] or 0) - (r["now_"] or 0), 1)
-    subj.sort(key=lambda r: -r["drop"])
+    agg = (f"AVG(CASE WHEN gr.semester={t1} THEN gr.score END) a1, AVG(CASE WHEN gr.semester={t0} THEN gr.score END) a0, "
+           f"100.0*SUM(gr.semester={t1} AND gr.score>={AR.PASS})/NULLIF(SUM(gr.semester={t1}),0) p1, "
+           f"100.0*SUM(gr.semester={t0} AND gr.score>={AR.PASS})/NULLIF(SUM(gr.semester={t0}),0) p0")
+    base = (f"FROM grades gr JOIN students s ON s.id=gr.student_id JOIN groups_ g ON g.id=s.group_id JOIN faculties f ON f.id=s.faculty_id "
+            f"WHERE {sc} AND s.status='faol' AND gr.semester IN ({t1},{t0}) AND gr.score IS NOT NULL")
+    cmp = {}
+    for r in db.rows(con, f"SELECT (g.name IN ({ph})) coh, {agg} {base} GROUP BY 1", names):
+        cmp["cohort" if r["coh"] else "rest"] = _pair(r["a1"], r["a0"], r["p1"], r["p0"])
+    def cut(col):
+        out = []
+        for r in db.rows(con, f"SELECT {col} k, COUNT(DISTINCT s.id) n, {agg} {base} GROUP BY 1"):
+            if r["a0"] is None or r["a1"] is None: continue      # 1-kurs: yakunlangan semestr yo'q
+            out.append({"key": r["k"], "n": r["n"], **_pair(r["a1"], r["a0"], r["p1"], r["p0"])})
+        return sorted(out, key=lambda x: -(x["drop"] or 0))
+    by_course, by_faculty = cut("g.course"), cut("f.name")
+    cats = {}
+    for r in db.rows(con, f"""SELECT gr.subject, gr.semester sem, SUM(gr.score) s, COUNT(*) n, SUM(gr.score>={AR.PASS}) p {base} AND g.name IN ({ph})
+                              GROUP BY gr.subject, gr.semester""", names):
+        c = cats.setdefault(subject_category(r["subject"]), {t1: [0, 0, 0], t0: [0, 0, 0]})
+        c[r["sem"]][0] += r["s"]; c[r["sem"]][1] += r["n"]; c[r["sem"]][2] += r["p"]
+    by_cat = []
+    for k, v in cats.items():
+        if v[t1][1] < 30 or v[t0][1] < 30: continue             # ikkala semestrda ham yetarli baho bo'lgan fan turlari
+        by_cat.append({"key": k, **_pair(v[t1][0] / v[t1][1], v[t0][0] / v[t0][1], 100 * v[t1][2] / v[t1][1], 100 * v[t0][2] / v[t0][1])})
+    by_cat.sort(key=lambda x: -(x["drop"] or 0))
     fac = {}
     for g in groups: fac[(g["faculty"], g["course"])] = fac.get((g["faculty"], g["course"]), 0) + 1
     (top_fac, top_course), top_n = max(fac.items(), key=lambda x: x[1])
-    return {"cohort": coh, "rest": rest, "subjects": subj, "top_faculty": top_fac, "top_course": top_course, "top_n": top_n, "groups": len(groups)}
+    return {"cohort": coh, "rest": rest, "compare": cmp, "by_course": by_course, "by_faculty": by_faculty, "categories": by_cat,
+            "top_faculty": top_fac, "top_course": top_course, "top_n": top_n, "groups": len(names),
+            "sem": AR.SEMESTER_SHORT[t1], "prev_sem": AR.SEMESTER_SHORT[t0], "pass": AR.PASS}
 
 def contract_forecast(con):
     """O'quv yili oxiriga tushum prognozi: grafik bo'yicha to'layotganlar to'liq to'laydi, ortda qolganlar qolgan qarzning yarmini."""
@@ -271,6 +326,7 @@ def an_academic(con, ctx, v, why):
                      ", ".join(f"{g['name']} ({g['gpa_prev']} → {g['gpa']}, {S._num(g['delta'])})" for g in dg[:3]) + ".")
         allg = [{"name": n, "faculty": c["faculty"], "course": c["course"]} for c in cl for n in c["group_names"]] or dg
         d = academic_drivers(con, ctx, allg)
+        if d: v["drivers"] = d          # manba ma'lumotiga qo'shiladi — javobdagi har bir raqam shu faktlar bilan solishtiriladi
         if d:
             c, r = d["cohort"], d["rest"]
             reasons.append(f"Pasaygan {d['groups']} ta guruhdan {d['top_n']} tasi bitta joyda: {d['top_faculty']}, {d['top_course']}-kurs.")
@@ -278,12 +334,23 @@ def an_academic(con, ctx, v, why):
                 reasons.append(f"Bu guruhlarda davomat {c['att']}% — qolgan talabalarda {r['att']}%. Darsga kelmaslik pasayishning birinchi omili.")
             if c["debt"] is not None and r["debt"] is not None and c["debt"] - r["debt"] >= 2:
                 reasons.append(f"Kontraktning yarmidan kamini to'laganlar ulushi {c['debt']}% (qolganlarda {r['debt']}%) — moliyaviy bosim ham bor.")
-            s = d["subjects"]
-            if len(s) >= 2:
-                if s[0]["drop"] - s[-1]["drop"] < 4:
-                    reasons.append(f"Ball barcha {len(s)} ta fanda deyarli bir xil tushgan ({s[-1]['drop']}–{s[0]['drop']} ball) — muammo bitta fan yoki o'qituvchida emas, kurs darajasida.")
+            cc, rr = d["compare"].get("cohort"), d["compare"].get("rest")
+            if cc and cc["pass_drop"] is not None:
+                reasons.append(f"O'tish ulushi (ball ≥ {AR.PASS}) bu guruhlarda {cc['pass_prev']}% dan {cc['pass_now']}% ga tushgan ({d['prev_sem']} → {d['sem']})"
+                               + (f"; qolgan guruhlarda {rr['pass_prev']}% → {rr['pass_now']}%." if rr and rr["pass_now"] is not None else "."))
+            bc, bf = d["by_course"], d["by_faculty"]
+            if len(bc) >= 2 and bc[0]["drop"] is not None:
+                reasons.append(f"Kurs kesimida eng katta pasayish — {bc[0]['key']}-kurs: o'rtacha ball {bc[0]['prev']} dan {bc[0]['now']} ga; "
+                               f"eng kichigi — {bc[-1]['key']}-kurs: {bc[-1]['prev']} dan {bc[-1]['now']} ga."
+                               + (f" Fakultet kesimida: {bf[0]['key']} — {bf[0]['prev']} dan {bf[0]['now']} ga." if bf and bf[0]["drop"] is not None and bf[0]["drop"] > 0 else ""))
+            ca = [x for x in d["categories"] if x["drop"] is not None]
+            if len(ca) >= 2:
+                if ca[0]["drop"] - ca[-1]["drop"] < 3:
+                    reasons.append(f"Fan turlari bo'yicha pasayish deyarli bir xil ({ca[-1]['key'].lower()}: {ca[-1]['prev']} → {ca[-1]['now']}; "
+                                   f"{ca[0]['key'].lower()}: {ca[0]['prev']} → {ca[0]['now']}) — muammo bitta fan yoki o'qituvchida emas, kurs darajasida.")
                 else:
-                    reasons.append(f"Eng ko'p tushgan fan: {s[0]['subject']} ({s[0]['drop']} ball). Eng kam: {s[-1]['subject']} ({s[-1]['drop']} ball).")
+                    reasons.append(f"Fan turlari kesimida eng ko'p tushgani — {ca[0]['key'].lower()} ({ca[0]['prev']} → {ca[0]['now']}), "
+                                   f"eng kami — {ca[-1]['key'].lower()} ({ca[-1]['prev']} → {ca[-1]['now']}).")
             fac_short = d["top_faculty"] + ("" if "fakultet" in d["top_faculty"].lower() else " fakulteti")
             # institutda dekan lavozimi yo'q (Yevropa modeli) — fakultet darajasidagi vazifa Registrator ofisiga (fakultet tyutorlari bilan)
             recs.append({"text": f"Registrator ofisiga: {fac_short} {d['top_course']}-kurs guruhlarida 7 kun ichida davomat tekshiruvi va fakultet tyutorlari bilan har bir qiynalayotgan talaba suhbati.",

@@ -10,9 +10,12 @@
 2. O'quv yuklama kalkulyatori: fan × guruhlar × potoklar × soat turi (ma'ruza — potokka, amaliy/seminar — guruhga, laboratoriya — kichik guruhga)
    → o'qituvchi va kafedra kesimida soatlar, stavka me'yori (documents.LOAD_NORM) va joriy teachers.load_hours bilan solishtirish;
    XLSX eksport va Hujjatlar markazidagi «O'quv yuklama taqsimoti» (documents.g_load) hujjatiga hisob-kitob bo'limi.
-3. Kafedralarga so'rovlar: Akademik bo'lim bir yoki bir nechta kafedraga topshiriq yuboradi (yuklama rejasi, sillabus yangilash, solishtirma),
-   kafedra natijani (matn/fayl) qaytaradi, bo'lim qabul qiladi yoki izoh bilan qayta ishlashga qaytaradi — tarix saqlanadi.
-   (Portal xatlarida «qabul / qayta ishlashga qaytarish» amali yo'q — shu sababli ko'rib chiqish shu modul ichida, faqat o'quv dasturi va yuklama so'rovlari uchun.)
+3. Kafedralarga so'rovlar: Akademik bo'lim bir yoki bir nechta kafedraga so'rov yuboradi (yuklama rejasi, sillabus yangilash, solishtirma).
+   Har bir kafedra uchun yagona topshiriqlar modeli (app/directives.py) bo'yicha TOPSHIRIQ yaratiladi (tasks.src='syl:<so'rov id>'):
+   ijro, taqsimlash (kafedra mudiri o'qituvchiga), natija, qabul / qayta ishlashga qaytarish — hammasi topshiriq orqali; «Majlislar va
+   topshiriqlar», «Mening vazifalarim» va bildirishnomalar uni bitta joydan ko'radi. syl_task_units — so'rov ichidagi kafedra qatori
+   (ilova fayl, raundlar tarixi) va topshiriqqa havola (directive_id); holati topshiriqdan sinxronlanadi (_sync_units). Server ishga
+   tushganda avvalgi (topshiriqsiz) so'rov qatorlari topshiriqqa bog'lanadi — mavjud ma'lumot saqlanadi (link_units, idempotent).
 
 Ruxsatlar: Akademik bo'lim — hammasi; o'quv ishlari prorektori — hammasini ko'radi, yakuniy tasdiqlaydi; rektor — faqat ko'rish;
 kafedra mudiri — o'z kafedrasi; o'qituvchi — o'ziga biriktirilgan fanlar. Har bir holat o'zgarishi audit jurnaliga (resurs: syllabus) yoziladi.
@@ -80,7 +83,11 @@ CREATE TABLE IF NOT EXISTS syl_load_plans(department_id INTEGER PRIMARY KEY, par
 """
 
 def init_tables(con):
-    con.executescript(SCHEMA); con.commit()
+    con.executescript(SCHEMA)
+    # eski bazalar: kafedra so'rovi qatori ↔ topshiriq havolasi (seed_syllabus ham shu yerdan o'tadi — bo'sh bazada ham ustun bo'lsin)
+    if "directive_id" not in {r[1] for r in con.execute("PRAGMA table_info(syl_task_units)").fetchall()}:
+        con.execute("ALTER TABLE syl_task_units ADD COLUMN directive_id INT")
+    con.commit()
 
 def init(con):
     """Jadvallar + (bo'sh bo'lsa) demo holat. Server ishga tushganda chaqiriladi; mavjud ma'lumotga tegmaydi."""
@@ -94,6 +101,11 @@ def init(con):
             con.executemany("INSERT INTO syl_ref(subject, university, topics, description, sample) VALUES(?,?,?,?,1)", seed_syllabus.ref_rows()); con.commit()
     except Exception as e:   # demo ma'lumot bo'lmasa ham modul ishlashi kerak
         print("syllabus seed xato:", repr(e))
+    try:
+        n = link_units(con)
+        if n: print(f"syllabus: {n} ta kafedra so'rovi qatori topshiriqqa bog'landi")
+    except Exception as e:
+        print("syllabus.link_units:", repr(e))
 
 # =============================================================================================
 # O'quv reja me'yorlari (kredit va soat turlari)
@@ -631,8 +643,9 @@ def mywork_items(c: Ctx, mk) -> list[dict]:
         if over:
             out.append(mk("sillabus", "nazorat", "syover", f"Kafedrada {len(over)} ta sillabus muddati o'tgan", ", ".join(sorted({r['subject'] for r in over})[:3]),
                           min(r["due"] for r in over), {"view": "syllabus", "status": "overdue"}, "nazorat", "muddati o'tgan", "high", len(over), "alert"))
+        # topshiriqqa bog'langan so'rovlar «Mening vazifalarim»ga topshiriq sifatida keladi (directives) — bu yerda faqat bog'lanmaganlari
         for u in db.rows(_con, """SELECT u.*, t.title, t.due, t.kind FROM syl_task_units u JOIN syl_tasks t ON t.id=u.task_id
-                                  WHERE u.department_id=? AND u.status IN ('yangi','qayta') AND t.status='ochiq' ORDER BY t.due""", (c.user["department_id"],)):
+                                  WHERE u.department_id=? AND u.status IN ('yangi','qayta') AND t.status='ochiq' AND u.directive_id IS NULL ORDER BY t.due""", (c.user["department_id"],)):
             out.append(mk("sillabus", "sorov", f"syk{u['id']}", ("Qayta ishlang: " if u["status"] == "qayta" else "Akademik bo'lim so'rovi: ") + u["title"],
                           f"{TASK_KINDS.get(u['kind'], '')} · {UNIT_ST[u['status']]}" + (f" · «{(u['comment'] or '')[:60]}»" if u["status"] == "qayta" and u["comment"] else ""),
                           u["due"], {"view": "syllabus", "tab": "tasks", "task": u["task_id"]}, "bolimga", UNIT_ST[u["status"]],
@@ -650,7 +663,7 @@ def mywork_items(c: Ctx, mk) -> list[dict]:
                           ", ".join(sorted({dn.get(r['department_id'], '') for r in over})[:3]) + " kafedralari", min(r["due"] for r in over),
                           {"view": "syllabus", "status": "overdue"}, "nazorat", "muddati o'tgan", "high", len(over), "alert"))
         units = db.rows(_con, """SELECT u.*, t.title, t.due FROM syl_task_units u JOIN syl_tasks t ON t.id=u.task_id
-                                 WHERE u.status='topshirildi' AND t.status='ochiq' ORDER BY u.submitted_at""")
+                                 WHERE u.status='topshirildi' AND t.status='ochiq' AND u.directive_id IS NULL ORDER BY u.submitted_at""")
         by = {}
         for u in units: by.setdefault(u["task_id"], []).append(u)
         for tid, us in by.items():
@@ -694,7 +707,7 @@ def notif_items(c: Ctx) -> list[dict]:
             out.append({"id": "synkaf", "kind": "sillabus", "icon": "pen", "level": "warn", "title": f"{len(st)} ta sillabus kafedra kelishuvini kutmoqda",
                         "sub": ", ".join(sorted({r['subject'] for r in st})[:3]), "ts": max(r["updated_at"] for r in st), "link": {"view": "syllabus", "status": "kelishuvda"}})
         for u in db.rows(_con, """SELECT u.*, t.title, t.created_at FROM syl_task_units u JOIN syl_tasks t ON t.id=u.task_id
-                                  WHERE u.department_id=? AND u.status IN ('yangi','qayta') AND t.status='ochiq'""", (c.user["department_id"],)):
+                                  WHERE u.department_id=? AND u.status IN ('yangi','qayta') AND t.status='ochiq' AND u.directive_id IS NULL""", (c.user["department_id"],)):
             q = u["status"] == "qayta"
             out.append({"id": f"synt{u['id']}", "kind": "sillabus", "icon": "alert" if q else "inbox", "level": "bad" if q else "info",
                         "title": ("Qayta ishlashga qaytarildi: " if q else "Akademik bo'lim so'rovi: ") + u["title"],
@@ -705,7 +718,7 @@ def notif_items(c: Ctx) -> list[dict]:
         if sub:
             out.append({"id": "synrev", "kind": "sillabus", "icon": "book", "level": "info", "title": f"{len(sub)} ta sillabus tekshiruvga keldi",
                         "sub": ", ".join(sorted({r['subject'] for r in sub})[:3]), "ts": max(r["submitted_at"] for r in sub), "link": {"view": "syllabus", "status": "tekshiruvda"}})
-        tu = db.rows(_con, "SELECT u.*, t.title FROM syl_task_units u JOIN syl_tasks t ON t.id=u.task_id WHERE u.status='topshirildi' AND t.status='ochiq'")
+        tu = db.rows(_con, "SELECT u.*, t.title FROM syl_task_units u JOIN syl_tasks t ON t.id=u.task_id WHERE u.status='topshirildi' AND t.status='ochiq' AND u.directive_id IS NULL")
         if tu:
             out.append({"id": "synans", "kind": "sillabus", "icon": "inbox", "level": "info", "title": f"Kafedralardan {len(tu)} ta javob keldi",
                         "sub": ", ".join(sorted({u['title'] for u in tu})[:2]), "ts": max(u["submitted_at"] for u in tu), "link": {"view": "syllabus", "tab": "tasks"}})
@@ -894,15 +907,97 @@ def xlsx_bytes(calc: dict) -> bytes:
 # =============================================================================================
 # Kafedralarga so'rovlar
 # =============================================================================================
+ISSUER_UNIT = "akademik"          # so'rovni beruvchi bo'lim (directives: Akademik bo'lim → @kafedra quyi bo'limlar)
+
+def _dir_for(con, task: dict, dept_id: int, created: str | None = None) -> int | None:
+    """Kafedra qatori uchun topshiriq (directives.create_linked). Kafedra org_units da bo'lmasa — None (qator eski usulda qoladi)."""
+    from . import directives as DIR
+    # bo'sh bazadan seed (app.seed → seed_syllabus): Portal tuzilmasi (org_units) va topshiriqlar kengaytmasi hali yo'q —
+    # qator havolasiz yoziladi, server ishga tushganda link_units() bog'laydi
+    if not db.one(con, "SELECT 1 x FROM sqlite_master WHERE type='table' AND name='org_units'"): return None
+    if "origin" not in {r[1] for r in con.execute("PRAGMA table_info(tasks)").fetchall()}: return None
+    if not db.one(con, "SELECT 1 x FROM org_units WHERE key=?", (f"kaf{int(dept_id)}",)): return None
+    return DIR.create_linked(con, task["created_by"], ISSUER_UNIT, f"kaf{int(dept_id)}", task["title"], task.get("body") or "", task["due"],
+                             "oddiy", TASK_KINDS.get(task["kind"], "") + " — natija (matn yoki fayl) shu topshiriqqa javob sifatida",
+                             f"syl:{task['id']}", created)
+
 def create_task(con, actor, kind, title, body, due, deps, ts=None) -> int:
     t = ts or _now()
     cur = con.execute("INSERT INTO syl_tasks(kind,title,body,due,created_by,created_name,created_at,status) VALUES(?,?,?,?,?,?,?,'ochiq')",
                       (kind, title, body, due, actor["id"], _short(actor["full_name"]), t))
+    task = {"id": cur.lastrowid, "kind": kind, "title": title, "body": body, "due": due, "created_by": actor["id"]}
     for d in deps:
-        u = con.execute("INSERT INTO syl_task_units(task_id,department_id,status,round) VALUES(?,?,'yangi',0)", (cur.lastrowid, d))
+        did = _dir_for(con, task, d, t)
+        u = con.execute("INSERT INTO syl_task_units(task_id,department_id,status,round,directive_id) VALUES(?,?,'yangi',0,?)", (cur.lastrowid, d, did))
         _log(con, "task", u.lastrowid, actor, "so'rov yuborildi", None, "yangi", "", None, t)
     con.commit()
     return cur.lastrowid
+
+# --- topshiriq ↔ so'rov qatori ---
+def _unit_from_dir(d: dict) -> str:
+    """Topshiriq holatidan so'rov qatori holati."""
+    if d["status"] == "bajarildi": return "qabul" if d.get("review") == "qabul" else "topshirildi"
+    return "qayta" if d.get("review") == "qaytarildi" else "yangi"
+
+def _uname(con, uid):
+    u = db.one(con, "SELECT id, full_name, role FROM users WHERE id=?", (uid,)) if uid else None
+    return u or {"id": None, "full_name": "—", "title": ""}
+
+def _sync_units(con, where: str = "1=1", args=()) -> int:
+    """Topshiriq orqali (Majlislar va topshiriqlar oynasidan) bajarilgan o'zgarishlarni so'rov qatoriga ko'chiradi; tarixga yoziladi.
+    Topshiriq bekor qilingan (o'chirilgan) bo'lsa — havola uziladi, qator holati o'zgarmaydi."""
+    n = 0
+    for u in db.rows(con, f"""SELECT u.*, d.id d_id, d.status d_status, d.review d_review, d.result d_result, d.result_at d_result_at, d.result_by d_result_by,
+                                     d.review_note d_note, d.review_at d_review_at, d.review_by d_review_by
+                              FROM syl_task_units u LEFT JOIN tasks d ON d.id=u.directive_id WHERE u.directive_id IS NOT NULL AND {where}""", args):
+        if not u["d_id"]:
+            con.execute("UPDATE syl_task_units SET directive_id=NULL WHERE id=?", (u["id"],)); n += 1; continue
+        to = _unit_from_dir({"status": u["d_status"], "review": u["d_review"]})
+        if to == u["status"]: continue
+        if to == "topshirildi" or (to == "qabul" and u["status"] in ("yangi", "qayta")):
+            con.execute("UPDATE syl_task_units SET status='topshirildi', response=?, submitted_at=?, round=round+1 WHERE id=?",
+                        (u["d_result"], u["d_result_at"], u["id"]))
+            _log(con, "task", u["id"], _uname(con, u["d_result_by"]), "javob yuborildi", u["status"], "topshirildi", u["d_result"] or "", (u["round"] or 0) + 1, u["d_result_at"])
+            u = dict(u, status="topshirildi", round=(u["round"] or 0) + 1)
+        if to in ("qabul", "qayta"):
+            con.execute("UPDATE syl_task_units SET status=?, reviewed_at=?, comment=? WHERE id=?", (to, u["d_review_at"], u["d_note"], u["id"]))
+            _log(con, "task", u["id"], _uname(con, u["d_review_by"]), "qabul qilindi" if to == "qabul" else "qayta ishlashga qaytarildi",
+                 u["status"], to, u["d_note"] or "", u["round"], u["d_review_at"])
+        elif to == "yangi" and u["status"] != "yangi":
+            con.execute("UPDATE syl_task_units SET status='yangi' WHERE id=?", (u["id"],))
+        n += 1
+    if n: con.commit()
+    return n
+
+def link_units(con) -> int:
+    """Avvalgi (topshiriqsiz) ochiq so'rov qatorlarini topshiriqqa bog'lash — holat, natija, qabul/qaytarish va tarix bilan. Idempotent."""
+    rows = db.rows(con, """SELECT u.*, t.kind, t.title, t.body, t.due, t.created_by, t.created_at FROM syl_task_units u JOIN syl_tasks t ON t.id=u.task_id
+                           WHERE u.directive_id IS NULL AND t.status='ochiq' ORDER BY u.id""")
+    n = 0
+    for u in rows:
+        task = {"id": u["task_id"], "kind": u["kind"], "title": u["title"], "body": u["body"], "due": u["due"], "created_by": u["created_by"]}
+        did = _dir_for(con, task, u["department_id"], u["created_at"])
+        if not did: continue
+        head = db.one(con, "SELECT head_user FROM org_units WHERE key=?", (f"kaf{u['department_id']}",))["head_user"]
+        st, now = u["status"], _now()
+        upd = {}
+        if st in ("topshirildi", "qabul"):
+            upd = {"status": "bajarildi", "result": u["response"], "result_at": u["submitted_at"], "result_by": head, "assignee_user": head,
+                   "review": "kutilmoqda" if st == "topshirildi" else "qabul"}
+            if st == "qabul": upd.update(review_at=u["reviewed_at"], review_by=u["created_by"], review_note=u["comment"])
+        elif st == "qayta":
+            upd = {"status": "jarayonda", "result": u["response"], "result_at": u["submitted_at"], "result_by": head, "assignee_user": head,
+                   "review": "qaytarildi", "review_at": u["reviewed_at"], "review_by": u["created_by"], "review_note": u["comment"]}
+        if upd:
+            upd["updated_at"] = now
+            con.execute(f"UPDATE tasks SET {', '.join(k + '=?' for k in upd)} WHERE id=?", (*upd.values(), did))
+        for h in db.rows(con, "SELECT * FROM syl_log WHERE ref_type='task' AND ref_id=? AND action!='so''rov yuborildi' ORDER BY id", (u["id"],)):
+            con.execute("INSERT INTO task_log(task_id,ts,user_id,user_name,action,detail) VALUES(?,?,?,?,?,?)",
+                        (did, h["ts"], h["user_id"], h["user_name"], "bajarildi — natija yuborildi" if h["action"] == "javob yuborildi" else h["action"], (h["comment"] or "")[:500]))
+        con.execute("UPDATE syl_task_units SET directive_id=? WHERE id=?", (did, u["id"]))
+        n += 1
+    if n: con.commit()
+    return n
 
 def _task_submit(con, u, actor, text, ts=None, file_name=None, file_path=None):
     t = ts or _now()
@@ -910,12 +1005,23 @@ def _task_submit(con, u, actor, text, ts=None, file_name=None, file_path=None):
     sets = ", ".join(["status='topshirildi'", "response=?", "submitted_at=?", "round=round+1"] + [f"{k}=?" for k in kw])
     con.execute(f"UPDATE syl_task_units SET {sets} WHERE id=?", (text, t, *kw.values(), u["id"]))
     _log(con, "task", u["id"], actor, "javob yuborildi", u["status"], "topshirildi", text, (u["round"] or 0) + 1, t)
+    if u.get("directive_id"):     # topshiriq bilan bir xil holat (API yo'lida directives.set_status allaqachon yozgan bo'lsa — o'zgarmaydi)
+        con.execute("""UPDATE tasks SET status='bajarildi', result=?, result_at=?, result_by=?, review='kutilmoqda', review_note=NULL,
+                       assignee_user=COALESCE(assignee_user, ?), updated_at=? WHERE id=? AND status!='bajarildi'""",
+                    (text or (file_name and f"Ilova: {file_name}") or "Javob yuborildi", t, actor.get("id"), actor.get("id"), t, u["directive_id"]))
     con.commit()
 
 def _task_review(con, u, actor, action, comment, ts=None):
     t = ts or _now(); to = "qabul" if action == "qabul" else "qayta"
     con.execute("UPDATE syl_task_units SET status=?, reviewed_at=?, comment=? WHERE id=?", (to, t, comment, u["id"]))
     _log(con, "task", u["id"], actor, "qabul qilindi" if to == "qabul" else "qayta ishlashga qaytarildi", u["status"], to, comment, u["round"], t)
+    if u.get("directive_id"):
+        if to == "qabul":
+            con.execute("UPDATE tasks SET review='qabul', review_note=?, review_at=?, review_by=?, updated_at=? WHERE id=? AND status='bajarildi'",
+                        (comment or None, t, actor.get("id"), t, u["directive_id"]))
+        else:
+            con.execute("""UPDATE tasks SET status='jarayonda', review='qaytarildi', review_note=?, review_at=?, review_by=?, updated_at=?
+                           WHERE id=? AND status='bajarildi'""", (comment, t, actor.get("id"), t, u["directive_id"]))
     con.commit()
 
 def seed_task_submit(con, uid, actor, text, ts): _task_submit(con, db.one(con, "SELECT * FROM syl_task_units WHERE id=?", (uid,)), actor, text, ts)
@@ -926,12 +1032,18 @@ def _task_visible(c: Ctx):
     if k == "oqituvchi": raise AccessDenied("⛔ Kafedra so'rovlari — Akademik bo'lim va kafedra mudirlari uchun.")
     return f"u.department_id={int(c.user['department_id'])}" if k == "kafedra" else "1=1"
 
+def _dir_meta(ids) -> dict:
+    ids = [int(i) for i in ids if i]
+    if not ids: return {}
+    return {r["id"]: r for r in db.rows(_con, f"""SELECT id, status, review, assignee_user, due_at FROM tasks WHERE id IN ({','.join(map(str, ids))})""")}
+
 def tasks_list(c: Ctx) -> dict:
     w = _task_visible(c); td = today().isoformat(); dn = _dept_names(_con)
+    _sync_units(_con)
     ts = db.rows(_con, f"""SELECT t.* FROM syl_tasks t WHERE EXISTS(SELECT 1 FROM syl_task_units u WHERE u.task_id=t.id AND {w}) ORDER BY t.id DESC""")
     out = []
     for t in ts:
-        us = db.rows(_con, f"SELECT u.id, u.department_id, u.status, u.submitted_at, u.reviewed_at, u.round, u.file_name FROM syl_task_units u WHERE u.task_id=? AND {w} ORDER BY u.department_id", (t["id"],))
+        us = db.rows(_con, f"SELECT u.id, u.department_id, u.status, u.submitted_at, u.reviewed_at, u.round, u.file_name, u.directive_id FROM syl_task_units u WHERE u.task_id=? AND {w} ORDER BY u.department_id", (t["id"],))
         for u in us:
             u["department"] = dn.get(u["department_id"], ""); u["status_label"] = UNIT_ST[u["status"]]
             u["overdue"] = bool(t["due"] and t["due"] < td and u["status"] in ("yangi", "qayta"))
@@ -942,6 +1054,7 @@ def tasks_list(c: Ctx) -> dict:
 
 def task_detail(c: Ctx, tid: int) -> dict:
     w = _task_visible(c); dn = _dept_names(_con)
+    _sync_units(_con, "u.task_id=?", (tid,))
     t = db.one(_con, "SELECT * FROM syl_tasks WHERE id=?", (tid,))
     us = db.rows(_con, f"SELECT u.* FROM syl_task_units u WHERE u.task_id=? AND {w} ORDER BY u.department_id", (tid,)) if t else []
     if not t or not us: raise HTTPException(404, "So'rov topilmadi")
@@ -953,6 +1066,8 @@ def task_detail(c: Ctx, tid: int) -> dict:
         mine = c.role.key == "kafedra" and u["department_id"] == c.user.get("department_id")
         u["can_submit"] = mine and u["status"] in ("yangi", "qayta") and t["status"] == "ochiq"
         u["can_review"] = c.role.key == "akademik" and u["status"] == "topshirildi"
+        d = _dir_meta([u.get("directive_id")]).get(u.get("directive_id")) if u.get("directive_id") else None
+        u["directive"] = {"id": d["id"], "status": d["status"], "review": d["review"], "delegated": bool(db.one(_con, "SELECT 1 x FROM tasks WHERE parent_id=?", (d["id"],)))} if d else None
         u.pop("file_path", None)
     return {**t, "kind_label": TASK_KINDS.get(t["kind"], t["kind"]), "units": us}
 
@@ -1296,6 +1411,7 @@ def api_task(tid: int, request: Request):
 
 def _unit(c, tid, uid):
     w = _task_visible(c)
+    _sync_units(_con, "u.id=?", (uid,))
     u = db.one(_con, f"SELECT u.* FROM syl_task_units u WHERE u.id=? AND u.task_id=? AND {w}", (uid, tid))
     if not u: raise HTTPException(404, "So'rov topilmadi")
     return u
@@ -1306,6 +1422,10 @@ def api_task_submit(tid: int, uid: int, body: TaskAnswerIn, request: Request):
     if not (c.role.key == "kafedra" and u["department_id"] == c.user.get("department_id") and u["status"] in ("yangi", "qayta")):
         _deny(c, "so'rovga javob", "⛔ Javobni shu kafedra mudiri yuboradi (yangi yoki qaytarilgan so'rovga).", f"so'rov #{tid}")
     if len(body.text.strip()) < 3 and not u["file_name"]: raise HTTPException(400, "Javob matnini yozing yoki fayl ilova qiling")
+    if u.get("directive_id"):      # yagona oqim: javob — topshiriq natijasi (qabul/qaytarish topshiriqda)
+        from . import directives as DIR
+        txt = body.text.strip()[:4000] or f"Ilova: {u['file_name']}"
+        DIR.set_status(c, u["directive_id"], DIR.StatusIn(status="bajarildi", result=txt + (f"\n(Ilova: {u['file_name']} — O'quv dasturlari → kafedra so'rovi)" if u["file_name"] and body.text.strip() else "")))
     _task_submit(_con, u, c.user, body.text.strip()[:4000])
     _audit(c, "so'rovga javob yuborildi", True, f"so'rov #{tid} · raund {(u['round'] or 0) + 1}")
     return {"ok": True}
@@ -1347,6 +1467,9 @@ def api_task_review(tid: int, uid: int, body: TaskReviewIn, request: Request):
     if u["status"] != "topshirildi": raise HTTPException(400, "Bu javob ko'rib chiqish holatida emas")
     if body.action not in ("qabul", "qayta"): raise HTTPException(400, "Noma'lum amal")
     if body.action == "qayta" and len(body.comment.strip()) < 5: raise HTTPException(400, "Qaytarish uchun izoh yozing")
+    if u.get("directive_id"):
+        from . import directives as DIR
+        DIR.do_review(c, u["directive_id"], "qabul" if body.action == "qabul" else "qaytarish", body.comment.strip()[:2000])
     _task_review(_con, u, c.user, body.action, body.comment.strip()[:2000])
     _audit(c, "kafedra javobi " + ("qabul qilindi" if body.action == "qabul" else "qayta ishlashga qaytarildi"), True, f"so'rov #{tid} · kafedra {u['department_id']}")
     return {"ok": True}
@@ -1357,6 +1480,19 @@ def api_task_close(tid: int, request: Request):
     if c.role.key != "akademik": _deny(c, "so'rovni yopish", "⛔ So'rovni Akademik bo'lim yopadi.", f"so'rov #{tid}")
     t = db.one(_con, "SELECT * FROM syl_tasks WHERE id=?", (tid,))
     if not t: raise HTTPException(404, "So'rov topilmadi")
-    _con.execute("UPDATE syl_tasks SET status=? WHERE id=?", ("yopilgan" if t["status"] == "ochiq" else "ochiq", tid)); _con.commit()
+    closing = t["status"] == "ochiq"
+    _con.execute("UPDATE syl_tasks SET status=? WHERE id=?", ("yopilgan" if closing else "ochiq", tid))
+    if closing:     # javob bermagan kafedralar topshirig'i bekor qilinadi (audit jurnalida qoladi); qayta ochilsa — yangidan beriladi
+        _sync_units(_con, "u.task_id=?", (tid,))
+        for u in db.rows(_con, "SELECT id, directive_id FROM syl_task_units WHERE task_id=? AND directive_id IS NOT NULL AND status IN ('yangi','qayta')", (tid,)):
+            ids, stack = [], [u["directive_id"]]
+            while stack:
+                i = stack.pop(); ids.append(i); stack += [r["id"] for r in db.rows(_con, "SELECT id FROM tasks WHERE parent_id=?", (i,))]
+            q = ",".join(map(str, ids))
+            _con.execute(f"DELETE FROM task_msgs WHERE task_id IN ({q})"); _con.execute(f"DELETE FROM task_log WHERE task_id IN ({q})")
+            _con.execute(f"DELETE FROM tasks WHERE id IN ({q})")
+            _con.execute("UPDATE syl_task_units SET directive_id=NULL WHERE id=?", (u["id"],))
+    _con.commit()
+    if not closing: link_units(_con)
     _audit(c, "so'rov " + ("yopildi" if t["status"] == "ochiq" else "qayta ochildi"), True, f"#{tid} {t['title'][:80]}")
     return {"ok": True}

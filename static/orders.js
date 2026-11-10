@@ -82,25 +82,31 @@ async function renderOrders() {
   catch (e) { if (e.status === 403 || e.message === "denied") { el.innerHTML = typeof locked === "function" ? locked("Buyruqlar") : `<div class="card">${esc(e.msg || "Ruxsat yo'q")}</div>`; return; } throw e; }
   const c = orCan();
   if (!OR.tab) OR.tab = ME.role_key === "malumotlar_bazasi" ? "audit" : "reg";
-  if (!OR.f.status) OR.f.status = c.sign || c.forward ? "imzo" : c.edit ? "jarayonda" : "";
+  if (!orTabs().some(([k]) => k === OR.tab)) OR.tab = "reg";
+  if (!OR.f.status) OR.f.status = c.sign || c.forward ? "imzo" : c.register ? (OR.meta.pending.register ? "jurnal" : "") : c.edit || c.edit_staff ? "jarayonda" : "";
   orShell();
 }
 function orTabs() {
   const c = orCan();
   return [["reg", "Reyestr", "scroll"], ...(c.edit ? [["intake", "Arizadan buyruq", "file"], ["bulk", "Ro'yxatdan buyruq", "layers"]] : []),
-          ["audit", "Muammoli talabalar", "alert"], ["changes", "O'zgarishlar jurnali", "history"]];
+          ...(c.students ? [["audit", "Muammoli talabalar", "alert"], ["changes", "O'zgarishlar jurnali", "history"]] : []),
+          ...(c.outgoing ? [["out", "Chiquvchi yozishmalar", "send"]] : [])];
 }
 function orShell() {
-  const el = $("#v-orders"), m = OR.meta, c = orCan();
-  const pend = c.sign ? m.pending.sign : c.forward ? m.pending.forward : 0;
-  el.innerHTML = `<div class="head"><div><h2>Buyruqlar</h2><span class="muted">Talabalar harakati: arizadan buyruq loyihasi, katta ro'yxatlar versiyalari, rektor imzosi va bazaga avtomatik ta'sir. ${c.sirtqi ? "Ko'lam: faqat sirtqi ta'lim talabalari." : ""}</span></div></div>
-    ${pend ? `<button type="button" class="or-pend" id="orPend">${ico("stamp", 18)}<span><b>${pend} ta buyruq ${c.sign ? "imzongizni" : "kelishuvingizni"} kutmoqda</b><small>Ko'rib chiqish uchun bosing</small></span>${ico("arrow", 16)}</button>` : ""}
+  const el = $("#v-orders"), m = OR.meta, c = orCan(), P = m.pending;
+  /* mendan harakat kutayotganlar (menyu belgisi bilan bir xil): imzo / kelishuv / qaytarilgan / devonxona jurnali */
+  const pend = [[P.sign, "imzongizni kutmoqda", "imzo"], [P.forward, "kelishuvingizni kutmoqda", "imzo"], [P.returned, "qaytarilgan — tuzatib qayta yuboring", "qaytarilgan"],
+                [P.register, "devonxona jurnaliga olinmagan", "jurnal"]].filter(x => x[0]);
+  const sub = c.edit_staff ? "Xodimlar buyruqlari (mehnat ta'tili): Kadrlar bo'limi loyihalaydi, rektor imzolaydi." : c.register ? "Devonxona: buyruqlar reyestri, imzolangan buyruqlarni jurnalga ro'yxatga olish va chiquvchi yozishmalar."
+    : `Talabalar va xodimlar buyruqlarining yagona joyi: arizadan loyiha, katta ro'yxatlar versiyalari, kelishuv, rektor imzosi va bazaga avtomatik ta'sir. ${c.sirtqi ? "Ko'lam: faqat sirtqi ta'lim talabalari." : ""}`;
+  el.innerHTML = `<div class="head"><div><h2>Buyruqlar</h2><span class="muted">${sub}</span></div></div>
+    ${pend.map(([n, t, f], i) => `<button type="button" class="or-pend" data-pend="${f}">${ico("stamp", 18)}<span><b>${n} ta buyruq ${t}</b><small>Ko'rib chiqish uchun bosing</small></span>${ico("arrow", 16)}</button>`).join("")}
     <div class="or-tabs" role="tablist">${orTabs().map(([k, l, i]) => `<button type="button" role="tab" data-t="${k}" aria-selected="${OR.tab === k}" class="${OR.tab === k ? "on" : ""}">${ico(i, 15)}<span>${l}</span></button>`).join("")}</div>
     <div id="orBody"></div>`;
   el.querySelectorAll(".or-tabs button").forEach(b => b.onclick = () => { OR.tab = b.dataset.t; OR.id = null; orShell(); });
-  if ($("#orPend")) $("#orPend").onclick = () => { OR.tab = "reg"; OR.id = null; OR.f.status = "imzo"; orShell(); };
+  el.querySelectorAll("[data-pend]").forEach(b => b.onclick = () => { OR.tab = "reg"; OR.id = null; OR.f.status = b.dataset.pend; orShell(); });
   if (OR.id) return orDetail(OR.id);
-  ({reg: orRegistry, intake: orIntake, bulk: orBulk, audit: orAudit, changes: orChanges})[OR.tab]();
+  ({reg: orRegistry, intake: orIntake, bulk: orBulk, audit: orAudit, changes: orChanges, out: orOutgoing})[OR.tab]();
 }
 function orOpen(id) { OR.id = id; OR.iq = ""; OR.ioff = 0; OR.sel = new Set(); OR.diff = null; OR.confirm = null; OR.editItem = null; orShell(); window.scrollTo({top: 0}); }
 
@@ -110,7 +116,7 @@ async function orRegistry(more) {
   if (!more) {
     b.innerHTML = `<div class="card or-card"><div class="or-filters">
         <label class="or-search">${ico("search", 16)}<input id="orQ" placeholder="Raqam, sarlavha, talaba F.I.Sh., HEMIS ID yoki guruh" value="${esc(OR.f.q)}" aria-label="Qidiruv"></label>
-        <select id="orS" aria-label="Holat"><option value="jarayonda">Jarayonda (loyiha, imzoda)</option><option value="imzo">Imzo kutmoqda</option><option value="">Hammasi</option>
+        <select id="orS" aria-label="Holat"><option value="jarayonda">Jarayonda (loyiha, imzoda)</option><option value="imzo">Imzo kutmoqda</option><option value="qaytarilgan">Qaytarilgan</option>${orCan().register ? `<option value="jurnal">Jurnalga olinmagan</option>` : ""}<option value="">Hammasi</option>
           ${Object.entries(m.statuses).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("")}</select>
         <select id="orK" aria-label="Turi"><option value="">Barcha turlar</option>${m.kinds.map(k => `<option value="${k.key}">${esc(k.short)}</option>`).join("")}</select>
         <select id="orH" aria-label="Manba"><option value="-1">Yangi va arxiv</option><option value="0">Tizimda tuzilgan</option><option value="1">Arxiv (import)</option></select>
@@ -129,7 +135,7 @@ async function orRegistry(more) {
   $("#orList").innerHTML = OR.list.length ? OR.list.map(o => `<button type="button" class="or-row" data-id="${o.id}">
       <span class="or-rno"><b>${esc(o.reg_no || "Loyiha #" + o.id)}</b><small>${o.order_date ? dmy(o.order_date) : "yaratildi " + orWhen(o.created_at)}</small></span>
       <span class="or-rt"><b>${esc(o.title)}</b><small><span class="or-kind">${esc(o.kind_name)}</span>${o.study_form ? ` · ${esc(o.study_form)}` : ""}${o.historic ? " · arxiv" : o.creator ? ` · ${esc(o.creator)}` : ""}${o.version > 1 ? ` · ${o.version}-versiya` : ""}${o.returned_note && o.status === "loyiha" ? ` · <em class="or-ret">qaytarilgan</em>` : ""}</small></span>
-      <span class="or-rn"><b>${orN(o.count)}</b><small>talaba</small></span>
+      <span class="or-rn"><b>${orN(o.count)}</b><small>${orKind(o.kind).staff ? "xodim" : "talaba"}</small></span>
       <span class="or-rs">${orSt(o.status, o.status_name)}</span></button>`).join("")
     : `<div class="or-empty">${ico("scroll", 22)}<b>Buyruq topilmadi</b><span class="tiny muted">Filtrni o'zgartiring${orCan().edit ? " yoki «Arizadan buyruq» / «Ro'yxatdan buyruq» orqali yangi loyiha tuzing" : ""}.</span></div>`;
   $("#orList").querySelectorAll(".or-row").forEach(x => x.onclick = () => orOpen(+x.dataset.id));
@@ -149,17 +155,21 @@ async function orDetail(id, keepScroll) {
   if (can.sign) act.push(`<button type="button" class="btn primary sm" data-a="sign">${ico("stamp", 15)} Imzolash</button>`);
   if (can.return) act.push(`<button type="button" class="btn sm" data-a="return">${ico("undo", 15)} Qaytarish</button>`);
   if (can.annul) act.push(`<button type="button" class="btn sm" data-a="annul">${ico("x", 15)} Bekor qiluvchi buyruq</button>`);
-  act.push(`<a class="btn sm" href="/api/orders/${o.id}/docx">${ico("download", 15)} DOCX</a>`, `<a class="btn sm" href="/api/orders/${o.id}/xlsx">${ico("download", 15)} Ro'yxat (XLSX)</a>`);
+  if (can.register) act.push(`<button type="button" class="btn primary sm" data-a="register">${ico("check", 15)} Jurnalga ro'yxatga olish</button>`);
+  act.push(`<a class="btn sm" href="/api/orders/${o.id}/docx">${ico("download", 15)} DOCX</a>`);
+  if (can.students) act.push(`<a class="btn sm" href="/api/orders/${o.id}/xlsx">${ico("download", 15)} Ro'yxat (XLSX)</a>`);
+  if (orCan().register && o.status === "imzolangan") act.push(`<button type="button" class="btn sm" id="orToOut">${ico("send", 15)} Chiquvchi xat</button>`);
   if (can.delete) act.push(`<button type="button" class="btn ghost sm" data-a="delete">${ico("trash", 15)} O'chirish</button>`);
   const confHtml = conf ? `<div class="or-confirm" role="alert">${conf.note ? `<label class="or-l">${esc(conf.label)}<textarea id="orCN" rows="2" placeholder="${esc(conf.ph || "")}"></textarea></label>` : `<span>${conf.text}</span>`}
       <div class="row-actions"><button type="button" class="btn primary sm" id="orCY">${esc(conf.yes)}</button><button type="button" class="btn ghost sm" id="orCX">Bekor</button></div></div>` : "";
   const rel = d.related;
-  const steps = [["loyiha", "Loyiha", o.created_at, o.creator], ["yuborilgan", "Imzoga yuborildi", o.submitted_at, ""], ["kelishilgan", "Prorektor kelishdi", o.forwarded_at, o.forwarder], ["imzolangan", "Rektor imzoladi", o.signed_at, o.signer]];
-  const reached = {loyiha: 0, yuborilgan: 1, kelishilgan: 2, imzolangan: 3, bekor_qilingan: 3, bekor: 0}[o.status] ?? 0;
+  const steps = d.staff ? [["loyiha", "Loyiha (Kadrlar)", o.created_at, o.creator], ["yuborilgan", "Imzoga yuborildi", o.submitted_at, ""], ["imzolangan", "Rektor imzoladi", o.signed_at, o.signer]]
+    : [["loyiha", "Loyiha", o.created_at, o.creator], ["yuborilgan", "Imzoga yuborildi", o.submitted_at, ""], ["kelishilgan", "Prorektor kelishdi", o.forwarded_at, o.forwarder], ["imzolangan", "Rektor imzoladi", o.signed_at, o.signer]];
+  const reached = (d.staff ? {loyiha: 0, yuborilgan: 1, kelishilgan: 1, imzolangan: 2, bekor_qilingan: 2, bekor: 0} : {loyiha: 0, yuborilgan: 1, kelishilgan: 2, imzolangan: 3, bekor_qilingan: 3, bekor: 0})[o.status] ?? 0;
   b.innerHTML = `<div class="or-dhead"><button type="button" class="btn ghost sm" id="orBack">${ico("back", 15)} Reyestr</button></div>
     <div class="card or-card">
       <div class="or-top"><div class="or-ttl"><span class="or-kind">${esc(o.kind_name)}</span><h3>${esc(o.title)}</h3>
-        <span class="muted tiny">${o.reg_no ? `<b>№ ${esc(o.reg_no)}</b> · ${dmy(o.order_date)}` : `Loyiha #${o.id}`} · ${orN(d.all)} ta talaba · ${o.version}-versiya${o.study_form ? " · " + esc(o.study_form) : ""}${o.historic ? " · arxivdan import" : ""}</span></div>
+        <span class="muted tiny">${o.reg_no ? `<b>№ ${esc(o.reg_no)}</b> · ${dmy(o.order_date)}` : `Loyiha #${o.id}`}${d.staff ? ` · xodim: ${esc(o.params.staff_name || "")}` : ` · ${orN(d.all)} ta talaba · ${o.version}-versiya`}${o.study_form ? " · " + esc(o.study_form) : ""}${o.historic ? " · arxivdan import" : ""}</span></div>
         <div>${orSt(o.status, o.status_name)}</div></div>
       ${o.historic ? "" : `<ol class="or-steps">${steps.map(([s, l, ts, who], i) => `<li class="${i <= reached && o.status !== "bekor" ? "done" : ""}"><i></i><b>${l}</b><small>${i <= reached && ts ? orWhen(ts) : ""}${who && i <= reached ? " · " + esc(who) : ""}</small></li>`).join("")}</ol>`}
       ${o.returned_note && o.status === "loyiha" ? `<div class="or-note warn">${ico("undo", 15)}<span><b>Qaytarilgan:</b> ${esc(o.returned_note)}</span></div>` : ""}
@@ -169,14 +179,27 @@ async function orDetail(id, keepScroll) {
       ${d.checks.errors.map(e => `<div class="or-note bad">${ico("alert", 15)}<span>${esc(e)}</span></div>`).join("")}
       ${d.checks.warnings.map(e => `<div class="or-note warn">${ico("alert", 15)}<span>${esc(e)}</span></div>`).join("")}
       <div class="row-actions or-acts">${act.join("")}</div>${confHtml}
+      ${rel.journal ? `<div class="or-note ok">${ico("checkc", 15)}<span>Devonxona jurnaliga olingan: ${orWhen(rel.journal.at)}${rel.journal.by ? " · " + esc(rel.journal.by) : ""}${rel.journal.note ? " · " + esc(rel.journal.note) : ""}</span></div>` : ""}
+      ${(rel.outgoing || []).length ? `<div class="or-note">${ico("send", 15)}<span>Chiquvchi xatlar: ${rel.outgoing.map(m => `<b>${esc(m.out_no)}</b> → ${esc(m.addressee)} (${dmy(m.out_date)})`).join("; ")}</span></div>` : ""}
       ${o.status === "imzolangan" && k.effect && o.kind !== "bekor" && !o.historic ? `<div class="or-note ok">${ico("checkc", 15)}<span>Ta'sir bazaga o'tkazildi${o.applied_at ? " · " + orWhen(o.applied_at) : ""}. Ro'yxat muzlatilgan — o'zgartirish faqat tuzatuvchi buyruq orqali.</span></div>` : ""}
     </div>
     <div class="or-grid">
-      <div class="or-main">${orItemsCard(d)}</div>
-      <div class="or-side">${orParamsCard(d)}${orVersionsCard(d)}${orFilesCard(d)}${orLogCard(d)}</div>
+      <div class="or-main">${d.staff ? orStaffCard(d) : orItemsCard(d)}</div>
+      <div class="or-side">${d.staff ? "" : orParamsCard(d) + orVersionsCard(d) + orFilesCard(d)}${orLogCard(d)}</div>
     </div>`;
   orBind(d);
   if (keepScroll) window.scrollTo({top: y});
+}
+/* xodimlar buyrug'i (mehnat ta'tili): talabalar ro'yxati yo'q — xodim va sanalar */
+function orStaffCard(d) {
+  const o = d.order, p = o.params || {}, ed = d.can.edit;
+  return `<div class="card or-card"><h4>Xodim</h4>
+    <dl class="or-dl"><dt>F.I.Sh.</dt><dd><b>${esc(p.staff_name || "—")}</b></dd><dt>Lavozim</dt><dd>${esc([p.unit, p.position].filter(Boolean).join(" — ") || "—")}</dd>
+      <dt>Ta'til</dt><dd>${p.date_from ? dmy(p.date_from) : "—"} – ${p.date_to ? dmy(p.date_to) : "—"} · ${esc(p.days || "")} kalendar kun</dd>
+      <dt>Asos</dt><dd>${esc(o.basis || "xodimning arizasi va ta'tillar jadvali")}</dd><dt>Manba</dt><dd>${esc(o.source || "—")}</dd></dl>
+    ${ed ? `<div class="or-form"><label class="or-l">Boshlanish sanasi<input type="date" id="orSD" value="${esc(p.date_from || "")}"></label>
+      <label class="or-l">Kunlar soni<input type="number" min="1" max="120" id="orSN" value="${esc(p.days || "")}"></label>
+      <button type="button" class="btn sm" id="orSS">${ico("check", 15)} Saqlash</button></div>` : ""}</div>`;
 }
 function orParamsCard(d) {
   const o = d.order, k = orKind(o.kind), ed = d.can.edit;
@@ -263,6 +286,7 @@ function orBind(d) {
       delete: {text: "Loyiha o'chiriladi (versiyalar va jurnal saqlanadi).", yes: "O'chirish", go: () => orApi(`/api/orders/${o.id}/delete`, {}), ok: "Loyiha o'chirildi"},
       return: {note: true, label: "Qaytarish sababi", ph: "Masalan: 3-qatordagi talabaning sanasi noto'g'ri", yes: "Qaytarish", go: n => orApi(`/api/orders/${o.id}/return`, {note: n}), ok: "Registrator ofisiga qaytarildi"},
       annul: {note: true, label: "Bekor qilish sababi", ph: "Masalan: talaba arizasini qaytarib oldi", yes: "Loyiha tuzish", go: n => orApi(`/api/orders/${o.id}/annul`, {note: n}), ok: "Bekor qiluvchi buyruq loyihasi tuzildi"},
+      register: {note: true, label: "Jurnal izohi (ixtiyoriy)", ph: "Masalan: asl nusxa arxivga topshirildi, nusxalar bo'limlarga tarqatildi", yes: "Ro'yxatga olish", go: n => orApi(`/api/orders/${o.id}/register`, {note: n || ""}), ok: "Devonxona jurnaliga ro'yxatga olindi"},
     }[a];
     OR.confirm = C; orDetail(o.id, true).then(() => {
       $("#orCN")?.focus();
@@ -278,6 +302,8 @@ function orBind(d) {
       });
     });
   });
+  if ($("#orSS")) $("#orSS").onclick = e => orDo(e.target, async () => { await orApi(`/api/orders/${o.id}/edit`, {params: {date_from: $("#orSD").value, days: $("#orSN").value}}); await reload(); }, "Saqlandi");
+  if ($("#orToOut")) $("#orToOut").onclick = () => { OR.outDraft = {order_id: o.id, subject: `${o.reg_no}-son buyruq: ${o.title}`}; OR.tab = "out"; OR.id = null; orShell(); };
   if ($("#orPS")) $("#orPS").onclick = e => orDo(e.target, async () => {
     const params = {}; orKind(o.kind).fields.forEach(f => { const x = $("#orPP_" + f); if (x) params[f] = x.value; });
     await orApi(`/api/orders/${o.id}/edit`, {title: $("#orPT").value, basis: $("#orPB").value, note: $("#orPN").value, params}); await reload();
@@ -497,7 +523,39 @@ async function orChanges(more) {
 }
 
 /* ---------- menyu belgisi ---------- */
+/* ---------- Devonxona: chiquvchi yozishmalar jurnali ---------- */
+async function orOutgoing() {
+  const b = $("#orBody"), dr = OR.outDraft || {};
+  const r = await orApi("/api/orders/outgoing?" + new URLSearchParams({q: OR.oq || ""}));
+  b.innerHTML = `<div class="or-grid2">${r.can_add ? `<div class="card or-card"><h4>Chiquvchi xatni ro'yxatga olish <span class="muted tiny">navbatdagi raqam: <b>${esc(r.next_no)}</b></span></h4>
+      <div class="or-form"><label class="or-l">Qabul qiluvchi *<input id="ogA" placeholder="Masalan: Oliy ta'lim, fan va innovatsiyalar vazirligi" value="${esc(dr.addressee || "")}"></label>
+      <label class="or-l">Mavzu *<input id="ogS" value="${esc(dr.subject || "")}" placeholder="Xat mavzusi"></label>
+      <label class="or-l">Sana<input type="date" id="ogD" value="${esc(ME.today || "")}"></label>
+      <label class="or-l">Bog'liq buyruq (ixtiyoriy)<input id="ogO" inputmode="numeric" placeholder="buyruq ID" value="${esc(dr.order_id || "")}"></label>
+      <label class="or-l">Portal yozishmasi (ixtiyoriy)<input id="ogT" inputmode="numeric" placeholder="yozishma ID" value=""></label>
+      <label class="or-l">Varaqlar soni<input type="number" min="1" id="ogP" value="1"></label>
+      <label class="or-l">Izoh<textarea id="ogN" rows="2"></textarea></label>
+      <button type="button" class="btn primary sm" id="ogGo">${ico("send", 15)} Ro'yxatga olish</button></div></div>` : ""}
+    <div class="card or-card"><div class="or-filters"><label class="or-search">${ico("search", 16)}<input id="ogQ" placeholder="Raqam, qabul qiluvchi yoki mavzu" value="${esc(OR.oq || "")}" aria-label="Qidiruv"></label></div>
+      <div class="tiny muted or-cnt">${orN(r.total)} ta chiquvchi xat</div>
+      <div class="or-list">${r.items.map(m => `<div class="or-row or-out"><span class="or-rno"><b>${esc(m.out_no)}</b><small>${dmy(m.out_date)}</small></span>
+        <span class="or-rt"><b>${esc(m.subject)}</b><small>→ ${esc(m.addressee)}${m.order_reg ? ` · buyruq <a href="#" data-oo="${m.order_id}">${esc(m.order_reg)}</a>` : ""}${m.thread_ref ? ` · portal ${esc(m.thread_ref)}` : ""} · ${esc(m.created_by_name || "")}</small></span>
+        <span class="or-rn"><b>${m.pages || 1}</b><small>varaq</small></span></div>`).join("") || `<div class="or-empty">${ico("send", 22)}<b>Hali chiquvchi xat yo'q</b></div>`}</div></div></div>`;
+  let t; $("#ogQ").oninput = () => { clearTimeout(t); t = setTimeout(() => { OR.oq = $("#ogQ").value.trim(); orOutgoing().then(() => { const i = $("#ogQ"); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }); }, 300); };
+  b.querySelectorAll("[data-oo]").forEach(a => a.onclick = e => { e.preventDefault(); OR.tab = "reg"; orOpen(+a.dataset.oo); });
+  if ($("#ogGo")) $("#ogGo").onclick = e => orDo(e.target, async () => {
+    const x = await orApi("/api/orders/outgoing", {addressee: $("#ogA").value, subject: $("#ogS").value, out_date: $("#ogD").value, order_id: +$("#ogO").value || 0,
+                                                    thread_id: +$("#ogT").value || 0, pages: +$("#ogP").value || 1, note: $("#ogN").value});
+    OR.outDraft = null; toast(`Ro'yxatga olindi: ${x.out_no}`); await orOutgoing();
+  });
+}
+
+/* menyu belgisi (yagona qoida): mendan harakat kutayotgan buyruqlar — imzo, kelishuv, qaytarilgan loyiha, devonxona jurnali */
 async function ordersBadge(set) {
-  if (!["rektor", "prorektor_oquv"].includes(ME?.role_key)) return;
-  try { const m = await orApi("/api/orders/meta"); set("orders", ME.role_key === "rektor" ? m.pending.sign : m.pending.forward); } catch (e) {}
+  if (document.querySelector('#nav a[data-v="orders"]')?.classList.contains("hidden")) return;
+  try {
+    const p = (await orApi("/api/orders/meta")).pending;
+    const parts = [[p.sign, "imzongizni kutmoqda"], [p.forward, "kelishuvingizni kutmoqda"], [p.returned, "qaytarilgan loyiha"], [p.register, "devonxona jurnaliga olinmagan"]].filter(x => x[0]);
+    set("orders", p.action, parts.length ? "Buyruqlar: " + parts.map(([n, t]) => `${n} ta ${t}`).join("; ") : "");
+  } catch (e) {}
 }

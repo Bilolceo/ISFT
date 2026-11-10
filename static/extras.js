@@ -524,8 +524,8 @@
           try { localStorage.setItem("jarvis.portalTab", PT.tab); } catch (e) {}
         }
         go("portal"); break;
-      case "tasks":
-        if (l.meeting && typeof openDecision === "function") openDecision(l.meeting);
+      case "tasks":   /* majlis topshirig'i: {meeting, task} — qaror kartasi ochiladi va topshiriq ajratiladi */
+        if (l.meeting && typeof openDecision === "function") openDecision(l.meeting, l.task);
         else if (l.directive && typeof openDirective === "function") openDirective(l.directive);   /* directives.js */
         else { if (typeof DEC !== "undefined") DEC.open = null; if (typeof DIR !== "undefined") DIR.open = null; go("tasks"); }
         break;
@@ -533,6 +533,20 @@
         go("documents");
         if (l.reg) waitFor(() => [...document.querySelectorAll("#docReg tr")].find(tr => tr.textContent.includes(l.reg))).then(flash);
         break;
+      case "orders":   /* Buyruqlar: {order} — buyruq sahifasi; {tab} — reyestr/chiquvchi */
+        if (typeof OR !== "undefined") { OR.id = l.order || null; if (l.order || !l.tab) OR.tab = "reg"; else OR.tab = l.tab; OR.confirm = null; }
+        go("orders"); break;
+      case "service":  /* Murojaatlar va nosozliklar: {tab, request|ticket|procurement} — kerakli yorliq va qator ajratiladi */
+        if (typeof SVC !== "undefined") { if (l.tab) SVC.tab = l.tab; SVC.focus = l.request ? `rq${l.request}` : l.ticket ? `tk${l.ticket}` : l.procurement ? `pr${l.procurement}` : null; SVC.queue = l.queue || null; }
+        go("service");
+        if (typeof SVC !== "undefined" && SVC.focus) { const k = SVC.focus; waitFor(() => document.querySelector(`#v-service [data-row="${k}"]`)).then(el => flash(el && (el.closest("tr") || el))); }
+        break;
+      case "staffabs": /* Xodimlar ta'tili: {absence} — yozuv kartasi */
+        if (typeof SA !== "undefined") { SA.tab = "list"; SA.form = null; SA.open = l.absence || null; if (l.absence) SA.period = "all"; }
+        go("staffabs"); break;
+      case "agents":   /* AI agentlar: {action} — taklifni ko'rib chiqish oynasi */
+        if (typeof AGS !== "undefined") AGS.focus = l.action || null;
+        go("agents"); break;
       case "syllabus":   /* syllabus.js: sillabus / holat / so'rov */
         if (typeof sylLink === "function") sylLink(l);
         go("syllabus"); break;

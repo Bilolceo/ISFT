@@ -4,6 +4,9 @@
   3) Tadbirga QR orqali qatnashuvni belgilash (ma'naviyat va yoshlar)
 
 Tamoyil: tizim tasniflaydi va loyiha tayyorlaydi — qarorni mas'ul xodim qabul qiladi.
+Navbatlar: har bir murojaat mas'ul bo'limga (unit) tushadi; bo'lim xodimi «Olindi» bossa — o'ziga biriktiriladi (assignee_user), «Hal qilindi»
+bilan yopiladi. AT muhandisi (it_staff) faqat AT bo'limi navbatini va o'ziga biriktirilganlarni ko'radi, umumiy hodisa xabarini yubormaydi.
+Xarid: xo'jalik nosozlik uchun «Xarid kerak» belgilasa — Xarid bo'limi navbatiga xarid so'rovi tushadi (rbac.PROCUREMENT).
 Ommaviy QR sahifalari (login'siz) faqat ma'lumot QABUL qiladi; hech qanday shaxsiy ma'lumot ko'rsatmaydi.
 """
 import base64, binascii, datetime as dt, html, io, json, os, re, secrets, socket, time
@@ -13,7 +16,7 @@ from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel, Field
 from . import db, rbac, brand, academic_rules as AR
-from .rbac import Ctx, AccessDenied, FACILITIES, REQUESTS, YOUTH
+from .rbac import Ctx, AccessDenied, FACILITIES, REQUESTS, YOUTH, PROCUREMENT
 
 router = APIRouter()
 _con = None
@@ -31,10 +34,63 @@ CREATE TABLE IF NOT EXISTS requests(id INTEGER PRIMARY KEY, created_at TEXT, cha
 CREATE TABLE IF NOT EXISTS event_qr(event_id INTEGER PRIMARY KEY, code TEXT UNIQUE, open INT DEFAULT 0);
 CREATE TABLE IF NOT EXISTS event_reg(event_id INT, student_id INT, PRIMARY KEY(event_id, student_id));
 CREATE TABLE IF NOT EXISTS event_checkin(event_id INT, student_id INT, ts TEXT, PRIMARY KEY(event_id, student_id));
+CREATE TABLE IF NOT EXISTS procurements(id INTEGER PRIMARY KEY, ticket_id INT, room TEXT, item TEXT, text TEXT, qty INT DEFAULT 1, est_cost INT,
+  status TEXT, note TEXT, created_by INT, created_by_name TEXT, created_at TEXT, updated_at TEXT, updated_by_name TEXT);
 """
+# murojaatlar va nosozliklar navbati: kim olgan (assignee_user), qachon
+_ADD_COLS = {"requests": [("assignee_user", "INT"), ("taken_at", "TEXT")], "tickets": [("assignee_user", "INT"), ("taken_at", "TEXT"), ("procurement_id", "INT")]}
+IT_UNIT = "Axborot texnologiyalari bo'limi"
+# lavozim → murojaatlar navbatidagi bo'lim nomi (classify() qaytaradigan nom bilan bir xil)
+ROLE_REQ_UNIT = {"it_head": IT_UNIT, "it_staff": IT_UNIT, "talabalar": "Registrator ofisi", "registrator_xodim": "Registrator ofisi",
+                 "sirtqi": "Sirtqi bo'lim", "akademik": "Akademik faoliyatni boshqarish bo'limi", "buxgalteriya": "Buxgalteriya bo'limi"}
+UNIT_ONLY = ("it_staff",)          # faqat o'z bo'limi navbati va o'ziga biriktirilganlar
+INCIDENT_OWNERS = ("it_head", "talabalar")   # umumiy hodisa xabari — menyu belgisida shu lavozimlarga «harakat kutmoqda»
+PROC_STATUSES = ["yangi", "ko'rib chiqilmoqda", "buyurtma berildi", "yetkazildi", "rad etildi"]
 
 def init(con):
-    con.executescript(SCHEMA); con.commit()
+    con.executescript(SCHEMA)
+    for t, cols in _ADD_COLS.items():
+        have = {r[1] for r in con.execute(f"PRAGMA table_info({t})")}
+        for c_, ty in cols:
+            if c_ not in have: con.execute(f"ALTER TABLE {t} ADD COLUMN {c_} {ty}")
+    con.commit()
+    try: seed_queue_demo(con)
+    except Exception as e: print("service.seed_queue_demo:", e)
+
+DEMO_IT = [("LMS'da yangi kursga o'qituvchi sifatida qo'shib bering, kafedra mudiri ruxsat bergan", 22, "jarayonda", 26),
+           ("Talaba akkauntiga ikkinchi email manzil qo'shib berishingizni so'rayman", 22, "yangi", 20),
+           ("Kutubxona zalidagi Wi-Fi tarmog'iga kafedra noutbukini ulab berish kerak", None, "yangi", 7),
+           ("Onlayn dars yozuvlarini platformaga yuklash uchun o'qituvchiga ruxsat kerak", None, "yangi", 3)]
+
+def seed_queue_demo(con):
+    """Demo navbatlar (idempotent): AT bo'limi murojaatlari (2 tasi AT muhandisiga biriktirilgan, 2 tasi navbatda) va
+    xo'jalik nosozligidan 2 ta xarid so'rovi — AT muhandisi va Xarid bo'limi bo'sh sahifa ko'rmasin."""
+    con.execute("CREATE TABLE IF NOT EXISTS svc_demo(k TEXT PRIMARY KEY)")
+    if not con.execute("SELECT 1 FROM sqlite_master WHERE name='users'").fetchone(): return
+    if not con.execute("SELECT 1 FROM svc_demo WHERE k='it_queue'").fetchone():
+        it = db.one(con, "SELECT id FROM users WHERE role='it_staff' ORDER BY id LIMIT 1")
+        # bo'sh bazadan seed: AT muhandisi akkaunti hali yaratilmagan bo'lsa — kutamiz (server startida qayta urinadi), aks holda
+        # «biriktirilgan» murojaatlar egasiz qolib ketadi
+        for text, who, stt, hrs in (DEMO_IT if it else []):
+            r = create_request(con, text, name="Demo murojaat", channel="veb-forma", when=now() - dt.timedelta(hours=hrs))
+            if who and it:
+                con.execute("UPDATE requests SET assignee_user=?, taken_at=?, status=? WHERE id=?", (it["id"], iso(now() - dt.timedelta(hours=max(1, hrs - 2))), stt, r["id"]))
+        if it: con.execute("INSERT INTO svc_demo(k) VALUES('it_queue')")
+        con.commit()
+    if not con.execute("SELECT 1 FROM svc_demo WHERE k='procurement'").fetchone():
+        xo = db.one(con, "SELECT id, full_name FROM users WHERE role='xojalik' ORDER BY id LIMIT 1")
+        rep = db.rows(con, """SELECT t.id, t.item, t.text, r.name room FROM tickets t JOIN rooms r ON r.id=t.room_id WHERE t.status!='hal qilindi'
+                              AND t.item!='Boshqa' AND t.procurement_id IS NULL ORDER BY t.reports DESC, t.id LIMIT 2""")
+        if xo and rep:
+            for k, t in enumerate(rep):
+                ts = iso(now() - dt.timedelta(days=3 - k))
+                st = "buyurtma berildi" if k == 0 else "yangi"
+                cur = con.execute("""INSERT INTO procurements(ticket_id,room,item,text,qty,est_cost,status,note,created_by,created_by_name,created_at,updated_at)
+                                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""", (t["id"], t["room"], t["item"], f"Ta'mirlab bo'lmaydi — almashtirish kerak. {t['text'] or ''}".strip(),
+                                                                      1, 2_400_000 if k == 0 else 850_000, st, "Yetkazib beruvchiga buyurtma berildi" if k == 0 else None,
+                                                                      xo["id"], xo["full_name"], ts, ts))
+                con.execute("UPDATE tickets SET procurement_id=?, status='jarayonda', note=? WHERE id=?", (cur.lastrowid, f"Xarid so'rovi X-{cur.lastrowid:04d}", t["id"]))
+            con.execute("INSERT INTO svc_demo(k) VALUES('procurement')"); con.commit()
 
 def bind(con, ctx_fn):
     global _con, _ctx
@@ -227,7 +283,21 @@ def _group_incident(con, topic, when):
     return cur.lastrowid
 
 def _req_scope(ctx: Ctx):
+    if ctx.role.key in UNIT_ONLY:   # AT muhandisi: AT bo'limi navbati + o'ziga biriktirilganlar
+        un = ROLE_REQ_UNIT[ctx.role.key].replace("'", "''")
+        return f"(unit='{un}' OR assignee_user={int(ctx.user['id'])})"
     return f"faculty_id={int(ctx.user['faculty_id'])}" if ctx.role.scope == "fakultet" else "1=1"
+
+def my_queue(con, ctx: Ctx) -> dict:
+    """Mendan harakat kutayotgan murojaatlar: menga biriktirilgan ochiqlari + bo'limim navbatidagi hali hech kim olmaganlari
+    (hodisaga birlashtirilganlari — umumiy xabar bilan yopiladi, navbatga kirmaydi). Badge, «Mening vazifalarim» va sahifa — bitta qoida."""
+    if not ctx.can(REQUESTS): return {"mine": [], "unit": [], "unit_name": None}
+    w = _req_scope(ctx); uid = int(ctx.user["id"]); un = ROLE_REQ_UNIT.get(ctx.role.key)
+    mine = db.rows(con, f"SELECT * FROM requests WHERE {w} AND assignee_user=? AND status IN ('yangi','jarayonda') ORDER BY created_at", (uid,))
+    unit = db.rows(con, f"""SELECT * FROM requests WHERE {w} AND unit=? AND assignee_user IS NULL AND incident_id IS NULL AND status='yangi'
+                            ORDER BY created_at""", (un,)) if un else []
+    for r in mine + unit: r["number"] = f"M-{r['id']:04d}"
+    return {"mine": mine, "unit": unit, "unit_name": un}
 
 def requests_overview(con, ctx: Ctx, quiet=False):
     if quiet:
@@ -243,10 +313,19 @@ def requests_overview(con, ctx: Ctx, quiet=False):
     since = iso(now() - dt.timedelta(days=30))
     by_cat = db.rows(con, f"SELECT category, COUNT(*) n, SUM(status!='hal qilindi' AND status!='javob berildi') open FROM requests WHERE {w} AND created_at>=? GROUP BY category ORDER BY n DESC", (since,))
     single_open = [r for r in reqs if r["status"] in ("yangi", "jarayonda") and not r["incident_id"]]
-    for r in reqs: r["number"] = f"M-{r['id']:04d}"
-    return {"incidents": incs, "requests": reqs, "by_cat": by_cat, "open_single": len(single_open), "can_broadcast": ctx.role.scope != "fakultet",
+    names = {u["id"]: (u["full_name"].split(":", 1)[-1].strip() or u["full_name"]) for u in db.rows(con, "SELECT id, full_name FROM users")}
+    for r in reqs:
+        r["number"] = f"M-{r['id']:04d}"; r["assignee_name"] = names.get(r.get("assignee_user"))
+        r["mine"] = r.get("assignee_user") == ctx.user["id"]
+    q = my_queue(con, ctx)
+    staff = []
+    if ctx.role.key == "it_head":   # AT boshlig'i murojaatni muhandisga biriktiradi
+        staff = [{"id": u["id"], "name": names.get(u["id"])} for u in db.rows(con, "SELECT id FROM users WHERE role IN ('it_staff','it_head') AND COALESCE(active,1)=1 ORDER BY id")]
+    return {"incidents": incs, "requests": reqs, "by_cat": by_cat, "open_single": len(single_open),
+            "can_broadcast": ctx.role.scope != "fakultet" and ctx.role.key not in UNIT_ONLY,
+            "queue": {"mine": [r["id"] for r in q["mine"]], "unit": [r["id"] for r in q["unit"]], "unit_name": q["unit_name"]}, "staff": staff,
             "open_total": sum(1 for r in reqs if r["status"] in ("yangi", "jarayonda")),
-            "grouped": sum(1 for r in reqs if r["incident_id"]), "scope": ctx.scope_label(con)}
+            "grouped": sum(1 for r in reqs if r["incident_id"]), "scope": f"{ROLE_REQ_UNIT[ctx.role.key]} navbati" if ctx.role.key in UNIT_ONLY else ctx.scope_label(con)}
 
 def notice_template(inc, n):
     return (f"Hurmatli talabalar! {inc['title']} bo'yicha {n} ta murojaat qabul qilindi. "
@@ -336,13 +415,34 @@ def C(request: Request) -> Ctx: return _ctx(request)
 @router.get("/api/svc/overview")
 def overview(request: Request):
     c = C(request); out = {"tabs": []}
-    for key, fn, res in (("facilities", facilities, FACILITIES), ("requests", requests_overview, REQUESTS), ("events", events_overview, YOUTH)):
+    for key, fn, res in (("facilities", facilities, FACILITIES), ("requests", requests_overview, REQUESTS), ("procurement", procurement_overview, PROCUREMENT),
+                         ("events", events_overview, YOUTH)):
         if c.can(res):
             out[key] = fn(_con, c); out["tabs"].append(key)
     if not out["tabs"]:
         rbac.audit(_con, c, "murojaatlar va nosozliklar", FACILITIES, False)
     out["base"] = public_base(request)
+    out["action"] = action_count(_con, c, out)
     return out
+
+def action_count(con, c: Ctx, ov: dict | None = None) -> dict:
+    """Menyu belgisi — «mendan harakat kutayotganlar» (yagona qoida): menga biriktirilgan + bo'limim navbatidagi olinmagan murojaatlar,
+    xabar yuborilmagan ochiq hodisalar (xabar yuboruvchi lavozimlar), xo'jalik — yangi nosozliklar, xarid — yangi / ko'rib chiqilayotgan so'rovlar."""
+    parts = []
+    q = my_queue(con, c)
+    if q["mine"]: parts.append((len(q["mine"]), "sizga biriktirilgan murojaat"))
+    if q["unit"]: parts.append((len(q["unit"]), f"{q['unit_name']} navbatida hech kim olmagan"))
+    if c.role.key in INCIDENT_OWNERS and c.can(REQUESTS):   # umumiy xabar mas'ullari (notice_template: AT bartaraf etadi, Registrator ofisi javob beradi)
+        n = db.one(con, "SELECT COUNT(*) n FROM incidents i WHERE i.status='ochiq' AND i.notified_at IS NULL AND EXISTS(SELECT 1 FROM requests r WHERE r.incident_id=i.id)")["n"]
+        if n: parts.append((n, "ochiq hodisa — talabalarga xabar yuborilmagan"))
+    if c.role.key == "xojalik" and c.can(FACILITIES):
+        n = db.one(con, "SELECT COUNT(*) n FROM tickets WHERE status='yangi'")["n"]
+        if n: parts.append((n, "yangi nosozlik («Olindi» bosilmagan)"))
+    if c.role.key == "xarid" and c.can(PROCUREMENT):
+        n = db.one(con, "SELECT COUNT(*) n FROM procurements WHERE status IN ('yangi','ko''rib chiqilmoqda')")["n"]
+        if n: parts.append((n, "xarid so'rovi ko'rib chiqilishi kerak"))
+    total = sum(n for n, _ in parts)
+    return {"n": total, "tip": ("Sizdan harakat kutmoqda: " + "; ".join(f"{n} ta {t}" for n, t in parts)) if parts else "Sizdan harakat kutayotgan ish yo'q"}
 
 class TStatus(BaseModel):
     status: str
@@ -392,12 +492,86 @@ def request_status(rid: int, body: RStatus, request: Request):
     if body.status not in ("yangi", "jarayonda", "javob berildi", "hal qilindi"): raise HTTPException(400)
     _con.execute("UPDATE requests SET status=?, answer=COALESCE(NULLIF(?,''),answer), resolved_at=? WHERE id=?",
                  (body.status, body.answer[:1000], iso(now()) if body.status == "hal qilindi" else None, rid))
+    if body.status == "jarayonda":   # «Olindi» — hech kim olmagan bo'lsa, menga biriktiriladi
+        _con.execute("UPDATE requests SET assignee_user=?, taken_at=? WHERE id=? AND assignee_user IS NULL", (c.user["id"], iso(now()), rid))
+    _con.commit(); return {"ok": True}
+
+class Assign(BaseModel):
+    user_id: int
+
+@router.post("/api/svc/requests/{rid}/assign")
+def request_assign(rid: int, body: Assign, request: Request):
+    """AT boshlig'i AT navbatidagi murojaatni muhandisga biriktiradi."""
+    c = C(request); _g(c, REQUESTS, "murojaatni biriktirish", f"M-{rid:04d} → #{body.user_id}")
+    if c.role.key != "it_head": raise AccessDenied("⛔ Murojaatni muhandisga AT bo'limi boshlig'i biriktiradi.")
+    r = db.one(_con, "SELECT id, unit FROM requests WHERE id=?", (rid,))
+    if not r: raise HTTPException(404)
+    if r["unit"] != IT_UNIT: raise HTTPException(400, "Murojaat AT bo'limi navbatida emas")
+    u = db.one(_con, "SELECT id FROM users WHERE id=? AND role IN ('it_staff','it_head')", (body.user_id,))
+    if not u: raise HTTPException(400, "Xodim AT bo'limida emas")
+    _con.execute("UPDATE requests SET assignee_user=?, taken_at=?, status=CASE WHEN status='yangi' THEN 'jarayonda' ELSE status END WHERE id=?",
+                 (body.user_id, iso(now()), rid))
+    _con.commit(); return {"ok": True}
+
+# =====================================================================
+# 4) XARID: xo'jalik nosozligidan xarid so'rovi (rbac.PROCUREMENT)
+# =====================================================================
+def procurement_overview(con, ctx: Ctx, quiet=False):
+    if quiet:
+        if not ctx.can(PROCUREMENT): raise AccessDenied("")
+    else:
+        _g(ctx, PROCUREMENT, "xarid so'rovlari")
+    rows = db.rows(con, """SELECT * FROM procurements ORDER BY CASE status WHEN 'yangi' THEN 0 WHEN 'ko''rib chiqilmoqda' THEN 1
+                           WHEN 'buyurtma berildi' THEN 2 ELSE 3 END, created_at DESC LIMIT 200""")
+    for r in rows: r["created_by_name"] = (r["created_by_name"] or "").split(":", 1)[-1].strip()
+    open_ = [r for r in rows if r["status"] not in ("yetkazildi", "rad etildi")]
+    return {"items": rows, "open": len(open_), "new": sum(1 for r in rows if r["status"] == "yangi"),
+            "ordered": sum(1 for r in rows if r["status"] == "buyurtma berildi"), "statuses": PROC_STATUSES,
+            "can_status": ctx.role.key == "xarid", "sum": sum(r["est_cost"] or 0 for r in open_)}
+
+class Procure(BaseModel):
+    text: str = Field("", max_length=600)
+    qty: int = 1
+    est_cost: int | None = None
+
+@router.post("/api/svc/tickets/{tid}/procure")
+def ticket_procure(tid: int, body: Procure, request: Request):
+    """Xo'jalik: nosozlikni ta'mirlab bo'lmaydi — «Xarid kerak» → Xarid bo'limi navbatiga so'rov."""
+    c = C(request); _g(c, FACILITIES, "xarid so'rovi yaratish", f"#{tid}")
+    if not c.can(PROCUREMENT): raise AccessDenied("⛔ Xarid so'rovini xo'jalik bo'limi yuboradi.")
+    t = db.one(_con, "SELECT t.*, r.name room FROM tickets t JOIN rooms r ON r.id=t.room_id WHERE t.id=?", (tid,))
+    if not t: raise HTTPException(404)
+    if t.get("procurement_id"): raise HTTPException(409, "Bu nosozlik bo'yicha xarid so'rovi allaqachon yuborilgan")
+    ts = iso(now())
+    cur = _con.execute("""INSERT INTO procurements(ticket_id,room,item,text,qty,est_cost,status,created_by,created_by_name,created_at,updated_at)
+                          VALUES(?,?,?,?,?,?,?,?,?,?,?)""", (tid, t["room"], t["item"], (body.text or t["text"] or "")[:600], max(1, min(body.qty or 1, 999)),
+                                                           body.est_cost, "yangi", c.user["id"], c.user["full_name"], ts, ts))
+    _con.execute("UPDATE tickets SET procurement_id=?, status=CASE WHEN status='yangi' THEN 'jarayonda' ELSE status END, note=? WHERE id=?",
+                 (cur.lastrowid, f"Xarid so'rovi X-{cur.lastrowid:04d}", tid))
+    _con.commit(); rbac.audit(_con, c, "xarid so'rovi yuborildi", PROCUREMENT, True, f"X-{cur.lastrowid:04d} · {t['room']} · {t['item']}")
+    return {"ok": True, "id": cur.lastrowid, "number": f"X-{cur.lastrowid:04d}"}
+
+class PStatus(BaseModel):
+    status: str
+    note: str = Field("", max_length=300)
+
+@router.post("/api/svc/procurement/{pid}/status")
+def procurement_status(pid: int, body: PStatus, request: Request):
+    c = C(request); _g(c, PROCUREMENT, "xarid so'rovi holati", f"X-{pid:04d} → {body.status}")
+    if c.role.key != "xarid": raise AccessDenied("⛔ Xarid so'rovi holatini Xarid bo'limi yangilaydi.")
+    if body.status not in PROC_STATUSES: raise HTTPException(400)
+    p = db.one(_con, "SELECT * FROM procurements WHERE id=?", (pid,))
+    if not p: raise HTTPException(404)
+    _con.execute("UPDATE procurements SET status=?, note=COALESCE(NULLIF(?,''),note), updated_at=?, updated_by_name=? WHERE id=?",
+                 (body.status, body.note, iso(now()), c.user["full_name"], pid))
+    if body.status == "yetkazildi" and p["ticket_id"]:
+        _con.execute("UPDATE tickets SET note=? WHERE id=?", (f"Xarid X-{pid:04d}: yetkazildi — o'rnatish xo'jalik bo'limida", p["ticket_id"]))
     _con.commit(); return {"ok": True}
 
 def _incident_guard(c: Ctx):
-    # hodisa butun institut bo'yicha — umumiy xabarni fakultet emas, talabalar bo'limi / rahbariyat yuboradi
-    if c.role.scope == "fakultet":
-        raise AccessDenied("⛔ Umumiy hodisa bo'yicha xabarni talabalar bo'limi yoki rahbariyat yuboradi.")
+    # hodisa butun institut bo'yicha — umumiy xabarni fakultet emas, Registrator ofisi / AT boshlig'i / rahbariyat yuboradi
+    if c.role.scope == "fakultet" or c.role.key in UNIT_ONLY:
+        raise AccessDenied("⛔ Umumiy hodisa bo'yicha xabarni Registrator ofisi, AT bo'limi boshlig'i yoki rahbariyat yuboradi.")
 
 @router.post("/api/svc/incidents/{iid}/draft")
 async def incident_draft(iid: int, request: Request, ai_: int = 0):

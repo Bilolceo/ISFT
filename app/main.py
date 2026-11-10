@@ -54,6 +54,22 @@ async def _warm():
     asyncio.create_task(OC.events_supervisor())   # Hikvision voqealar oqimi tinglovchilari
     asyncio.create_task(OPSM.poller())   # qoidalar har 10 daqiqada qayta hisoblanadi
 
+@app.on_event("startup")
+async def _bot_start():   # Telegram bot shu jarayonda (TELEGRAM_BOT_TOKEN bo'lsa); token yo'q — faqat log
+    try:
+        from . import bot as BOT
+        await BOT.start_in_app(con)
+    except Exception as e:
+        print("Telegram bot ishga tushmadi:", type(e).__name__)
+
+@app.on_event("shutdown")
+async def _bot_stop():
+    try:
+        from . import bot as BOT
+        await BOT.stop_in_app()
+    except Exception as e:
+        print("Telegram bot to'xtatishda xato:", type(e).__name__)
+
 from . import sessions as SS
 SS.init(con)
 COOKIE = "sid"
@@ -189,7 +205,7 @@ class Transcript(BaseModel):
 @app.post("/api/meetings/extract")
 async def extract(body: Transcript, request: Request):
     c = ctx(request); rbac.require(con, c, rbac.TASKS, "bayonnomadan topshiriq ajratish")
-    return {"tasks": await ai.extract_tasks(body.transcript)}
+    return await ai.extract_tasks_result(body.transcript)   # {"tasks": [...], "source": "ai" | "qoida"}
 
 class Meeting(BaseModel):
     title: str
@@ -263,7 +279,7 @@ async def doc(body: Doc, request: Request):
     if c.role.level > 3:
         raise AccessDenied("⛔ Tarjima va shartnoma yordamchisi rahbariyat va bo'limlar uchun.")
     rbac.audit(con, c, f"tarjima va shartnoma yordamchisi: {body.mode}", "docs", True, body.text[:80])
-    return {"result": await ai.doc_assist(body.text, body.mode)}
+    return await ai.doc_assist_result(body.text, body.mode)   # {"result", "ai", "source", "reason"} — Tahlil rejimida ai=false
 
 RBAC_FULL_VIEW = ("rektor", "kengash", "it_head")   # to'liq jadval: rahbariyat va tizim ma'muri; boshqalar — faqat o'z lavozimi
 
@@ -276,9 +292,23 @@ def rbac_matrix(request: Request):
 
 @app.get("/api/status")
 async def status():
-    return {"llm": await ai.llm_available(), "model": ai.MODEL, "db": str(db.DB_PATH.name),
+    a = await ai.llm_status()
+    try:
+        from . import bot as BOT
+        b = {k: v for k, v in BOT.status().items() if k in ("enabled", "running", "username", "mode", "note", "last_error", "error_at", "started_at", "next_brief", "next_portal")}
+    except Exception as e:
+        b = {"enabled": False, "running": False, "username": None, "last_error": type(e).__name__}
+    return {"llm": a["ai"], "model": ai.MODEL, "ai": a, "bot": b, "db": str(db.DB_PATH.name),
             "students": db.one(con, "SELECT COUNT(*) n FROM students")["n"],
             "audit": db.one(con, "SELECT COUNT(*) n FROM audit_log")["n"]}
+
+@app.get("/healthz")
+def healthz():   # Railway healthcheck: faqat baza (Ollama/Telegram tekshirilmaydi)
+    try:
+        db.one(con, "SELECT 1 x")
+        return {"ok": True}
+    except Exception:
+        return JSONResponse({"ok": False, "error": "db"}, status_code=503)
 
 
 # ---------- Hujjatlar markazi ----------
@@ -411,6 +441,10 @@ from . import orders as ORD   # Buyruqlar: arizadan buyruq, reyestr va muvofiqli
 ORD.init(con)
 ORD.bind(con, ctx)
 app.include_router(ORD.router)
+from . import academic_flows as AF   # Talaba harakati: sessiya jadvali, apellyatsiya, qayta o'qish, ko'chirish, ISFT granti, bitiruv (ORD.bind dan keyin)
+AF.init(con)
+AF.bind(con, ctx)
+app.include_router(AF.router)
 from . import reyting as RT   # Reyting: talabalar o'zlashtirish reytingi (GPA), qaydnoma, dinamika, a'lochilar, bo'linmalar
 RT.init(con)   # kesh (rating_cache) yo'q yoki manba o'zgargan bo'lsa — mavjud baholardan quriladi; qayta seed shart emas
 RT.bind(con, ctx)

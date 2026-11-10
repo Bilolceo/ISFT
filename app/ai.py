@@ -1,12 +1,31 @@
 """ISFT Core AI qatlami. Til modeli mahalliy (Ollama) ishlaydi — ma'lumot serverdan chiqmaydi.
-Muhim tamoyil: model bazaga to'g'ridan-to'g'ri kirmaydi. U faqat RBAC dan o'tgan servis natijalarini ko'radi."""
-import json, os, re, datetime as dt
+Muhim tamoyil: model bazaga to'g'ridan-to'g'ri kirmaydi. U faqat RBAC dan o'tgan servis natijalarini ko'radi.
+
+Til modeli ulanmagan bo'lsa (masalan, Railway'da Ollama yo'q) — «Tahlil rejimi»: raqamlar va xulosalar qoidalar bilan
+hisoblanadi (source="qoida"), matn yaratuvchi vositalar (tarjima, javob loyihasi) o'chiriladi va {"ai": false, "reason": ...} qaytadi.
+Har bir AI natijasida "source": "ai" | "qoida" bor.
+
+Til modeli manzili (faqat institut nazoratidagi server — shaxsiy ma'lumot O'zbekistondan tashqariga chiqmasligi shart):
+  ISFT_CORE_LLM_URL   — masalan http://10.0.0.5:11434 (Ollama) yoki http://10.0.0.5:8000/v1 (OpenAI-mos: vLLM, llama.cpp, Ollama /v1)
+  ISFT_CORE_LLM_API   — ollama | openai (bo'sh bo'lsa: manzil /v1 bilan tugasa openai, aks holda ollama)
+  ISFT_CORE_LLM_KEY   — ixtiyoriy Bearer kalit (institut serveri himoyalangan bo'lsa)
+  ISFT_CORE_LLM=0     — til modelini butunlay o'chirish (doim «Tahlil rejimi»)
+  OLLAMA_URL          — eski nom; ISFT_CORE_LLM_URL bo'lmasa ishlatiladi. Standart: http://localhost:11434
+Hech qanday bulut AI provayderi standart holatda ulanmagan."""
+import json, os, re, time, datetime as dt
 import httpx
 from . import services as S, db
 from .rbac import AccessDenied, Ctx, audit
 
-OLLAMA = os.getenv("OLLAMA_URL", "http://localhost:11434")
+LLM_URL = (os.getenv("ISFT_CORE_LLM_URL") or os.getenv("OLLAMA_URL") or "http://localhost:11434").rstrip("/")
+LLM_API = (os.getenv("ISFT_CORE_LLM_API") or ("openai" if LLM_URL.endswith("/v1") else "ollama")).strip().lower()
+LLM_KEY = os.getenv("ISFT_CORE_LLM_KEY", "")
+LLM_ON = os.getenv("ISFT_CORE_LLM", "1").strip().lower() not in ("0", "false", "no", "off")
+OLLAMA = LLM_URL      # eski nom (moslik uchun)
 MODEL = os.getenv("ISFT_CORE_MODEL", "qwen3:8b")
+
+def _headers():
+    return {"Authorization": f"Bearer {LLM_KEY}"} if LLM_KEY else {}
 
 TOOLS = {
     "academic": (S.academic_overview, "o'zlashtirish, o'rtacha ball, davomat, pasaygan guruhlar"),
@@ -61,12 +80,30 @@ def route(q: str) -> list[str]:
 def strategic(q: str) -> bool:
     q = norm(q); return any(w in q for w in STRATEGIC)
 
+def _oa_body(messages, max_tokens, stream, fmt=None):
+    body = {"model": MODEL, "messages": messages, "stream": stream, "temperature": 0.1, "max_tokens": max_tokens}
+    if fmt == "json": body["response_format"] = {"type": "json_object"}
+    elif isinstance(fmt, dict): body["response_format"] = {"type": "json_schema", "json_schema": {"name": "javob", "schema": fmt}}
+    return body
+
 async def llm(messages):
     """Javobni token-token oqim ko'rinishida beradi."""
-    body = {"model": MODEL, "messages": messages, "stream": True, "think": False,
-            "keep_alive": "60m", "options": {"temperature": 0.1, "num_ctx": 6144, "num_predict": 320}}
-    async with httpx.AsyncClient(timeout=180) as c:
-        async with c.stream("POST", f"{OLLAMA}/api/chat", json=body) as r:
+    if not LLM_ON: raise RuntimeError("til modeli o'chirilgan")
+    async with httpx.AsyncClient(timeout=180, headers=_headers()) as c:
+        if LLM_API == "openai":
+            async with c.stream("POST", f"{LLM_URL}/chat/completions", json=_oa_body(messages, 320, True)) as r:
+                r.raise_for_status()
+                async for line in r.aiter_lines():
+                    if not line.startswith("data:"): continue
+                    data = line[5:].strip()
+                    if data == "[DONE]": break
+                    ch = (json.loads(data).get("choices") or [{}])[0]
+                    tok = (ch.get("delta") or {}).get("content")
+                    if tok: yield tok
+            return
+        body = {"model": MODEL, "messages": messages, "stream": True, "think": False,
+                "keep_alive": "60m", "options": {"temperature": 0.1, "num_ctx": 6144, "num_predict": 320}}
+        async with c.stream("POST", f"{LLM_URL}/api/chat", json=body) as r:
             r.raise_for_status()
             async for line in r.aiter_lines():
                 if line:
@@ -75,29 +112,72 @@ async def llm(messages):
                         yield tok
 
 async def llm_once(messages, fmt=None, max_tokens=700):
-    body = {"model": MODEL, "messages": messages, "stream": False, "think": False, "keep_alive": "60m",
-            "options": {"temperature": 0.1, "num_ctx": 6144, "num_predict": max_tokens}}
-    if fmt: body["format"] = fmt
-    async with httpx.AsyncClient(timeout=240) as c:
-        r = await c.post(f"{OLLAMA}/api/chat", json=body); r.raise_for_status()
+    if not LLM_ON: raise RuntimeError("til modeli o'chirilgan")
+    async with httpx.AsyncClient(timeout=240, headers=_headers()) as c:
+        if LLM_API == "openai":
+            r = await c.post(f"{LLM_URL}/chat/completions", json=_oa_body(messages, max_tokens, False, fmt)); r.raise_for_status()
+            return r.json()["choices"][0]["message"]["content"]
+        body = {"model": MODEL, "messages": messages, "stream": False, "think": False, "keep_alive": "60m",
+                "options": {"temperature": 0.1, "num_ctx": 6144, "num_predict": max_tokens}}
+        if fmt: body["format"] = fmt
+        r = await c.post(f"{LLM_URL}/api/chat", json=body); r.raise_for_status()
         return r.json()["message"]["content"]
 
 async def warmup():
     """Modelni xotiraga oldindan yuklab qo'yadi — birinchi javob tez chiqishi uchun."""
+    if not LLM_ON or LLM_API != "ollama":
+        await llm_available(); return
     try:
-        async with httpx.AsyncClient(timeout=120) as c:
-            await c.post(f"{OLLAMA}/api/chat", json={"model": MODEL, "messages": [{"role": "user", "content": "salom"}],
+        async with httpx.AsyncClient(timeout=120, headers=_headers()) as c:
+            await c.post(f"{LLM_URL}/api/chat", json={"model": MODEL, "messages": [{"role": "user", "content": "salom"}],
                          "stream": False, "think": False, "keep_alive": "60m", "options": {"num_ctx": 6144, "num_predict": 1}})
     except Exception:
         pass
 
-async def llm_available() -> bool:
+# «Tahlil rejimi» sabablari — foydalanuvchiga ko'rsatiladigan matn (dasturchi buyrug'i emas)
+TAHLIL = "Tizim «Tahlil rejimi»da ishlaydi: raqamlar va xulosalar qoidalar asosida hisoblanadi."
+REASONS = {
+    "off": "Til modeli administrator tomonidan o'chirilgan.",
+    "unreachable": "Til modeli serveri hozir ulanmagan.",
+    "no_model": "Til modeli serverida kerakli model yuklanmagan.",
+    "error": "Til modeli javob bermadi.",
+}
+_AVAIL = {"t": -1e9, "ok": False, "code": None}
+
+async def _probe() -> tuple[bool, str | None]:
+    if not LLM_ON: return False, "off"
+    want = MODEL.split(":")[0]
     try:
-        async with httpx.AsyncClient(timeout=2) as c:
-            r = await c.get(f"{OLLAMA}/api/tags")
-            return any(m["name"].startswith(MODEL.split(":")[0]) for m in r.json().get("models", []))
+        async with httpx.AsyncClient(timeout=2, headers=_headers()) as c:
+            if LLM_API == "openai":
+                r = await c.get(f"{LLM_URL}/models"); r.raise_for_status()
+                names = [m.get("id", "") for m in r.json().get("data", [])]
+            else:
+                r = await c.get(f"{LLM_URL}/api/tags"); r.raise_for_status()
+                names = [m.get("name", "") for m in r.json().get("models", [])]
     except Exception:
-        return False
+        return False, "unreachable"
+    return (True, None) if any(n.split("/")[-1].startswith(want) for n in names) else (False, "no_model")
+
+async def llm_available() -> bool:
+    """Natija qisqa muddat keshlanadi (har so'rovda tarmoq tekshiruvi bo'lmasin)."""
+    if time.monotonic() - _AVAIL["t"] > (30 if _AVAIL["ok"] else 15):
+        ok, code = await _probe()
+        _AVAIL.update(t=time.monotonic(), ok=ok, code=code)
+    return _AVAIL["ok"]
+
+async def llm_status() -> dict:
+    """/api/status → "ai". tools: har bir vosita uchun "ai" | "qoida" | None (None — vosita o'chiq, UI tugmani o'chiradi)."""
+    ok = await llm_available()
+    code = None if ok else (_AVAIL["code"] or "unreachable")
+    return {"ai": ok, "mode": "ai" if ok else "tahlil", "model": MODEL, "backend": LLM_API, "local": _is_local(),
+            "reason": None if ok else f"{REASONS[code]} {TAHLIL}", "reason_code": code,
+            "tools": {"chat": "ai" if ok else "qoida", "extract": "ai" if ok else "qoida", "contract": "ai" if ok else "qoida",
+                      "translate": "ai" if ok else None, "reply": "ai" if ok else None}}
+
+def _is_local() -> bool:
+    host = httpx.URL(LLM_URL).host or ""
+    return host in ("localhost", "127.0.0.1", "::1")
 
 async def classify(q: str) -> list[str]:
     """Kalit so'z topilmasa, modeldan qaysi ma'lumot kerakligini so'raymiz."""
@@ -217,10 +297,12 @@ async def answer(con, ctx: Ctx, q: str):
         data["alerts"] = S.alerts(con, ctx)
         audit(con, ctx, "strategik xulosa", "kpi", True, q)
     used = list(data.keys())
-    yield json.dumps({"sources": [TOOLS[n][1] if n in TOOLS else "proaktiv ogohlantirishlar" for n in used], "denied": denied}, ensure_ascii=False) + "\n"
+    use_llm = bool(data) and await llm_available()
+    yield json.dumps({"sources": [TOOLS[n][1] if n in TOOLS else "proaktiv ogohlantirishlar" for n in used], "denied": denied,
+                      "source": "ai" if use_llm else "qoida"}, ensure_ascii=False) + "\n"
     if not data and denied:
         yield "\n".join(denied); return
-    if not await llm_available():
+    if not use_llm:
         yield fallback_answer(data, denied); return
     payload = json.dumps(trim(data, 4), ensure_ascii=False, default=str)
     if len(payload) > 1800:   # katta JSON promptni sekinlashtiradi — faktlar yetarli
@@ -249,6 +331,10 @@ def _parse_date(s):
         return None   # "31.02" kabi mavjud bo'lmagan sana
 
 async def extract_tasks(transcript: str) -> list[dict]:
+    return (await extract_tasks_result(transcript))["tasks"]
+
+async def extract_tasks_result(transcript: str) -> dict:
+    """{"tasks": [...], "source": "ai" | "qoida"} — model ishlamasa, bayonnoma qoidalar (regex) bilan ajratiladi."""
     if await llm_available():
         try:
             out = await llm_once([{"role": "system", "content":
@@ -258,7 +344,7 @@ async def extract_tasks(transcript: str) -> list[dict]:
                 {"role": "user", "content": transcript}], fmt="json")
             tasks = json.loads(out).get("tasks", [])
             tasks = [t for t in tasks if t.get("text")]
-            if tasks: return tasks
+            if tasks: return {"tasks": tasks, "source": "ai"}
         except Exception:
             pass
     out = []
@@ -272,12 +358,13 @@ async def extract_tasks(transcript: str) -> list[dict]:
             if m and ACTION_RE.search(m["text"]):   # muddatsiz, lekin aniq topshiriq ("... bir hafta ichida yopish")
                 days = 7 if "hafta" in m["text"].lower() else 14
                 out.append({"assignee": m["who"].strip(), "text": m["text"].strip().rstrip("."), "due": (S.TODAY + dt.timedelta(days=days)).isoformat()})
-    return out
+    return {"tasks": out, "source": "qoida"}
 
 WHO_RE = re.compile(r"^(?P<who>[A-ZА-Я][\w'ʻ’\- ]{2,60}?)\s*:\s*(?P<text>.+)$")
 ACTION_RE = re.compile(r"\w+(sin|ish|ishni|ishsin|ilsin|asin)\b", re.I)
 
-async def doc_assist(text: str, mode: str) -> str:
+async def doc_assist_result(text: str, mode: str) -> dict:
+    """{"result": str, "ai": bool, "source": "ai"|"qoida"|None, "reason": str (ai=false bo'lsa), "mode": ...}"""
     prompts = {
         "translate": "Quyidagi xatni o'zbek tiliga (lotin) rasmiy uslubda tarjima qil. Agar matn o'zbekcha bo'lsa, ingliz tiliga rasmiy tarjima qil. Faqat tarjimani yoz.",
         "contract": "Sen oliy ta'lim muassasasi yuristiga yordamchisan. Quyidagi shartnoma matnidan e'tibor talab qiladigan bandlarni top: "
@@ -286,6 +373,57 @@ async def doc_assist(text: str, mode: str) -> str:
                     "O'zbek tilida (lotin). Oxirida: 'Yakuniy qarorni yurist qabul qiladi.'",
         "reply": "Quyidagi xorijiy hamkor xatiga institut nomidan qisqa, xushmuomala rasmiy javob loyihasini ingliz tilida yoz. So'ng o'zbekcha qisqa mazmunini ber.",
     }
-    if not await llm_available():
-        return "Mahalliy AI modeli ishga tushmagan (Ollama). `ollama serve` buyrug'ini ishga tushiring."
-    return await llm_once([{"role": "system", "content": prompts[mode]}, {"role": "user", "content": text[:12000]}])
+    code = None
+    if await llm_available():
+        try:
+            out = await llm_once([{"role": "system", "content": prompts[mode]}, {"role": "user", "content": text[:12000]}])
+            return {"result": out, "ai": True, "source": "ai", "mode": mode}
+        except Exception:
+            code = "error"
+    code = code or _AVAIL["code"] or "unreachable"
+    reason = f"{REASONS[code]} {TAHLIL}"
+    if mode == "contract":   # shartnoma: kalit so'zlar bo'yicha qoidaviy tekshiruv
+        return {"result": contract_rules(text), "ai": False, "source": "qoida", "reason": reason, "mode": mode}
+    what = {"translate": "Tarjima", "reply": "Javob loyihasi"}[mode]
+    return {"result": f"{what} hozircha mavjud emas. {REASONS[code]} Bu vosita til modelini talab qiladi va «Tahlil rejimi»da o'chirilgan. "
+                      "Keyinroq qayta urinib ko'ring yoki matnni xalqaro bo'limga yuboring.",
+            "ai": False, "source": None, "reason": reason, "mode": mode}
+
+# ---------- Shartnoma: qoidaviy tekshiruv (til modeli yo'q paytda) ----------
+CONTRACT_RULES = [
+    (r"jarima|penya|neustoyka|penalt|liquidated damages", "jarima/penya bandi",
+     "miqdori va yuqori chegarasini aniqlang, ikki tomonga teng bo'lsin"),
+    (r"bir tomonlama|unilateral|terminate|bekor qil", "bekor qilish sharti",
+     "ogohlantirish muddati kamida 30 kun va ikki tomonga teng bo'lsin"),
+    (r"intellektual|mualliflik|dasturiy ta'minot|intellectual property|copyright|mulki hisoblanadi", "intellektual mulk",
+     "institut yaratilgan natijalardan foydalanish huquqini saqlab qolsin"),
+    (r"oldindan to'la|avans|prepay|in advance|advance payment", "oldindan to'lov",
+     "to'lov bosqichma-bosqich, bajarilgan ish dalolatnomasi bo'yicha bo'lsin"),
+    (r"javobgar|liabilit|indemn|zararni qopla|kompensatsiya", "javobgarlik",
+     "javobgarlik chegarasi va istisnolarini aniq yozing"),
+    (r"nizo|arbitraj|arbitration|governing law|jurisdiction|sudida|qonunchiligi", "nizolarni hal qilish joyi",
+     "O'zbekiston Respublikasi qonunchiligi va sudi ko'rsatilsin"),
+    (r"shaxsiy ma'lumot|personal data|uchinchi shaxs|third part|maxfiy|confidential", "ma'lumotlar va maxfiylik",
+     "shaxsiy ma'lumotlar O'zbekistondan tashqariga chiqmasligi yozilsin"),
+    (r"avtomatik uzaytiril|automatically renew|auto-renew|muddatsiz", "muddat va uzaytirish",
+     "avtomatik uzaytirish o'rniga yozma kelishuv talab qilinsin"),
+]
+
+def contract_rules(text: str) -> str:
+    """Kalit so'zlar bo'yicha e'tibor talab qiladigan bandlar. Til modeli emas — topilmagan xavf bo'lishi mumkin."""
+    rows, seen = [], set()
+    for line in [x.strip() for x in re.split(r"\n+|(?<=[.;])\s+(?=\d+\.\d+)", text or "") if x.strip()]:
+        n = re.match(r"^(\d+(?:\.\d+)*)\.?\s", line)
+        low = norm(line)
+        for pat, what, tip in CONTRACT_RULES:
+            if what in seen or not re.search(pat, low): continue
+            seen.add(what)
+            rows.append(f"⚠ {n.group(1) if n else 'band'}: {what} — tekshirish kerak → {tip}.")
+        if len(rows) >= 6: break
+    head = "Qoidalar asosida tekshiruv (til modeli ulanmagan): kalit so'zlar bo'yicha topilgan bandlar. Barcha xavflar topilmagan bo'lishi mumkin."
+    body = "\n".join(rows) if rows else "Kalit so'zlar bo'yicha xavfli band topilmadi."
+    return f"{head}\n{body}\nYakuniy qarorni yurist qabul qiladi."
+
+async def doc_assist(text: str, mode: str) -> str:
+    """Eski (faqat matn) interfeys — moslik uchun."""
+    return (await doc_assist_result(text, mode))["result"]

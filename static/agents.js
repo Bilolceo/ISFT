@@ -4,7 +4,7 @@
    Global: renderAgents(), briefCardHtml()
    Uslublar: agents.css (shu fayldan ulanadi)
    ===================================================================== */
-const AGS = {lvl: null, open: new Set()};
+const AGS = {lvl: null, open: new Set(), focus: null};   /* focus — {view:"agents", action:id} havolasidan: shu taklif ochiladi */
 if (!document.querySelector('link[href="agents.css"]')) document.head.insertAdjacentHTML("beforeend", '<link rel="stylesheet" href="agents.css">');
 
 /* qo'shimcha ikonkalar (app.js da bo'lmasa) */
@@ -103,6 +103,8 @@ async function renderAgents() {
   if (!el.innerHTML) el.innerHTML = `<p class="muted">Yuklanmoqda…</p>`;
   const d = await J("/api/agents");
   AGS.lvl = d.levels;
+  const focus = AGS.focus; AGS.focus = null;
+  if (focus && d.pending.some(p => p.id === +focus)) AGS.open.add(+focus);
   const L = d.levels, ro = d.read_only, mine = d.pending.filter(p => p.can_approve);
   let h = `<div class="head"><div><h2>AI agentlar markazi</h2><span class="muted">ISFT Core ichidagi ixtisoslashgan yordamchilar · ${dmy(d.today)}</span></div>
     ${d.can_run ? `<button class="btn" id="agRun">${ico("refresh", 16)}Hozir ishga tushirish</button>` : ""}</div>
@@ -129,7 +131,13 @@ async function renderAgents() {
     const r = await J(`/api/agents/actions/${id}/${ok ? "approve" : "reject"}`, {method: "POST"});
     AGS.open.delete(+id); toast(r.result || "Bajarildi"); await after();
   });
-  el.querySelectorAll("[data-ag-ok]").forEach(b => b.onclick = () => act(b, true));
+  /* Tasdiqlash — avval ko'rib chiqish: birinchi bosishda taklif ochiladi («Tasdiqlansa: …») va tugma «Ha, tasdiqlash»ga o'tadi */
+  el.querySelectorAll("[data-ag-ok]").forEach(b => b.onclick = () => {
+    const it = b.closest(".ag-it");
+    if (!b.dataset.armed && it && !it.classList.contains("open")) { it.classList.add("open"); it.querySelector("[data-ag-tog]")?.setAttribute("aria-expanded", "true"); AGS.open.add(+b.dataset.agOk); }
+    if (typeof arm === "function" && !arm(b, "Ha, tasdiqlash", 8000)) return;
+    act(b, true);
+  });
   el.querySelectorAll("[data-ag-no]").forEach(b => b.onclick = () => act(b, false));
   el.querySelectorAll("[data-ag-tog]").forEach(b => b.onclick = () => {
     const it = b.closest(".ag-it"), id = +b.dataset.agTog, on = it.classList.toggle("open");
@@ -154,6 +162,11 @@ async function renderAgents() {
         AGS.open.clear(); toast(`${n} ta taklif tasdiqlandi${n < mine.length ? ` (${mine.length - n} tasi bajarilmadi)` : ""}`); await after();
       }, "Tasdiqlanmoqda…");
     };
+  }
+  if (focus) {   /* havoladan kelgan taklif: ko'rinadigan joyga va ajratib ko'rsatiladi */
+    const it = el.querySelector(`.ag-it[data-id="${+focus}"]`);
+    if (it) { it.scrollIntoView({block: "center", behavior: "smooth"}); it.classList.add("xt-flash"); setTimeout(() => it.classList.remove("xt-flash"), 2600); }
+    else toast("Bu taklif allaqachon ko'rib chiqilgan");
   }
 }
 

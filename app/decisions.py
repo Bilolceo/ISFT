@@ -154,6 +154,8 @@ def _add_cols(con, table, cols):
             con.execute(f"ALTER TABLE {table} ADD COLUMN {name} {typ}")
 
 def init(con):
+    global _con
+    if _con is None: _con = con     # bind() dan oldin (agent_hub.init skanerlari) ham ishlashi uchun — main.py: DEC.init birinchi chaqiriladi
     _add_cols(con, "meetings", [("status", "TEXT"), ("minutes", "TEXT"), ("source", "TEXT"), ("created_by", "INT"),
                                 ("created_at", "TEXT"), ("confirmed_at", "TEXT"), ("confirmed_by", "INT"), ("incident_id", "INT"),
                                 ("extract_note", "TEXT")])
@@ -166,6 +168,8 @@ def init(con):
     CREATE INDEX IF NOT EXISTS ix_task_msgs ON task_msgs(task_id);
     CREATE INDEX IF NOT EXISTS ix_task_log ON task_log(task_id);
     """)
+    _add_cols(con, "tasks", [("review", "TEXT"), ("review_note", "TEXT"), ("review_at", "TEXT"), ("review_by", "INT")])   # qabul/qaytarish (directives bilan umumiy)
+    cleanup_junk(con)
     have = {r[0] for r in con.execute("SELECT role FROM users").fetchall()}
     if have:   # bo'sh baza (seed boshlanishi) emas
         for name, role in DEMO_USERS:
@@ -176,6 +180,92 @@ def init(con):
 def bind(con, ctx_fn):
     global _con, _ctx
     _con, _ctx = con, ctx_fn
+
+def cleanup_junk(con) -> int:
+    """tests/test_regressiya.py avvalgi versiyalari qoldirgan sinov majlisi ("Test", matn "t": "x"/"y" topshiriqlari) — idempotent o'chiriladi."""
+    ids = [r[0] for r in con.execute("SELECT id FROM meetings WHERE title='Test' AND transcript='t'").fetchall()]
+    if not ids: return 0
+    q = ",".join(map(str, ids))
+    tids = [r[0] for r in con.execute(f"SELECT id FROM tasks WHERE meeting_id IN ({q})").fetchall()]
+    if tids:
+        tq = ",".join(map(str, tids))
+        for tb in ("task_msgs", "task_log"):
+            try: con.execute(f"DELETE FROM {tb} WHERE task_id IN ({tq})")
+            except Exception: pass
+        con.execute(f"DELETE FROM tasks WHERE id IN ({tq})")
+    con.execute(f"DELETE FROM meetings WHERE id IN ({q})")
+    con.commit()
+    return len(ids)
+
+# ---------------------------------------------------------------------------------------------
+# Eski (bo'limsiz) majlis topshiriqlari → yagona oqim. Avval /api/meetings orqali kiritilgan topshiriqlar faqat rol bo'yicha
+# yozilgan va «Bajarildi» tugmasi bilan (rektor/kengash ham boshqaning topshirig'ini) natijasiz yopilardi. Endi har biri bo'limga
+# (Portal org_units) bog'lanadi, majlis «arxiv» manbali qaror sifatida ochiladi: holatni faqat ijrochi (bo'lim rahbari yoki
+# biriktirilgan xodim) natija bilan yakunlaydi, rektor qabul qiladi yoki qaytaradi. main.py dagi eski /api/tasks/{id}/status
+# bo'limli topshiriqni rad etadi — shuning uchun ko'chirishdan keyin bitta yakunlash oqimi qoladi. Idempotent.
+# ---------------------------------------------------------------------------------------------
+LEGACY_SOURCE = "arxiv"
+
+def _legacy_target(t, heads_role: dict) -> str | None:
+    role = t.get("assignee_role") or ""
+    if role in MULTI_UNIT_ROLES:
+        lu = legacy_unit(t)
+        if lu: return task_key(lu)
+    if role not in MULTI_UNIT_ROLES:
+        cands = _units_in(t.get("assignee") or "")
+        if cands: return cands[0]
+    ks = [k for k, r in heads_role.items() if r == role]
+    if len(ks) == 1: return task_key(ks[0])
+    if role in UNIT_OF_ROLE: return UNIT_OF_ROLE[role]
+    return "rektorat" if "rektorat" in registry() else None
+
+def migrate_legacy(con=None) -> int:
+    con = con or _con
+    if con is None or _con is None: return 0
+    # server starti tartibi: Portal tuzilmasi (org_units) va topshiriqlar kengaytmasi (directives.init → tasks.origin) hali yo'q bo'lsa —
+    # keyingi chaqiruvda (ular tayyor bo'lgach) bajariladi
+    if not db.one(con, "SELECT 1 x FROM sqlite_master WHERE type='table' AND name='org_units'"): return 0
+    if "origin" not in {r[1] for r in con.execute("PRAGMA table_info(tasks)").fetchall()}: return 0
+    rows = db.rows(con, """SELECT t.* FROM tasks t JOIN meetings m ON m.id=t.meeting_id
+                           WHERE t.unit IS NULL AND t.status!='qoralama' AND COALESCE(t.origin,'')!='topshiriq'""")
+    if not rows: return 0
+    heads_role = {r["key"]: r["role"] for r in db.rows(con, "SELECT o.key, u.role FROM org_units o JOIN users u ON u.id=o.head_user")}
+    now, n, mids = _iso(_now()), 0, set()
+    for t in rows:
+        unit = _legacy_target(t, heads_role)
+        if not unit: continue
+        who = None
+        if t.get("assignee_role") == "oqituvchi":      # o'qituvchi — bo'lim rahbari emas: shu kafedradagi yagona o'qituvchi akkaunti bo'lsa, unga biriktiriladi
+            us = db.rows(con, "SELECT id FROM users WHERE role='oqituvchi' AND unit=? AND COALESCE(active,1)=1", (org_key(unit),))
+            if len(us) == 1: who = us[0]["id"]
+        st = t["status"] if t["status"] in ("yangi", "jarayonda", "bajarildi") else "yangi"
+        # eski "mas'ul" matni — lavozim/bo'lim nomi (masalan, "Talabalar bilan ishlash bo'limi"), shaxs emas: endi bo'lim (unit) manba;
+        # matn tarixga yoziladi, ekranda bo'lim nomi va biriktirilgan xodim ko'rsatiladi
+        con.execute("""UPDATE tasks SET unit=?, assignee_user=COALESCE(assignee_user, ?), assignee=CASE WHEN ? IS NULL THEN '' ELSE assignee END,
+                       status=?, due_at=COALESCE(due_at, due),
+                       review=CASE WHEN ?='bajarildi' THEN COALESCE(review,'qabul') ELSE review END, updated_at=COALESCE(updated_at, ?) WHERE id=? AND unit IS NULL""",
+                    (unit, who, who, st, st, now, t["id"]))
+        con.execute("INSERT INTO task_log(task_id,ts,user_id,user_name,action,detail) VALUES(?,?,?,?,?,?)",
+                    (t["id"], now, 0, "ISFT Core", "yagona ijro oqimiga o'tkazildi",
+                     f"{unit_name(unit) or unit} navbatiga · avvalgi mas'ul: {t.get('assignee') or '—'} · avvalgi holat: {t['status']}"))
+        mids.add(t["meeting_id"]); n += 1
+    if mids:
+        q = ",".join(map(str, mids))
+        con.execute(f"""UPDATE meetings SET source=?, status='tasdiqlangan', confirmed_at=COALESCE(confirmed_at, date)
+                        WHERE id IN ({q}) AND source IS NULL""", (LEGACY_SOURCE,))
+    con.commit()
+    return n
+
+def legacy_pending() -> bool:
+    if not _con or "origin" not in {r[1] for r in _con.execute("PRAGMA table_info(tasks)").fetchall()}: return False   # directives.init hali o'tmagan
+    return bool(_con.execute("""SELECT 1 FROM tasks WHERE unit IS NULL AND meeting_id IS NOT NULL AND status!='qoralama'
+                                         AND COALESCE(origin,'')!='topshiriq' LIMIT 1""").fetchone())
+
+def ensure_migrated():
+    try:
+        if legacy_pending(): migrate_legacy(_con)
+    except Exception as e:
+        print("decisions.migrate_legacy:", repr(e))
 
 # ---------------------------------------------------------------------------------------------
 # Ruxsatlar
@@ -243,6 +333,13 @@ def can_act(c: Ctx, t) -> bool:
     """Holat/natija kiritish: bo'lim rahbari yoki biriktirilgan xodim."""
     if t["status"] == "qoralama" or not t.get("unit"): return False
     return is_head(c, t["unit"]) or t.get("assignee_user") == c.user["id"]
+
+REVIEWERS = ("rektor",)     # majlis topshirig'i natijasini qabul qiladi / qaytaradi (kuzatuv kengashi — faqat ko'radi)
+
+def can_review(c: Ctx, t) -> bool:
+    """Majlis topshirig'i natijasini qabul qilish/qaytarish: rektor; o'z natijasini o'zi qabul qilmaydi."""
+    return (t.get("meeting_id") is not None and (t.get("origin") or "") != "topshiriq" and t["status"] == "bajarildi"
+            and t.get("review") == "kutilmoqda" and c.role.key in REVIEWERS and t.get("result_by") != c.user["id"])
 
 def can_chat(c: Ctx, t) -> bool:
     if t["status"] == "qoralama": return False
@@ -469,10 +566,12 @@ def task_view(c: Ctx, t, by_id=None):
                       "result": dep.get("result") if can_view(c, dep) else None} if dep else None,
               "blocked": bool(dep and dep["status"] != "bajarildi"),
               "can_act": can_act(c, t), "can_assign": is_head(c, t.get("unit")) and t["status"] not in ("qoralama", "bajarildi"),
-              "can_chat": can_chat(c, t)})
+              "can_chat": can_chat(c, t), "review": t.get("review"), "review_note": t.get("review_note"), "review_at": t.get("review_at"),
+              "review_by": _short(_uname(t.get("review_by"))), "can_review": can_review(c, t)})
     return v
 
 def decision(c: Ctx, mid: int, audit=True):
+    ensure_migrated()
     m = db.one(_con, "SELECT * FROM meetings WHERE id=?", (mid,))
     if not m or not m.get("source"): raise HTTPException(404, "Qaror topilmadi")
     ts = db.rows(_con, "SELECT * FROM tasks WHERE meeting_id=? ORDER BY pos, id", (mid,))
@@ -511,6 +610,7 @@ def _staff_for(c: Ctx):
 
 def summary_list(c: Ctx):
     """Qarorlar ro'yxati (rektor paneli va topshiriqlar bo'limi uchun)."""
+    ensure_migrated()
     rows = db.rows(_con, "SELECT * FROM meetings WHERE source IS NOT NULL ORDER BY id DESC LIMIT 20")
     out = []
     for m in rows:
@@ -557,13 +657,18 @@ def _secretary(c: Ctx):
     if c.role.key != SECRETARY:
         raise AccessDenied("⛔ Majlis materiali va bayonnomani rektorat kotibi kiritadi va tasdiqlaydi.")
 
+def demo_tools() -> bool:
+    """«Demoni qayta boshlash» kabi demo vositalari — faqat ISFT_CORE_DEMO_TOOLS=1 bo'lsa (oddiy ish rejimida yashirin va 403)."""
+    import os
+    return os.getenv("ISFT_CORE_DEMO_TOOLS", "") == "1"
+
 @router.get("/api/dec/capabilities")
 def capabilities(request: Request):
     C(request)
     return {"audio": False,
             "audio_note": "Ovozdan matnga o'tkazish (lokal STT, masalan whisper.cpp) bu serverda o'rnatilmagan. "
                           "Demo uchun namunaviy transkript ishlatiladi; ovoz tashqi servisga yuborilmaydi.",
-            "sample": demo_transcript(dt.date.today())}
+            "sample": demo_transcript(dt.date.today()), "demo_tools": demo_tools()}
 
 @router.get("/api/dec/units")
 def units_(request: Request):
@@ -737,6 +842,7 @@ def update(tid: int, body: Update, request: Request):
     if t["status"] == "bajarildi": raise HTTPException(409, "Topshiriq allaqachon yakunlangan")
     res = (body.result or "").strip()
     now = _iso(_now())
+    if body.status == "bajarildi" and not res: raise HTTPException(400, "Yakunlash uchun natijani yozing")   # yozishdan oldin (yarim tranzaksiya qolmasin)
     if not t.get("assignee_user"):   # rahbar o'zi bajarayotgan bo'lsa — ijrochi sifatida o'zi yoziladi
         _con.execute("UPDATE tasks SET assignee_user=?, assignee=? WHERE id=?", (c.user["id"], _short(c.user["full_name"]), tid))
         _log(tid, c, "o'zi ijroga oldi")
@@ -746,8 +852,9 @@ def update(tid: int, body: Update, request: Request):
             d = db.one(_con, "SELECT status, unit FROM tasks WHERE id=?", (t["depends_on"],))
             if d and d["status"] != "bajarildi":
                 raise HTTPException(409, f"Avval bog'liq topshiriq ({unit_name(d['unit']) or 'oldingi'}) natijasi kiritilishi kerak")
-        _con.execute("UPDATE tasks SET status='bajarildi', result=?, result_at=?, result_by=?, updated_at=? WHERE id=? AND status!='bajarildi'",
-                     (res, now, c.user["id"], now, tid))
+        rv = "qabul" if c.role.key in REVIEWERS else "kutilmoqda"     # rektor o'zi bajargan bo'lsa — qabul kutilmaydi
+        _con.execute("""UPDATE tasks SET status='bajarildi', result=?, result_at=?, result_by=?, updated_at=?, review=?, review_note=NULL
+                        WHERE id=? AND status!='bajarildi'""", (res, now, c.user["id"], now, rv, tid))
         _log(tid, c, "yakunlandi", res[:200])
         if body.notify_incident:
             m = db.one(_con, "SELECT incident_id FROM meetings WHERE id=?", (t["meeting_id"],))
@@ -765,6 +872,52 @@ def update(tid: int, body: Update, request: Request):
         else:
             _con.execute("UPDATE tasks SET updated_at=? WHERE id=?", (now, tid))
     _con.commit(); return {"ok": True}
+
+class ReviewIn(BaseModel):
+    decision: str                 # qabul | qaytarish
+    note: str = Field("", max_length=2000)
+
+@router.post("/api/dec/task/{tid}/review")
+def review(tid: int, body: ReviewIn, request: Request):
+    """Majlis topshirig'i natijasini qabul qilish yoki izoh bilan qayta ishlashga qaytarish (directives bilan bir xil oqim)."""
+    c = C(request); _guard(c, "topshiriq natijasini ko'rib chiqish", f"#{tid} → {body.decision}")
+    t = _task(tid)
+    if t.get("origin") == "topshiriq":
+        from . import directives as DIR
+        return DIR.do_review(c, tid, body.decision, body.note)
+    if c.role.key not in REVIEWERS:
+        rbac.audit(_con, c, "topshiriq natijasini ko'rib chiqish", TASKS, False, f"#{tid}")
+        raise AccessDenied("⛔ Majlis topshirig'i natijasini rektor qabul qiladi yoki qaytaradi. So'rov audit jurnaliga yozildi.")
+    if t["status"] != "bajarildi" or t.get("review") != "kutilmoqda": raise HTTPException(409, "Natija hali yuborilmagan yoki allaqachon ko'rib chiqilgan")
+    if t.get("result_by") == c.user["id"]: raise HTTPException(409, "O'z natijangizni o'zingiz qabul qila olmaysiz")
+    now, note = _iso(_now()), body.note.strip()
+    if body.decision == "qabul":
+        _con.execute("UPDATE tasks SET review='qabul', review_note=?, review_at=?, review_by=?, updated_at=? WHERE id=?", (note or None, now, c.user["id"], now, tid))
+        _log(tid, c, "qabul qilindi", note)
+    elif body.decision == "qaytarish":
+        if not note: raise HTTPException(400, "Qaytarish sababini yozing")
+        _con.execute("""UPDATE tasks SET status='jarayonda', review='qaytarildi', review_note=?, review_at=?, review_by=?, updated_at=? WHERE id=?""",
+                     (note, now, c.user["id"], now, tid))
+        _log(tid, c, "qayta ishlashga qaytarildi", note)
+    else:
+        raise HTTPException(400, "Noto'g'ri qaror")
+    _con.commit()
+    return {"ok": True}
+
+def review_rows(c: Ctx) -> list[dict]:
+    """Majlis topshiriqlari: natijasi qabulimni kutayotganlar (rektor) va menga qaytarilganlar (ijrochi) — mywork/bildirishnomalar uchun."""
+    out = []
+    if c.role.key in REVIEWERS:
+        out += [dict(t, _kind="review") for t in db.rows(_con, """SELECT t.*, m.title meeting FROM tasks t JOIN meetings m ON m.id=t.meeting_id
+                     WHERE t.status='bajarildi' AND t.review='kutilmoqda' AND COALESCE(t.origin,'')!='topshiriq' AND COALESCE(t.result_by,0)!=?
+                     ORDER BY t.result_at""", (c.user["id"],))]
+    for t in db.rows(_con, """SELECT t.*, m.title meeting FROM tasks t JOIN meetings m ON m.id=t.meeting_id
+                              WHERE t.review='qaytarildi' AND t.status!='bajarildi' AND COALESCE(t.origin,'')!='topshiriq' AND t.unit IS NOT NULL"""):
+        if can_act(c, t): out.append(dict(t, _kind="returned"))
+    return out
+
+def task_link(t) -> dict:
+    return {"view": "tasks", "meeting": t["meeting_id"], "task": t["id"]}
 
 class Msg(BaseModel):
     text: str = Field(..., min_length=1, max_length=2000)
@@ -787,9 +940,12 @@ def post_msg(tid: int, body: Msg, request: Request):
 def demo_reset(request: Request):
     """Demoni boshlang'ich holatga qaytarish: shu oqimda yaratilgan qarorlar va LMS hodisasi xabari."""
     c = C(request)
+    if not demo_tools():
+        rbac.audit(_con, c, "demo ssenariysini qayta boshlash", TASKS, False, "demo vositalari o'chiq")
+        raise AccessDenied("⛔ Demo vositalari o'chirilgan (ISFT_CORE_DEMO_TOOLS=1 emas). So'rov audit jurnaliga yozildi.")
     if c.role.key not in (SECRETARY, "rektor"): raise AccessDenied("⛔ Demoni faqat kotib yoki rektor qayta boshlaydi.")
     rbac.audit(_con, c, "demo ssenariysini qayta boshlash", TASKS, True)
-    ms = db.rows(_con, "SELECT id, incident_id FROM meetings WHERE source IS NOT NULL")
+    ms = db.rows(_con, "SELECT id, incident_id FROM meetings WHERE source IN ('demo','manual')")   # arxiv (eski majlislar) o'chirilmaydi
     for m in ms:
         ids = [r["id"] for r in db.rows(_con, "SELECT id FROM tasks WHERE meeting_id=?", (m["id"],))]
         notices = [r["detail"] for r in db.rows(_con, f"SELECT detail FROM task_log WHERE action='talabalarga yuborildi' AND task_id IN ({','.join(map(str, ids)) or '0'})")]

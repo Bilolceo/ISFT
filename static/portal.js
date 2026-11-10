@@ -60,8 +60,17 @@ const ptUnit = k => (PT.units?.units || []).find(u => u.key === k);
 const ptShortUnit = n => String(n || "").replace(/ kafedrasi$/, " kaf.").replace(/ fakulteti$/, " fak.");
 
 /* ---------- menyudagi belgi (app.js badges() chaqiradi) ---------- */
+/* menyu belgisi — yagona qoida: «mendan harakat kutilayotgan» xatlar (menga biriktirilgan javobsiz, rahbar uchun — bo'limga kelgan
+   biriktirilmagan, men ko'rib chiqishim kerak bo'lgan javob, qaytarilgan javob); o'qilmaganlar soni — sahifa ichidagi yorliqlarda */
 async function portalBadge(set) {
-  try { const s = await J("/api/portal/summary"); PT.sum = s; set("portal", s.unread); if (document.querySelector("#v-portal:not(.hidden)")) ptTabCounts(); } catch (e) {}
+  try {
+    const s = await J("/api/portal/summary"); PT.sum = s;
+    const tip = `Harakatingizni kutayotgan xatlar: ${s.action || 0}` + (s.assigned_to_me ? ` · sizga biriktirilgan: ${s.assigned_to_me}` : "")
+      + (s.to_review ? ` · ko'rib chiqish: ${s.to_review}` : "") + (s.inbox_returned ? ` · qaytarilgan: ${s.inbox_returned}` : "")
+      + (s.unread ? ` · o'qilmagan: ${s.unread}` : "");
+    set("portal", s.action || 0, tip);
+    if (document.querySelector("#v-portal:not(.hidden)")) ptTabCounts();
+  } catch (e) {}
 }
 function ptTabCounts() {
   const em = document.querySelector('#v-portal .pn-tab[data-pt="mail"] em');
@@ -151,7 +160,8 @@ function ptLeadStrip(c) {
   const t = PT.box === "all" ? `Rahbariyat nazorati: <b>${c.all_pending || 0}</b> ta xat javob kutmoqda${c.all_overdue ? `, <b class="bad">${c.all_overdue}</b> tasi muddatdan o'tgan` : ""}`
     : PT.box === "control" ? `Rezolyutsiyangiz bilan nazoratda: <b>${c.control || 0}</b> ta xat${c.control_overdue ? `, <b class="bad">${c.control_overdue}</b> tasi muddatdan o'tgan` : ""}`
     : PT.box === "area" ? `Yo'nalishingizdagi bo'limlar: <b>${c.area_pending || 0}</b> ta xat javob kutmoqda`
-    : PT.box === "archive" ? `Yopilgan, qaytarib olingan va siz arxivlagan yozishmalar` : PT.box === "drafts" ? `Yozilayotgan xatlar avtomatik saqlanadi` : "";
+    : PT.box === "archive" ? `Yopilgan, qaytarib olingan va siz arxivlagan yozishmalar` : PT.box === "drafts" ? `Yozilayotgan xatlar avtomatik saqlanadi`
+    : PT.units?.member_only && ["inbox", "sent"].includes(PT.box) ? `Faqat sizga biriktirilgan, o'zingiz yuborgan yoki qatnashgan xatlar. Bo'limga kelgan boshqa xatlarni bo'lim rahbari taqsimlaydi.` : "";
   return t ? `<div class="pt-lead">${ico(PT.box === "archive" ? "folder" : PT.box === "drafts" ? "pen" : "shield", 14)}<span>${t}</span></div>` : "";
 }
 async function ptMail() {
@@ -232,11 +242,17 @@ function ptDraftItems() {
 function ptBindItems() {
   document.querySelectorAll("#ptItems [data-t]").forEach(x => x.onclick = () => { ptLeaveCompose(); PT.act = null; ptOpen(+x.dataset.t); });
   document.querySelectorAll("#ptItems [data-dr]").forEach(x => x.onclick = () => ptOpenDraft(+x.dataset.dr));
-  document.querySelectorAll("#ptItems [data-drx]").forEach(x => x.onclick = async () => {
-    const id = +x.dataset.drx; if (!(await ptPost(`/api/portal/drafts/${id}`, {}, "DELETE"))) return;
-    Object.keys(PT.dids).forEach(k => { if (PT.dids[k] === id) delete PT.dids[k]; });
-    if (PT.draftId === id) { clearTimeout(PT.dt); PT.dt = null; PT.draftId = null; if (PT.compose) { PT.compose = false; PT.cdraft = null; PT.cs++; document.querySelector(".pt-mail")?.classList.remove("has-open"); $("#ptRead").innerHTML = ptReadEmpty(PT.list.counts); } }
-    toast("Qoralama o'chirildi"); await ptLoadList(); ptRefreshBoxCounts(); ptDrawItems();
+  /* qoralamani o'chirish — qaytarib bo'lmaydi: darhol yashiriladi, 5 soniya ichida «Bekor qilish» mumkin (undoToast), keyin o'chiriladi */
+  document.querySelectorAll("#ptItems [data-drx]").forEach(x => x.onclick = () => {
+    const id = +x.dataset.drx, row = x.closest(".pt-drw"); if (row) row.hidden = true;
+    const del = async () => {
+      if (!(await ptPost(`/api/portal/drafts/${id}`, {}, "DELETE"))) { if (row?.isConnected) row.hidden = false; return; }
+      Object.keys(PT.dids).forEach(k => { if (PT.dids[k] === id) delete PT.dids[k]; });
+      if (PT.draftId === id) { clearTimeout(PT.dt); PT.dt = null; PT.draftId = null; if (PT.compose) { PT.compose = false; PT.cdraft = null; PT.cs++; document.querySelector(".pt-mail")?.classList.remove("has-open"); $("#ptRead").innerHTML = ptReadEmpty(PT.list.counts); } }
+      await ptLoadList(); ptRefreshBoxCounts(); if (PT.box === "drafts") ptDrawItems();
+    };
+    if (typeof undoToast === "function") undoToast("Qoralama o'chirildi", del, {onUndo: () => { if (row?.isConnected) row.hidden = false; }});
+    else del();
   });
   const m = $("#ptMoreL");
   if (m) m.onclick = () => busy(m, async () => { await ptLoadList(true); ptDrawItems(); }, "Yuklanmoqda…");
@@ -374,6 +390,7 @@ async function ptOpen(id, keep) {
       <div class="pt-th-sub"><b>${esc(d.from_unit_name)}</b>${d.from_name ? ` · ${esc(d.from_name)}` : ""} · ${ptFull(d.created_at)}${W.length ? `<span class="pt-watch">${ico("eye", 13)}Nazoratda: ${esc(W.map(w => ptShortUnit(w.name)).join(", "))}</span>` : ""}</div>
       <div class="pt-rcs">${rec ? `<span class="pt-rcs-l">Kimga edi:</span>${(d.recalled?.recipients || []).map(x => `<span class="pt-rc off" title="${esc(x.name)} — qaytarib olingan"><i></i>${esc(ptShortUnit(x.name))}</span>`).join("")}` : many ? `<button class="pt-rcs-sum" id="ptRcsT" aria-expanded="${PT.rcOpen}" aria-controls="ptRcd"><span class="pt-rcs-l">Kimga:</span>${sumBtn}${ico("chev", 15)}</button>`
         : `<span class="pt-rcs-l">Kimga:</span>${R.map(x => ptRc(x, d)).join("")}<button class="pt-rcs-more" id="ptRcsT" aria-expanded="${PT.rcOpen}" aria-controls="ptRcd">Tafsilot${ico("chev", 14)}</button>`}</div>
+      ${(d.directives || []).length ? `<div class="pt-dirs">${ico("tasks", 14)}<span>Topshiriq sifatida:</span>${d.directives.map(x => `<button type="button" class="pt-tag" data-pdir="${x.id}" title="Topshiriqni ochish">${esc(ptShortUnit(x.name))} · ${x.status === "bajarildi" ? (x.review === "kutilmoqda" ? "natija qabul kutmoqda" : "bajarildi") : x.review === "qaytarildi" ? "qaytarildi" : x.status === "jarayonda" ? "jarayonda" : "yangi"}</button>`).join("")}</div>` : ""}
       ${acts.length ? `<div class="pt-acts" role="toolbar" aria-label="Amallar">${acts.map(([k, i, l, p]) => `<button class="btn sm${p ? " pt-act-p" : ""}${PT.act === k ? " on" : ""}" data-act="${k}">${ico(i, 15)}${l}</button>`).join("")}</div>` : ""}
     </div>
     <div class="pt-msgs" id="ptMsgs"><div id="ptActF" class="pt-actf"></div><div class="pt-rcd" id="ptRcd" ${PT.rcOpen ? "" : "hidden"}><div class="pt-rcd-h">${ico("users", 14)}Qabul qiluvchilar · ${R.length}</div>${R.map(x => ptRcRow(x, d)).join("")}</div><div id="ptStu">${ptStuBlock(d)}</div>${res}${msgs}</div>
@@ -386,6 +403,7 @@ async function ptOpen(id, keep) {
       </div>` : `<div class="pt-observer">${ico("eye", 16)}<span>${d.role === "observer" ? "Rahbariyat nazorati: siz bu yozishma ishtirokchisi emassiz — faqat ko'rish. Ochilgani audit jurnaliga yozildi." : "Bu yozishmaga javob yozish huquqingiz yo'q — faqat ko'rish."}</span></div>`}
   </div>`;
   if ($("#ptRcsT")) $("#ptRcsT").onclick = () => { PT.rcOpen = !PT.rcOpen; $("#ptRcd").hidden = !PT.rcOpen; $("#ptRcsT").setAttribute("aria-expanded", PT.rcOpen); if (PT.rcOpen) { $("#ptMsgs").scrollTop = 0; if (window.innerWidth <= 980) $("#ptRcd").scrollIntoView({block: "nearest"}); } };
+  r.querySelectorAll("[data-pdir]").forEach(b => b.onclick = () => { if (typeof openDirective === "function") openDirective(+b.dataset.pdir); });
   $("#ptBack").onclick = () => { PT.open = null; PT.act = null; document.querySelector(".pt-mail")?.classList.remove("has-open"); document.querySelectorAll("#ptItems .pt-it").forEach(x => x.classList.remove("on")); $("#ptRead").innerHTML = ptReadEmpty(PT.list.counts); window.scrollTo({top: 0}); };
   r.querySelectorAll("[data-act]").forEach(b => b.onclick = () => ptAction(b.dataset.act, b));
   ptBindResCards(); ptBindStu(d);
@@ -685,6 +703,15 @@ function ptTplSave() {
     if (await ptPost("/api/portal/templates", {title, subject, body, kind: $("#ptKind").value, priority: $("#ptPrio").value, due_days, to: [...PT.to]})) { PT.tpls = null; toast(`«${title}» shablon sifatida saqlandi`); reset(); }
   }, "…");
 }
+/* «Ma'lumot so'rovi» / «Topshiriq» turi: vakolatingizdagi bo'limlarga xat emas, TOPSHIRIQ yuboriladi (natija, qabul/qaytarish —
+   «Majlislar va topshiriqlar» oqimi). Qolgan bo'limlarga — oddiy xat. Server ham shu qoidani qo'llaydi (portal.api_create). */
+function ptDirHint() {
+  const h = $("#ptDirHint"), k = $("#ptKind")?.value; if (!h) return;
+  const du = new Set(PT.units.directive_units || []), sel = [...PT.to].filter(u => u !== "*");
+  const dir = ["sorov", "topshiriq"].includes(k) ? sel.filter(u => du.has(u)) : [], rest = sel.filter(u => !dir.includes(u));
+  h.hidden = !dir.length;
+  if (dir.length) h.innerHTML = `${ico("tasks", 15)}<span><b>${dir.length} ta bo'limga topshiriq sifatida yuboriladi</b> (${esc(dir.map(u => ptShortUnit(ptUnit(u)?.name || u)).join(", "))}): ijro, natija, qabul yoki qaytarish — «Majlislar va topshiriqlar»da.${rest.length ? ` Qolgan ${rest.length} ta bo'limga — oddiy xat.` : ""}${PT.stu.size ? " Talabalar ro'yxati biriktirilgan bo'lsa — xat sifatida." : ""}</span>`;
+}
 function ptCompose() {
   const r = $("#ptRead"), K = PT.units.kinds, P = PT.units.prios, dr = PT.cdraft || {};
   if (PT.cdraft) { PT.to = new Set(dr.to || []); if (dr.id) ptSetDid(dr.id); if (dr._att) PT.att = dr._att.slice(); if (dr._stu) PT.stu = new Map(dr._stu); }
@@ -701,14 +728,16 @@ function ptCompose() {
       <label>Javob muddati<input id="ptDue" title="Ixtiyoriy" type="date" min="${esc(ME.today)}" value="${esc(dr.due || "")}"></label>
       <label class="full">Matn<textarea id="ptBody2" rows="7" placeholder="Hurmatli hamkasblar! …" required>${esc(dr.body || "")}</textarea></label>
     </div>
+    <p class="pt-dirhint" id="ptDirHint" hidden></p>
     <div class="pt-cf-att"><div class="pt-att" id="ptAtt"></div><div class="pt-reply-a">${ptAttachBtns()}</div></div>
     ${PT.units.students ? `<div class="pt-cf-stu" id="ptStuC"></div>` : ""}
     <div class="pt-cf-f"><div class="pt-cf-fl"><span id="ptTplSave"><button type="button" class="btn sm ghost" id="ptTplSv">${ico("folder", 15)}Shablon sifatida saqlash</button></span><span class="pt-dst" id="ptDst" aria-live="polite"></span></div>
       <div class="row-actions"><button type="button" class="btn ghost" id="ptCancel">Bekor qilish</button><button class="btn primary" id="ptSendNew">${ico("send", 16)}Yuborish</button></div></div>
     <span class="muted tiny pt-cf-note">${ico("shield", 14)} Xatga ro'yxat raqami beriladi; ilovalar qabul qiluvchilarga avtomatik ulashiladi. Yozilgan matn qoralama sifatida avtomatik saqlanadi.</span>
   </form>`;
-  ptBindPicker("ptTo", PT.to, ptDraftSched); ptBindAttach();
+  ptBindPicker("ptTo", PT.to, () => { ptDraftSched(); ptDirHint(); }); ptBindAttach();
   if ($("#ptStuC")) ptStuCompose($("#ptStuC"));
+  $("#ptKind").addEventListener("change", ptDirHint); ptDirHint();
   const f = $("#ptCf");
   f.addEventListener("input", e => { if (e.target.closest("#ptTplSave, .pt-pick, .pt-sp")) return; ptDraftSched(); });
   f.addEventListener("change", e => { if (e.target.matches("#ptKind, #ptPrio, #ptDue")) ptDraftSched(); });
@@ -725,8 +754,13 @@ function ptCompose() {
     const res = await ptPost("/api/portal/threads", {subject, body, to: [...PT.to], kind: $("#ptKind").value, priority: $("#ptPrio").value, due: $("#ptDue").value || null, file_ids: PT.att.map(f => f.id), draft_id: PT.draftId || null,
       students: [...PT.stu.keys()], student_note: PT.stu.size ? ($("#ptStuNote")?.value || "").trim() : ""});
     if (!res) return;
-    toast(`Xat yuborildi · ${res.ref_no}${PT.stu.size ? ` · ${PT.stu.size} ta talaba` : ""}`); PT.compose = false; PT.cdraft = null; PT.cs++; ptSetDid(null); PT.to = new Set(); PT.att = []; PT.stu = new Map(); PT.stuNote = ""; PT.box = "sent"; PT.flt = "all"; PT.q = ""; PT.open = res.id; await ptMail();
+    const nd = (res.directives || []).length;
+    toast(nd && !res.id ? `Topshiriq sifatida yuborildi: ${res.directives.map(x => ptShortUnit(x.name)).join(", ")} — ijro «Majlislar va topshiriqlar»da kuzatiladi`
+      : `Xat yuborildi · ${res.ref_no}${PT.stu.size ? ` · ${PT.stu.size} ta talaba` : ""}${nd ? ` · ${nd} ta bo'limga topshiriq` : ""}`);
+    PT.compose = false; PT.cdraft = null; PT.cs++; ptSetDid(null); PT.to = new Set(); PT.att = []; PT.stu = new Map(); PT.stuNote = "";
     if (typeof badges === "function") badges();
+    if (!res.id && nd && typeof openDirective === "function") { openDirective(res.directives[0].id); return; }
+    PT.box = "sent"; PT.flt = "all"; PT.q = ""; PT.open = res.id; await ptMail();
   }, "Yuborilmoqda…");
   if (!dr.subject && !(dr.to || []).length) setTimeout(() => r.querySelector(".pt-up [data-uq]")?.focus({preventScroll: true}), 30);
 }

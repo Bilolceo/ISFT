@@ -32,7 +32,7 @@ AGENTS = [
      "does": ["Muddatdan 2 kun oldin avtomatik eslatma (3-daraja)", "Muddati o'tgan topshiriq → rasmiy eslatma taklifi", "Tasdiqlovchi: rektor yoki rektorat kotibi"],
      "sees": "Majlis topshiriqlari"},
     {"key": "talaba", "name": "Talabani qo'llab-quvvatlash agenti", "emoji": "🎓", "level": 2, "status": "faol",
-     "desc": "Talabalar bilan ishlash markazi holatlarini kuzatadi: call-markaz navbati, jiddiy akademik holatlar bo'yicha registratorga topshiriq taklifi.",
+     "desc": "Talabalar markazi holatlarini kuzatadi: call-markaz navbati, jiddiy akademik holatlar bo'yicha registratorga topshiriq taklifi.",
      "does": ["Call-markaz navbati xulosasi (avtomatik)", "Jiddiy akademik holatlar → registratorga topshiriq taklifi", "Tasdiqlovchi: rektor yoki o'quv prorektori"],
      "sees": "Talabalar markazi (faqat jamlangan raqamlar)"},
     {"key": "moliya", "name": "Moliya prognoz agenti", "emoji": "💰", "level": 1, "status": "faol",

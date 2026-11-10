@@ -35,7 +35,8 @@ ok(oq.get("/api/docs/lookup/task").status_code==403, "o'qituvchi rektorat topshi
 ok(reg.get("/api/docs/lookup/student?q=").status_code==200, "Registrator ofisi talabalarni qidira oladi")
 ok(ty.post("/api/svc/incidents/2/notify",json={"text":"x"*30}).status_code==403, "tyutor umumiy hodisa xabarini yubora olmaydi")
 ok("requests" not in ty.get("/api/svc/overview").json(), "tyutorda murojaatlar (umumiy xabar) yorlig'i yo'q")
-ok(rk.post("/api/tasks/1/status",json={"status":"<script>"}).status_code==400, "topshiriq holati whitelist")
+# eski bir bosishli holat API (main.py) — bo'limli (yagona oqimdagi) topshiriqni o'zgartirmaydi: 403 (avval whitelist 400 edi)
+ok(rk.post("/api/tasks/1/status",json={"status":"<script>"}).status_code in (400,403), "topshiriq holati: eski API orqali o'zgartirib bo'lmaydi")
 r=rk.post("/api/meetings",json={"title":"Test","transcript":"t","tasks":[{"assignee":"Moliya fakulteti dekani","text":"x","due":"15.11"},{"assignee":"Moliya-iqtisod ishlari prorektori","text":"y","due":"2026-11-31"}]})
 ok(r.status_code==200, "buzuq sanali majlis saqlandi (400/500 emas)")
 row=DB.execute("select assignee_role,due from tasks order by id desc limit 2").fetchall()
@@ -78,4 +79,11 @@ cid=DB.execute("select id from cameras where room_id=1").fetchone()[0]
 t=xo.post(f"/api/spaces/cameras/{cid}/test").json(); ok(t["ok"] is False and "Ulanib" in t["error"], f"yetib bo'lmaydigan kamera → aniq xato: {t.get('error','')[:60]}")
 ok("secret" not in xo.get("/api/spaces/overview").text, "parol API javobida yo'q")
 xo.post("/api/spaces/cameras",json={"room_id":1,"mode":"sim"})
+# tozalash: test yaratgan «Test» majlisi (matn "t") va uning "x"/"y" topshiriqlari bazada qolmasin (decisions.cleanup_junk bilan bir xil)
+for (mid,) in DB.execute("select id from meetings where title='Test' and transcript='t'").fetchall():
+    ids=[r[0] for r in DB.execute("select id from tasks where meeting_id=?",(mid,))]
+    q=",".join(map(str,ids)) or "0"
+    DB.execute(f"delete from task_log where task_id in ({q})"); DB.execute(f"delete from task_msgs where task_id in ({q})")
+    DB.execute(f"delete from tasks where id in ({q})"); DB.execute("delete from meetings where id=?",(mid,))
+DB.commit()
 print("\nNATIJA:", "HAMMASI O'TDI" if not fails else f"{len(fails)} ta xato: {fails}")

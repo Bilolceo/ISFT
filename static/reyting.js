@@ -65,7 +65,8 @@ async function renderReyting() {
   el.innerHTML = `<div class="head rt-head"><div class="rt-ttl"><h2>Reyting</h2>
         <span class="muted">${esc(M.title)}</span>
         <div class="rt-src"><span class="rt-chip">${ico("users", 14)}${esc(M.scope)}</span>${M.mode === "aggregate" ? `<span class="rt-chip warn">${ico("lock", 14)}Faqat jamlangan ko'rsatkichlar</span>` : ""}
-          <span class="rt-chip muted" title="Kesh: ${rtN(M.rows)} qator, ${esc(M.seconds || "")} s">${ico("calendar", 14)}${when}</span></div></div>
+          <span class="rt-chip muted" title="Kesh: ${rtN(M.rows)} qator, ${esc(M.seconds || "")} s">${ico("calendar", 14)}${when}</span>
+          ${M.in_progress ? `<span class="rt-chip muted" title="Joriy semestrda faqat oraliq nazorat o'tkazilgan — reyting yakunlangan semestrlar bo'yicha; joriy oraliq natijalari talaba kartasida">${ico("info", 14)}${esc(M.in_progress.short)}: yakuniy nazorat hali o'tmagan</span>` : ""}</div></div>
       <div class="rt-hact">
         <div class="rt-seg" role="group" aria-label="Semestr">${M.semesters.map(s => `<button type="button" data-sem="${s.key}" class="${+RT.sem === s.key ? "on" : ""}" aria-pressed="${+RT.sem === s.key}" title="${esc(s.label)}">${esc(s.short)}</button>`).join("")}</div>
         ${M.can_recompute ? `<button class="btn sm" id="rtRe" title="Reytingni baholar jadvalidan qayta hisoblash">${ico("refresh", 15)}Qayta hisoblash</button>` : ""}</div></div>
@@ -92,14 +93,14 @@ async function rtOverview() {
   const O = await rtApi(`/api/reyting/overview?sem=${RT.sem}`), T = O.total || {}, P = O.prev;
   const dv = (a, b, d = 2, inv = false) => a == null || b == null ? "" : (() => { const x = +(a - b).toFixed(d); if (!x) return `<span class="trend muted">0</span>`; const good = inv ? x < 0 : x > 0; return `<span class="trend ${good ? "up" : "dn"}">${x > 0 ? "+" : "−"}${Math.abs(x).toFixed(d)}</span>`; })();
   const mx = Math.max(1, ...O.bins.map(b => b.n));
-  const tbl = (rows, title) => `<div class="card rt-card"><h3>${title}</h3><div class="tw rt-tw"><table class="rt-t"><thead><tr><th>Bo'lim</th><th class="n">Talaba</th><th class="n">O'rt. GPA</th><th class="n">O'rt. ball</th><th class="n">Qarzdor</th><th class="n">A'lochi</th><th class="n">Davomat</th></tr></thead><tbody>
+  const tbl = (rows, title) => `<div class="card rt-card"><h3>${title}</h3><div class="tw rt-tw"><table class="rt-t"><thead><tr><th>Bo'lim</th><th class="n">Talaba</th><th class="n">O'rt. GPA (5)</th><th class="n">O'rt. ball (100)</th><th class="n" title="Shu semestrdan o'zlashtirilmagan fani qolgan talabalar ulushi">Qarzdor (sem.)</th><th class="n">A'lochi</th><th class="n">Davomat</th></tr></thead><tbody>
     ${rows.map(r => `<tr><td>${esc(r.label)}</td><td class="n">${rtN(r.n)}</td><td class="n"><b>${rtG(r.gpa)}</b></td><td class="n">${rtS(r.avg_score)}</td><td class="n">${rtS(r.debt_pct)}%</td><td class="n">${rtS(r.excellent_pct)}%</td><td class="n">${r.attendance == null ? "—" : rtS(r.attendance) + "%"}</td></tr>`).join("")}</tbody></table></div></div>`;
   $("#rtBody").innerHTML = `<div class="rt-kpis">
       <div class="rt-kpi"><span>Reytingda</span><b>${rtN(T.n)}</b><small>faol talaba · ${esc(O.scope)}</small></div>
-      <div class="rt-kpi"><span>O'rtacha GPA</span><b>${rtG(T.gpa)}${P ? dv(T.gpa, P.gpa) : ""}</b><small>${P ? `o'tgan semestr: ${rtG(P.gpa)}` : "5 ballik, kredit bilan tortilgan"}</small></div>
-      <div class="rt-kpi${T.debt_pct > 20 ? " warn" : ""}"><span>Akademik qarzdorlar</span><b>${rtS(T.debt_pct)}%${P ? dv(T.debt_pct, P.debt_pct, 1, true) : ""}</b><small>${rtN(T.debt)} talaba · kamida bitta «F»</small></div>
+      <div class="rt-kpi"><span>O'rtacha GPA (5)</span><b>${rtG(T.gpa)}${P ? dv(T.gpa, P.gpa) : ""}</b><small>${P ? `o'tgan semestr: ${rtG(P.gpa)}` : "5 ballik, kredit bilan tortilgan"}</small></div>
+      <div class="rt-kpi${T.debt_pct > 20 ? " warn" : ""}" title="${esc(O.labels?.debtor_def || "")}"><span>Akademik qarzdorlar</span><b>${rtN(T.debtors_all ?? T.debt)}</b><small>talaba · barcha yakunlangan semestrlar bo'yicha${T.students_all ? ` (${rtS(100 * T.debtors_all / T.students_all)}% faol)` : ""} · shu semestrdan: ${rtN(T.debt)}</small></div>
       <div class="rt-kpi"><span>A'lochilar</span><b>${rtS(T.excellent_pct)}%${P ? dv(T.excellent_pct, P.excellent_pct, 1) : ""}</b><small>${rtN(T.excellent)} talaba · barcha fanlardan «5»</small></div>
-      <div class="rt-kpi"><span>O'rtacha ball</span><b>${rtS(T.avg_score)}</b><small>davomat: ${T.attendance == null ? "qayd etilmagan" : rtS(T.attendance) + "%"}</small></div></div>
+      <div class="rt-kpi"><span>O'rtacha ball (100)</span><b>${rtS(T.avg_score)}</b><small>panel KPI bilan bir xil · davomat: ${T.attendance == null ? "qayd etilmagan" : rtS(T.attendance) + "% (joriy)"}</small></div></div>
     <div class="grid g2 rt-g">
       <div class="card rt-card"><h3>GPA taqsimoti <span class="muted tiny">${esc(O.label)} · talabalar soni</span></h3>
         <div class="rt-hist" role="img" aria-label="GPA bo'yicha talabalar taqsimoti">${O.bins.map(b => `<div class="rt-hb" title="GPA ${b.lo.toFixed(1)}–${b.hi.toFixed(1)}: ${fmt(b.n)} talaba"><span class="rt-hv">${fmt(b.n)}</span><i style="height:${(100 * b.n / mx).toFixed(1)}%"></i><span class="rt-hl">${b.lo.toFixed(1)}–${b.hi.toFixed(1)}</span></div>`).join("")}</div></div>
@@ -169,7 +170,7 @@ function rtRowClicks(from) {
 function rtSpark(trend) {
   const pts = trend.filter(t => t.gpa != null);
   if (pts.length < 2) return `<p class="muted tiny">Trend uchun kamida ikki semestr kerak.</p>`;
-  const W = 340, H = 104, lo = 2, hi = 5, x = i => 56 + i * (W - 112) / (pts.length - 1), y = v => 22 + 56 * (1 - (v - lo) / (hi - lo));
+  const W = Math.max(340, 112 + (pts.length - 1) * 96), H = 104, lo = 2, hi = 5,   /* semestr ko'p bo'lsa yozuvlar ustma-ust tushmasin */ x = i => 56 + i * (W - 112) / (pts.length - 1), y = v => 22 + 56 * (1 - (v - lo) / (hi - lo));
   const grid = [5, 4, 3, 2].map(v => `<line x1="24" x2="${W - 4}" y1="${y(v)}" y2="${y(v)}" class="rt-sg"/><text x="0" y="${y(v) + 3.5}" class="rt-sx">${v}.0</text>`).join("");
   return `<svg class="rt-spark" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Semestrlar bo'yicha GPA: ${pts.map(p => `${esc(p.short)} ${p.gpa}`).join(", ")}">${grid}
     <polyline points="${pts.map((p, i) => `${x(i)},${y(p.gpa)}`).join(" ")}" class="rt-sl"/>
@@ -181,8 +182,13 @@ async function rtCard(sid) {
   const back = {list: "Reyting ro'yxatiga", qaydnoma: "Qaydnomaga", dynamics: "Dinamikaga", top: "A'lochilar ro'yxatiga"}[RT.cardFrom] || "Orqaga";
   const places = sem?.places ? C.levels.map(l => { const p = sem.places[l.key]; return `<div class="rt-plt"><span>${esc(l.label)}</span><b>${fmt(p.rank)}<small> / ${fmt(p.n)}</small></b><small>yuqori ${p.pct}% ${p.delta != null ? rtDelta(p.delta) : ""}</small></div>`; }).join("") : "";
   const stbl = x => `<div class="tw rt-tw"><table class="rt-t"><thead><tr><th>Fan</th><th class="n">Ball</th><th class="n">Oraliq</th><th class="n">Yakuniy</th><th class="n">Harf</th><th class="n">Baho</th><th class="n">Kredit</th><th>O'qituvchi</th></tr></thead><tbody>
-    ${x.subjects.map(g => `<tr${g.fail ? ' class="rt-fail"' : ""}><td>${esc(g.subject)}</td><td class="n"><b>${g.score}</b></td><td class="n">${g.oraliq}</td><td class="n">${g.yakuniy}</td><td class="n"><span class="rt-ltr l-${g.letter}">${g.letter}</span></td><td class="n">${g.grade} <small class="muted">${esc(g.word)}</small></td><td class="n" title="Manba: ${esc(g.credit_source)}">${g.credits}${g.credit_source === "standart" ? "*" : ""}</td><td><span class="nowrap">${esc(g.teacher || "—")}</span></td></tr>`).join("")}</tbody></table></div>
-    <p class="muted tiny rt-note">GPA ${rtG(x.gpa)} · o'rtacha ball ${rtS(x.avg_score)} · kredit ${x.credits_ok}/${x.credits}${x.n_f ? ` · <b class="bad">${x.n_f} ta fan o'zlashtirilmagan</b>` : ""}. * — kredit o'quv dasturida ko'rsatilmagan, standart ${RT.meta.methodology.credit_default} kredit.</p>`;
+    ${x.subjects.map(g => `<tr${g.fail ? ' class="rt-fail"' : ""}><td>${esc(g.subject)}${g.attempts > 1 ? ` <small class="muted" title="Qayta topshirilgan: hisobdagi urinish ko'rsatilgan">(${g.attempts}-urinish)</small>` : ""}</td><td class="n"><b>${g.score}</b></td><td class="n">${g.oraliq ?? "—"}</td><td class="n">${g.yakuniy ?? (g.admitted === false ? `<small class="muted">kiritilmagan</small>` : "—")}</td><td class="n"><span class="rt-ltr l-${g.letter}">${g.letter}</span></td><td class="n">${g.grade} <small class="muted">${esc(g.word)}</small></td><td class="n" title="Manba: ${esc(g.credit_source)}">${g.credits}${g.credit_source === "standart" ? "*" : ""}</td><td><span class="nowrap">${esc(g.teacher || "—")}</span></td></tr>`).join("")}</tbody></table></div>
+    <p class="muted tiny rt-note">${x.sem_no ? `${x.sem_no}-semestr · ` : ""}GPA (5) ${rtG(x.gpa)} · o'rtacha ball (100) ${rtS(x.avg_score)} · kredit ${x.credits_ok}/${x.credits}${x.n_f ? ` · <b class="bad">${x.n_f} ta fan o'zlashtirilmagan</b>` : ""}. Kredit — o'quv rejasidan${x.subjects.some(g => g.credit_source === "standart") ? `; * — o'quv rejasida yo'q, standart ${RT.meta.methodology.credit_default} kredit` : ""}.</p>`;
+  const cur = C.current, Cu = C.cumulative;
+  const curCard = cur ? `<div class="card rt-card"><h3>Joriy semestr — ${esc(cur.label)}${cur.sem_no ? ` <span class="muted tiny">${cur.sem_no}-semestr</span>` : ""}</h3>
+    <p class="muted tiny rt-note" style="margin-top:0">${esc(cur.note)} Davomat: ${cur.attendance == null ? "qayd etilmaydi" : rtS(cur.attendance) + "%"}.</p>
+    <div class="tw rt-tw"><table class="rt-t"><thead><tr><th>Fan</th><th class="n">Oraliq (30)</th><th class="n">Yakuniyga kirish</th><th class="n">Kredit</th><th>O'qituvchi</th></tr></thead><tbody>
+    ${cur.subjects.map(g => `<tr${g.admitted ? "" : ' class="rt-fail"'}><td>${esc(g.subject)}</td><td class="n"><b>${g.oraliq ?? "—"}</b></td><td class="n">${g.admitted ? "ruxsat" : `<b class="bad">yo'q (&lt; ${C.oraliq_min})</b>`}</td><td class="n">${g.credits}</td><td><span class="nowrap">${esc(g.teacher || "—")}</span></td></tr>`).join("")}</tbody></table></div></div>` : "";
   $("#rtBody").innerHTML = `<button class="btn ghost sm rt-back" id="rtBack">${ico("back", 15)}${back}</button>
     <div class="card rt-card rt-sc">
       <div class="rt-sh"><div><h3 class="rt-sn">${esc(s.full_name)}</h3>
@@ -190,15 +196,16 @@ async function rtCard(sid) {
         <div class="rt-tags">${sem && sem.n_f ? `<span class="rt-tag bad">akademik qarzdor · ${sem.n_f} ta «F»</span>` : ""}${sem && sem.subjects.every(g => g.score >= RT.meta.methodology.excellent_min) ? `<span class="rt-tag ok">a'lochi</span>` : ""}${C.ranked ? "" : `<span class="rt-tag warn">reytingda ishtirok etmaydi (${esc(s.status)})</span>`}</div></div>
       </div>
       <div class="rt-kpis rt-k4">
-        <div class="rt-kpi"><span>Semestr GPA</span><b>${rtG(sem?.gpa)}</b><small>${esc(sem?.short || "")}</small></div>
-        <div class="rt-kpi"><span>Kumulyativ GPA</span><b>${rtG(C.cumulative.gpa)}</b><small>barcha semestrlar · kredit ${C.cumulative.credits_ok}/${C.cumulative.credits}</small></div>
-        <div class="rt-kpi"><span>O'rtacha ball</span><b>${rtS(sem?.avg_score)}</b><small>100 ballik</small></div>
-        <div class="rt-kpi"><span>Davomat</span><b>${sem?.attendance == null ? "—" : rtS(sem.attendance) + "%"}</b><small>${sem?.attendance == null ? "qayd etilmagan" : "joriy semestr"}</small></div></div>
+        <div class="rt-kpi"><span>Semestr GPA (5)</span><b>${rtG(sem?.gpa)}</b><small>${esc(sem?.short || "yakunlangan semestr yo'q")}</small></div>
+        <div class="rt-kpi"><span>Kumulyativ GPA (5)</span><b>${rtG(Cu.gpa)}</b><small>${C.semesters.length} ta yakunlangan semestr${Cu.debts ? ` · <b class="bad">${Cu.debts} ta qarz</b>` : ""}</small></div>
+        <div class="rt-kpi"><span>Kreditlar</span><b>${rtN(Cu.credits_ok)}<small> / ${rtN(Cu.program_credits)}</small></b><small>dastur bajarildi: ${Cu.progress_pct ?? 0}%</small><div class="rt-bar"><i style="width:${Math.min(100, Cu.progress_pct || 0)}%"></i></div></div>
+        <div class="rt-kpi"><span>O'rtacha ball (100)</span><b>${rtS(sem?.avg_score)}</b><small>davomat (joriy): ${cur?.attendance == null ? "qayd etilmagan" : rtS(cur.attendance) + "%"}</small></div></div>
       ${places ? `<h3 class="rt-h">O'rinlar <span class="muted tiny">${esc(sem.label)}</span></h3><div class="rt-plts">${places}</div>` : ""}
       <div class="rt-two"><div><h3 class="rt-h">Semestrlar bo'yicha trend</h3>${rtSpark(C.trend)}
         <div class="rt-trl">${C.trend.map(t => `<span>${esc(t.short)}: GPA <b>${rtG(t.gpa)}</b>${t.rank ? ` · institutda ${fmt(t.rank)} / ${fmt(t.n)}` : ""}</span>`).join("")}</div></div></div>
     </div>
-    ${sem ? `<div class="card rt-card"><h3>Fanlar — ${esc(sem.label)}</h3>${stbl(sem)}</div>` : ""}
+    ${curCard}
+    ${sem ? `<div class="card rt-card"><h3>Fanlar — ${esc(sem.label)}</h3>${stbl(sem)}</div>` : `<div class="card"><p class="muted">Yakunlangan semestr yo'q — talaba birinchi semestrda.</p></div>`}
     ${other.map(x => `<details class="card rt-card rt-det"><summary><b>Fanlar — ${esc(x.label)}</b> <span class="muted tiny">GPA ${rtG(x.gpa)}</span></summary>${stbl(x)}</details>`).join("")}`;
   $("#rtBack").onclick = () => { RT.card = null; rtTab(); };
   window.scrollTo({top: 0});
@@ -255,7 +262,7 @@ async function rtTop() {
       <label class="rt-f sm"><span>Davomat kamida, %</span><input type="number" id="rtTa" min="0" max="100" step="1" value="${P.min_att}"></label>
       <label class="rt-f sm"><span>«F» ko'pi bilan</span><select id="rtTx">${[0, 1, 2].map(n => `<option value="${n}"${+P.max_f === n ? " selected" : ""}>${n}</option>`).join("")}</select></label>
       <div class="rt-exp"><button class="btn sm primary" type="submit">Qo'llash</button><a class="btn sm" href="/api/reyting/top/export?${qs}" download>${ico("download", 15)}Excel (.xlsx)</a></div></form>
-      <p class="muted tiny rt-note">Kurs — daraja (bakalavr/magistr) va kurs bo'yicha butun institut. Ro'yxat: kurs reytingida eng yaxshi ${T.params.pct}% ichida, «F» soni ≤ ${T.params.max_f}${T.params.att_applied ? `, davomat ≥ ${T.params.min_att}% (masofaviy — davomat qayd etilmaydi, shart qo'llanmaydi)` : " — o'tgan semestr davomati saqlanmagan, davomat sharti qo'llanmadi"}. Ko'lam: ${esc(T.scope)}. Jami: <b>${fmt(T.total)}</b>.</p></div>
+      <p class="muted tiny rt-note">Kurs — daraja (bakalavr/magistr) va kurs bo'yicha butun institut. Ro'yxat: kurs reytingida eng yaxshi ${T.params.pct}% ichida, «F» soni ≤ ${T.params.max_f}${T.params.att_applied ? `, joriy davomat ≥ ${T.params.min_att}% (masofaviy — davomat qayd etilmaydi, shart qo'llanmaydi)` : " — bu semestr davomati saqlanmagan, davomat sharti qo'llanmadi"}. Ko'lam: ${esc(T.scope)}. Jami: <b>${fmt(T.total)}</b>.</p></div>
     ${T.courses.map(c => `<div class="card rt-card"><h3>${esc(c.level)} · ${c.course}-kurs <span class="muted tiny">kursda ${fmt(c.n)} talaba · eng yaxshi ${T.params.pct}% = ${fmt(c.quota)} o'rin · ro'yxatda ${c.rows.length}</span></h3>
       <div class="tw rt-tw"><table class="rt-t"><thead><tr><th>O'rin</th><th>Talaba</th><th>Guruh</th><th class="n">GPA</th><th class="n">O'rt. ball</th><th class="n">Davomat</th></tr></thead><tbody>
       ${c.rows.map(r => `<tr class="rt-row" data-sid="${r.id}" tabindex="0"><td class="rt-plc"><b class="rt-pl">${fmt(r.rank)}</b><span class="rt-of"> / ${fmt(r.n)}</span><small class="rt-pct">yuqori ${r.pct}%</small></td><td class="rt-nm"><a href="#" data-sid="${r.id}">${esc(r.name)}</a>${r.excellent ? `<span class="rt-tag ok">a'lochi</span>` : ""}</td><td><span class="nowrap">${esc(r.grp)}</span><small class="muted">${esc(r.faculty || "")}</small></td><td class="n"><b>${rtG(r.gpa)}</b></td><td class="n">${rtS(r.avg_score)}</td><td class="n">${r.attendance == null ? `<span class="muted">—</span>` : rtS(r.attendance) + "%"}</td></tr>`).join("")}</tbody></table></div></div>`).join("") || `<div class="card"><p class="muted">Shartlarga mos talaba topilmadi.</p></div>`}`;
@@ -289,7 +296,7 @@ async function rtMethod() {
   $("#rtBody").innerHTML = `<div class="grid g2 rt-g">
     <div class="card rt-card"><h3>Formula</h3><p class="rt-formula">${esc(m.formula)}</p>
       <p class="tiny">Har bir fanning 100 ballik bali 5 ballik bahoga o'tkaziladi va fan krediti bilan tortiladi. Semestr GPA — shu semestr fanlari bo'yicha; kumulyativ GPA — barcha semestrlar bo'yicha.</p>
-      <p class="tiny"><b>Kredit manbai:</b> o'quv dasturi (O'quv dasturlari moduli) — ${cov.from_syllabus} / ${cov.subjects} fan; qolganlari uchun standart ${m.credit_default} kredit. ${esc(m.credit_note)}.</p>
+      <p class="tiny"><b>Kredit manbai:</b> o'quv rejasi (yo'nalish × semestr) — ${cov.from_syllabus} / ${cov.subjects} fan; har semestr ${m.semester_credits || 30} kredit, bakalavriat ${(m.program_credits || {}).bakalavr || 240}, magistratura ${(m.program_credits || {}).magistr || 120} kredit; o'quv rejasida yo'q fan — standart ${m.credit_default} kredit. ${esc(m.credit_note)}.</p>
       <h3 class="rt-h">Teng kelganda tartib</h3><ol class="rt-ol">${m.order.map(o => `<li>${esc(o.label)} — ${o.digits} xonagacha yaxlitlangan qiymat bo'yicha</li>`).join("")}</ol>
       <p class="tiny muted">Reytingda faqat «${esc(m.status)}» holatidagi talabalar. «F» bo'lgan talaba reytingda qoladi va «akademik qarzdor» deb belgilanadi. A'lochi — barcha fanlardan kamida ${m.excellent_min} ball («5»).</p></div>
     <div class="card rt-card"><h3>Baholash shkalasi</h3><div class="tw rt-tw"><table class="rt-t"><thead><tr><th>Ball</th><th>Harf</th><th>Baho</th><th></th></tr></thead><tbody>

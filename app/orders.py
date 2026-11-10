@@ -12,9 +12,12 @@
 3. Katta ro'yxatlar (Excel/CSV) versiyalari: qayta yuklash — YANGI versiya (eskilari saqlanadi), kim/qachon, +/− farq, eski
    versiyani tiklash (yangi versiya sifatida), buyruq DOCX oxirgi versiyadan; imzodan keyin ro'yxat muzlatiladi.
 4. Ruxsatlar: talabalar (Registrator) — to'liq; sirtqi — faqat sirtqi talabalar; malumotlar_bazasi — o'qish + muvofiqlik auditi
-   (tuzatishlar bilan); prorektor_oquv — o'qish + kelishish; rektor — imzolash / qaytarish; boshqalar — 403. Har bir amal
-   rbac.audit(resource="orders").
-documents.py dagi «order_student» (bitta talaba, bitta hujjat) saqlanadi — Talabalar markazi undan foydalanadi; to'liq jarayon shu yerda.
+   (tuzatishlar bilan); prorektor_oquv — o'qish + kelishish; rektor — imzolash / qaytarish; kadrlar — xodimlar buyruqlari
+   (mehnat ta'tili; talabalar buyruqlarini ko'rmaydi); devonxona — reyestrni o'qish, imzolangan buyruqni devonxona jurnaliga
+   ro'yxatga olish va chiquvchi yozishmalar jurnali (rbac.CHANCERY); boshqalar — 403. Har bir amal rbac.audit(resource="orders").
+5. Buyruqlar — talabalar va xodimlar buyruqlarining YAGONA joyi (imzolash, kelishish, qaytarish). Hujjatlar markazidagi eski buyruq
+   loyihalari (order_student, reprimand, leave_order — status «loyiha») server startida shu yerga ko'chiriladi (migrate_legacy_docs);
+   xodimlar ta'tili (staff_absence.link_order) mehnat ta'tili buyrug'ini shu yerda yaratadi (draft_staff_leave).
 """
 import datetime as dt, io, json, re, secrets, threading
 from pathlib import Path
@@ -59,16 +62,54 @@ KINDS = {
     "guruh": dict(title="Talabalarni boshqa guruhga o'tkazish to'g'risida", short="Guruh o'zgarishi", fields=["group_to", "reason"], req=["group_to"], effect=True),
     "tiklash": dict(title="Talabalar safiga qayta tiklash to'g'risida", short="Qayta tiklash", fields=["date_from", "group_to"], req=["date_from", "group_to"], effect=True),
     "bekor": dict(title="Buyruqni bekor qilish to'g'risida", short="Bekor qilish (tuzatuvchi)", fields=[], req=[], effect=True),
+    "hayfsan": dict(title="Talabaga hayfsan e'lon qilish to'g'risida", short="Hayfsan", fields=["reason"], req=[], effect=False),
+    # «Talaba harakati» (app/academic_flows.py) loyihalaydigan turlar — loyihani baribir Registrator ofisi (sirtqi — Sirtqi bo'lim) imzoga yuboradi
+    "akademik_qarz": dict(title="Akademik qarzdorlik sababli talabalar safidan chetlashtirish to'g'risida", short="Chetlashtirish (akademik qarzdorlik)",
+                          fields=["date_from", "reason"], req=["date_from"], effect=True),
+    "ichki_kochirish": dict(title="Talabalarni boshqa ta'lim yo'nalishiga (ta'lim shakliga) ko'chirish to'g'risida", short="Ichki ko'chirish",
+                            fields=["date_from", "group_to", "reason"], req=["date_from", "group_to"], effect=True),
+    "kochirib_qabul": dict(title="Boshqa oliy ta'lim muassasasidan o'qishini ko'chirish tartibida talabalar safiga qabul qilish to'g'risida",
+                           short="Ko'chirish tartibida qabul", fields=["date_from", "group_to", "source_otm"], req=["date_from", "group_to"], effect=True),
+    "kursda_qoldirish": dict(title="Talabani kursda qoldirish (o'quv yilini takroran o'qitish) to'g'risida", short="Kursda qoldirish",
+                             fields=["date_from", "group_to", "reason"], req=["date_from", "group_to"], effect=True),
+    "qayta_oqish": dict(title="Akademik qarzdor talabalarga fanlarni to'lov-kontrakt asosida qayta o'qishga ruxsat berish to'g'risida",
+                        short="Qayta o'qish (to'lovli)", fields=["reason"], req=[], effect=False),
+    "isft_granti": dict(title="ISFT granti asosida o'qishga o'tkazish to'g'risida", short="ISFT granti berish",
+                        fields=["date_from", "reason"], req=["date_from"], effect=True),
+    "isft_granti_mahrum": dict(title="ISFT grantidan mahrum qilish va to'lov-kontrakt asosiga o'tkazish to'g'risida", short="ISFT grantidan mahrum qilish",
+                               fields=["date_from", "reason", "contract_amount"], req=["date_from"], effect=True),
+    "bitirish": dict(title="Bitiruvchilarni talabalar safidan chiqarish va diplom berish to'g'risida", short="Bitirish (diplom berish)",
+                     fields=["date_from"], req=["date_from"], effect=True),
+    # xodimlar buyruqlari (Kadrlar bo'limi loyihalaydi, Rektor imzolaydi; talabalar ro'yxati yo'q — xodim params ichida)
+    "xodim_tatil": dict(title="Xodimga mehnat ta'tili berish to'g'risida", short="Mehnat ta'tili (xodim)", fields=["date_from", "days"],
+                        req=["date_from", "days"], effect=False, staff=True),
 }
-EXIT_KINDS = ("chetlashtirish_xohish", "chetlashtirish_tolov", "kochirish")
+STAFF_KINDS = tuple(k for k, v in KINDS.items() if v.get("staff"))
+def is_staff_kind(k) -> bool: return k in STAFF_KINDS
+EXIT_KINDS = ("chetlashtirish_xohish", "chetlashtirish_tolov", "kochirish", "akademik_qarz")
+# guruhni o'zgartiradigan turlar (muvofiqlik auditi: oxirgi buyruqdagi guruh) va ta'lim shaklini ham guruhdan oladigan turlar (academic_flows)
+GROUP_KINDS = ("guruh", "tiklash", "tatildan_qaytish", "ichki_kochirish", "kochirib_qabul", "kursda_qoldirish")
+FORM_KINDS = ("ichki_kochirish", "kochirib_qabul", "kursda_qoldirish")
+ADMIT_KINDS = ("qabul", "tiklash", "kochirib_qabul")
+GRADUATED = "bitirgan"
 FIELD_LABELS = {"old_surname": "Eski familiya", "new_surname": "Yangi familiya", "basis": "Asos hujjat", "reason": "Sabab",
-                "date_from": "Sanadan", "date_to": "Sanagacha", "group_to": "Yangi guruh", "target": "Qabul qiluvchi OTM"}
+                "date_from": "Sanadan", "date_to": "Sanagacha", "group_to": "Yangi guruh", "target": "Qabul qiluvchi OTM",
+                "days": "Kunlar soni", "source_otm": "Avvalgi OTM", "contract_amount": "Kontrakt summasi (so'm)"}
 BASIS = {"familiya": "talabaning arizasi va {basis}", "akademik_tatil": "talabaning arizasi va tegishli tasdiqlovchi hujjat (tibbiy xulosa / guvohnoma)",
          "tatildan_qaytish": "talabaning arizasi va akademik ta'til muddati tugaganligi", "chetlashtirish_xohish": "talabaning arizasi",
          "chetlashtirish_tolov": "buxgalteriyaning qarzdorlik to'g'risidagi ma'lumotnomasi va Registrator ofisining bildirgisi",
          "kochirish": "talabaning arizasi va qabul qiluvchi oliy ta'lim muassasasining roziligi", "guruh": "talabaning arizasi va Registrator ofisining taqdimnomasi",
          "tiklash": "talabaning arizasi va Registrator ofisining taqdimnomasi", "qabul": "qabul komissiyasining qarori", "kurs": "o'quv rejasini to'liq bajarganligi (yakuniy nazorat natijalari)",
-         "bekor": "Registrator ofisining bildirgisi (xato aniqlangan)"}
+         "bekor": "Registrator ofisining bildirgisi (xato aniqlangan)", "hayfsan": "Registrator ofisining bildirgisi va davomat jurnali ma'lumotlari",
+         "xodim_tatil": "xodimning arizasi va ta'tillar jadvali",
+         "akademik_qarz": "qayta topshirish natijalari (baholar tarixi), belgilangan muddatda akademik qarzdorlik tugatilmaganligi va Registrator ofisining bildirgisi",
+         "ichki_kochirish": "talabaning arizasi, akademik farq fanlari ro'yxati va Registrator ofisining taqdimnomasi",
+         "kochirib_qabul": "talabaning arizasi, avvalgi OTM akademik ma'lumotnomasi (transkripti) va akademik farq fanlari ro'yxati",
+         "kursda_qoldirish": "talabaning arizasi va qayta topshirish natijalari (baholar tarixi)",
+         "qayta_oqish": "talabalarning arizalari va qayta topshirish natijalari (baholar tarixi)",
+         "isft_granti": "ISFT granti komissiyasining yillik reyting (kredit bilan tortilgan GPA) bo'yicha qarori",
+         "isft_granti_mahrum": "ISFT granti komissiyasining qarori (akademik qarzdorlik yoki GPA belgilangan chegaradan past)",
+         "bitirish": "o'quv rejasining to'liq bajarilganligi, bitiruv ishi (magistrlik dissertatsiyasi) himoyasi va yakuniy davlat attestatsiyasi natijalari"}
 STATUS = {"loyiha": "Loyiha", "yuborilgan": "Imzoga yuborilgan", "kelishilgan": "Prorektor kelishgan", "imzolangan": "Imzolangan",
           "bekor": "O'chirilgan loyiha", "bekor_qilingan": "Bekor qilingan"}
 ACTIVE = ("faol", "akademik ta'til")
@@ -76,8 +117,11 @@ EXPELLED = "chetlashtirilgan"
 
 # Ruxsatlar
 EDIT = ("talabalar", "registrator_xodim", "sirtqi")   # Registrator ofisi (boshlig'i va xodimlari); sirtqi — faqat sirtqi talabalar
+STAFF_EDIT = ("kadrlar",)                            # xodimlar buyruqlari (mehnat ta'tili)
 FIX = EDIT + ("malumotlar_bazasi",)
-READ = EDIT + ("prorektor_oquv", "rektor", "malumotlar_bazasi")
+READ = EDIT + ("prorektor_oquv", "rektor", "malumotlar_bazasi")   # talabalar ma'lumoti (ro'yxat, audit, jurnal)
+CHANCERY = ("devonxona",)                            # rbac.CHANCERY: reyestr, ro'yxatga olish, chiquvchi yozishmalar
+REG_READ = READ + STAFF_EDIT + CHANCERY              # buyruqlar reyestri (ko'lam ord_scope bo'yicha)
 FORWARD = ("prorektor_oquv",)
 SIGN = ("rektor",)
 
@@ -118,12 +162,19 @@ CREATE INDEX IF NOT EXISTS ix_os_student ON order_students(student_id);
 CREATE INDEX IF NOT EXISTS ix_ord_status ON orders(status, kind);
 CREATE INDEX IF NOT EXISTS ix_sc_student ON student_changes(student_id);
 CREATE INDEX IF NOT EXISTS ix_ol_order ON order_log(order_id);
+CREATE TABLE IF NOT EXISTS outgoing_mail(id INTEGER PRIMARY KEY, out_no TEXT UNIQUE, out_date TEXT, addressee TEXT, subject TEXT, order_id INT,
+  thread_id INT, pages INT, note TEXT, created_by INT, created_by_name TEXT, created_at TEXT);
 """
+JOURNAL_COLS = [("journal_at", "TEXT"), ("journal_by", "INT"), ("journal_note", "TEXT")]   # Devonxona: ro'yxatga olish
 
 def init(con, fresh=False):
     """Jadvallar + (bo'sh bo'lsa) reyestr seed'i, namuna arizalar va demo buyruqlar. Qayta chaqirish xavfsiz (idempotent)."""
     try:
         con.executescript(SCHEMA); con.commit()
+        have = {r[1] for r in con.execute("PRAGMA table_info(orders)")}
+        for col, ty in JOURNAL_COLS:
+            if col not in have: con.execute(f"ALTER TABLE orders ADD COLUMN {col} {ty}")
+        con.commit()
         for d in (UPL, OUTD, SAMPLES): d.mkdir(parents=True, exist_ok=True)
         if con.execute("SELECT COUNT(*) FROM students").fetchone()[0]:
             from . import seed_orders
@@ -135,12 +186,24 @@ def init(con, fresh=False):
 def bind(con, ctx_fn):
     global _con, _ctx
     _con, _ctx = con, ctx_fn
+    try:
+        from . import staff_absence as SA
+        SA.ensure_order_col(con)
+        migrate_legacy_docs(con)
+        seed_outgoing_demo(con)
+    except Exception as e:
+        import traceback; traceback.print_exc(); print("orders.migrate_legacy_docs:", e)
 
 # ---------------------------------------------------------------------------------------------
 # Ruxsat va ko'lam
 # ---------------------------------------------------------------------------------------------
-NEED = {"read": READ, "edit": EDIT, "fix": FIX, "forward": FORWARD, "sign": SIGN}
-DENY_MSG = {"read": "Buyruqlar reyestri Registrator ofisi, Sirtqi bo'lim, Ma'lumotlar bazasi bo'limi, O'quv ishlari prorektori va Rektor uchun",
+NEED = {"read": REG_READ, "read_st": READ, "edit": EDIT, "edit_any": EDIT + STAFF_EDIT, "fix": FIX, "forward": FORWARD, "sign": SIGN,
+        "register": CHANCERY, "outgoing": CHANCERY + SIGN}
+DENY_MSG = {"read": "Buyruqlar reyestri Registrator ofisi, Sirtqi bo'lim, Ma'lumotlar bazasi bo'limi, O'quv ishlari prorektori, Kadrlar bo'limi, Devonxona va Rektor uchun",
+            "read_st": "Talabalar ro'yxatlari, muvofiqlik auditi va o'zgarishlar jurnali Registrator ofisi, Sirtqi bo'lim, Ma'lumotlar bazasi bo'limi, O'quv ishlari prorektori va Rektor uchun",
+            "edit_any": "Buyruq loyihasini Registrator ofisi (talabalar) yoki Kadrlar bo'limi (xodimlar) tayyorlaydi",
+            "register": "Buyruqni devonxona jurnaliga Devonxona ro'yxatga oladi",
+            "outgoing": "Chiquvchi yozishmalar jurnalini Devonxona yuritadi",
             "edit": "Buyruq loyihasini Registrator ofisi (sirtqi talabalar uchun — Sirtqi bo'lim) tayyorlaydi",
             "fix": "Muvofiqlik tuzatishlarini Registrator ofisi, Sirtqi bo'lim va Ma'lumotlar bazasi bo'limi kiritadi",
             "forward": "Buyruqni O'quv ishlari bo'yicha prorektor kelishadi", "sign": "Buyruqlarni faqat Rektor imzolaydi"}
@@ -160,7 +223,18 @@ def _audit(c, action, detail=""): rbac.audit(_con, c, f"buyruqlar: {action}", RE
 
 def is_sirtqi(c: Ctx) -> bool: return c.role.key == "sirtqi"
 def st_scope(c: Ctx, alias="s") -> str: return f"{alias}.study_form='sirtqi'" if is_sirtqi(c) else "1=1"
-def ord_scope(c: Ctx, alias="o") -> str: return f"{alias}.study_form='sirtqi'" if is_sirtqi(c) else "1=1"
+_STAFF_SQL = "(" + ",".join(f"'{k}'" for k in STAFF_KINDS) + ")"
+def ord_scope(c: Ctx, alias="o") -> str:
+    """Ko'lam: Kadrlar — faqat xodimlar buyruqlari; talabalar bilan ishlovchi bo'limlar — faqat talabalar buyruqlari (sirtqi — sirtqi);
+    Rektor va Devonxona — hammasi."""
+    k = c.role.key
+    if k in SIGN + CHANCERY: return "1=1"
+    if k in STAFF_EDIT: return f"{alias}.kind IN {_STAFF_SQL}"
+    base = f"{alias}.kind NOT IN {_STAFF_SQL}"
+    return f"{base} AND {alias}.study_form='sirtqi'" if is_sirtqi(c) else base
+
+def can_edit_order(c: Ctx, o: dict) -> bool:
+    return c.role.key in (STAFF_EDIT if is_staff_kind(o["kind"]) else EDIT)
 
 def _order(c: Ctx, oid: int) -> dict:
     o = db.one(_con, f"SELECT * FROM orders o WHERE o.id=? AND {ord_scope(c)}", (oid,))
@@ -184,7 +258,7 @@ def _students(ids) -> dict:
     out = {}
     for k in range(0, len(ids), 900):
         part = ids[k:k + 900]
-        for r in db.rows(_con, f"""SELECT s.id, s.hemis_id, s.full_name, s.group_id, s.faculty_id, s.status, s.study_form, g.name grp, g.course
+        for r in db.rows(_con, f"""SELECT s.id, s.hemis_id, s.full_name, s.group_id, s.faculty_id, s.status, s.study_form, s.payment_type, g.name grp, g.course
                                    FROM students s LEFT JOIN groups_ g ON g.id=s.group_id WHERE s.id IN ({','.join('?' * len(part))})""", part):
             out[r["id"]] = r
     return out
@@ -273,6 +347,12 @@ def _check_scope_students(c: Ctx, studs: list[dict], action: str):
 # Tekshiruvlar (imzodan oldin)
 # ---------------------------------------------------------------------------------------------
 def checks(o: dict, its: list[dict] | None = None) -> dict:
+    if is_staff_kind(o["kind"]):
+        p = _j(o.get("params")); errors = []
+        if not p.get("staff_id"): errors.append("Xodim tanlanmagan")
+        miss = [FIELD_LABELS[f] for f in KINDS[o["kind"]]["req"] if not p.get(f)]
+        if miss: errors.append("Majburiy maydon to'ldirilmagan: " + ", ".join(miss))
+        return {"errors": errors, "warnings": []}
     its = its if its is not None else items(o["id"])
     st = _students([i["student_id"] for i in its if i["student_id"]])
     params = _j(o.get("params"))
@@ -295,6 +375,10 @@ def checks(o: dict, its: list[dict] | None = None) -> dict:
         if k == "tiklash" and s["status"] != EXPELLED: add("talaba chetlashtirilgan emas (tiklash shart emas)", i)
         if k == "guruh" and d.get("group_to_id") == s["group_id"]: add("yangi guruh joriy guruh bilan bir xil", i)
         if k == "familiya" and d.get("old_surname") and s["full_name"].split()[0].lower() != str(d["old_surname"]).lower(): add("eski familiya bazadagidan farq qiladi", i)
+        if k in ("ichki_kochirish", "kursda_qoldirish", "isft_granti", "isft_granti_mahrum", "bitirish") and s["status"] != "faol": add("talaba hozir faol emas", i)
+        if k in FORM_KINDS and d.get("group_to_id") == s["group_id"]: add("yangi guruh joriy guruh bilan bir xil", i)
+        if k == "isft_granti" and s.get("payment_type") == "grant": add("talaba allaqachon grant asosida o'qiydi", i)
+        if k == "isft_granti_mahrum" and s.get("payment_type") != "grant": add("talaba grant asosida o'qimaydi", i)
         if s["full_name"] != i["full_name"] and k != "bekor": add("F.I.Sh. ro'yxat tuzilgandan keyin o'zgargan", i)
     for msg, names in w.items():
         warns.append(f"{len(names)} ta: {msg}" + (f" ({', '.join(names[:3])}{'…' if len(names) > 3 else ''})" if names else ""))
@@ -315,8 +399,10 @@ def _change(sid, field, old, new, o, c, note=""):
                  (_now(), sid, field, None if old is None else str(old), None if new is None else str(new), o["id"] if o else None,
                   o.get("reg_no") if o else None, c.user["id"] if c else None, c.user["full_name"] if c else "Tizim", note))
 
+ST_COLS = "id, full_name, status, group_id, faculty_id, study_form, payment_type, contract_amount"   # buyruq ta'sir qiladigan (va qaytariladigan) maydonlar
+
 def _apply_item(o, it, c) -> dict:
-    s = db.one(_con, "SELECT id, full_name, status, group_id, faculty_id FROM students WHERE id=?", (it["student_id"],))
+    s = db.one(_con, f"SELECT {ST_COLS} FROM students WHERE id=?", (it["student_id"],))
     if not s: return {}
     d = {**_j(o.get("params")), **it["data"]}
     k = o["kind"]; upd = {}; extra = {}
@@ -343,9 +429,20 @@ def _apply_item(o, it, c) -> dict:
     elif k == "tiklash":
         upd["status"] = "faol"
         if d.get("group_to_id"): upd["group_id"] = int(d["group_to_id"])
+    elif k in FORM_KINDS:   # ichki ko'chirish, ko'chirish tartibida qabul, kursda qoldirish — guruh (va guruhdan ta'lim shakli)
+        if d.get("group_to_id"): upd["group_id"] = int(d["group_to_id"])
+        if k == "kochirib_qabul": upd["status"] = "faol"
+    elif k == "isft_granti":
+        upd["payment_type"] = "grant"; upd["contract_amount"] = 0
+    elif k == "isft_granti_mahrum":
+        upd["payment_type"] = "kontrakt"
+        if str(d.get("contract_amount") or "").isdigit(): upd["contract_amount"] = int(d["contract_amount"])
+    elif k == "bitirish":
+        upd["status"] = GRADUATED
     if "group_id" in upd:
         g = _group(upd["group_id"])
         if g and g["faculty_id"] != s["faculty_id"]: upd["faculty_id"] = g["faculty_id"]
+        if g and k in FORM_KINDS and g.get("form") and g["form"] != s["study_form"]: upd["study_form"] = g["form"]
     upd = {f: v for f, v in upd.items() if s[f] != v}
     if upd:
         _con.execute(f"UPDATE students SET {', '.join(f'{f}=?' for f in upd)} WHERE id=?", (*upd.values(), s["id"]))
@@ -360,7 +457,7 @@ def _revert(target: dict, o: dict, c) -> dict:
     for it in items(target["id"], target["version"]):
         p = _j(it.get("prev"))
         if not it.get("applied") or not p: continue
-        s = db.one(_con, "SELECT id, full_name, status, group_id, faculty_id FROM students WHERE id=?", (it["student_id"],))
+        s = db.one(_con, f"SELECT {ST_COLS} FROM students WHERE id=?", (it["student_id"],))
         if not s: continue
         back = {}
         for f, v in (p.get("after") or {}).items():
@@ -378,13 +475,14 @@ def _revert(target: dict, o: dict, c) -> dict:
     for x in conflicts[:50]: _log(target["id"], c, "ziddiyat", x)
     return {"reverted": n_ok, "conflicts": conflicts[:50]}
 
-def next_reg(year=None) -> str:
+def next_reg(year=None, prefix="TB") -> str:
+    """TB — talabalar buyruqlari, ShT — xodimlar (shaxsiy tarkib) buyruqlari. Hujjatlar markazining eski raqamlari bilan to'qnashmaydi."""
     yy = f"{(year or _today().year) % 100:02d}"
     n = 0
-    for r in db.rows(_con, "SELECT reg_no FROM orders WHERE reg_no LIKE ?", (f"TB-{yy}/%",)):
+    for r in db.rows(_con, "SELECT reg_no FROM orders WHERE reg_no LIKE ? UNION SELECT reg_no FROM documents WHERE reg_no LIKE ?", (f"{prefix}-{yy}/%",) * 2):
         try: n = max(n, int(r["reg_no"].split("/")[1]))
-        except (ValueError, IndexError): pass
-    return f"TB-{yy}/{n + 1:04d}"
+        except (ValueError, IndexError, AttributeError): pass
+    return f"{prefix}-{yy}/{n + 1:04d}"
 
 def sign(o: dict, c: Ctx, base_url: str) -> dict:
     with _lock:
@@ -396,7 +494,7 @@ def sign(o: dict, c: Ctx, base_url: str) -> dict:
         if o["kind"] == "bekor":
             tgt = db.one(_con, "SELECT * FROM orders WHERE id=?", (o["cancels_id"],))
             if not tgt or tgt["status"] != "imzolangan": _bad("Bekor qilinayotgan buyruq imzolangan holatda emas")
-        reg, today = next_reg(), _today().isoformat()
+        reg, today = next_reg(prefix="ShT" if is_staff_kind(o["kind"]) else "TB"), _today().isoformat()
         code = secrets.token_hex(4).upper()
         try:
             _con.execute("UPDATE orders SET status='imzolangan', reg_no=?, order_date=?, signed_by=?, signed_at=?, verify_code=? WHERE id=?",
@@ -410,12 +508,12 @@ def sign(o: dict, c: Ctx, base_url: str) -> dict:
                     if _apply_item(o, it, c): res["changed"] += 1
             _con.execute("UPDATE orders SET applied_at=? WHERE id=?", (_now(), o["id"]))
             _log(o["id"], c, "imzolandi", f"{reg} · {today} · " + (f"{res.get('reverted', 0)} ta talaba ma'lumoti qaytarildi" if o["kind"] == "bekor"
-                                                                   else f"bazaga ta'sir: {res['changed']} ta talaba"))
+                                                                   else "xodimlar buyrug'i" if is_staff_kind(o["kind"]) else f"bazaga ta'sir: {res['changed']} ta talaba"))
             _con.commit()
         except Exception:
             _con.rollback(); raise
     fname = _publish(o, c, base_url)
-    _audit(c, "buyruq imzolandi", f"{reg} · {KINDS[o['kind']]['short']} · {len(its)} ta talaba")
+    _audit(c, "buyruq imzolandi", f"{reg} · {KINDS[o['kind']]['short']} · " + (_j(o.get("params")).get("staff_name", "xodim") if is_staff_kind(o["kind"]) else f"{len(its)} ta talaba"))
     return {"ok": True, "reg_no": reg, "date": today, "file": fname, **res}
 
 def _publish(o: dict, c: Ctx, base_url: str) -> str | None:
@@ -428,13 +526,14 @@ def _publish(o: dict, c: Ctx, base_url: str) -> str | None:
         fname = f"{o['reg_no'].replace('/', '-')}.docx"
         (D.OUT / fname).write_bytes(p.read_bytes())
         its = items(o["id"])
-        holder = (lambda n: (n[0] + " " + " ".join(x[0] + "." for x in n[1:3])) if n else "")(its[0]["full_name"].split()) if len(its) == 1 else f"{len(its)} nafar talaba"
+        one = its[0]["full_name"] if len(its) == 1 else _j(o.get("params")).get("staff_name") if is_staff_kind(o["kind"]) else None
+        holder = (lambda n: (n[0] + " " + " ".join(x[0] + "." for x in n[1:3])) if n else "")(one.split()) if one else f"{len(its)} nafar talaba"
         cr = db.one(_con, "SELECT full_name, role FROM users WHERE id=?", (o["created_by"],)) if o.get("created_by") else None
         if not db.one(_con, "SELECT 1 x FROM documents WHERE reg_no=?", (o["reg_no"],)):
             _con.execute("""INSERT INTO documents(reg_no,kind,title,holder,created_by,creator_role,created_at,status,verify_code,file,params,signed_at)
                             VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
                          (o["reg_no"], "orders", f"Buyruq: {KINDS[o['kind']]['title']}", holder, o["created_by"] or c.user["id"],
-                          rbac.user_title(cr) if cr else "Registrator ofisi", _now(), "imzolangan", o["verify_code"], fname,
+                          rbac.user_title(cr) if cr else ("Kadrlar bo'limi" if is_staff_kind(o["kind"]) else "Registrator ofisi"), _now(), "imzolangan", o["verify_code"], fname,
                           json.dumps({"order_id": o["id"]}), _now()))
         _con.execute("UPDATE orders SET file=? WHERE id=?", (fname, o["id"])); _con.commit()
         return fname
@@ -454,7 +553,16 @@ def _cols(kind):
            "chetlashtirish_tolov": [("Sanadan", lambda i, d: _dmy(d.get("date_from")))],
            "kochirish": [("Sanadan", lambda i, d: _dmy(d.get("date_from"))), ("Qabul qiluvchi OTM", lambda i, d: d.get("target", ""))],
            "guruh": [("Yangi guruh", lambda i, d: d.get("group_to", ""))],
-           "tiklash": [("Sanadan", lambda i, d: _dmy(d.get("date_from"))), ("Guruh", lambda i, d: d.get("group_to", ""))]}
+           "tiklash": [("Sanadan", lambda i, d: _dmy(d.get("date_from"))), ("Guruh", lambda i, d: d.get("group_to", ""))],
+           "hayfsan": [("Sabab", lambda i, d: d.get("reason", ""))],
+           "akademik_qarz": [("Sanadan", lambda i, d: _dmy(d.get("date_from"))), ("Asos (qarzdor fanlar)", lambda i, d: d.get("reason", ""))],
+           "ichki_kochirish": [("Sanadan", lambda i, d: _dmy(d.get("date_from"))), ("Yangi guruh", lambda i, d: d.get("group_to", "")), ("Izoh", lambda i, d: d.get("reason", ""))],
+           "kochirib_qabul": [("Sanadan", lambda i, d: _dmy(d.get("date_from"))), ("Guruh", lambda i, d: d.get("group_to", "")), ("Avvalgi OTM", lambda i, d: d.get("source_otm", ""))],
+           "kursda_qoldirish": [("Sanadan", lambda i, d: _dmy(d.get("date_from"))), ("Guruh", lambda i, d: d.get("group_to", ""))],
+           "qayta_oqish": [("Fanlar", lambda i, d: d.get("reason", ""))],
+           "isft_granti": [("Sanadan", lambda i, d: _dmy(d.get("date_from"))), ("Asos", lambda i, d: d.get("reason", ""))],
+           "isft_granti_mahrum": [("Sanadan", lambda i, d: _dmy(d.get("date_from"))), ("Sabab", lambda i, d: d.get("reason", ""))],
+           "bitirish": [("Sanadan", lambda i, d: _dmy(d.get("date_from")))]}
     return base + per.get(kind, [])
 
 def _dmy(v):
@@ -470,7 +578,16 @@ CLAUSE = {"familiya": "Quyidagi talabaning familiyasi asos hujjatga muvofiq o'zg
           "guruh": "Quyidagi talabalar ko'rsatilgan guruhga o'tkazilsin:",
           "tiklash": "Quyidagi talabalar ko'rsatilgan sanadan talabalar safiga qayta tiklansin:",
           "qabul": "Quyidagi shaxslar institut talabalari safiga qabul qilinsin:",
-          "kurs": "O'quv rejasini to'liq bajargan quyidagi talabalar keyingi kursga o'tkazilsin:"}
+          "kurs": "O'quv rejasini to'liq bajargan quyidagi talabalar keyingi kursga o'tkazilsin:",
+          "hayfsan": "Ichki tartib qoidalarini (sababsiz dars qoldirish) buzgani uchun quyidagi talabaga hayfsan e'lon qilinsin:",
+          "akademik_qarz": "Qayta topshirish natijalariga ko'ra belgilangan muddatda akademik qarzdorligini tugatmagan quyidagi talabalar ko'rsatilgan sanadan talabalar safidan chetlashtirilsin:",
+          "ichki_kochirish": "Quyidagi talabalar arizasiga ko'ra ko'rsatilgan guruhga (ta'lim yo'nalishi / ta'lim shakliga) ko'chirilsin; akademik farq fanlari belgilangan muddatda topshirilsin:",
+          "kochirib_qabul": "Boshqa oliy ta'lim muassasasidan o'qishini ko'chirish tartibida quyidagi shaxslar institut talabalari safiga qabul qilinsin; akademik farq fanlari belgilangan muddatda topshirilsin:",
+          "kursda_qoldirish": "Akademik qarzdorligini qayta topshirish orqali tugata olmagan quyidagi talabalar arizasiga ko'ra o'quv yilini takroran o'qish uchun kursda qoldirilsin:",
+          "qayta_oqish": "Quyidagi talabalarga akademik qarzdor fanlarni to'lov-kontrakt asosida qayta o'qishga ruxsat berilsin:",
+          "isft_granti": "ISFT granti komissiyasi qaroriga muvofiq quyidagi talabalar ko'rsatilgan sanadan ISFT granti asosida o'qishga o'tkazilsin:",
+          "isft_granti_mahrum": "ISFT granti komissiyasi qaroriga muvofiq quyidagi talabalar ISFT grantidan mahrum qilinsin va ko'rsatilgan sanadan to'lov-kontrakt asosida o'qishga o'tkazilsin:",
+          "bitirish": "O'quv rejasini to'liq bajargan, bitiruv ishini (magistrlik dissertatsiyasini) himoya qilgan va yakuniy davlat attestatsiyasidan muvaffaqiyatli o'tgan quyidagi talabalarga diplom berilsin va ular bitiruvchi sifatida talabalar safidan chiqarilsin:"}
 
 def render_docx(o: dict, base_url: str = "http://localhost:8000/") -> Path:
     from docx import Document
@@ -480,6 +597,8 @@ def render_docx(o: dict, base_url: str = "http://localhost:8000/") -> Path:
     params = _j(o.get("params"))
     signed = o["status"] in ("imzolangan", "bekor_qilingan") and o.get("reg_no")
     doc = Document(); B.setup(doc); B.letterhead(doc)
+    if is_staff_kind(o["kind"]):
+        return _render_staff(doc, o, params, signed, base_url)
     B.regline(doc, o["reg_no"] if signed else "LOYIHA", _d_uz(o["order_date"]) if signed else "«___» __________ 20___ y.")
     B.title(doc, "BUYRUQ" if signed else "BUYRUQ (LOYIHA)", o.get("title") or KINDS[o["kind"]]["title"])
     basis = o.get("basis") or BASIS[o["kind"]].format(basis=(its[0]["data"].get("basis") if its else "") or "asos hujjat")
@@ -507,7 +626,8 @@ def render_docx(o: dict, base_url: str = "http://localhost:8000/") -> Path:
             if params.get("date_from"): B.para(doc, f"Sana: {_d_uz(params['date_from'])}dan.", indent=False, size=11)
     if o["kind"] == "chetlashtirish_tolov":
         B.para(doc, f"{n}. Buxgalteriya talabalarning qarzdorligini hisob-kitobda qayd etsin va undirish choralarini ko'rsin."); n += 1
-    if o["kind"] in ("akademik_tatil", "tatildan_qaytish", "tiklash", "chetlashtirish_tolov", "chetlashtirish_xohish", "kochirish"):
+    if o["kind"] in ("akademik_tatil", "tatildan_qaytish", "tiklash", "chetlashtirish_tolov", "chetlashtirish_xohish", "kochirish", "akademik_qarz", "ichki_kochirish",
+                     "kochirib_qabul", "kursda_qoldirish", "qayta_oqish", "isft_granti", "isft_granti_mahrum", "bitirish"):
         B.para(doc, f"{n}. Buxgalteriya to'lov-kontrakt hisob-kitoblarini ushbu buyruqqa muvofiq qayta ko'rib chiqsin."); n += 1
     B.para(doc, f"{n}. Registrator ofisi ushbu o'zgarishlarni HEMIS axborot tizimida 3 ish kuni ichida aks ettirsin."); n += 1
     B.para(doc, f"{n}. Buyruq ijrosini nazorat qilish o'quv ishlari bo'yicha prorektor zimmasiga yuklansin.")
@@ -529,6 +649,117 @@ def render_docx(o: dict, base_url: str = "http://localhost:8000/") -> Path:
     out = OUTD / f"order-{o['id']}-v{ver}{'-signed' if signed else ''}.docx"
     doc.save(out)
     return out
+
+def _render_staff(doc, o: dict, p: dict, signed, base_url) -> Path:
+    """Xodimlar buyrug'i (mehnat ta'tili) — Hujjatlar markazidagi «leave_order» matni asosida."""
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from . import brand as B
+    B.regline(doc, o["reg_no"] if signed else "LOYIHA", _d_uz(o["order_date"]) if signed else "«___» __________ 20___ y.")
+    B.title(doc, "BUYRUQ" if signed else "BUYRUQ (LOYIHA)", "Mehnat ta'tili berish to'g'risida")
+    B.para(doc, "O'zbekiston Respublikasi Mehnat kodeksiga va ta'tillar jadvaliga muvofiq, xodimning arizasi asosida")
+    x = doc.add_paragraph(); x.alignment = WD_ALIGN_PARAGRAPH.CENTER; B.run(x, "BUYURAMAN:", 12, True)
+    B.para(doc, f"1. {p.get('unit') or ''} — {p.get('position') or ''} {p.get('staff_name') or ''}ga {_d_uz(p.get('date_from'))}dan {_d_uz(p.get('date_to'))}gacha "
+                f"{p.get('days')} kalendar kunlik yillik asosiy mehnat ta'tili berilsin.")
+    B.para(doc, "2. Buxgalteriya ta'til haqini belgilangan tartibda hisoblab, ta'til boshlanishidan oldin to'lab bersin.")
+    B.para(doc, "3. Ta'til davrida xodimning vazifalarini bajarish bo'lim boshlig'i tomonidan taqsimlansin.")
+    x = doc.add_paragraph(); B.run(x, f"Asos: {o.get('basis') or BASIS['xodim_tatil']}.", 11, False, italic=True)
+    B.signature(doc, "Rektor", B.INST["rector_short"])
+    x = doc.add_paragraph(); B.run(x, "Loyiha kiritdi: Kadrlar bo'limi  _______________", 10.5)
+    doc.add_paragraph(); x = doc.add_paragraph(); B.run(x, "KELISHILDI:", 10.5, True, B.RGB_TEAL_DARK)
+    for w in ["Bosh buxgalter", "Yuriskonsult"]:
+        x = doc.add_paragraph(); B.run(x, f"{w}  _______________", 10.5)
+    if signed and o.get("verify_code"):
+        B.footer_qr(doc, f"{base_url.rstrip('/')}/verify/{o['verify_code']}", o["verify_code"],
+                    "Buyruq institut axborot tizimida ro'yxatga olingan. Haqiqiyligini QR-kod orqali tekshiring.")
+    OUTD.mkdir(parents=True, exist_ok=True)
+    out = OUTD / f"order-{o['id']}-staff{'-signed' if signed else ''}.docx"
+    doc.save(out)
+    return out
+
+def _staff_params(staff_id: int, date_from: str, days, absence_id=None) -> dict:
+    st = db.one(_con, "SELECT * FROM staff WHERE id=?", (int(staff_id or 0),))
+    if not st: _bad("Xodim topilmadi")
+    try: start = dt.date.fromisoformat(str(date_from)[:10])
+    except ValueError: _bad("Ta'til boshlanish sanasi noto'g'ri")
+    try: days = int(days or 0) or (56 if st.get("unit") == "Professor-o'qituvchi" else 21)
+    except (TypeError, ValueError): _bad("Kunlar soni noto'g'ri")
+    if not 1 <= days <= 120: _bad("Kunlar soni 1–120 oralig'ida bo'lishi kerak")
+    p = {"staff_id": st["id"], "staff_name": st["full_name"], "position": st.get("position"), "unit": st.get("unit"),
+         "date_from": start.isoformat(), "days": days, "date_to": (start + dt.timedelta(days=days - 1)).isoformat()}
+    if absence_id: p["absence_id"] = int(absence_id)
+    return p
+
+def draft_staff_leave(con, c: Ctx, staff_id: int, date_from: str, days=None, absence_id=None, source="Xodimlar ta'tili", status="loyiha",
+                      created_at=None) -> dict:
+    """Xodimga mehnat ta'tili buyrug'i loyihasi (Buyruqlar — yagona joy). staff_absence.link_order va eski hujjatlar migratsiyasi chaqiradi."""
+    global _con
+    _con = _con or con
+    if c.role.key not in STAFF_EDIT: _deny(c, "xodim buyrug'i loyihasi", "Xodimlar buyrug'ini Kadrlar bo'limi tayyorlaydi")
+    p = _staff_params(staff_id, date_from, days, absence_id)
+    ts = created_at or _now()
+    cur = _con.execute("""INSERT INTO orders(kind,title,status,source,params,count,created_by,created_at,submitted_at) VALUES(?,?,?,?,?,?,?,?,?)""",
+                       ("xodim_tatil", f"{p['staff_name']}ga mehnat ta'tili berish to'g'risida"[:300], status, source, json.dumps(p, ensure_ascii=False), 1,
+                        c.user["id"], ts, ts if status == "yuborilgan" else None))
+    o = db.one(_con, "SELECT * FROM orders WHERE id=?", (cur.lastrowid,))
+    _log(o["id"], c, "loyiha yaratildi", f"Mehnat ta'tili (xodim) · {p['staff_name']} · manba: {source}")
+    if status == "yuborilgan": _log(o["id"], c, "imzoga yuborildi", "")
+    _con.commit()
+    _audit(c, "xodim buyrug'i loyihasi", f"#{o['id']} · {p['staff_name']} · {p['date_from']} · {p['days']} kun")
+    return o
+
+LEGACY_DOC_KINDS = ("order_student", "reprimand", "leave_order")
+
+def _migrate_if_needed():
+    """Server ishlab turganda Hujjatlar markazida (eski kod yo'li orqali) yangi buyruq loyihasi paydo bo'lsa — darhol Buyruqlarga."""
+    try:
+        if db.one(_con, f"SELECT 1 x FROM documents WHERE status='loyiha' AND kind IN ({','.join('?' * len(LEGACY_DOC_KINDS))}) LIMIT 1", LEGACY_DOC_KINDS):
+            with _lock: migrate_legacy_docs(_con)
+    except Exception as e:
+        print("orders._migrate_if_needed:", e)
+
+def migrate_legacy_docs(con) -> int:
+    """Hujjatlar markazida «loyiha» holatida qolgan buyruqlar (order_student, reprimand, leave_order) → Buyruqlar. Idempotent:
+    ko'chirilgan hujjat «bekor» bo'ladi (params.moved_to_order), xodimlar ta'tili yozuvi yangi buyruqqa bog'lanadi."""
+    global _con
+    _con = _con or con
+    n = 0
+    try:
+        docs = db.rows(con, f"SELECT * FROM documents WHERE status='loyiha' AND kind IN ({','.join('?' * len(LEGACY_DOC_KINDS))}) ORDER BY id", LEGACY_DOC_KINDS)
+    except Exception:
+        return 0
+    for d in docs:
+        src = f"Hujjatlar markazi: {d['reg_no']}"
+        if db.one(con, "SELECT 1 x FROM orders WHERE source=?", (src,)): continue
+        u = db.one(con, "SELECT * FROM users WHERE id=?", (d["created_by"],))
+        if not u: continue
+        c = Ctx(u, rbac.ROLES[u["role"]])
+        p = _j(d.get("params"))
+        try:
+            if d["kind"] == "leave_order":
+                if c.role.key not in STAFF_EDIT: continue
+                o = draft_staff_leave(con, c, p.get("staff"), p.get("start") or _today().isoformat(), p.get("days"), source=src, status="yuborilgan",
+                                      created_at=d["created_at"])
+                con.execute("UPDATE staff_absences SET order_id=? WHERE order_doc_id=?", (o["id"], d["id"]))
+            else:
+                sid = int(str(p.get("target") or "").split(":")[-1] or 0)
+                kind = "hayfsan" if d["kind"] == "reprimand" else p.get("action")
+                if kind not in KINDS or not sid: continue
+                data = {"reason": p.get("reason")} if p.get("reason") else {}
+                if p.get("from_date"): data["date_from"] = p["from_date"]
+                o = create_order(c, kind, [{"student_id": sid, "data": data}], src, note=f"Hujjatlar markazidan ko'chirildi ({d['reg_no']})")
+                ch = checks(db.one(con, "SELECT * FROM orders WHERE id=?", (o["id"],)))
+                if ch["errors"]:
+                    con.execute("UPDATE orders SET returned_note=? WHERE id=?", ("Hujjatlar markazidan ko'chirildi — majburiy maydonlarni to'ldirib, imzoga qayta yuboring", o["id"]))
+                else:
+                    con.execute("UPDATE orders SET status='yuborilgan', submitted_at=? WHERE id=?", (d["created_at"], o["id"]))
+                    _log(o["id"], c, "imzoga yuborildi", "Hujjatlar markazidan ko'chirildi")
+            p["moved_to_order"] = o["id"]
+            con.execute("UPDATE documents SET status='bekor', params=? WHERE id=?", (json.dumps(p, ensure_ascii=False), d["id"]))
+            con.commit(); n += 1
+        except (HTTPException, AccessDenied, ValueError) as e:
+            con.rollback(); print("orders.migrate_legacy_docs:", d["reg_no"], e)
+    if n: print(f"Buyruqlar: Hujjatlar markazidan {n} ta buyruq loyihasi ko'chirildi")
+    return n
 
 def list_xlsx(o: dict, version: int) -> bytes:
     its = items(o["id"], version)
@@ -592,7 +823,7 @@ def analyze(c: Ctx) -> dict:
     for s in studs:
         es = ev.get(s["id"], [])
         active = s["status"] in ACTIVE
-        if active and not any(e["kind"] in ("qabul", "tiklash") for e in es):
+        if active and not any(e["kind"] in ADMIT_KINDS for e in es):
             add("no_admission", s, "Hech bir imzolangan qabul buyrug'ida topilmadi", es[-1:])
         qab = [e for e in es if e["kind"] == "qabul"]
         if len({e["oid"] for e in qab}) > 1:
@@ -610,7 +841,7 @@ def analyze(c: Ctx) -> dict:
         if active and es and es[-1]["kind"] in EXIT_KINDS:
             add("expelled_active", s, f"{es[-1]['reg_no']} ({_dmy(es[-1]['d'])}) bilan chetlashtirilgan, bazadagi holat: «{s['status']}»", es[-1:])
             continue
-        if active and (s["course"] or 1) >= 2 and not any(e["kind"] in ("akademik_tatil", "tiklash") for e in es):
+        if active and (s["course"] or 1) >= 2 and not any(e["kind"] in ("akademik_tatil", "tiklash", "kochirib_qabul", "kursda_qoldirish") for e in es):
             n = len({e["oid"] for e in es if e["kind"] == "kurs"})
             if n < (s["course"] - 1):
                 add("no_transfer", s, f"{s['course']}-kurs talabasi: kutilgan {s['course'] - 1} ta kursga o'tkazish buyrug'idan {n} tasida bor",
@@ -620,7 +851,7 @@ def analyze(c: Ctx) -> dict:
             for e in es:
                 d = _j(e["data"])
                 if e["kind"] in ("qabul", "kurs"): last = (e, e["gid"])
-                elif e["kind"] in ("guruh", "tiklash", "tatildan_qaytish") and d.get("group_to_id"): last = (e, int(d["group_to_id"]))
+                elif e["kind"] in GROUP_KINDS and d.get("group_to_id"): last = (e, int(d["group_to_id"]))
             if last and last[1] and last[1] != s["group_id"]:
                 add("group_mismatch", s, f"{last[0]['reg_no']} buyrug'ida guruh {gname.get(last[1], '?')}, bazada — {s['grp']}", [last[0]],
                     {"order_group": {"id": last[1], "name": gname.get(last[1])}})
@@ -682,17 +913,42 @@ def _attach(oid, c: Ctx | None, kind, filename, stored, size, student_id=None, n
 # ---------------------------------------------------------------------------------------------
 def _caps(c: Ctx) -> dict:
     k = c.role.key
-    return {"edit": k in EDIT, "fix": k in FIX, "forward": k in FORWARD, "sign": k in SIGN, "sirtqi": k == "sirtqi"}
+    return {"edit": k in EDIT, "edit_staff": k in STAFF_EDIT, "fix": k in FIX, "forward": k in FORWARD, "sign": k in SIGN, "sirtqi": k == "sirtqi",
+            "register": k in CHANCERY, "outgoing": k in CHANCERY + SIGN, "students": k in READ}
+
+def pending(c: Ctx) -> dict:
+    """Mening harakatimni kutayotgan buyruqlar (badge, «Mening vazifalarim», bildirishnomalar — bitta qoida)."""
+    k, sc = c.role.key, ord_scope(c)
+    _migrate_if_needed()
+    out = {"sign": [], "forward": [], "returned": [], "register": []}
+    cols = "o.id, o.kind, o.title, o.reg_no, o.status, o.count, o.created_at, o.submitted_at, o.forwarded_at, o.signed_at, o.returned_note, o.params"
+    if k in SIGN:
+        out["sign"] = db.rows(_con, f"SELECT {cols} FROM orders o WHERE {sc} AND o.status IN ('yuborilgan','kelishilgan') ORDER BY COALESCE(o.forwarded_at, o.submitted_at), o.id")
+    if k in FORWARD:   # xodimlar buyrug'i prorektor kelishuvisiz rektorga boradi
+        out["forward"] = db.rows(_con, f"SELECT {cols} FROM orders o WHERE {sc} AND o.status='yuborilgan' ORDER BY o.submitted_at, o.id")
+    if k in EDIT + STAFF_EDIT:   # qaytarilgan loyihalar: bo'lim rahbari — barchasi, xodim — o'zi tuzganlari
+        mine = "" if k in ("talabalar", "sirtqi", "kadrlar") else f" AND o.created_by={int(c.user['id'])}"
+        out["returned"] = db.rows(_con, f"SELECT {cols} FROM orders o WHERE {sc} AND o.status='loyiha' AND o.returned_note IS NOT NULL{mine} ORDER BY o.id")
+    if k in CHANCERY:
+        out["register"] = db.rows(_con, f"SELECT {cols} FROM orders o WHERE {sc} AND o.status='imzolangan' AND COALESCE(o.historic,0)=0 AND o.journal_at IS NULL ORDER BY o.signed_at, o.id")
+    for v in out.values():
+        for r in v: r["kind_name"] = KINDS.get(r["kind"], {}).get("short", r["kind"]); r["params"] = _j(r.get("params"))
+    return out
 
 @router.get("/api/orders/meta")
 def meta(request: Request):
     c = C(request, "read", "meta")
     sc = ord_scope(c)
     cnt = {r["status"]: r["n"] for r in db.rows(_con, f"SELECT status, COUNT(*) n FROM orders o WHERE {sc} GROUP BY status")}
-    return {"kinds": [{"key": k, "title": v["title"], "short": v["short"], "fields": v["fields"], "req": v["req"], "effect": v["effect"]} for k, v in KINDS.items()],
+    pd = pending(c)
+    act = len(pd["sign"]) + len(pd["forward"]) + len(pd["returned"]) + len(pd["register"])
+    vis = [k for k in KINDS if (is_staff_kind(k) and c.role.key in STAFF_EDIT + SIGN + CHANCERY) or (not is_staff_kind(k) and c.role.key not in STAFF_EDIT)]
+    return {"kinds": [{"key": k, "title": KINDS[k]["title"], "short": KINDS[k]["short"], "fields": KINDS[k]["fields"], "req": KINDS[k]["req"], "effect": KINDS[k]["effect"],
+                       "staff": bool(KINDS[k].get("staff"))} for k in vis],
             "field_labels": FIELD_LABELS, "statuses": STATUS, "caps": _caps(c), "counts": cnt, "ocr": IN.ocr_available(),
-            "pending": {"sign": cnt.get("yuborilgan", 0) + cnt.get("kelishilgan", 0), "forward": cnt.get("yuborilgan", 0), "drafts": cnt.get("loyiha", 0)},
-            "samples": samples_list(c)}
+            "pending": {"sign": len(pd["sign"]), "forward": len(pd["forward"]), "returned": len(pd["returned"]), "register": len(pd["register"]),
+                        "drafts": cnt.get("loyiha", 0), "action": act},
+            "samples": samples_list(c) if c.role.key in EDIT else []}
 
 def samples_list(c: Ctx) -> list[dict]:
     try:
@@ -706,7 +962,9 @@ def list_orders(request: Request, status: str = "", kind: str = "", q: str = "",
     c = C(request, "read", "reyestr")
     w, a = [ord_scope(c)], []
     if status == "jarayonda": w.append("o.status IN ('loyiha','yuborilgan','kelishilgan')")
-    elif status == "imzo": w.append("o.status IN ('yuborilgan','kelishilgan')")
+    elif status == "imzo": w.append("o.status IN ('yuborilgan','kelishilgan')" if c.role.key not in FORWARD else "o.status='yuborilgan'")
+    elif status == "jurnal": w.append("o.status='imzolangan' AND COALESCE(o.historic,0)=0 AND o.journal_at IS NULL")
+    elif status == "qaytarilgan": w.append("o.status='loyiha' AND o.returned_note IS NOT NULL")
     elif status in STATUS: w.append("o.status=?"); a.append(status)
     else: w.append("o.status!='bekor'")
     if kind in KINDS: w.append("o.kind=?"); a.append(kind)
@@ -721,7 +979,7 @@ def list_orders(request: Request, status: str = "", kind: str = "", q: str = "",
     where = " AND ".join(w)
     total = db.one(_con, f"SELECT COUNT(*) n FROM orders o WHERE {where}", a)["n"]
     rows = db.rows(_con, f"""SELECT o.id, o.kind, o.title, o.status, o.reg_no, o.order_date, o.study_form, o.source, o.count, o.version, o.historic,
-                              o.created_at, o.submitted_at, o.forwarded_at, o.signed_at, o.cancels_id, o.cancelled_by, o.returned_note, u.full_name creator
+                              o.created_at, o.submitted_at, o.forwarded_at, o.signed_at, o.cancels_id, o.cancelled_by, o.returned_note, o.journal_at, u.full_name creator
                               FROM orders o LEFT JOIN users u ON u.id=o.created_by WHERE {where}
                               ORDER BY CASE o.status WHEN 'yuborilgan' THEN 0 WHEN 'kelishilgan' THEN 0 WHEN 'loyiha' THEN 1 ELSE 2 END,
                                        COALESCE(o.order_date, substr(o.created_at,1,10)) DESC, o.id DESC LIMIT ? OFFSET ?""", a + [min(max(limit, 1), 200), max(offset, 0)])
@@ -760,17 +1018,21 @@ def detail(oid: int, request: Request, q: str = "", offset: int = 0, limit: int 
     if pend: rel["cancel_pending"] = pend
     u = lambda uid: _short((db.one(_con, "SELECT full_name FROM users WHERE id=?", (uid,)) or {}).get("full_name")) if uid else None
     caps = _caps(c)
-    k = c.role.key; s_ = o["status"]
-    can = {"edit": caps["edit"] and s_ == "loyiha", "submit": caps["edit"] and s_ == "loyiha", "delete": caps["edit"] and s_ == "loyiha",
+    k = c.role.key; s_ = o["status"]; ed = can_edit_order(c, o); stf = is_staff_kind(o["kind"])
+    can = {"edit": ed and s_ == "loyiha", "submit": ed and s_ == "loyiha", "delete": ed and s_ == "loyiha",
            "forward": caps["forward"] and s_ == "yuborilgan", "sign": caps["sign"] and s_ in ("yuborilgan", "kelishilgan"),
            "return": (k in FORWARD and s_ == "yuborilgan") or (k in SIGN and s_ in ("yuborilgan", "kelishilgan")),
-           "annul": caps["edit"] and s_ == "imzolangan" and o["kind"] != "bekor" and not pend}
+           "annul": caps["edit"] and not stf and s_ == "imzolangan" and o["kind"] != "bekor" and not pend,
+           "register": caps["register"] and s_ == "imzolangan" and not o.get("historic") and not o.get("journal_at"),
+           "students": caps["students"] and not stf}
+    if o.get("journal_at"): rel["journal"] = {"at": o["journal_at"], "by": u(o.get("journal_by")), "note": o.get("journal_note")}
+    rel["outgoing"] = db.rows(_con, "SELECT id, out_no, out_date, addressee, subject FROM outgoing_mail WHERE order_id=? ORDER BY id", (oid,))
     _audit(c, "buyruq ochildi", f"{o.get('reg_no') or '#' + str(oid)}")
     return {"order": {**o, "params": params, "kind_name": KINDS[o["kind"]]["short"], "kind_title": KINDS[o["kind"]]["title"], "status_name": STATUS.get(s_, s_),
                       "creator": u(o["created_by"]), "forwarder": u(o.get("forwarded_by")), "signer": u(o.get("signed_by"))},
             "items": page, "total": len(view), "all": len(its), "unmatched": sum(1 for i in its if not i["student_id"]),
             "versions": vers, "files": files, "log": log, "checks": ch, "related": rel, "can": can,
-            "fields": KINDS[o["kind"]]["fields"], "req": KINDS[o["kind"]]["req"]}
+            "fields": KINDS[o["kind"]]["fields"], "req": KINDS[o["kind"]]["req"], "staff": stf}
 
 class NewOrder(BaseModel):
     kind: str
@@ -782,8 +1044,14 @@ class NewOrder(BaseModel):
 
 @router.post("/api/orders")
 def create(body: NewOrder, request: Request):
-    c = C(request, "edit", "loyiha yaratish")
+    c = C(request, "edit_any", "loyiha yaratish")
     if body.kind == "bekor": _bad("Bekor qiluvchi buyruq imzolangan buyruq sahifasidan tuziladi")
+    if is_staff_kind(body.kind) or c.role.key in STAFF_EDIT:
+        if not (is_staff_kind(body.kind) and c.role.key in STAFF_EDIT):
+            _deny(c, "loyiha yaratish", "Xodimlar buyrug'ini Kadrlar bo'limi, talabalar buyrug'ini Registrator ofisi tayyorlaydi", body.kind)
+        p = body.params or {}
+        o = draft_staff_leave(_con, c, p.get("staff_id"), p.get("date_from"), p.get("days"), source="qo'lda")
+        return {"ok": True, "id": o["id"]}
     o = create_order(c, body.kind, body.students[:20000], "qo'lda", body.title, body.basis, body.note, body.params)
     return {"ok": True, "id": o["id"]}
 
@@ -795,13 +1063,18 @@ class EditOrder(BaseModel):
 
 @router.post("/api/orders/{oid}/edit")
 def edit(oid: int, body: EditOrder, request: Request):
-    c = C(request, "edit", "loyihani tahrirlash", f"#{oid}")
+    c = C(request, "edit_any", "loyihani tahrirlash", f"#{oid}")
     o = _order(c, oid); _editable(c, o)
+    if not can_edit_order(c, o): _deny(c, "loyihani tahrirlash", DENY_MSG["edit_any"], f"#{oid}")
     upd = {}
     if body.title is not None: upd["title"] = body.title.strip()[:300] or KINDS[o["kind"]]["title"]
     if body.basis is not None: upd["basis"] = body.basis.strip()[:500] or None
     if body.note is not None: upd["note"] = body.note.strip()[:1000] or None
-    if body.params is not None and o["kind"] != "bekor": upd["params"] = json.dumps(_norm_data(o["kind"], body.params), ensure_ascii=False)
+    if body.params is not None and is_staff_kind(o["kind"]):
+        cur = _j(o.get("params"))
+        upd["params"] = json.dumps(_staff_params(cur.get("staff_id"), body.params.get("date_from") or cur.get("date_from"),
+                                                 body.params.get("days") or cur.get("days"), cur.get("absence_id")), ensure_ascii=False)
+    elif body.params is not None and o["kind"] != "bekor": upd["params"] = json.dumps(_norm_data(o["kind"], body.params), ensure_ascii=False)
     if upd:
         _con.execute(f"UPDATE orders SET {', '.join(f'{k}=?' for k in upd)} WHERE id=?", (*upd.values(), oid))
         _log(oid, c, "loyiha tahrirlandi", ", ".join(upd)); _con.commit()
@@ -879,7 +1152,7 @@ def _upload_list(c: Ctx, oid: int, name: str, raw: bytes, by_name=None, ts=None)
 
 @router.get("/api/orders/{oid}/versions/{no}/diff")
 def version_diff(oid: int, no: int, request: Request, against: int = 0, limit: int = 300):
-    c = C(request, "read", "versiya farqi", f"#{oid} v{no}")
+    c = C(request, "read_st", "versiya farqi", f"#{oid} v{no}")
     _order(c, oid)
     base_no = against or no - 1
     a = {_key(i): i for i in items(oid, base_no)} if base_no >= 1 else {}
@@ -913,8 +1186,9 @@ def _transition(c: Ctx, o: dict, frm: tuple, to: str, action: str, detail="", **
 
 @router.post("/api/orders/{oid}/submit")
 def submit(oid: int, request: Request):
-    c = C(request, "edit", "imzoga yuborish", f"#{oid}")
+    c = C(request, "edit_any", "imzoga yuborish", f"#{oid}")
     o = _order(c, oid)
+    if not can_edit_order(c, o): _deny(c, "imzoga yuborish", DENY_MSG["edit_any"], f"#{oid}")
     if o["status"] == "loyiha":
         ch = checks(o)
         if ch["errors"]: _bad("Yuborib bo'lmaydi: " + "; ".join(ch["errors"]))
@@ -951,8 +1225,9 @@ def sign_ep(oid: int, request: Request):
 
 @router.post("/api/orders/{oid}/delete")
 def delete(oid: int, request: Request):
-    c = C(request, "edit", "loyihani o'chirish", f"#{oid}")
+    c = C(request, "edit_any", "loyihani o'chirish", f"#{oid}")
     o = _order(c, oid)
+    if not can_edit_order(c, o): _deny(c, "loyihani o'chirish", DENY_MSG["edit_any"], f"#{oid}")
     _transition(c, o, ("loyiha",), "bekor", "loyiha o'chirildi", "versiyalar va jurnal saqlanadi")
     return {"ok": True}
 
@@ -981,7 +1256,7 @@ def docx(oid: int, request: Request):
 
 @router.get("/api/orders/{oid}/xlsx")
 def xlsx(oid: int, request: Request, version: int = 0):
-    c = C(request, "read", "ro'yxat XLSX", f"#{oid}")
+    c = C(request, "read_st", "ro'yxat XLSX", f"#{oid}")
     o = _order(c, oid)
     v = version or o["version"]
     data = list_xlsx(o, v)
@@ -992,7 +1267,7 @@ def xlsx(oid: int, request: Request, version: int = 0):
 
 @router.get("/api/orders/files/{fid}")
 def file_get(fid: int, request: Request):
-    c = C(request, "read", "ilova fayl", f"#{fid}")
+    c = C(request, "read_st", "ilova fayl", f"#{fid}")
     f = db.one(_con, "SELECT * FROM order_files WHERE id=?", (fid,))
     if not f: raise HTTPException(404)
     if f["order_id"]: _order(c, f["order_id"])
@@ -1077,7 +1352,7 @@ async def intake_sample(name: str, request: Request):
 
 @router.get("/api/orders/samples/{name}")
 def sample_get(name: str, request: Request):
-    c = C(request, "read", "namuna fayl", name)
+    c = C(request, "read_st", "namuna fayl", name)
     if name not in {x["file"] for x in samples_list(c)}: raise HTTPException(404)
     return FileResponse(SAMPLES / name, filename=name)
 
@@ -1126,7 +1401,7 @@ def lookup_students(request: Request, q: str = "", limit: int = 15):
 
 @router.get("/api/orders/lookup/groups")
 def lookup_groups(request: Request, q: str = ""):
-    c = C(request, "read", "guruh qidiruvi")
+    c = C(request, "read_st", "guruh qidiruvi")
     like = f"%{(q or '').strip().upper()}%"
     w = "g.form='sirtqi'" if is_sirtqi(c) else "1=1"
     return db.rows(_con, f"SELECT g.id, g.name, g.course, g.form, g.level FROM groups_ g WHERE {w} AND upper(g.name) LIKE ? ORDER BY g.name LIMIT 30", (like,))
@@ -1134,7 +1409,7 @@ def lookup_groups(request: Request, q: str = ""):
 # ---------- muvofiqlik auditi ----------
 @router.get("/api/orders/audit/issues")
 def audit_issues(request: Request, kind: str = "", q: str = ""):
-    c = C(request, "read", "muvofiqlik auditi")
+    c = C(request, "read_st", "muvofiqlik auditi")
     r = analyze(c)
     its = r["items"]
     if kind in ISSUES: its = [x for x in its if x["kind"] == kind]
@@ -1205,7 +1480,7 @@ def audit_fix(body: Fix, request: Request):
 
 @router.get("/api/orders/student/{sid}")
 def student_history(sid: int, request: Request):
-    c = C(request, "read", "talaba buyruqlari", str(sid))
+    c = C(request, "read_st", "talaba buyruqlari", str(sid))
     s = db.one(_con, f"SELECT s.id, s.full_name, s.hemis_id, s.status, s.study_form, g.name grp FROM students s LEFT JOIN groups_ g ON g.id=s.group_id WHERE s.id=? AND {st_scope(c)}", (sid,))
     if not s: raise HTTPException(404, "Talaba topilmadi")
     ords = db.rows(_con, """SELECT o.id, o.kind, o.reg_no, o.order_date, o.status, o.title, i.group_name, i.data FROM order_students i
@@ -1231,7 +1506,7 @@ def _named(rows):
 
 @router.get("/api/orders/changes/log")
 def changes_log(request: Request, q: str = "", offset: int = 0, limit: int = 100):
-    c = C(request, "read", "o'zgarishlar jurnali")
+    c = C(request, "read_st", "o'zgarishlar jurnali")
     w, a = [st_scope(c)], []
     if q.strip():
         like = f"%{q.strip()}%"; w.append("(s.full_name LIKE ? OR s.hemis_id LIKE ? OR ch.reg_no LIKE ? OR ch.old LIKE ? OR ch.new LIKE ?)"); a += [like] * 5
@@ -1243,3 +1518,88 @@ def changes_log(request: Request, q: str = "", offset: int = 0, limit: int = 100
     _named(rows)
     if offset == 0: _audit(c, "o'zgarishlar jurnali", q[:80])
     return {"items": rows, "total": total}
+
+# ---------------------------------------------------------------------------------------------
+# Devonxona: imzolangan buyruqni jurnalga ro'yxatga olish va chiquvchi yozishmalar jurnali (rbac.CHANCERY)
+# ---------------------------------------------------------------------------------------------
+@router.post("/api/orders/{oid}/register")
+def register(oid: int, body: Note, request: Request):
+    c = C(request, "register", "devonxona jurnaliga ro'yxatga olish", f"#{oid}")
+    o = _order(c, oid)
+    if o["status"] != "imzolangan" or o.get("historic"): _bad("Faqat tizimda imzolangan buyruq devonxona jurnaliga olinadi")
+    if o.get("journal_at"): _bad("Buyruq allaqachon ro'yxatga olingan")
+    note = (body.note or "").strip()[:300] or None
+    _con.execute("UPDATE orders SET journal_at=?, journal_by=?, journal_note=? WHERE id=?", (_now(), c.user["id"], note, oid))
+    _log(oid, c, "devonxona jurnaliga olindi", note or ""); _con.commit()
+    _audit(c, "devonxona jurnaliga olindi", f"{o['reg_no']}" + (f" · {note}" if note else ""))
+    return {"ok": True, "reg_no": o["reg_no"]}
+
+def seed_outgoing_demo(con):
+    """Devonxona demo jurnali (bo'sh bo'lsa): 3 ta chiquvchi xat — biri imzolangan buyruqqa bog'langan."""
+    if db.one(con, "SELECT 1 x FROM outgoing_mail LIMIT 1"): return
+    dv = db.one(con, "SELECT id, full_name FROM users WHERE role='devonxona' ORDER BY id LIMIT 1")
+    if not dv: return
+    o = db.one(con, "SELECT id, reg_no, title FROM orders WHERE status='imzolangan' AND reg_no IS NOT NULL ORDER BY order_date DESC, id DESC LIMIT 1")
+    t = _today()
+    rows = [("Oliy ta'lim, fan va innovatsiyalar vazirligi", "Talabalar kontingenti harakati to'g'risida ma'lumot (oktabr)", o["id"] if o else None, 6, 3),
+            ("Toshkent shahar bandlik bosh boshqarmasi", "Bitiruvchilar bandligi monitoringi bo'yicha javob xati", None, 4, 2),
+            ("Riga Technical University", "Hamkorlik memorandumini uzaytirish to'g'risida taklif", None, 1, 1)]
+    for k, (addr, subj, oid, ago, pages) in enumerate(rows, 1):
+        d = (t - dt.timedelta(days=ago)).isoformat()
+        con.execute("""INSERT INTO outgoing_mail(out_no,out_date,addressee,subject,order_id,pages,note,created_by,created_by_name,created_at)
+                       VALUES(?,?,?,?,?,?,?,?,?,?)""", (f"Ch-{t.year % 100:02d}/{k:04d}", d, addr, subj, oid, pages, "Demo yozuv", dv["id"], dv["full_name"], d + "T10:00:00"))
+    con.commit()
+
+def next_out_no(year=None) -> str:
+    yy = f"{(year or _today().year) % 100:02d}"
+    n = 0
+    for r in db.rows(_con, "SELECT out_no FROM outgoing_mail WHERE out_no LIKE ?", (f"Ch-{yy}/%",)):
+        try: n = max(n, int(r["out_no"].split("/")[1]))
+        except (ValueError, IndexError): pass
+    return f"Ch-{yy}/{n + 1:04d}"
+
+class Outgoing(BaseModel):
+    addressee: str
+    subject: str
+    out_date: str = ""
+    order_id: int = 0
+    thread_id: int = 0
+    pages: int = 1
+    note: str = ""
+
+@router.get("/api/orders/outgoing")
+def outgoing_list(request: Request, q: str = "", offset: int = 0, limit: int = 50):
+    c = C(request, "outgoing", "chiquvchi yozishmalar jurnali")
+    w, a = ["1=1"], []
+    if q.strip():
+        like = f"%{q.strip()}%"; w.append("(m.out_no LIKE ? OR m.addressee LIKE ? OR m.subject LIKE ?)"); a += [like] * 3
+    where = " AND ".join(w)
+    total = db.one(_con, f"SELECT COUNT(*) n FROM outgoing_mail m WHERE {where}", a)["n"]
+    rows = db.rows(_con, f"""SELECT m.*, o.reg_no order_reg, o.title order_title, t.ref_no thread_ref, t.subject thread_subject FROM outgoing_mail m
+                            LEFT JOIN orders o ON o.id=m.order_id LEFT JOIN portal_threads t ON t.id=m.thread_id
+                            WHERE {where} ORDER BY m.id DESC LIMIT ? OFFSET ?""", a + [min(max(limit, 1), 200), max(offset, 0)])
+    for r in rows: r["created_by_name"] = _short(r["created_by_name"]) or r["created_by_name"]
+    if offset == 0: _audit(c, "chiquvchi yozishmalar jurnali", f"{total} ta {q}"[:120])
+    return {"items": rows, "total": total, "next_no": next_out_no(), "can_add": c.role.key in CHANCERY}
+
+@router.post("/api/orders/outgoing")
+def outgoing_add(body: Outgoing, request: Request):
+    c = C(request, "register", "chiquvchi xatni ro'yxatga olish")
+    addr, subj = body.addressee.strip()[:200], body.subject.strip()[:300]
+    if len(addr) < 3 or len(subj) < 3: _bad("Qabul qiluvchi va mavzuni yozing")
+    try: d = dt.date.fromisoformat(body.out_date[:10]).isoformat() if body.out_date else _today().isoformat()
+    except ValueError: _bad("Sana noto'g'ri")
+    if body.order_id: _order(c, body.order_id)
+    if body.thread_id and not db.one(_con, "SELECT 1 x FROM portal_threads WHERE id=?", (body.thread_id,)): _bad("Portal yozishmasi topilmadi")
+    with _lock:
+        no = next_out_no()
+        cur = _con.execute("""INSERT INTO outgoing_mail(out_no,out_date,addressee,subject,order_id,thread_id,pages,note,created_by,created_by_name,created_at)
+                              VALUES(?,?,?,?,?,?,?,?,?,?,?)""", (no, d, addr, subj, body.order_id or None, body.thread_id or None, max(1, min(body.pages or 1, 999)),
+                                                                (body.note or "").strip()[:500] or None, c.user["id"], c.user["full_name"], _now()))
+        if body.order_id: _log(body.order_id, c, "chiquvchi xat", f"{no} · {addr}")
+        _con.commit()
+    _audit(c, "chiquvchi xat ro'yxatga olindi", f"{no} · {addr} · {subj}"[:200])
+    return {"ok": True, "id": cur.lastrowid, "out_no": no}
+
+# "/api/orders/outgoing" — "/api/orders/{oid}" dan oldin tekshirilsin (aks holda 422)
+router.routes.sort(key=lambda r: 0 if getattr(r, "path", "") == "/api/orders/outgoing" else 1)

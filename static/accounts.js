@@ -191,7 +191,7 @@ const AC_CONFIRM = {
   "deactivate": u => [`<b>${esc(acPerson(u))}</b> faolsizlantiriladi: tizimga kira olmaydi, ochiq sessiyalari darhol ishlamay qoladi, Telegram uziladi va kirish ro'yxatida ko'rinmaydi. Ma'lumotlari va audit tarixi saqlanadi.`, "Faolsizlantirish", "danger"],
   "activate": u => [`<b>${esc(acPerson(u))}</b> qayta faollashtiriladi va eski paroli bilan kira oladi. Kerak bo'lsa, keyin parolni tiklang.`, "Faollashtirish", ""],
 };
-function acOpen(id, kind) { AC.open = {id, kind}; acTable(); const x = $("#acX"); if (x) { x.closest("tr").previousElementSibling?.scrollIntoView({block: "nearest"}); (x.querySelector("input,select,.btn.primary,.btn.ac-danger") || x).focus?.(); } }
+function acOpen(id, kind) { AC.open = {id, kind}; acTable(); const x = $("#acX"); if (x) { x.closest("tr").previousElementSibling?.scrollIntoView({block: "nearest"}); (x.querySelector("form input,form select,[data-cancel]") || x).focus?.(); } }   /* tasdiq panelida fokus — «Bekor qilish»da (Enter tasodifan tiklamasin) */
 function acClose() { const id = AC.open && AC.open.id; AC.open = null; acTable(); const b = document.querySelector(`[data-menu="${id}"]`); if (b) b.focus(); }
 
 function acPanel(u) {
@@ -264,7 +264,9 @@ function acPanelBind() {
   x.addEventListener("keydown", e => { if (e.key === "Escape") { e.preventDefault(); acClose(); } });
   acCopyBind(x);
   const doB = x.querySelector("[data-do]");
-  if (doB) doB.onclick = () => acRun(doB, async () => {
+  /* qaytarib bo'lmaydigan amallar (parol tiklash, faolsizlantirish) — panel + ikki bosqichli tugma (app.js arm) */
+  const AC_ARM = {"reset-password": "Ha, parolni tiklash", "demo-password": "Ha, sinov parolini tiklash", "deactivate": "Ha, faolsizlantirish", "revoke": "Ha, sessiyalarni yopish"};
+  if (doB) doB.onclick = () => (AC_ARM[doB.dataset.do] && typeof arm === "function" && !arm(doB, AC_ARM[doB.dataset.do])) ? null : acRun(doB, async () => {
     const k = doB.dataset.do, r = await acApi(`/api/accounts/${id}/${k}`, {});
     if (r.password) {
       AC.open.result = `<div class="ac-done" role="status">${ico("checkc", 18)}<div><b>${esc(acPerson(u))}: yangi parol yaratildi</b>${r.revoked ? `<span class="muted tiny">${r.revoked} ta sessiya yopildi</span>` : ""}${acPwBox(r.password)}

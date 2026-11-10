@@ -23,13 +23,28 @@ Bu hujjatdagi qoidalarni `tests/test_ruxsatlar.py` tekshiradi.
 | Yoshlar masalalari prorektori | Auditoriyalar va kameralar (Majlislar zali signali), Talabalar markazi (jamlangan), hisobotlar | Kamera signali unga borardi, lekin uni ochib ko'ra olmasdi |
 | Ilmiy ishlar prorektori | Viza uchun taklifnoma | Xalqaro hamkorlik bo'limi shu prorektorga bo'ysunadi |
 | AT bo'limi boshlig'i | Kameralar salomatligi. Faqat kameraning texnik voqealarini belgilaydi: to'sish, tasvir yo'qolishi, siljish | Kamera tarmog'i va proshivkasi AT bo'limining ishi |
-| Strategik bo'lim, Sifatni ta'minlash, Yuridik bo'lim, Devonxona, Marketing, Xarid | Akkaunt, Portal, majlis topshiriqlari; eng kam ruxsat | 04.09.2024 tasdiqlangan tuzilma |
+| AT bo'limi muhandisi (#22) | `requests` — «Murojaatlar va nosozliklar»da **faqat** AT bo'limi navbati va o'ziga biriktirilgan murojaatlar; «Olindi» (o'ziga biriktiradi) / «Hal qilindi». Umumiy hodisa xabarini yubormaydi va hodisani yopmaydi (server: `service.UNIT_ONLY`). AT boshlig'i murojaatni muhandisga biriktiradi | Muhandisning real navbati yo'q edi — faqat majlis topshiriqlari |
+| Devonxona (#40) | Yangi resurs `chancery`: Buyruqlar reyestri (o'qish — talabalar va xodimlar buyruqlari), imzolangan buyruqni devonxona jurnaliga ro'yxatga olish, chiquvchi yozishmalar jurnali (raqam `Ch-YY/NNNN`, sana, qabul qiluvchi, mavzu, buyruq yoki Portal yozishmasiga havola). Loyiha tuzmaydi, imzolamaydi; talabalar muvofiqlik auditi, o'zgarishlar jurnali, talaba qidiruvi va ro'yxat XLSX — yopiq | Devonxona — buyruqlar va chiquvchi hujjatlar ro'yxatga olinadigan joy |
+| Kadrlar bo'limi | Buyruqlar — **faqat xodimlar buyruqlari** (mehnat ta'tili): loyiha, imzoga yuborish, qaytarilganini tuzatish. Talabalar buyruqlari, audit va jurnal yopiq | Buyruqlar — talabalar va xodimlar buyruqlarining yagona joyi (Hujjatlar markazidagi buyruq shablonlari o'rniga) |
+| Xarid bo'limi (#42) | Yangi resurs `procurement`: xarid so'rovlari navbati (xo'jalik nosozligidan), holat: yangi → ko'rib chiqilmoqda → buyurtma berildi → yetkazildi / rad etildi. Nosozliklar, murojaatlar, talabalar va kadrlar ma'lumoti — yopiq | Xo'jalik «Xarid kerak» belgilagan jihozlar shu bo'limga tushadi |
+| Xo'jalik bo'limi | `procurement`: nosozlik qatorida «Xarid kerak» (ikki bosqichli tasdiq) va xarid so'rovlari holatini ko'rish | — |
+| Moliya-iqtisod prorektori | `procurement` — xarid so'rovlarini ko'rish (kuratorlik) | Xarid bo'limi shu prorektorga bo'ysunadi |
+| Yuridik bo'lim (#39) | `international` — xalqaro/hamkorlik shartnomalari reyestri (faqat o'qish) va «Tarjima va shartnoma» tekshiruvi (AI o'chiq bo'lsa — qoida asosida). Panelda «Shartnomalar ekspertizasi» ish stoli: 180 kun ichida tugaydigan yoki e'tirozli shartnomalar navbati va yuridik xulosa (`POST /api/desk/legal/{id}` — faqat Yuridik bo'lim; e'tiroz/tugatishda izoh majburiy) | Shartnomalar ekspertizasi yuridik bo'lim ishi |
+| Strategik bo'lim (#37), Sifatni ta'minlash (#38), Marketing (#41) | Ruxsatlar o'zgarmadi — mavjud resurslar ustida ish stoli (`app/desks.py`, `GET /api/desk`, panelda): strategik — `kpi` + `reports` (10 ta institut KPI, fakultetlar kesimi, haftalik brifing DOCX, KPI jadvali CSV); sifat — `academic` (faqat jamlangan, faqat o'qish: fakultet/kurs kesimida ball, davomat, o'zlashtirmaganlar va a'lochilar ulushi, keskin pasaygan guruhlar, sillabuslar holati); marketing — `admissions` (voronka, yo'nalishlar konversiyasi, haftalik dinamika). Hech bir stol shaxsiy ma'lumot qaytarmaydi; o'qish audit jurnaliga yoziladi | Panellar bo'sh edi: ruxsat bor, lekin ko'rinish yo'q edi |
 | Barcha xodimlar (call-markaz va Kuzatuv kengashidan tashqari) | Xizmat xati | — |
 | Reyting (`app/reyting.py`, [reyting.md](reyting.md)) | To'liq: Registrator ofisi (#17, #43), Akademik bo'lim, rektor, o'quv prorektori, Imtihon va Ma'lumotlar bazasi bo'limlari; Sirtqi bo'lim — faqat sirtqi talabalar; kafedra mudiri — o'z kafedrasi; tyutor — o'z fakulteti; o'qituvchi — o'zi baholagan talabalar; Kuzatuv kengashi, boshqa prorektorlar, Sifat boshqarmasi — faqat jamlangan (ism-sharifsiz); qolganlar (Buxgalteriya) — 403. Qayta hisoblash — Registrator ofisi va Akademik bo'lim. Audit resursi `rating` | Reyting talaba baholarini ochadi — faqat ular bilan ishlaydigan bo'limlarga; rahbariyat kuzatuvi uchun jamlangan ko'rinish |
 
 ## Olib tashlangan ortiqcha ruxsatlar
 - **Kuzatuv kengashi** kamera xavfsizlik voqealari va kameralar ro'yxatini endi ko'rmaydi. Kengash operativ ish bilan shug'ullanmaydi, unga bandlik statistikasi ochiq qoldi. Ijro nazorati xati va xizmat xati ham olib tashlandi.
 - **Ruxsat jadvali** (`/api/rbac`) endi faqat tizimga kirgan foydalanuvchiga ochiladi. Avval kirishsiz ham ochilardi. To'liq jadvalni rektor, Kuzatuv kengashi va AT bo'limi boshlig'i ko'radi, qolganlar faqat o'z lavozimining ruxsatlarini ko'radi.
+
+## Menyu belgilari — yagona qoida
+Menyudagi har bir raqam — **sizdan harakat kutayotgan ishlar** soni va u bo'lim sahifasidagi son bilan teng; sichqoncha ostida izoh
+(nimani sanaydi). «Mening vazifalarim» — sahifadagi «Jami ish»; «Buyruqlar» — imzo / kelishuv / qaytarilgan / jurnalga olinmagan;
+«Murojaatlar va nosozliklar» — menga biriktirilgan + bo'limim navbatida hech kim olmagan murojaatlar (xo'jalik — yangi nosozliklar,
+xarid — ochiq so'rovlar, AT boshlig'i va Registrator ofisi — xabar yuborilmagan hodisalar); «Majlislar» — menga/bo'limimga tegishli
+bajarilmagan topshiriqlar; «AI agentlar» — mening tasdig'imni kutayotgan takliflar; «Talabalar markazi» — navbatimdagi kechikkanlar.
+Hujjatlar markazida imzo navbati yo'q: buyruqlar faqat «Buyruqlar»da imzolanadi.
 
 ## Bo'limlar ro'yxati bitta joyda
 - Majlis topshiriqlari, Portal va «Mening vazifalarim» bitta bo'limlar ro'yxatidan foydalanadi: `org_units` jadvali va `users.unit` maydoni.

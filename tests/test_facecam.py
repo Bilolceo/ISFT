@@ -194,7 +194,7 @@ ok(q("SELECT COUNT(*) FROM face_events WHERE status IN ('notanish','rozilik_yoq'
    "Notanish / rozilik yo'q voqealarida shaxs ham, FPID ham saqlanmaydi")
 ok(q("SELECT COUNT(*) FROM face_persons p WHERE p.consent=0 AND p.revoked_at IS NULL AND EXISTS(SELECT 1 FROM face_events e WHERE e.person_id=p.id)")[0][0] == 0
    and q("SELECT COUNT(*) FROM face_persons WHERE consent=0")[0][0] > 0, "Seed: rozilik bermagan shaxslar bor va ular birorta kadrda tanilmagan")
-users = {" ".join(n.split(":")[-1].replace("'", "").replace("ʻ", "").replace("’", "").lower().split()[:2]) for (n,) in q("SELECT full_name FROM users")}
+users = {" ".join(n.split(":")[-1].replace("'", "").replace("ʻ", "").replace("’", "").lower().split()[:2]) for (n,) in q("SELECT full_name FROM users WHERE role!='tyutor'")}   # tyutorlar — sintetik xodimlar (haqiqiy rahbarlar emas)
 lead = [n for (n,) in q("SELECT name FROM face_persons") if " ".join(n.replace("'", "").lower().split()[:2]) in users]
 heads = q("SELECT COUNT(*) FROM face_persons p JOIN teachers t ON t.id=p.ref_id AND p.kind='oqituvchi' WHERE t.position='Kafedra mudiri'")[0][0]
 ok(not lead and heads == 0, f"Haqiqiy rahbarlar (foydalanuvchilar, kafedra mudirlari) ro'yxatga olinmagan ({lead[:3]})")

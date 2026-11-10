@@ -55,7 +55,9 @@ _short = DEC._short
 # ---------------------------------------------------------------------------------------------
 COLS = [("origin", "TEXT"), ("parent_id", "INT"), ("issuer_user", "INT"), ("issuer_unit", "TEXT"), ("on_behalf", "TEXT"),
         ("priority", "TEXT"), ("body", "TEXT"), ("expect", "TEXT"), ("attach", "TEXT"), ("result_attach", "TEXT"),
-        ("review", "TEXT"), ("review_note", "TEXT"), ("review_at", "TEXT"), ("review_by", "INT"), ("created_at", "TEXT")]
+        ("review", "TEXT"), ("review_note", "TEXT"), ("review_at", "TEXT"), ("review_by", "INT"), ("created_at", "TEXT"),
+        ("src", "TEXT")]     # manba: 'syl:<so'rov id>' (O'quv dasturlari — kafedra so'rovi), 'portal' / 'portal:<xat id>' (Portal — ma'lumot so'rovi)
+SRC_LABEL = {"syl": "O'quv dasturlari · kafedra so'rovi", "portal": "Portal · ma'lumot so'rovi"}
 
 def init(con):
     try:
@@ -78,6 +80,11 @@ def init(con):
         seed_demo(con)
     except Exception as e:
         print("directives.seed_demo:", repr(e))
+    try:     # eski (bo'limsiz) majlis topshiriqlari → yagona ijro oqimi (decisions.migrate_legacy, idempotent)
+        n = DEC.migrate_legacy(con)
+        if n: print(f"decisions: {n} ta eski majlis topshirig'i yagona oqimga o'tkazildi")
+    except Exception as e:
+        print("decisions.migrate_legacy:", repr(e))
 
 def bind(con, ctx_fn):
     global _con, _ctx
@@ -172,6 +179,31 @@ def _insert(con, issuer, issuer_unit, on_behalf, title, body, unit, assignee, du
                        unit, assignee, ts, ORIGIN, parent, issuer, issuer_unit, on_behalf, prio, body, expect,
                        json.dumps(attach) if attach else None, ts))
     return cur.lastrowid
+
+def create_linked(con, issuer: int, issuer_unit: str | None, unit: str, title: str, body: str, due: str, prio: str = "oddiy", expect: str = "",
+                  src: str | None = None, created: str | None = None, attach: list | None = None, on_behalf: str | None = None) -> int:
+    """Boshqa modullar (O'quv dasturlari, Portal) uchun topshiriq yaratish — vakolat chaqiruvchida tekshirilgan bo'lishi kerak.
+    Modul global holatiga bog'liq emas (seed paytida ham ishlaydi). due — 'YYYY-MM-DD' (18:00 deb olinadi) yoki ISO vaqt."""
+    if due and "T" not in due: due = f"{due[:10]}T18:00"
+    h = db.one(con, "SELECT u.role FROM org_units o JOIN users u ON u.id=o.head_user WHERE o.key=?", (DEC.org_key(unit),))
+    ts = created or _iso(_now())
+    tid = con.execute("""INSERT INTO tasks(meeting_id,assignee,assignee_role,text,due,due_at,status,unit,assignee_user,pos,updated_at,
+                           origin,parent_id,issuer_user,issuer_unit,on_behalf,priority,body,expect,attach,created_at,src)
+                         VALUES(NULL,'',?,?,?,?,'yangi',?,NULL,0,?,?,NULL,?,?,?,?,?,?,?,?,?)""",
+                      (h["role"] if h else None, title[:300], (due or "")[:10] or None, due, unit, ts, ORIGIN, issuer, issuer_unit, on_behalf,
+                       prio if prio in PRIOS else "oddiy", body, expect, json.dumps(attach) if attach else None, ts, src)).lastrowid
+    u = db.one(con, "SELECT full_name FROM users WHERE id=?", (issuer,))
+    con.execute("INSERT INTO task_log(task_id,ts,user_id,user_name,action,detail) VALUES(?,?,?,?,?,?)",
+                (tid, ts, issuer, u["full_name"] if u else "", "topshiriq berildi", SRC_LABEL.get((src or "").split(":")[0], "")))
+    return tid
+
+def src_info(t) -> dict | None:
+    s = t.get("src") or ""
+    if not s: return None
+    kind, _, ref = s.partition(":")
+    link = {"view": "syllabus", "tab": "tasks", "task": int(ref)} if kind == "syl" and ref.isdigit() else \
+           {"view": "portal", "thread": int(ref)} if kind == "portal" and ref.isdigit() else None
+    return {"kind": kind, "label": SRC_LABEL.get(kind, kind), "link": link}
 
 # ---------------------------------------------------------------------------------------------
 # VAKOLAT — yagona funksiya
@@ -355,7 +387,7 @@ def node(w: W, t, deep=False) -> dict:
               "suggest_complete": bool(kids) and done == len(kids) and t["status"] != "bajarildi" and w.act(t),
               "can_act": w.act(t), "can_delegate": w.delegate(t), "can_review": w.review(t), "can_cancel": w.cancel(t),
               "can_assign": w.head(t.get("unit")) and t["status"] != "bajarildi",
-              "mine": w.mine(t), "awaiting_me": w.review(t)})
+              "mine": w.mine(t), "awaiting_me": w.review(t), "source": src_info(t)})
     if deep:
         v["attachments"] = _files(t.get("attach"))
         v["result_attachments"] = _files(t.get("result_attach"))
@@ -371,6 +403,8 @@ def _get(tid) -> dict:
 # ---------------------------------------------------------------------------------------------
 def task_rows(c: Ctx) -> list[dict]:
     """services.tasks_list ga qo'shiladigan qatorlar: ko'rinadigan topshiriqlar, majlis qatorlari shaklida (meeting — kim bergani)."""
+    if _con is None: return []   # server starti: modul hali ulanmagan (agent_hub skanerlari DIR.init dan oldin ishlaydi)
+    DEC.ensure_migrated()     # /api/meetings orqali yangi kiritilgan bo'limsiz topshiriqlar ham yagona oqimga o'tadi
     w = W(c)
     now, out = dt.datetime.now(), []
     for t in w.by.values():
@@ -429,6 +463,14 @@ def notifications(c: Ctx) -> list[dict]:
             elif d and 0 <= (d.date() - today).days <= 2:
                 items.append({"id": f"dn{t['id']}", "kind": "topshiriq", "icon": "clock", "level": "warn", "title": f"Topshiriq muddati yaqin: {t['text']}",
                               "sub": sub, "ts": _iso(dt.datetime.combine(d.date() - dt.timedelta(days=2), dt.time(0))), "link": _link(t)})
+    for t in DEC.review_rows(c):      # majlis topshiriqlari: natija qabulingizni kutmoqda / qayta ishlashga qaytarildi
+        if t["_kind"] == "review":
+            items.append({"id": f"mk{t['id']}", "kind": "topshiriq", "icon": "check", "level": "warn", "title": f"Natija qabulingizni kutmoqda: {t['text']}",
+                          "sub": " · ".join(x for x in [t.get("meeting") or "Majlis", _short(DEC._uname(t.get("result_by"))), DEC.unit_name(t.get("unit"))] if x),
+                          "ts": t.get("result_at") or t.get("updated_at"), "link": DEC.task_link(t)})
+        else:
+            items.append({"id": f"mq{t['id']}", "kind": "topshiriq", "icon": "alert", "level": "bad", "title": f"Qayta ishlashga qaytarildi: {t['text']}",
+                          "sub": (t.get("review_note") or "")[:140], "ts": t.get("review_at") or t.get("updated_at"), "link": DEC.task_link(t)})
     for it in items: it["ts"] = it["ts"] or _iso(_now())
     return items
 
@@ -446,6 +488,11 @@ def mywork_items(c: Ctx) -> list[dict]:
         elif not c.can(TASKS) and w.mine(t):
             out.append(MW._item("majlis", "topshiriq", f"mt{t['id']}", t["text"], " · ".join(x for x in [f"Topshiriq · {_issuer_label(t)}", t["status"]] if x),
                                 due, _link(t), "menga" if t.get("assignee_user") == w.uid else "bolimga", t["status"], icon="tasks"))
+    for t in DEC.review_rows(c):      # majlis topshiriqlari natijasini rektor qabul qiladi (qaytarilganlari tasks_list orqali «mine» bo'lib keladi)
+        if t["_kind"] != "review": continue
+        out.append(MW._item("majlis", "qabul", f"mk{t['id']}", f"Natijani ko'rib chiqing: {t['text']}",
+                            " · ".join(x for x in [t.get("meeting") or "Majlis", _short(DEC._uname(t.get("result_by"))), DEC.unit_name(t.get("unit")), "qabul qiling yoki qaytaring"] if x),
+                            t.get("due_at") or t.get("due"), DEC.task_link(t), "nazorat", "natija kutilmoqda", "mid", icon="check"))
     return out
 
 # ---------------------------------------------------------------------------------------------
@@ -479,9 +526,12 @@ def _check_files(c: Ctx, ids: list[int], share_units: list[str]) -> list[int]:
     for i in dict.fromkeys(ids or []):
         f = db.one(_con, "SELECT * FROM portal_files WHERE id=?", (int(i),))
         if not f or not PT.can_see_file(_con, c, f): raise HTTPException(400, f"Ilova #{i} topilmadi yoki sizga ochiq emas")
+        own = PT.can_share(c, f)       # yangi ulashmani faqat fayl egasi bo'lim yaratadi (Portal qoidasi)
         for u in share_units:
             o = DEC.org_key(u)
-            if o and o != f["owner_unit"]: _con.execute("INSERT OR IGNORE INTO portal_shares(file_id,unit) VALUES(?,?)", (f["id"], o))
+            if not o or o == f["owner_unit"] or PT._has_access(_con, f, o): continue
+            if not own: raise HTTPException(400, f"«{f['name']}» fayli boshqa bo'limga tegishli — uni faqat egasi bo'lim ulasha oladi")
+            _con.execute("INSERT OR IGNORE INTO portal_shares(file_id,unit) VALUES(?,?)", (f["id"], o))
         out.append(f["id"])
     if len(out) > 10: raise HTTPException(400, "Ilovalar 10 tadan oshmasin")
     return out
@@ -668,7 +718,10 @@ class ReviewIn(BaseModel):
 
 @router.post("/api/dir/{tid}/review")
 def api_review(tid: int, body: ReviewIn, request: Request):
-    c = C(request)
+    return do_review(C(request), tid, body.decision, body.note)
+
+def do_review(c: Ctx, tid: int, decision: str, note: str = ""):
+    body = ReviewIn(decision=decision, note=note or "")
     action = "topshiriq natijasini ko'rib chiqish"
     t = _get(tid); w = W(c); t = w.by[tid]
     if not w.reviewer(t):

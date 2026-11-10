@@ -1,15 +1,17 @@
 """Reyting — «Oliy ta'lim muassasasi talabalarining o'zlashtirish ko'rsatkichlarini reyting baholash avtomatlashtirilgan tizimi».
 
 Batafsil: docs/reyting.md. Qisqacha:
-  * Reyting baholar jadvalidan (grades) hisoblanadi: semestr GPA = Σ(kredit × 5 ballik baho) / Σ kredit (app/academic_rules.py).
+  * Reyting baholar jadvalidan (grades) hisoblanadi: semestr GPA = Σ(kredit × 5 ballik baho) / Σ kredit (app/academic_rules.py);
+    kredit — o'quv rejasidan (grades.credits). Faqat YAKUNLANGAN semestrlar (yakuniy ball bor): 2025-26 bahorgi ... 2023-24 kuzgi;
+    joriy semestrda faqat oraliq nazorat bor — u talaba kartasida alohida ko'rsatiladi, reytingga kirmaydi.
     Teng kelganda: o'rtacha ball (100 ballik), keyin davomat. Faqat faol talabalar; «F» (40 dan past) bo'lgan talaba ham
-    reytingda qoladi, lekin «akademik qarzdor» deb belgilanadi.
+    reytingda qoladi, lekin «akademik qarzdor» deb belgilanadi (ta'rif — academic_rules.DEBTOR_DEF).
   * O'rinlar besh darajada: guruh, kurs (daraja + kurs), yo'nalish (daraja + yo'nalish), fakultet, institut — «37 / 1 240» va foiz.
   * Kesh (rating_cache) SQL oyna funksiyalari (RANK() OVER ...) bilan bir so'rovda quriladi (~1 s, 29 ming talaba × 2 semestr).
     Ishga tushganda kesh yo'q yoki manba ma'lumot (baholar, talabalar, o'quv dasturi kreditlari) o'zgargan bo'lsa — qayta quriladi;
     ish paytida ham 30 soniyada bir marta barmoq izi (fingerprint) tekshiriladi. Qayta seed shart emas.
   * Ruxsatlar (serverda): to'liq — Registrator ofisi, Akademik bo'lim, rektor, o'quv prorektori, Imtihon va Ma'lumotlar bazasi bo'limlari;
-    ko'lamli — Sirtqi bo'lim (faqat sirtqi), kafedra mudiri (o'z kafedrasi guruhlari), tyutor (o'z fakulteti), o'qituvchi (o'zi baholagan
+    ko'lamli — Sirtqi bo'lim (faqat sirtqi), kafedra mudiri (o'z kafedrasi guruhlari), tyutor (o'ziga biriktirilgan guruhlar), o'qituvchi (o'zi baholagan
     talabalar); faqat jamlangan (ism-shariflarsiz) — Kuzatuv kengashi, boshqa prorektorlar, Sifat boshqarmasi. Qolganlar — 403.
     Har bir murojaat audit jurnaliga (resurs "rating") yoziladi.
 """
@@ -36,7 +38,7 @@ PART = {"group": "semester, group_id", "course": "semester, level, course", "dir
 ORDER_SQL = "gpa DESC, avg_score DESC, attendance IS NULL, attendance DESC"   # AR.RATING_ORDER bilan bir xil
 FORMS = {"kunduzgi": "Kunduzgi", "sirtqi": "Sirtqi", "masofaviy": "Masofaviy"}
 CHECK_EVERY = 30   # soniya: manba o'zgarganini tekshirish oralig'i
-CACHE_VERSION = 2   # kesh formulasi o'zgarsa oshiriladi — eski kesh ishga tushganda avtomatik qayta quriladi
+CACHE_VERSION = 3   # kesh formulasi o'zgarsa oshiriladi — eski kesh ishga tushganda avtomatik qayta quriladi (3: ko'p semestr, o'quv rejasi kreditlari)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS rating_cache(student_id INT, semester INT, gpa REAL, avg_score REAL, credits INT, credits_ok INT, n_subj INT,
@@ -67,38 +69,42 @@ def _meta(con, key, default=None):
 
 def fingerprint(con) -> str:
     """Manba ma'lumotning barmoq izi: baholar, talabalar holati/guruhi/davomati, guruhlar kursi, o'quv dasturi kreditlari."""
-    g = con.execute("SELECT COUNT(*), TOTAL(score), TOTAL(score*semester), TOTAL((student_id*score) % 9973), TOTAL(length(subject)*score) FROM grades").fetchone()
+    g = con.execute("""SELECT COUNT(*), TOTAL(score), TOTAL(score*semester), TOTAL((student_id*score) % 9973), TOTAL(length(subject)*score),
+                       TOTAL(credits*score), TOTAL(oraliq) FROM grades""").fetchone()
     s = con.execute("""SELECT COUNT(*), TOTAL(status='faol'), TOTAL(group_id*(status='faol')), TOTAL(attendance), TOTAL((id*(status='faol')) % 9973),
                        TOTAL(length(study_form)*id % 7919) FROM students""").fetchone()
     gp = con.execute("SELECT COUNT(*), TOTAL(course*id), TOTAL(length(direction)*id % 7919) FROM groups_").fetchone()
-    try: c = con.execute("SELECT COUNT(*), TOTAL(credits*length(subject)) FROM syl_items").fetchone()
+    try: c = con.execute("SELECT COUNT(*), TOTAL(credits*length(subject)) FROM curriculum").fetchone()
     except Exception: c = (0, 0)
-    rules = f"v{CACHE_VERSION}:{AR.PASS}:{AR.CREDIT_DEFAULT}:{AR.CURRENT_SEMESTER}:{AR.RATED_STATUS}:" + ",".join(f"{lo}-{g}" for lo, _, _, g, _ in AR.SCALE)
+    rules = f"v{CACHE_VERSION}:{AR.PASS}:{AR.CREDIT_DEFAULT}:{AR.CURRENT_SEMESTER}:{AR.RATING_SEMESTER}:{AR.RATED_STATUS}:" + ",".join(f"{lo}-{g}" for lo, _, _, g, _ in AR.SCALE)
     return rules + "|" + "|".join(str(round(x, 3)) if isinstance(x, float) else str(x) for x in (*g, *s, *gp, *c))
 
 def rebuild(con, reason="") -> dict:
     """Keshni to'liq qayta quradi (bitta tranzaksiya: o'quvchilar eski yoki yangi holatni ko'radi, yarim holatni emas)."""
     t0 = time.time()
     fp = fingerprint(con)
-    credits = AR.subject_credits(con)
-    subj = [r[0] for r in con.execute("SELECT DISTINCT subject FROM grades")]
+    # kreditlar ma'lumotnomasi (metodika uchun): fan → o'quv rejasidagi eng ko'p uchragan kredit. Hisobda baho qatoridagi kredit ishlatiladi.
+    subj = {}
+    for x, cr, n in con.execute("""SELECT subject, credits, COUNT(*) n FROM grades WHERE semester < ? GROUP BY subject, credits
+                                   ORDER BY subject, n DESC""", (AR.CURRENT_SEMESTER,)):
+        subj.setdefault(x, cr)
     con.execute("DELETE FROM rating_credits")
     con.executemany("INSERT INTO rating_credits(subject,credits,source) VALUES(?,?,?)",
-                    [(x, AR.credit_of(credits, x), AR.CREDIT_SOURCE_SYL if x in credits else AR.CREDIT_SOURCE_DEFAULT) for x in subj])
+                    [(x, cr or AR.CREDIT_DEFAULT, AR.CREDIT_SOURCE_SYL if cr else AR.CREDIT_SOURCE_DEFAULT) for x, cr in subj.items()])
     wins = ",\n".join(f"RANK() OVER (PARTITION BY {PART[k]} ORDER BY {ORDER_SQL}), COUNT(*) OVER (PARTITION BY {PART[k]})" for k, _ in AR.RATING_LEVELS)
     con.execute("DELETE FROM rating_cache")
     con.execute(f"""INSERT INTO rating_cache({COLS})
         WITH g AS (
-          SELECT gr.student_id sid, gr.semester, gr.score, COALESCE(c.credits, {AR.CREDIT_DEFAULT}) cr, {AR.grade5_sql('gr.score')} g5
+          SELECT gr.student_id sid, gr.semester, gr.score, COALESCE(gr.credits, {AR.CREDIT_DEFAULT}) cr, {AR.grade5_sql('gr.score')} g5
           FROM grades gr JOIN students s ON s.id=gr.student_id AND s.status='{AR.RATED_STATUS}'
-          LEFT JOIN rating_credits c ON c.subject=gr.subject),
+          WHERE gr.semester < {AR.CURRENT_SEMESTER} AND gr.score IS NOT NULL),
         a AS (
           SELECT sid, semester, {AR.ratio2_sql('SUM(cr*g5)', 'SUM(cr)')} gpa, {AR.ratio2_sql('SUM(score)', 'COUNT(*)')} avg_score, SUM(cr) credits,
                  SUM(CASE WHEN score >= {AR.PASS} THEN cr ELSE 0 END) credits_ok, COUNT(*) n_subj, SUM(score < {AR.PASS}) n_f, MIN(score) min_score
           FROM g GROUP BY sid, semester),
         b AS (
           SELECT a.*, s.group_id, gp.course, s.faculty_id, gp.direction, s.level, s.study_form,
-                 CASE WHEN a.semester={AR.CURRENT_SEMESTER} THEN s.attendance END attendance
+                 CASE WHEN a.semester={AR.RATING_SEMESTER} THEN s.attendance END attendance
           FROM a JOIN students s ON s.id=a.sid JOIN groups_ gp ON gp.id=s.group_id)
         SELECT sid, semester, gpa, avg_score, credits, credits_ok, n_subj, n_f, min_score, group_id, course, faculty_id, direction, level,
                study_form, attendance, {wins}
@@ -109,7 +115,7 @@ def rebuild(con, reason="") -> dict:
         con.execute("INSERT OR REPLACE INTO rating_meta(key,value) VALUES(?,?)", (k, v))
     con.commit()
     _state.update(fp=fp, checked=time.time()); _memo.clear()
-    return {"rows": n, "seconds": took, "computed_at": _meta(con, "computed_at"), "credits_from_syllabus": len([x for x in subj if x in credits]),
+    return {"rows": n, "seconds": took, "computed_at": _meta(con, "computed_at"), "credits_from_syllabus": sum(1 for v in subj.values() if v),
             "subjects": len(subj)}
 
 def ensure(con=None, force_check=False):
@@ -127,8 +133,14 @@ def ensure(con=None, force_check=False):
         _state.update(fp=fp, checked=time.time())
 
 def init(con):
+    AR.ensure_schema(con)
     con.executescript(SCHEMA)
     con.commit()
+    try:   # tyutorlar va guruhlar biriktirmasi — server ishga tushishining oxirida (boshqa demo akkauntlar id'si o'zgarmasligi uchun)
+        from . import student_ops as OPS
+        print("Tyutorlar:", OPS.ensure_tutors(con))
+    except Exception as e:
+        print("tyutorlar biriktirmasi:", e)
     try:
         ensure(con, force_check=True)
     except Exception as e:   # reyting keshi ilovaning ishga tushishini to'xtatmasin — birinchi so'rovda qayta urinadi
@@ -165,7 +177,7 @@ def scope_sql(c: Ctx, a="r", id_col="student_id") -> str:
     k = c.role.key
     if k == "sirtqi": return f"{a}.study_form='sirtqi'"
     if k == "kafedra": return f"{a}.group_id IN (SELECT id FROM groups_ WHERE department_id={int(c.user.get('department_id') or 0)})"
-    if k == "tyutor": return f"{a}.faculty_id={int(c.user.get('faculty_id') or 0)}"
+    if k == "tyutor": return f"{a}.group_id IN (SELECT group_id FROM tutor_groups WHERE user_id={int(c.user.get('id') or 0)})"
     if k == "oqituvchi": return f"{a}.{id_col} IN (SELECT student_id FROM grades WHERE teacher_id={int(c.user.get('teacher_id') or 0)})"
     return "1=1"
 
@@ -176,7 +188,9 @@ def scope_label(c: Ctx) -> str:
     return c.scope_label(_con)
 
 def _sem(sem: int) -> int:
-    if sem not in AR.SEMESTERS: raise HTTPException(400, "Noto'g'ri semestr")
+    if sem not in AR.COMPLETED_SEMESTERS:
+        raise HTTPException(400, "Noto'g'ri semestr" + (" — joriy semestr yakuniy nazorati hali o'tmagan, reyting yakunlangan semestrlar bo'yicha"
+                                                         if sem == AR.CURRENT_SEMESTER else ""))
     return sem
 
 def _level(level: str) -> str:
@@ -211,17 +225,25 @@ def methodology(con) -> dict:
         "unit_min": AR.UNIT_MIN, "unit_min_note": AR.UNIT_MIN_NOTE,
         "credit_default": AR.CREDIT_DEFAULT, "credit_note": AR.CREDIT_NOTE,
         "credits_coverage": {"subjects": cr["n"] or 0, "from_syllabus": cr["syl"] or 0},
-        "semesters": [{"key": k, "label": v} for k, v in AR.SEMESTERS.items()], "current": AR.CURRENT_SEMESTER,
+        "semesters": [{"key": k, "label": AR.SEMESTERS[k]} for k in AR.COMPLETED_SEMESTERS], "current": AR.RATING_SEMESTER,
+        "in_progress": {"key": AR.CURRENT_SEMESTER, "label": AR.SEMESTERS[AR.CURRENT_SEMESTER]},
+        "program_credits": AR.PROGRAM_CREDITS, "semester_credits": AR.SEMESTER_CREDITS,
+        "definitions": {"score": AR.SCORE_LABEL, "gpa": AR.GPA_LABEL, "debtor": AR.DEBTOR_DEF, "score_def": AR.SCORE_DEF},
         "source": AR.SOURCE,
         "notes": [
-            "Reyting baholar jadvalidagi yakuniy ballardan qayta hisoblanadi. students.gpa ustuni (HEMIS'dan olingan 100 ballik o'rtacha, "
-            "boshqa modullarda «o'rtacha ball» sifatida) reytingda ishlatilmaydi.",
+            "Reyting baholar jadvalidagi yakuniy ballardan (qayta topshirilgan bo'lsa — hisobdagi urinish) qayta hisoblanadi. "
+            f"Panel va boshqa modullardagi «{AR.SCORE_LABEL}» ham shu baholardan, xuddi shu formula bilan hisoblanadi (students.gpa — hisoblangan qiymat).",
+            f"Faqat yakunlangan semestrlar: {AR.SEMESTERS[AR.CURRENT_SEMESTER]}da hozircha faqat oraliq nazorat (30 ball) o'tkazilgan — yakuniy "
+            "nazorat qishki sessiyada; joriy oraliq natijalari talaba kartasida alohida ko'rsatiladi. 1-kurs talabalarining yakunlangan semestri hali yo'q.",
+            f"Kredit — o'quv rejasidan: har semestr {AR.SEMESTER_CREDITS} kredit, bakalavriat {AR.BACHELOR_CREDITS}, magistratura {AR.MASTER_CREDITS} kredit.",
             "O'rin — RANK() usulida: barcha mezonlari to'liq teng talabalar bir xil o'rinni oladi, keyingisi o'tkazib yuboriladi (1, 2, 2, 4).",
             "Foiz — «yuqoridan necha foiz ichida»: o'rin / jami × 100, yuqoriga yaxlitlanadi (1 — eng yaxshi).",
-            "O'tgan semestr davomati bazada saqlanmagan: o'tgan semestr reytingida teng kelganda faqat GPA va o'rtacha ball hisobga olinadi.",
+            "Davomat: oxirgi yakunlangan semestr reytingida teng kelganda joriy semestr davomati hisobga olinadi; undan oldingi semestrlar "
+            "davomati bazada saqlanmagan — u yerda faqat GPA va o'rtacha ball.",
             "Masofaviy ta'limda auditoriya davomati qayd etilmaydi — davomat bo'yicha teng kelganda bunday talaba oxirida turadi; "
             "a'lochilar ro'yxatida davomat sharti unga qo'llanmaydi.",
-            "Oraliq/yakuniy ajratmasi bazada alohida saqlanmaydi — qaydnoma uchun yakuniy balldan deterministik ajratiladi (academic_rules.split_score).",
+            "Oraliq (30) va yakuniy (70) nazorat ballari bazada alohida saqlanadi; qayta topshirish urinishlari tarixda (asl urinish ham), "
+            "hisobga olinadigan natija — eng yuqorisi (o'tgan baho pasaytirilmaydi).",
         ],
     }
 
@@ -229,17 +251,18 @@ def meta(c: Ctx) -> dict:
     m = mode(c)
     sc = scope_sql(c, "r")
     facs = db.rows(_con, f"""SELECT f.id, f.name, COUNT(*) n FROM rating_cache r JOIN faculties f ON f.id=r.faculty_id
-                             WHERE r.semester=? AND {sc} GROUP BY f.id ORDER BY f.id""", (AR.CURRENT_SEMESTER,))
-    courses = db.rows(_con, f"SELECT DISTINCT r.course FROM rating_cache r WHERE r.semester=? AND {sc} ORDER BY 1", (AR.CURRENT_SEMESTER,))
-    forms = db.rows(_con, f"SELECT DISTINCT r.study_form FROM rating_cache r WHERE r.semester=? AND {sc} ORDER BY 1", (AR.CURRENT_SEMESTER,))
+                             WHERE r.semester=? AND {sc} GROUP BY f.id ORDER BY f.id""", (AR.RATING_SEMESTER,))
+    courses = db.rows(_con, f"SELECT DISTINCT r.course FROM rating_cache r WHERE r.semester=? AND {sc} ORDER BY 1", (AR.RATING_SEMESTER,))
+    forms = db.rows(_con, f"SELECT DISTINCT r.study_form FROM rating_cache r WHERE r.semester=? AND {sc} ORDER BY 1", (AR.RATING_SEMESTER,))
     groups = [] if m == "aggregate" else db.rows(_con, f"""SELECT g.id, g.name, g.course, g.faculty_id, g.form, COUNT(*) n FROM rating_cache r
-                    JOIN groups_ g ON g.id=r.group_id WHERE r.semester=? AND {sc} GROUP BY g.id ORDER BY g.name""", (AR.CURRENT_SEMESTER,))
+                    JOIN groups_ g ON g.id=r.group_id WHERE r.semester=? AND {sc} GROUP BY g.id ORDER BY g.name""", (AR.RATING_SEMESTER,))
     units = ["group", "kafedra"] + (["teacher"] if c.role.key in FULL + ("kafedra", "oqituvchi") else [])
     tabs = (["overview", "list", "qaydnoma", "dynamics", "top", "units", "method"] if m != "aggregate"
             else ["overview", "dynamics", "units", "method"])
     return {"mode": m, "role": c.role.key, "scope": scope_label(c), "title": AR.RATING_TITLE, "tabs": tabs, "units": units,
             "can_recompute": c.role.key in RECOMPUTE, "names": m != "aggregate",
-            "semesters": [{"key": k, "label": v, "short": AR.SEMESTER_SHORT[k]} for k, v in AR.SEMESTERS.items()], "current": AR.CURRENT_SEMESTER,
+            "semesters": [{"key": k, "label": AR.SEMESTERS[k], "short": AR.SEMESTER_SHORT[k]} for k in AR.COMPLETED_SEMESTERS], "current": AR.RATING_SEMESTER,
+            "in_progress": {"key": AR.CURRENT_SEMESTER, "label": AR.SEMESTERS[AR.CURRENT_SEMESTER], "short": AR.SEMESTER_SHORT[AR.CURRENT_SEMESTER]},
             "levels": [{"key": k, "label": l} for k, l in AR.RATING_LEVELS],
             "faculties": facs, "courses": [r["course"] for r in courses], "forms": [{"key": r["study_form"], "label": FORMS.get(r["study_form"], r["study_form"])} for r in forms],
             "groups": groups, "computed_at": _meta(_con, "computed_at"), "rows": int(_meta(_con, "rows", "0") or 0),
@@ -253,7 +276,14 @@ def overview(c: Ctx, sem: int) -> dict:
               SUM(r.n_f>0) debt, SUM(r.min_score>={AR.EXCELLENT_MIN}) excellent, ROUND(100.0*SUM(r.min_score>={AR.EXCELLENT_MIN})/COUNT(*),1) excellent_pct,
               ROUND(AVG(r.attendance),1) attendance"""
     tot = db.one(_con, f"SELECT {agg} FROM rating_cache r WHERE r.semester=? AND {sc}", (sem,))
-    prev = db.one(_con, f"SELECT {agg} FROM rating_cache r WHERE r.semester=? AND {sc}", (sem - 1,)) if sem - 1 in AR.SEMESTERS else None
+    prev = db.one(_con, f"SELECT {agg} FROM rating_cache r WHERE r.semester=? AND {sc}", (sem - 1,)) if sem - 1 in AR.COMPLETED_SEMESTERS else None
+    if prev and not prev["n"]: prev = None
+    # «Akademik qarzdor» — yagona ta'rif (academic_rules.DEBTOR_DEF): barcha yakunlangan semestrlar bo'yicha, faol talabalar.
+    # Talabalar markazidagi «Akademik qarzdor» bilan bir xil son; yuqoridagi «debt» — faqat shu semestrdan qolgan qarz.
+    ssc = scope_sql(c, "s", "id")
+    tot["debtors_all"] = db.one(_con, f"""SELECT COUNT(DISTINCT g.student_id) n FROM grades g JOIN students s ON s.id=g.student_id
+                                         WHERE {AR.debt_where('g')} AND s.status='{AR.RATED_STATUS}' AND {ssc}""")["n"]
+    tot["students_all"] = db.one(_con, f"SELECT COUNT(*) n FROM students s WHERE s.status='{AR.RATED_STATUS}' AND {ssc}")["n"]
     bins = []
     for lo, hi in GPA_BINS:
         n = db.one(_con, f"SELECT COUNT(*) n FROM rating_cache r WHERE r.semester=? AND {sc} AND r.gpa>=? AND r.gpa<?", (sem, lo, hi))["n"]
@@ -266,7 +296,9 @@ def overview(c: Ctx, sem: int) -> dict:
                                 GROUP BY r.study_form ORDER BY n DESC""", (sem,))
     for r in by_form: r["label"] = FORMS.get(r["label"], r["label"])
     return {"sem": sem, "label": AR.SEMESTERS[sem], "scope": scope_label(c), "total": tot, "prev": prev, "bins": bins,
-            "by_faculty": by_fac, "by_course": by_course, "by_form": by_form}
+            "by_faculty": by_fac, "by_course": by_course, "by_form": by_form,
+            "labels": {"score": AR.SCORE_LABEL, "gpa": AR.GPA_LABEL, "debtor": AR.DEBTOR_LABEL, "debtor_def": AR.DEBTOR_DEF,
+                       "debt_sem": "shu semestrdan o'zlashtirilmagan fani qolgan (hisobdagi ball < 40)"}}
 
 SORTS = {"place": ("r.r_{lv}", "ASC"), "gpa": ("r.gpa", "DESC"), "avg": ("r.avg_score", "DESC"), "att": ("r.attendance IS NULL, r.attendance", "DESC"),
          "credits": ("r.credits_ok", "DESC"), "nf": ("r.n_f", "DESC"), "delta": ("delta IS NULL, delta", "DESC"), "name": ("s.full_name", "ASC")}
@@ -283,7 +315,7 @@ def _filters(c: Ctx, sem, faculty=0, course=0, group=0, form="", flag="", q=""):
         w.append("(s.full_name LIKE ? OR s.hemis_id LIKE ? OR g.name LIKE ?)"); a += [f"%{q}%", f"{q}%", f"{q}%"]
     return " AND ".join(w), a
 
-def ranking(c: Ctx, sem=1, level="institute", faculty=0, course=0, group=0, form="", flag="", q="", sort="place", direction="", page=1, per=50) -> dict:
+def ranking(c: Ctx, sem=AR.RATING_SEMESTER, level="institute", faculty=0, course=0, group=0, form="", flag="", q="", sort="place", direction="", page=1, per=50) -> dict:
     lv = _level(level); sem = _sem(sem)
     w, a = _filters(c, sem, faculty, course, group, form, flag, q)
     col, d = SORTS.get(sort, SORTS["place"])
@@ -304,7 +336,7 @@ def ranking(c: Ctx, sem=1, level="institute", faculty=0, course=0, group=0, form
                     "excellent": r["min_score"] >= AR.EXCELLENT_MIN, "debtor": r["n_f"] > 0,
                     "place": _place(r, lv), "delta": r["delta"]})
     return {"sem": sem, "level": lv, "level_label": LEVELS[lv], "page": page, "per": per, "total": sm["n"], "pages": max(1, math.ceil(sm["n"] / per)),
-            "summary": sm, "rows": out, "has_prev": sem - 1 in AR.SEMESTERS}
+            "summary": sm, "rows": out, "has_prev": sem - 1 in AR.COMPLETED_SEMESTERS}
 
 def student_card(c: Ctx, sid: int) -> dict:
     s = db.one(_con, f"""SELECT s.id, s.full_name, s.hemis_id, s.status, s.level, s.study_form, s.attendance, s.group_id, s.faculty_id,
@@ -316,25 +348,25 @@ def student_card(c: Ctx, sid: int) -> dict:
             rbac.audit(_con, c, "reyting: ko'lamdan tashqari talaba", RES, False, str(sid))
             raise AccessDenied("⛔ Bu talaba sizning ko'lamingizga kirmaydi. So'rov audit jurnaliga yozildi.")
         raise HTTPException(404, "Talaba topilmadi")
-    grades = db.rows(_con, """SELECT gr.subject, gr.score, gr.semester, t.full_name teacher, rc.credits, rc.source FROM grades gr
-                              LEFT JOIN teachers t ON t.id=gr.teacher_id LEFT JOIN rating_credits rc ON rc.subject=gr.subject
+    grades = db.rows(_con, """SELECT gr.subject, gr.score, gr.semester, gr.oraliq, gr.yakuniy, gr.credits, gr.sem_no, gr.attempts, t.full_name teacher
+                              FROM grades gr LEFT JOIN teachers t ON t.id=gr.teacher_id
                               WHERE gr.student_id=? ORDER BY gr.semester DESC, gr.subject""", (sid,))
     cache = {r["semester"]: r for r in db.rows(_con, "SELECT * FROM rating_cache WHERE student_id=?", (sid,))}
     sems, allitems = [], []
-    for sem in sorted(AR.SEMESTERS, reverse=True):
-        gs = [g for g in grades if g["semester"] == sem]
+    for sem in AR.COMPLETED_SEMESTERS:
+        gs = [g for g in grades if g["semester"] == sem and g["score"] is not None]
         if not gs: continue
         subj = []
         for g in gs:
             cr = g["credits"] or AR.CREDIT_DEFAULT
-            o, y = AR.split_score(g["score"], f"{s['hemis_id']}|{g['subject']}" + ("" if sem == AR.CURRENT_SEMESTER else f"|{sem}"))
             g5, word = AR.grade5(g["score"])
-            subj.append({"subject": g["subject"], "score": g["score"], "oraliq": o, "yakuniy": y, "letter": AR.letter(g["score"]),
-                         "grade": g5, "word": word, "credits": cr, "credit_source": g["source"] or AR.CREDIT_SOURCE_DEFAULT,
-                         "teacher": g["teacher"], "fail": g["score"] < AR.PASS})
+            subj.append({"subject": g["subject"], "score": g["score"], "oraliq": g["oraliq"], "yakuniy": g["yakuniy"], "letter": AR.letter(g["score"]),
+                         "grade": g5, "word": word, "credits": cr, "credit_source": AR.CREDIT_SOURCE_SYL if g["credits"] else AR.CREDIT_SOURCE_DEFAULT,
+                         "teacher": g["teacher"], "fail": g["score"] < AR.PASS, "attempts": g["attempts"] or 1,
+                         "admitted": AR.admitted(g["oraliq"])})
             allitems.append((cr, g5, g["score"]))
         r = cache.get(sem)
-        sems.append({"sem": sem, "label": AR.SEMESTERS[sem], "short": AR.SEMESTER_SHORT[sem], "subjects": subj,
+        sems.append({"sem": sem, "label": AR.SEMESTERS[sem], "short": AR.SEMESTER_SHORT[sem], "sem_no": gs[0]["sem_no"], "subjects": subj,
                      "gpa": r["gpa"] if r else AR.gpa([(x["credits"], x["grade"]) for x in subj]),
                      "avg_score": r["avg_score"] if r else AR.ratio2(sum(x["score"] for x in subj), len(subj)),
                      "credits": sum(x["credits"] for x in subj), "credits_ok": sum(x["credits"] for x in subj if not x["fail"]),
@@ -345,24 +377,34 @@ def student_card(c: Ctx, sid: int) -> dict:
         if x["places"] and prev and prev["places"]:
             for k in x["places"]: x["places"][k]["delta"] = prev["places"][k]["rank"] - x["places"][k]["rank"]
     cum = AR.gpa([(cr, g5) for cr, g5, _ in allitems])
+    curg = [g for g in grades if g["semester"] == AR.CURRENT_SEMESTER]
+    current = {"sem": AR.CURRENT_SEMESTER, "label": AR.SEMESTERS[AR.CURRENT_SEMESTER], "short": AR.SEMESTER_SHORT[AR.CURRENT_SEMESTER],
+               "sem_no": curg[0]["sem_no"] if curg else None, "attendance": s["attendance"],
+               "subjects": [{"subject": g["subject"], "oraliq": g["oraliq"], "admitted": AR.admitted(g["oraliq"]), "credits": g["credits"] or AR.CREDIT_DEFAULT,
+                             "teacher": g["teacher"]} for g in curg],
+               "note": f"Yakuniy nazorat (qishki sessiya) hali o'tkazilmagan — oraliq nazorat {AR.ORALIQ_MAX} balldan; yakuniyga kirish uchun kamida {AR.ORALIQ_MIN} ball."} if curg else None
+    total = AR.PROGRAM_CREDITS.get(s["level"] or "bakalavr", AR.BACHELOR_CREDITS)
+    ok_cr = sum(cr for cr, _, sc in allitems if sc >= AR.PASS)
     return {"student": {k: s[k] for k in ("id", "full_name", "hemis_id", "status", "level", "study_form", "grp", "group_id", "course", "direction",
                                           "faculty", "kafedra")},
             "form_label": FORMS.get(s["study_form"], s["study_form"]), "ranked": s["status"] == AR.RATED_STATUS,
-            "semesters": sems, "cumulative": {"gpa": cum, "credits": sum(cr for cr, _, _ in allitems),
-                                              "credits_ok": sum(cr for cr, _, sc in allitems if sc >= AR.PASS),
-                                              "avg_score": AR.ratio2(sum(sc for _, _, sc in allitems), len(allitems))},
+            "semesters": sems, "current": current,
+            "cumulative": {"gpa": cum, "credits": sum(cr for cr, _, _ in allitems), "credits_ok": ok_cr,
+                           "avg_score": AR.ratio2(sum(sc for _, _, sc in allitems), len(allitems)),
+                           "program_credits": total, "progress_pct": round(100 * ok_cr / total, 1) if total else None,
+                           "debts": sum(1 for _, _, sc in allitems if sc < AR.PASS)},
             "trend": [{"sem": x["sem"], "short": x["short"], "gpa": x["gpa"], "avg_score": x["avg_score"],
                        "pct": (x["places"] or {}).get("institute", {}).get("pct"), "rank": (x["places"] or {}).get("institute", {}).get("rank"),
                        "n": (x["places"] or {}).get("institute", {}).get("n")} for x in sorted(sems, key=lambda y: y["sem"])],
-            "levels": [{"key": k, "label": l} for k, l in AR.RATING_LEVELS], "pass": AR.PASS}
+            "levels": [{"key": k, "label": l} for k, l in AR.RATING_LEVELS], "pass": AR.PASS, "oraliq_min": AR.ORALIQ_MIN, "oraliq_max": AR.ORALIQ_MAX}
 
 def qaydnoma(c: Ctx, gid: int, sem: int) -> dict:
     sem = _sem(sem)
     g = _group_in_scope(c, gid)
-    subj = db.rows(_con, f"""SELECT gr.subject, rc.credits, MIN(t.full_name) teacher, COUNT(*) n, ROUND(AVG(gr.score),1) avg,
+    subj = db.rows(_con, f"""SELECT gr.subject, MAX(gr.credits) credits, MIN(t.full_name) teacher, COUNT(*) n, ROUND(AVG(gr.score),1) avg,
                              ROUND(100.0*SUM(gr.score>={AR.PASS})/COUNT(*),1) pass_pct
                              FROM grades gr JOIN rating_cache r ON r.student_id=gr.student_id AND r.semester=gr.semester
-                             LEFT JOIN rating_credits rc ON rc.subject=gr.subject LEFT JOIN teachers t ON t.id=gr.teacher_id
+                             LEFT JOIN teachers t ON t.id=gr.teacher_id
                              WHERE r.group_id=? AND gr.semester=? GROUP BY gr.subject ORDER BY gr.subject""", (gid, sem))
     rows = db.rows(_con, """SELECT r.*, s.full_name name, s.hemis_id FROM rating_cache r JOIN students s ON s.id=r.student_id
                             WHERE r.group_id=? AND r.semester=? ORDER BY r.r_group, s.full_name""", (gid, sem))
@@ -380,7 +422,7 @@ def qaydnoma(c: Ctx, gid: int, sem: int) -> dict:
             "skipped": skipped, "pass": AR.PASS, "avg_gpa": round(sum(r["gpa"] for r in out) / len(out), 2) if out else None}
 
 def dynamics(c: Ctx, level="course", limit=15) -> dict:
-    lv = _level(level); cur, prv = AR.CURRENT_SEMESTER, AR.CURRENT_SEMESTER - 1
+    lv = _level(level); cur, prv = AR.RATING_SEMESTER, AR.RATING_SEMESTER - 1
     sc = scope_sql(c, "r"); limit = max(5, min(50, limit))
     base = f"""FROM rating_cache r JOIN rating_cache p ON p.student_id=r.student_id AND p.semester={prv}
                JOIN students s ON s.id=r.student_id JOIN groups_ g ON g.id=r.group_id WHERE r.semester={cur} AND {sc}"""
@@ -398,10 +440,10 @@ def dynamics(c: Ctx, level="course", limit=15) -> dict:
     out["groups_down"] = db.rows(_con, f"{gq} ORDER BY delta ASC, g.name LIMIT ?", (limit,))
     return out
 
-def top_list(c: Ctx, sem=1, pct=10.0, min_att=85.0, max_f=0) -> dict:
+def top_list(c: Ctx, sem=AR.RATING_SEMESTER, pct=10.0, min_att=85.0, max_f=0) -> dict:
     sem = _sem(sem)
     pct = max(1.0, min(50.0, float(pct))); min_att = max(0.0, min(100.0, float(min_att))); max_f = max(0, min(3, int(max_f)))
-    use_att = sem == AR.CURRENT_SEMESTER
+    use_att = sem == AR.RATING_SEMESTER   # oxirgi yakunlangan semestr natijalari + joriy davomat
     att = f" AND (r.attendance IS NULL OR r.attendance >= {min_att})" if use_att else ""
     rows = db.rows(_con, f"""SELECT r.student_id id, s.full_name name, s.hemis_id, g.name grp, r.level, r.course, r.study_form, r.gpa, r.avg_score,
                              r.attendance, r.n_f, r.r_course rank, r.n_course n, f.name faculty, r.min_score
@@ -423,7 +465,7 @@ def _units_all(kind: str, sem: int) -> list:
     key = (_state["fp"], kind, sem)
     if key in _memo: return _memo[key]
     agg = f"COUNT(*) n_grades, COUNT(DISTINCT gr.student_id) n_students, ROUND(AVG(gr.score),2) avg, ROUND(100.0*SUM(gr.score>={AR.PASS})/COUNT(*),1) pass_pct"
-    base = f"FROM grades gr JOIN students s ON s.id=gr.student_id AND s.status='{AR.RATED_STATUS}' WHERE gr.semester=?"
+    base = f"FROM grades gr JOIN students s ON s.id=gr.student_id AND s.status='{AR.RATED_STATUS}' WHERE gr.score IS NOT NULL AND gr.semester=?"
     if kind == "group":
         rows = db.rows(_con, f"""SELECT g.id, g.name, g.course, g.form, g.department_id, f.name faculty, {agg} {base.replace('WHERE', 'JOIN groups_ g ON g.id=s.group_id LEFT JOIN faculties f ON f.id=g.faculty_id WHERE')}
                                  GROUP BY g.id""", (sem,))
@@ -449,13 +491,13 @@ def _units_all(kind: str, sem: int) -> list:
     _memo[key] = ok + small
     return ok + small
 
-def units(c: Ctx, kind="group", sem=1) -> dict:
+def units(c: Ctx, kind="group", sem=AR.RATING_SEMESTER) -> dict:
     sem = _sem(sem)
     if kind not in AR.UNIT_MIN: raise HTTPException(400, "Noto'g'ri bo'linma turi")
     k, m = c.role.key, mode(c)
     if kind == "teacher" and k not in FULL + ("kafedra", "oqituvchi"):
         rbac.audit(_con, c, "reyting: o'qituvchilar reytingi", RES, False)
-        raise AccessDenied("⛔ O'qituvchilar reytingi (shaxsiy ko'rsatkich) — o'quv bo'limlari, kafedra mudiri (o'z kafedrasi) va o'qituvchining "
+        raise AccessDenied("⛔ O'qituvchilar reytingi (shaxsiy ko'rsatkich) — Registrator ofisi, Akademik faoliyatni boshqarish bo'limi, kafedra mudiri (o'z kafedrasi) va o'qituvchining "
                            "o'ziga. So'rov audit jurnaliga yozildi.")
     rows = _units_all(kind, sem)
     dep, tid = int(c.user.get("department_id") or 0), int(c.user.get("teacher_id") or 0)
@@ -637,12 +679,12 @@ def api_meta(request: Request):
     return meta(c)
 
 @router.get("/api/reyting/overview")
-def api_overview(request: Request, sem: int = AR.CURRENT_SEMESTER):
+def api_overview(request: Request, sem: int = AR.RATING_SEMESTER):
     c = C(request); guard(c, "umumiy ko'rinish", f"semestr {sem}"); ensure()
     return overview(c, _sem(sem))
 
 @router.get("/api/reyting/list")
-def api_list(request: Request, sem: int = AR.CURRENT_SEMESTER, level: str = "institute", faculty: int = 0, course: int = 0, group: int = 0,
+def api_list(request: Request, sem: int = AR.RATING_SEMESTER, level: str = "institute", faculty: int = 0, course: int = 0, group: int = 0,
              form: str = "", flag: str = "", q: str = "", sort: str = "place", dir: str = "", page: int = 1, per: int = 50):
     c = C(request); guard(c, "reyting ro'yxati", f"semestr {sem}, daraja {level}" + (f", qidiruv «{q[:40]}»" if q else ""), names=True); ensure()
     return ranking(c, sem, level, faculty, course, group, form[:20], flag, q.strip()[:60], sort, dir, page, per)
@@ -653,12 +695,12 @@ def api_student(sid: int, request: Request):
     return student_card(c, sid)
 
 @router.get("/api/reyting/qaydnoma/{gid}")
-def api_qaydnoma(gid: int, request: Request, sem: int = AR.CURRENT_SEMESTER):
+def api_qaydnoma(gid: int, request: Request, sem: int = AR.RATING_SEMESTER):
     c = C(request); guard(c, "reyting qaydnomasi", f"guruh {gid}, semestr {sem}", names=True); ensure()
     return qaydnoma(c, gid, sem)
 
 @router.get("/api/reyting/qaydnoma/{gid}/export")
-def api_qaydnoma_export(gid: int, request: Request, sem: int = AR.CURRENT_SEMESTER, fmt: str = "xlsx"):
+def api_qaydnoma_export(gid: int, request: Request, sem: int = AR.RATING_SEMESTER, fmt: str = "xlsx"):
     c = C(request)
     if fmt not in ("xlsx", "docx"): raise HTTPException(400, "Format: xlsx yoki docx")
     guard(c, f"reyting qaydnomasi eksporti (.{fmt})", f"guruh {gid}, semestr {sem}", names=True); ensure()
@@ -672,20 +714,20 @@ def api_dynamics(request: Request, level: str = "course", limit: int = 15):
     return dynamics(c, level, limit)
 
 @router.get("/api/reyting/top")
-def api_top(request: Request, sem: int = AR.CURRENT_SEMESTER, pct: float = AR.TOP_DEFAULTS["pct"], min_att: float = AR.TOP_DEFAULTS["min_att"],
+def api_top(request: Request, sem: int = AR.RATING_SEMESTER, pct: float = AR.TOP_DEFAULTS["pct"], min_att: float = AR.TOP_DEFAULTS["min_att"],
             max_f: int = AR.TOP_DEFAULTS["max_f"]):
     c = C(request); guard(c, "a'lochilar ro'yxati", f"semestr {sem}, {pct}%, davomat ≥ {min_att}, F ≤ {max_f}", names=True); ensure()
     return top_list(c, sem, pct, min_att, max_f)
 
 @router.get("/api/reyting/top/export")
-def api_top_export(request: Request, sem: int = AR.CURRENT_SEMESTER, pct: float = AR.TOP_DEFAULTS["pct"], min_att: float = AR.TOP_DEFAULTS["min_att"],
+def api_top_export(request: Request, sem: int = AR.RATING_SEMESTER, pct: float = AR.TOP_DEFAULTS["pct"], min_att: float = AR.TOP_DEFAULTS["min_att"],
                    max_f: int = AR.TOP_DEFAULTS["max_f"]):
     c = C(request); guard(c, "a'lochilar ro'yxati eksporti (.xlsx)", f"semestr {sem}, {pct}%", names=True); ensure()
     T = top_list(c, sem, pct, min_att, max_f)
     return _file(top_xlsx(T, _who(c)), f"alochilar_sem{sem}_{int(T['params']['pct'])}foiz.xlsx", XLSX)
 
 @router.get("/api/reyting/units")
-def api_units(request: Request, kind: str = "group", sem: int = AR.CURRENT_SEMESTER):
+def api_units(request: Request, kind: str = "group", sem: int = AR.RATING_SEMESTER):
     c = C(request); guard(c, "bo'linmalar reytingi", f"{kind}, semestr {sem}"); ensure()
     return units(c, kind, sem)
 

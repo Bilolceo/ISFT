@@ -686,7 +686,7 @@ def agent_facts(v: dict) -> dict:
     recs = [{"text": "Kameralar sahifasida voqealarni ko'rib chiqing: noto'g'ri signallarni belgilash statistikani aniqlashtiradi.",
              "action": {"type": "go", "view": "cams", "label": "Kameralar va xavfsizlik"}}]
     if v["idle_rooms"]:
-        recs.insert(0, {"text": f"O'quv bo'limiga: {', '.join(v['idle_rooms'])} jadvalini tekshirish — darslarni ko'chirish yoki xonani boshqa maqsadga berish.",
+        recs.insert(0, {"text": f"Akademik faoliyatni boshqarish bo'limiga: {', '.join(v['idle_rooms'])} jadvalini tekshirish — darslarni ko'chirish yoki xonani boshqa maqsadga berish.",
                         "action": {"type": "go", "view": "spaces", "label": "Auditoriyalar bandligi"}})
     return {"facts": facts, "why": why, "recs": recs, "sev": 2 if (w["p1"] or w["p2"] or v["offline"]) else 1,
             "head": f"kameralar: 7 kunda {w['total']} voqea, {len(v['offline'])} kamera oflayn"}

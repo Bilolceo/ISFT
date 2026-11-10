@@ -9,7 +9,7 @@ Tuzilma: ISFT rasmiy tashkiliy tuzilmasi (2024, 04.09.2024 tasdiqlangan) — fak
   * Kommunal xarajatlar rejadan oshgan
 """
 import random, datetime as dt
-from . import db
+from . import db, academic_rules as AR
 from .academic_rules import OTHER_UNIT_HEADS
 
 R = random.Random(42)
@@ -141,9 +141,132 @@ SUBJECTS = {
     "Pedagogika (magistratura)": ["Pedagogik tadqiqot metodlari","Oliy ta'lim pedagogikasi","Ta'lim menejmenti","Ilmiy tadqiqot metodologiyasi"],
     "Xorijiy til va adabiyoti (magistratura)": ["Qiyosiy tilshunoslik","Adabiy tahlil","Diskurs tahlili","Ilmiy tadqiqot metodologiyasi"],
 }
+# =====================================================================================================
+# O'QUV REJASI (curriculum): har yo'nalish × daraja uchun semestrlar bo'yicha TURLI fanlar va kreditlar (har semestr 30 kredit,
+# bakalavr 8 semestr = 240, magistr 4 semestr = 120). Yuqoridagi SUBJECTS — yo'nalishning tayanch fanlari (o'quv dasturlari moduli
+# katalogidagi nomlar): ular toq (kuzgi) semestrlarga joylanadi — joriy semestrda (1, 3, 5, 7) o'qitiladi. Qolgan o'rinlar —
+# yo'nalish oilasi fanlari va yo'nalishga xos qo'shimcha fanlar. TAXMIN (demo): institutning haqiqiy o'quv rejasi emas.
+# =====================================================================================================
+FAMILY = {"Iqtisodiyot": "econ", "Bank ishi va audit": "econ", "Menejment": "econ", "Marketing": "econ", "Biznes va menejment": "econ",
+          "Moliya sohasida boshqaruv": "econ", "Buxgalteriya hisobi va moliya": "econ", "Axborot tizimlari va texnologiyalari": "it",
+          "Axborot xavfsizligi": "it", "Xalqaro munosabatlar": "xm", "Pedagogika": "ped", "Psixologiya (faoliyat turlari bo'yicha)": "ped",
+          "Pedagogika va psixologiya": "ped", "Boshlang'ich ta'lim": "ped", "Maktabgacha ta'lim": "ped",
+          "Xorijiy til va adabiyoti": "lang", "Filologiya va tillarni o'qitish (ingliz tili)": "lang"}
+POOL = {
+    "econ": ["Oliy matematika", "Iqtisodiyot nazariyasi", "Informatika va axborot texnologiyalari", "Mikroiqtisodiyot", "Moliya",
+             "Buxgalteriya hisobi asoslari", "Menejment nazariyasi", "Marketing nazariyasi", "Soliqlar va soliqqa tortish", "Xalqaro iqtisodiyot",
+             "Investitsiyalar", "Iqtisodiy tahlil", "Biznes huquqi", "Raqamli iqtisodiyot", "Tadbirkorlik asoslari", "Moliyaviy bozorlar",
+             "Sug'urta ishi", "Mehnat iqtisodiyoti", "Davlat moliyasi", "Logistika", "Innovatsion iqtisodiyot", "Biznes etikasi",
+             "Korxona iqtisodiyoti", "Narx siyosati", "Iqtisodiy xavfsizlik", "Yashil iqtisodiyot", "Elektron tijorat"],
+    "it": ["Oliy matematika", "Diskret matematika", "Informatika asoslari", "Algoritmlar va ma'lumotlar tuzilmasi", "Obyektga yo'naltirilgan dasturlash",
+           "Kompyuter arxitekturasi", "Ehtimollar nazariyasi va statistika", "Mobil ilovalar", "Sun'iy intellekt asoslari", "Bulutli texnologiyalar",
+           "Tizimli tahlil", "IT loyihalarini boshqarish", "Kompyuter grafikasi", "Raqamli iqtisodiyot", "IT huquqi va etikasi",
+           "Parallel hisoblash", "Inson-kompyuter interfeysi", "Ma'lumotlarni vizuallashtirish", "Mashinali o'qitish", "Tarmoq dasturlash",
+           "Axborot tizimlari arxitekturasi", "Dasturiy ta'minot sifati", "Raqamli signallarni qayta ishlash", "Blokcheyn texnologiyalari",
+           "DevOps asoslari", "Kiberfizik tizimlar", "Raqamli transformatsiya"],
+    "ped": ["Pedagogika tarixi", "Psixologiya asoslari", "Anatomiya va fiziologiya", "Informatika va axborot texnologiyalari", "Inklyuziv ta'lim asoslari",
+            "Ta'lim texnologiyalari", "Tarbiyaviy ishlar metodikasi", "Maxsus pedagogika", "Kasbiy etika", "Ta'limda raqamli texnologiyalar",
+            "Qiyosiy pedagogika", "Ijtimoiy pedagogika", "Pedagogik tadqiqot metodlari", "Ta'lim sifatini baholash", "Valeologiya",
+            "Ekologik tarbiya", "Ma'naviyat asoslari", "Pedagogik mahorat asoslari", "Rivojlanish psixologiyasi", "Ta'lim huquqi",
+            "Media savodxonlik", "Oila psixologiyasi", "Bolalar huquqlari", "Ta'limda STEAM yondashuvi", "Pedagogik amaliyot", "Mentorlik asoslari",
+            "Umumiy didaktika"],
+    "lang": ["Kirish tilshunosligi", "Nutq amaliyoti", "Yozuv amaliyoti", "Tinglab tushunish", "Lotin tili", "Matn tahlili",
+             "Diskurs tahlili", "Ingliz adabiyoti", "Amerika adabiyoti", "Sotsiolingvistika", "Psixolingvistika", "Kognitiv tilshunoslik",
+             "Biznes ingliz tili", "Qiyosiy tipologiya", "Pragmatika", "Leksikografiya", "Semantika", "Til o'qitishda baholash",
+             "Ingliz tili tarixi", "Badiiy tarjima", "Kasbiy muloqot", "Ommaviy nutq", "Media matnlari tahlili", "Til korpuslari",
+             "Madaniyatlararo muloqot", "Ikkinchi xorijiy til (amaliy kurs)", "Ilmiy matn tarjimasi"],
+    "xm": ["Siyosatshunoslik", "Jahon tarixi", "Xalqaro munosabatlar tarixi", "Davlat va huquq nazariyasi", "Jahon iqtisodiyoti",
+           "Konstitutsiyaviy huquq", "Xalqaro xavfsizlik", "Markaziy Osiyo xalqaro munosabatlarda", "Xalqaro iqtisodiy munosabatlar",
+           "Mojarolarni hal qilish", "Xalqaro jurnalistika", "Global boshqaruv", "Xalqaro migratsiya", "Konsullik xizmati",
+           "Ikkinchi xorijiy til", "Ommaviy diplomatiya", "Siyosiy tahlil usullari", "Xalqaro integratsiya", "Energetika diplomatiyasi",
+           "Xalqaro ekologik huquq", "Inson huquqlari", "Xalqaro savdo huquqi", "Diplomatik yozishmalar", "Mintaqashunoslik", "Xalqaro muzokaralar",
+           "Raqamli diplomatiya", "Xalqaro biznes muhiti"],
+}
+EXTRA = {
+    "Iqtisodiyot": ["Iqtisodiy siyosat", "Mintaqaviy iqtisodiyot", "Iqtisodiy prognozlash", "Institutsional iqtisodiyot"],
+    "Bank ishi va audit": ["Bank operatsiyalari", "Kredit tahlili", "Xalqaro bank ishi", "Ichki audit"],
+    "Menejment": ["Inson resurslarini boshqarish", "Operatsion menejment", "Strategik menejment", "Boshqaruv qarorlari"],
+    "Marketing": ["Marketing tadqiqotlari", "Brend menejmenti", "Reklama va PR", "Savdo menejmenti"],
+    "Axborot tizimlari va texnologiyalari": ["Veb-dasturlash", "Dasturiy injiniring", "Ma'lumotlar tahlili", "Axborot tizimlarini loyihalash"],
+    "Axborot xavfsizligi": ["Kriptografik protokollar", "Kompyuter kriminalistikasi", "Xavfsizlik auditi", "Zararli dasturlar tahlili"],
+    "Xalqaro munosabatlar": ["Xalqaro tashkilotlar", "Geosiyosat", "Tashqi siyosat tahlili", "Diplomatik protokol"],
+    "Biznes va menejment": ["Biznes strategiyasi", "Xalqaro biznes", "Korporativ boshqaruv", "Loyiha boshqaruvi"],
+    "Moliya sohasida boshqaruv": ["Moliyaviy menejment", "Investitsion tahlil", "Moliyaviy risklar", "Bank ishi"],
+    "Buxgalteriya hisobi va moliya": ["Boshqaruv hisobi", "Soliq hisobi", "Moliyaviy tahlil", "Audit"],
+    "Pedagogika": ["Pedagogik texnologiyalar", "Tarbiya nazariyasi", "Ta'lim menejmenti", "Pedagogik diagnostika"],
+    "Psixologiya (faoliyat turlari bo'yicha)": ["Psixodiagnostika", "Klinik psixologiya asoslari", "Psixologik maslahat", "Mehnat psixologiyasi"],
+    "Pedagogika va psixologiya": ["Ijtimoiy psixologiya", "Pedagogik konfliktologiya", "Psixologik-pedagogik korreksiya", "Oila pedagogikasi"],
+    "Boshlang'ich ta'lim": ["O'qish savodxonligi metodikasi", "Tabiatshunoslik o'qitish metodikasi", "Boshlang'ich sinflarda tarbiya", "Inklyuziv ta'lim"],
+    "Maktabgacha ta'lim": ["Bolalar adabiyoti", "Maktabgacha ta'lim metodikasi", "O'yin pedagogikasi", "Maktabgacha yoshda jismoniy tarbiya"],
+    "Xorijiy til va adabiyoti": ["Nazariy grammatika", "Stilistika", "Mamlakatshunoslik", "Til tarixi"],
+    "Filologiya va tillarni o'qitish (ingliz tili)": ["Fonetika va fonologiya", "Kompyuter lingvistikasi", "Lingvokulturologiya", "Sinxron tarjima"],
+    "Davlat moliyaviy nazorati va auditi": ["Moliyaviy nazorat metodologiyasi", "Ichki nazorat tizimlari", "Davlat xaridlari auditi", "Soliq nazorati"],
+    "Pedagogika (magistratura)": ["Ta'lim siyosati", "Pedagogik innovatsiyalar", "Oliy ta'limda baholash", "Ta'lim sifatini boshqarish"],
+    "Xorijiy til va adabiyoti (magistratura)": ["Kognitiv tilshunoslik", "Qiyosiy adabiyotshunoslik", "Tarjimashunoslik", "Korpus lingvistikasi"],
+}
+MASTER_POOL = ["Akademik yozuv va nashr etish", "Ilmiy tadqiqotlarda statistik usullar", "Xorijiy tilda ilmiy muloqot", "Oliy ta'lim pedagogikasi",
+               "Innovatsion menejment", "Mutaxassislik bo'yicha ilmiy seminar", "Ilmiy-tadqiqot ishi (1-bosqich)", "Ilmiy-tadqiqot ishi (2-bosqich)"]
+LANG_TRACK = ["Ingliz tili", "Akademik ingliz tili", "Kasbiy ingliz tili"]     # 1–3-semestr (til yo'nalishlaridan tashqari)
+GEN_LOCAL = ["O'zbekiston tarixi", "Falsafa"]                                 # mahalliy yo'nalishlar: Gumanitar va tabiiy fanlar kafedrasi
+GEN_INTL = ["Tanqidiy fikrlash (Critical Thinking)", "Tadqiqot ko'nikmalari (Study Skills)"]   # xalqaro yo'nalishlar
+HUM_SUBJECTS = set(GEN_LOCAL)
+CREDIT_PAT = {5: [(6, 6, 6, 6, 6), (8, 6, 6, 5, 5), (7, 7, 6, 5, 5)]}
+FINAL_B = [("Malakaviy amaliyot", 12), ("Bitiruv malakaviy ishi", 12)]
+FINAL_M = [("Ilmiy-tadqiqot ishi va ilmiy-pedagogik amaliyot", 12), ("Magistrlik dissertatsiyasi", 18)]
+
+def curriculum(direction, level, fi):
+    """[[(fan, kredit), ...] × semestr] — 1-semestrdan boshlab. Har semestr 30 kredit, yo'nalish ichida fanlar takrorlanmaydi."""
+    key = f"{direction} (magistratura)" if level == "magistr" and f"{direction} (magistratura)" in SUBJECTS else direction
+    own = [x for x in SUBJECTS[key] if x not in LANG_TRACK]
+    extra = EXTRA.get(key, [])
+    if level == "magistr":
+        n, slots, place = 4, [5, 5, 5, 0], [1, 3, 1, 3]
+        fill = MASTER_POOL[:2] + [x for p in zip(extra, MASTER_POOL[2:]) for x in p] + MASTER_POOL[2 + len(extra):]
+        fixed = {i: [] for i in range(1, 5)}
+    else:
+        fam = FAMILY[direction]
+        n, slots, place = 8, [5] * 7 + [3], [3, 5, 7, 1]
+        pool = POOL[fam]
+        fill = pool[:6] + [x for p in zip(extra, pool[6:]) for x in p] + pool[6 + len(extra):]
+        fixed = {i: [] for i in range(1, 9)}
+        gen = GEN_INTL if fi == INTL_FACULTY else GEN_LOCAL
+        fixed[1].append(gen[0]); fixed[2].append(gen[1])
+        if fam != "lang":
+            for i, x in enumerate(LANG_TRACK, 1): fixed[i].append(x)
+    for i, x in enumerate(own): fixed[place[i % len(place)]].append(x)
+    used = {x for v in fixed.values() for x in v}
+    fill = [x for x in dict.fromkeys(fill) if x not in used]
+    out = []
+    for k in range(1, n + 1):
+        subj = list(fixed[k])
+        if level != "magistr" and k == 8: subj = []
+        while len(subj) < slots[k - 1] - (2 if level != "magistr" and k == 8 else 0) or (level != "magistr" and k == 8 and len(subj) < 1):
+            subj.append(fill.pop(0))
+        if level == "magistr" and k == 4:
+            out.append(list(FINAL_M)); continue
+        if level != "magistr" and k == 8:
+            out.append(list(FINAL_B) + [(subj[0], 6)]); continue
+        pat = CREDIT_PAT[5][(k - 1) % 3] if len(subj) == 5 else None
+        if not pat:
+            base = 30 // len(subj); pat = [base] * len(subj); pat[0] += 30 - base * len(subj)
+        out.append(list(zip(subj, pat)))
+    return out
+
 # Hamkorlar: isft.uz'da ro'yxat e'lon qilinmagan — haqiqiy universitet nomlari ishlatilmaydi (yolg'on hamkorlik ko'rinmasin). NAMUNA.
 COUNTRIES = [(f"Hamkor OTM — {c} (namuna)", c) for c in ["Buyuk Britaniya", "Polsha", "Latviya", "Janubiy Koreya", "Turkiya", "Avstriya",
              "Malayziya", "Litva", "Qozog'iston", "Xitoy", "Ispaniya", "Germaniya"]]
+
+def _split(sc):
+    """Demo yakuniy ball → (oraliq, yakuniy). Oraliq < 12 bo'lsa talaba yakuniyga kiritilmagan (yakuniy None, jami = oraliq)."""
+    if sc >= AR.PASS:
+        lo, hi = max(AR.ORALIQ_MIN, sc - AR.YAKUNIY_MAX), min(AR.ORALIQ_MAX, sc - AR.YAKUNIY_MIN)
+        o = max(lo, min(hi, round(sc * 0.3 + _RS.uniform(-3, 3))))
+        return o, sc - o
+    o = max(0, min(AR.ORALIQ_MAX, sc, round(sc * 0.33 + _RS.uniform(-3, 3))))
+    return (o, None) if o < AR.ORALIQ_MIN else (o, sc - o)
+
+_RS = random.Random(7)
+OLD_GRADE_ROWS = 0   # eski modeldagi joriy semestr baholari soni — seed_extra R ketma-ketligini saqlash uchun
 
 def run():
     if db.DB_PATH.exists():
@@ -179,7 +302,7 @@ def run():
                     for gi in range(1, k + 1):
                         cnt = n // k + (1 if gi <= n % k else 0)
                         if cnt <= 0: continue
-                        name = f"{code}-{26 - course}{suffix}{gi:02d}"
+                        name = f"{code}-{AR.intake_year(course) % 100:02d}{suffix}{gi:02d}"   # qabul yili: 1-kurs — 26, 4-kurs — 23
                         c.execute("INSERT INTO groups_(department_id,faculty_id,name,course,direction,level,form) VALUES(?,?,?,?,?,?,?)",
                                   (did, fi, name, course, d, "bakalavr", form))
                         group_rows.append((c.lastrowid, did, fi, course, d, form, cnt, "bakalavr"))
@@ -193,7 +316,7 @@ def run():
                 cnt = per_course // k + (1 if gi <= per_course % k else 0)
                 code = GROUP_CODE.get(prog, "MAG-" + "".join(w[0] for w in prog.split()[:2]).upper())
                 c.execute("INSERT INTO groups_(department_id,faculty_id,name,course,direction,level,form) VALUES(?,?,?,?,?,?,?)",
-                          (did, fi, f"{code}-{27 - course}{gi:02d}", course, prog, "magistr", "kunduzgi"))
+                          (did, fi, f"{code}-{AR.intake_year(course) % 100:02d}{gi:02d}", course, prog, "magistr", "kunduzgi"))
                 group_rows.append((c.lastrowid, did, fi, course, prog, "kunduzgi", cnt, "magistr"))
 
     # --- o'qituvchilar: jami 255, kafedralar bo'yicha guruhlar ulushiga qarab; ilmiy darajalilar ~24% (NQAAE) ---
@@ -212,24 +335,48 @@ def run():
             c.execute("INSERT INTO teachers(full_name,department_id,faculty_id,degree,position,load_hours,h_index) VALUES(?,?,?,?,?,?,?)",
                       (nm, did, fi, deg, pos, R.randint(560, 980), R.choice([0, 0, 1, 1, 2, 3, 4, 5, 7]) if deg in ("PhD", "DSc") else R.choice([0, 0, 1])))
             teachers.append((c.lastrowid, did, fi))
-    # o'qituvchi-guruh-fan
+    # o'quv rejasi (curriculum): yo'nalish × daraja × semestr → fanlar va kreditlar
+    AR.ensure_schema(con)
+    from . import student_ops as OPS
+    con.executescript(OPS.SCHEMA)   # student_leaves — akademik ta'til davri baholar yaratilishidan oldin kerak
+    RA = random.Random(20261110)    # akademik tarix uchun alohida ketma-ketlik: R (va undan keyingi demo ma'lumotlar) o'zgarmaydi
+    plans = {}
+    for did, fi, directions in dept_rows:
+        for d, _ in directions:
+            plans[(d, "bakalavr")] = curriculum(d, "bakalavr", fi)
+    for prog, dept_no in MASTERS:
+        plans[(prog, "magistr")] = curriculum(prog, "magistr", dept_rows[dept_no - 1][1])
+    c.executemany("INSERT INTO curriculum(direction,level,sem_no,subject,credits) VALUES(?,?,?,?,?)",
+                  [(d, lv, k, subj, cr) for (d, lv), sems in plans.items() for k, sem in enumerate(sems, 1) for subj, cr in sem])
+    # o'qituvchi-guruh-fan (JORIY semestr fanlari). Avvalgi tasodifiy ketma-ketlik saqlanadi: R har guruhda eski fanlar soni bo'yicha
+    # chaqiriladi, o'qituvchi esa yangi o'quv rejasidagi fan uchun RA bilan tanlanadi.
     tg = {}
     fund_teachers = [t for t in teachers if t[1] in inst_dept_ids]   # umumiy iqtisodiy fanlarni institut kafedrasi o'qitadi
     hum_id = next(did for did, _, _ in dept_rows if db.one(con, "SELECT name FROM departments WHERE id=?", (did,))["name"] == HUM_DEPT)
     hum_teachers = [t for t in teachers if t[1] == hum_id]
     skey = lambda d, level: f"{d} (magistratura)" if level == "magistr" and f"{d} (magistratura)" in SUBJECTS else d
+    def pool_for(subj, did):
+        return (fund_teachers if subj in FUND_SUBJECTS and fund_teachers else hum_teachers if subj in HUM_SUBJECTS
+                else [t for t in teachers if t[1] == did])
+    def teacher_for(gid, did, subj):
+        if (gid, subj) not in tg: tg[(gid, subj)] = RA.choice(pool_for(subj, did))[0]
+        return tg[(gid, subj)]
     for gid, did, fi, course, d, form, cnt, level in group_rows:
         key = skey(d, level)
         dept_teachers = [t for t in teachers if t[1] == did]
-        for subj in subjects_for(key, course, level, fi):
-            t = R.choice(fund_teachers if subj in FUND_SUBJECTS and fund_teachers else hum_teachers if subj == HUM_SUBJECT else dept_teachers)
-            c.execute("INSERT INTO teacher_groups VALUES(?,?,?)", (t[0], gid, subj))
-            tg[(gid, subj)] = t[0]
+        for subj in subjects_for(key, course, level, fi):   # faqat R ketma-ketligi uchun (eski fanlar ro'yxati)
+            R.choice(fund_teachers if subj in FUND_SUBJECTS and fund_teachers else hum_teachers if subj == HUM_SUBJECT else dept_teachers)
+        for subj, _ in plans[(d, level)][AR.sem_no(course, AR.CURRENT_SEMESTER) - 1]:
+            c.execute("INSERT INTO teacher_groups VALUES(?,?,?)", (teacher_for(gid, did, subj), gid, subj))
 
     # --- talabalar: 29 203 (NQAAE), shakli bo'yicha; narx — BHM × koeffitsiyent (isft.uz) ---
     bcv, tb = P["bcv"], P["tuition_bcv"]
     sid = 0
     day_pool = {}   # kurs → kunduzgi bakalavr talabalar (grant taqsimoti uchun)
+    global OLD_GRADE_ROWS
+    OLD_GRADE_ROWS = 0
+    grade_rows, attempt_rows, leave_rows = [], [], []
+    real_today = dt.date.today()
     for gid, did, fi, course, d, form, cnt, level in group_rows:
         key = skey(d, level)
         if level == "magistr": price = tb["magistr"] * bcv
@@ -258,8 +405,49 @@ def run():
                       (f"3{R.randint(10**11, 10**12-1)}", nm, gid, fi, g, R.choice(REGIONS), "kontrakt", amount, int(amount * paid_ratio),
                        round(gpa, 1), round(att, 1) if att is not None else None, round(prev, 1), status, level, form))
             if form == "kunduzgi" and level == "bakalavr": day_pool.setdefault(course, []).append((sid, gpa))
-            for subj in subjects_for(key, course, level, fi):
-                c.execute("INSERT INTO grades VALUES(?,?,?,?,?)", (sid, subj, tg[(gid, subj)], int(max(8, min(100, R.gauss(gpa, 8)))), 1))
+            for subj in subjects_for(key, course, level, fi):   # faqat R ketma-ketligi uchun (eski «bitta semestr» baholari)
+                R.gauss(gpa, 8); OLD_GRADE_ROWS += 1
+            # --- akademik tarix (RA): o'tgan semestrlar — yakuniy ball (oraliq + yakuniy), joriy semestr — faqat oraliq nazorat ---
+            leave = None
+            if status == "akademik ta'til":
+                k = len(leave_rows)
+                end = real_today + dt.timedelta(days=[12, 26, -9][k] if k < 3 else RA.randint(-40, 200))   # birinchi uchtasi — ogohlantirish oynasida
+                start = end - dt.timedelta(days=RA.choice([182, 270, 365]))
+                leave = (start.isoformat(), end.isoformat())
+                leave_rows.append((sid, "akademik", leave[0], leave[1], f"TH-{start.year % 100}/{RA.randint(100, 999)}"))
+            # HIKOYA: Xalqaro iqtisodiyot va moliya 2-kurs — 1-semestr (2025-26 kuzgi) yaxshi (prev), 2-semestrda keskin pasaygan (gpa),
+            # joriy semestr oraliq nazoratida ham past
+            ability = {AR.CURRENT_SEMESTER: gpa + RA.gauss(0, 2), 0: gpa, -1: prev}
+            for t in range(AR.CURRENT_SEMESTER, AR.OLDEST_SEMESTER - 1, -1):
+                n = AR.sem_no(course, t)
+                if n < 1: break
+                if leave:
+                    a0, a1 = AR.term_dates(t)
+                    if leave[0] <= a1 and leave[1] >= a0: continue   # ta'til davridagi semestrda baho yo'q
+                ab = ability.get(t, base + RA.uniform(-3, 3))
+                for subj, cr in plans[(d, level)][n - 1]:
+                    tid = teacher_for(gid, did, subj)
+                    if t == AR.CURRENT_SEMESTER:
+                        o = max(0, min(AR.ORALIQ_MAX, round(RA.gauss(ab * 0.31, 2.2))))
+                        grade_rows.append((sid, subj, tid, None, t, o, None, cr, n, 1)); continue
+                    sc = max(8, min(100, round(RA.gauss(ab, 8))))
+                    o, y = _split(sc)
+                    first = o + (y or 0)
+                    if first >= AR.PASS or RA.random() > (0.65 if t == 0 else 0.95):   # o'tgan yoki qarz yopilmagan
+                        grade_rows.append((sid, subj, tid, first, t, o, y, cr, n, 1)); continue
+                    # qayta topshirish (yozgi / keyingi semestr): yangi urinish hisobga olinadi, asl urinish tarixda qoladi
+                    o2 = o if o >= AR.ORALIQ_MIN else RA.randint(AR.ORALIQ_MIN, 20)
+                    y2 = RA.randint(AR.YAKUNIY_MIN, 45); s2 = o2 + y2
+                    when = (dt.date.fromisoformat(AR.term_dates(t)[1]) + dt.timedelta(days=RA.randint(20, 75))).isoformat()
+                    grade_rows.append((sid, subj, tid, s2, t, o2, y2, cr, n, 2))
+                    attempt_rows.append((sid, subj, t, 1, "asosiy", o, y, first, AR.term_dates(t)[1], 0, None))
+                    attempt_rows.append((sid, subj, t, 2, "qayta topshirish", o2, y2, s2, when, 1, None))
+    c.executemany("""INSERT INTO grades(student_id,subject,teacher_id,score,semester,oraliq,yakuniy,credits,sem_no,attempts)
+                     VALUES(?,?,?,?,?,?,?,?,?,?)""", grade_rows)
+    c.executemany("""INSERT INTO grade_attempts(student_id,subject,semester,attempt,kind,oraliq,yakuniy,score,at,counted,retake_id)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?)""", attempt_rows)
+    c.executemany("INSERT INTO student_leaves(student_id,kind,start,end,order_no) VALUES(?,?,?,?,?)", leave_rows)
+    AR.refresh_student_metrics(con)   # students.gpa / gpa_prev — baholardan (o'rtacha ball (100), oxirgi ikki yakunlangan semestr)
     # grantlar: har yili 300 (250 umumiy tanlov — eng yuqori natija, 50 ijtimoiy) — faqat kunduzgi bakalavr (isft.uz/en/faq)
     for course, pool in day_pool.items():
         top = [s for s, _ in sorted(pool, key=lambda x: -x[1])[:P["grants_per_year"] - P["grants_social"]]]
@@ -375,7 +563,7 @@ def run():
         (1, "Ilmiy ishlar prorektori", "prorektor_ilmiy", "Scopus maqolalar rejasini kafedralar kesimida taqsimlash", "2026-11-10", "jarayonda"),
         (1, "Yoshlar ishlari prorektori", "prorektor_yoshlar", "2-bino isitish tizimi bo'yicha murojaatni hal qilish", "2026-11-06", "jarayonda"),
         (2, "Qabul bo'limi", "qabul", "2027 qabul kampaniyasi uchun marketing rejasini taqdim etish", "2026-11-20", "jarayonda"),
-        (2, "Talabalar bilan ishlash bo'limi", "talabalar", "Qarzdor talabalar bilan individual suhbatlar o'tkazish", "2026-11-15", "jarayonda"),
+        (2, "Registrator ofisi", "talabalar", "Qarzdor talabalar bilan individual suhbatlar o'tkazish", "2026-11-15", "jarayonda"),
         (2, "Buxgalteriya", "buxgalteriya", "Kommunal xarajatlar oshishi sabablarini tahlil qilish", "2026-11-12", "jarayonda"),
     ]
     for i, (t, d, k) in enumerate(meetings, 1):
@@ -420,7 +608,7 @@ def run():
         c.execute("INSERT INTO users(full_name,role,faculty_id,department_id,teacher_id,link_code,pin) VALUES(?,?,?,?,?,?,?)",
                   (nm, role, f, d, tid, code, PW))
     from . import seed_extra
-    seed_extra.run(con, R, TODAY, teachers)
+    seed_extra.run(con, R, TODAY, teachers, old_rows=OLD_GRADE_ROWS)
     con.commit()
     from . import dateshift   # hikoya 2026-11-04 ga nisbatan yozilgan — hammasini bugungi sanaga suramiz
     print("Sanalar surildi:", dateshift.shift_all(con, (dt.date.today() - TODAY).days), "kun")
@@ -436,13 +624,12 @@ def run():
     def as_(uid): return rbac.ctx_for(con, uid)
     reg, rect, kadr, xal, mol, kaf = as_(17), as_(2), as_(12), as_(10), as_(5), as_(14)   # 17 — Registrator ofisi boshlig'i
     st = D.lookup(con, reg, "student", "")[:4]
-    grp = [g for g in D.lookup(con, reg, "group") if "-24" in g["label"]][0]["id"]
+    grp = [g for g in D.lookup(con, reg, "group") if "-25" in g["label"]][0]["id"]   # 2-kurs (2025 qabul) guruhi
     for x in st[:3]: D.issue(con, reg, "study_cert", {"target": f"s:{x['id']}", "purpose": R.choice(D.PURPOSES[:5])}, base)
     D.issue(con, reg, "study_cert", {"target": f"s:{st[3]['id']}", "lang": "en"}, base)
     D.issue(con, reg, "transcript", {"target": f"s:{st[0]['id']}"}, base)
     D.issue(con, reg, "exam_sheet", {"group": grp, "subject": "*"}, base)
     D.issue(con, reg, "debtors_list", {}, base)
-    D.issue(con, reg, "order_student", {"target": f"s:{st[1]['id']}", "action": "akademik_tatil", "reason": "sog'lig'i bo'yicha (tibbiy xulosa ilova qilingan)"}, base)
     D.issue(con, mol, "debt_letter", {"target": f"g:{grp}"}, base)
     D.issue(con, kaf, "load", {"department": 4}, base)
     D.issue(con, rect, "minutes", {"meeting": 5}, base)
