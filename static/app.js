@@ -143,7 +143,7 @@ function drawRoles() {
   $("#lvlTabs").querySelectorAll("button").forEach(b => { b.classList.toggle("on", +b.dataset.l === LVL); b.setAttribute("aria-selected", +b.dataset.l === LVL); });
   const q = ($("#roleSearch").value || "").trim().toLowerCase().replace(/[ʻʼ‘’`]/g, "'");
   if (q) $("#lvlTabs").querySelectorAll("button").forEach(b => { b.classList.remove("on"); b.setAttribute("aria-selected", false); });
-  const list = USERS.filter(u => q ? (u.role + " " + personOf(u)).toLowerCase().replace(/[ʻʼ‘’`]/g, "'").includes(q) : u.level === LVL);
+  const list = USERS.filter(u => q ? (u.role + " " + personOf(u)).toLowerCase().replace(/[ʻʼ‘’`]/g, "'").includes(q) : u.level === LVL && !u.search_only);   /* tyutorlar — faqat qidiruvda */
   const el = $("#roleList");
   el.innerHTML = list.length ? list.map(u => `<div class="role-row ${u.id === selUser ? "sel" : ""}" data-id="${u.id}" tabindex="0" role="option" aria-selected="${u.id === selUser}" title="${esc(u.role)} — ${esc(personOf(u))}">
     <span class="avatar l${u.level}${u.photo ? " has-photo" : ""}">${avHtml(u)}</span><div><b>${esc(u.role)}</b><small>${esc(personOf(u))}${q ? ` · ${LVL_TABS[u.level]}` : ""}</small></div><span class="chk">${u.id === selUser ? ico("check", 13) : ""}</span></div>`).join("")

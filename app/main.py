@@ -99,12 +99,13 @@ class Login(BaseModel):
 @app.get("/api/users")
 def users():
     us = db.rows(con, "SELECT * FROM users ORDER BY id")
-    # "Kafedralar" bo'limida faqat kafedra mudirlari (kafedralar tartibida); tyutor/o'qituvchi demo akkauntlari
-    # kirish ro'yxatida ko'rsatilmaydi (API orqali ishlashda davom etadi)
-    us = [u for u in us if rbac.ROLES[u["role"]].level != 4 or u["role"] == "kafedra"]
+    # "Kafedralar" bo'limida kafedra mudirlari va o'qituvchilar (Taqdimot, Vazifalar va testlar); tyutorlar (38 ta) ro'yxatni
+    # to'ldirib yubormasligi uchun faqat qidiruvda chiqadi (search_only)
+    us = [u for u in us if rbac.ROLES[u["role"]].level != 4 or u["role"] in ("kafedra", "oqituvchi", "tyutor")]
     us = [u for u in us if u.get("active") != 0 and not rbac.ROLES[u["role"]].legacy]   # faolsizlantirilgan / bekor qilingan lavozim — ro'yxatda yo'q
     us.sort(key=lambda u: (rbac.ROLES[u["role"]].level, u.get("department_id") or 0, u["id"]))
-    return [{"id": u["id"], "name": u["full_name"], "role": rbac.user_title(u), "level": rbac.ROLES[u["role"]].level, "photo": photo_of(u)} for u in us]
+    return [{"id": u["id"], "name": u["full_name"], "role": rbac.user_title(u), "level": rbac.ROLES[u["role"]].level, "photo": photo_of(u),
+             **({"search_only": True} if u["role"] == "tyutor" else {})} for u in us]
 
 def _ip(request: Request) -> str:
     return (request.client.host if request.client else "") or "?"
