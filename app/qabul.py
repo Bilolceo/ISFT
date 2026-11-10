@@ -18,6 +18,7 @@ P = "/api/qabul"
 RES = rbac.ADMISSIONS
 FULL = ("qabul",)
 READ = ("rektor", "prorektor_oquv", "marketing")
+SUMMARY = ("kengash", "prorektor_moliya")   # faqat jamlangan raqamlar (voronka, yo'nalishlar, kontrakt/grant) — abituriyentlar ro'yxatisiz
 STAGES = {"ariza": "Ariza qabul qilindi", "hujjat": "Hujjatlar tekshirildi", "imtihon": "Imtihon / suhbatdan o'tdi",
           "shartnoma": "Shartnoma tuzildi", "buyruq": "Qabul buyrug'i loyihasida", "rad": "Rad etildi"}
 NEXT = {"ariza": "hujjat", "hujjat": "imtihon", "imtihon": "shartnoma"}
@@ -69,9 +70,9 @@ def seed_demo(con):
                      f"Q-27/{1000 + i}" if st == "shartnoma" else None, "Imtihon bali past" if st == "rad" else None, d + "T09:00:00", d + "T09:00:00"))
     con.commit()
 
-def C(request: Request, write=False) -> Ctx:
+def C(request: Request, write=False, summary=False) -> Ctx:
     c = _ctx(request)
-    ok = c.role.key in FULL or (not write and c.role.key in READ)
+    ok = c.role.key in FULL or (not write and (c.role.key in READ or (summary and c.role.key in SUMMARY)))
     if not ok:
         rbac.audit(_con, c, "qabul: abituriyentlar", RES, False, "ruxsat yo'q")
         raise AccessDenied("⛔ Abituriyentlar oqimini Qabul komissiyasi yuritadi.")
@@ -79,13 +80,15 @@ def C(request: Request, write=False) -> Ctx:
 
 @router.get(P + "/meta")
 def api_meta(request: Request):
-    c = C(request)
+    c = C(request, summary=True)
     from . import desks
     by_stage = {r["stage"]: r["n"] for r in db.rows(_con, "SELECT stage, COUNT(*) n FROM qb_applicants GROUP BY 1")}
     by_dir = db.rows(_con, """SELECT direction, COUNT(*) n, SUM(stage='ariza') ariza, SUM(stage='hujjat') hujjat, SUM(stage='imtihon') imtihon,
                               SUM(stage='shartnoma') shartnoma, SUM(stage='buyruq') buyruq, SUM(stage='rad') rad FROM qb_applicants GROUP BY 1 ORDER BY n DESC""")
+    by_pay = db.rows(_con, """SELECT payment_type, COUNT(*) n, SUM(stage IN ('shartnoma','buyruq')) shartnoma FROM qb_applicants
+                              WHERE stage<>'rad' GROUP BY 1 ORDER BY n DESC""")
     rbac.audit(_con, c, "qabul: umumiy", RES, True)
-    return {"can_edit": c.role.key in FULL, "stages": STAGES, "next": NEXT, "pass_score": PASS_SCORE, "by_stage": by_stage, "by_direction": by_dir,
+    return {"can_edit": c.role.key in FULL, "summary_only": c.role.key in SUMMARY, "by_payment": by_pay, "stages": STAGES, "next": NEXT, "pass_score": PASS_SCORE, "by_stage": by_stage, "by_direction": by_dir,
             "directions": _dirs(_con), "desk": desks.admissions(_con)}
 
 @router.get(P + "/applicants")

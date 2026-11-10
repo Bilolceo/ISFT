@@ -64,13 +64,23 @@ print("— Ruxsatlar —")
 for p in ("/meta", "/applicants"):
     ok(httpx.get(B + X + p).status_code == 401, f"Kirishsiz: GET {p} → 401")
 ok(httpx.post(B + X + "/applicants", json={"full_name": "TEST Kirishsiz", "direction": "x"}).status_code == 401, "Kirishsiz: yangi ariza → 401")
-for cl, nm in ((ken, "Kuzatuv kengashi"), (bux, "Buxgalteriya"), (oqt, "O'qituvchi"), (stg, "Strategik bo'lim")):
+for cl, nm in ((bux, "Buxgalteriya"), (oqt, "O'qituvchi"), (stg, "Strategik bo'lim")):
     ok(cl.get(X + "/meta").status_code == 403 and cl.get(X + "/applicants").status_code == 403, f"{nm}: meta va ro'yxat → 403")
+pmo = S(uid("prorektor_moliya"))
+_tot = q1("SELECT COUNT(*) FROM qb_applicants WHERE stage<>'rad'")
+for cl, nm in ((ken, "Kuzatuv kengashi"), (pmo, "Moliya prorektori")):
+    sm = J(cl.get(X + "/meta"))
+    ok(sm["summary_only"] is True and sm["can_edit"] is False, f"{nm}: faqat jamlangan xulosa (summary_only, can_edit=false)")
+    ok(sum(r["n"] for r in sm["by_payment"]) == _tot and {r["payment_type"] for r in sm["by_payment"]} <= {"kontrakt", "grant"}, f"{nm}: kontrakt/grant taqsimoti bazaga mos ({_tot})")
+    ok(sum(sm["by_stage"].values()) == q1("SELECT COUNT(*) FROM qb_applicants"), f"{nm}: bosqichlar voronkasi bazaga mos")
+    ok(cl.get(X + "/applicants").status_code == 403, f"{nm}: abituriyentlar ro'yxati (shaxsiy ma'lumot) → 403")
+    ok(cl.post(X + "/applicants", json={"full_name": "TEST Xulosa Rol", "direction": "x"}).status_code == 403, f"{nm}: ariza kirita olmaydi → 403")
+    ok(cl.post(X + "/order", params={"direction": "x"}).status_code == 403, f"{nm}: buyruq loyihasi → 403")
 m = J(qb.get(X + "/meta"))
 ok(m["can_edit"] is True and m["pass_score"] == 56 and m["next"] == {"ariza": "hujjat", "hujjat": "imtihon", "imtihon": "shartnoma"}, "Qabul komissiyasi: tahrir huquqi, o'tish bali 56, bosqichlar")
 for cl, nm in ((rek, "Rektor"), (oquv, "O'quv prorektori"), (mkt, "Marketing")):
     mm = J(cl.get(X + "/meta"))
-    ok(mm["can_edit"] is False and cl.get(X + "/applicants").status_code == 200, f"{nm}: faqat ko'rish (can_edit=false, ro'yxat 200)")
+    ok(mm["can_edit"] is False and mm["summary_only"] is False and cl.get(X + "/applicants").status_code == 200, f"{nm}: faqat ko'rish (can_edit=false, ro'yxat 200)")
 dirs = m["directions"]
 ok(len(dirs) >= 3, f"Yo'nalishlar ro'yxati: {len(dirs)} ta")
 DIR0 = dirs[0]

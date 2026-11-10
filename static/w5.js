@@ -123,6 +123,16 @@ async function renderQabul() {
   try { QB.meta = await w5("/api/qabul/meta"); } catch (e) { el.innerHTML = `<div class="card">${esc(e.msg || "Ruxsat yo'q")}</div>`; return; }
   const m = QB.meta, s = m.by_stage;
   const order = ["ariza", "hujjat", "imtihon", "shartnoma", "buyruq", "rad"];
+  if (m.summary_only) {   /* Kengash, moliya prorektori — faqat jamlangan raqamlar, abituriyentlar ro'yxatisiz */
+    const PT = {kontrakt: "Kontrakt", grant: "Grant"};
+    el.innerHTML = w5head("Qabul xulosasi", "Jamlangan ko'rsatkichlar: bosqichlar, yo'nalishlar, kontrakt / grant. Abituriyentlar shaxsiy ma'lumotlari ko'rsatilmaydi.", "") +
+      `<div class="w5-funnel">${order.map(k => `<div class="w5-step ${k === "rad" ? "rad" : ""}"><b>${fmt(s[k] || 0)}</b><span>${esc(m.stages[k])}</span></div>`).join("")}</div>
+      <div class="card"><h3 style="margin-top:0">To'lov turi bo'yicha</h3>${tbl(["To'lov turi", "#Faol arizalar", "#Shartnoma tuzilgan"],
+        (m.by_payment || []).map(r => [esc(PT[r.payment_type] || r.payment_type || "—"), r.n, r.shartnoma]))}</div>
+      <div class="card"><h3 style="margin-top:0">Yo'nalishlar bo'yicha</h3>${tbl(["Yo'nalish", "#Jami", "#Ariza", "#Hujjat", "#Imtihon", "#Shartnoma", "#Buyruq", "#Rad"],
+        m.by_direction.map(r => [esc(r.direction), r.n, r.ariza, r.hujjat, r.imtihon, r.shartnoma, r.buyruq, r.rad]), {nw: [0]})}</div>`;
+    hydrateIcons(el); return;
+  }
   el.innerHTML = w5head("Qabul", "Abituriyentlar oqimi: ariza → hujjatlar → imtihon / suhbat → shartnoma → qabul buyrug'i loyihasi",
       m.can_edit ? `<button class="btn primary sm" id="qbNew">${ico("plus", 15)} Yangi ariza</button>` : "") +
     `<div class="w5-funnel">${order.map(k => `<button type="button" class="w5-step ${QB.stage === k ? "on" : ""} ${k === "rad" ? "rad" : ""}" data-stage="${k}"><b>${fmt(s[k] || 0)}</b><span>${esc(m.stages[k])}</span></button>`).join("")}</div>
