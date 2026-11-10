@@ -28,6 +28,19 @@ const MW_SRC = {
   xodim: {label: "Xodimlar ta'tili", icon: "users"},
   agent: {label: "AI agentlar", icon: "spark"},
   sillabus: {label: "O'quv dasturlari", icon: "book"},
+  moliya: {label: "Moliya", icon: "money"},
+  kadrlar: {label: "Kadrlar", icon: "idcard"},
+  ilmiy: {label: "Ilmiy", icon: "flask"},
+  xalqaro: {label: "Xalqaro", icon: "globe"},
+  yoshlar: {label: "Yoshlar", icon: "gift"},
+  amaliyot: {label: "Amaliyot", icon: "pin"},
+  harakat: {label: "Talaba harakati", icon: "cap"},
+  tekshiruv: {label: "Ishlar", icon: "check"},
+  talaba: {label: "Talaba so'rovlari", icon: "user"},
+  devon: {label: "Kiruvchi xatlar", icon: "mail"},
+  qabul: {label: "Qabul", icon: "users"},
+  rejalar: {label: "Rejalar", icon: "tasks"},
+  it_req: {label: "Akkaunt so'rovlari", icon: "users"},
 };
 const MW_GROUPS = [
   ["overdue", "Muddati o'tgan", "alert"],
@@ -53,6 +66,7 @@ function mwOpen(link) {
   if (!link || !link.view) return;
   /* Talabalar markazi: o'z navbatim, kerakli tur bilan (XT.openLink faqat talaba kartasini biladi) */
   if (link.view === "ops" && link.tab && typeof OPSV !== "undefined") { OPSV.tab = link.tab; OPSV.kind = link.kind || ""; OPSV.rule = ""; OPSV.level = 0; OPSV.page = 30; }
+  if (link.href) { location.href = link.href; return; }
   if (typeof XT !== "undefined" && XT.openLink) XT.openLink(link); else go(link.view);
 }
 
@@ -70,7 +84,7 @@ function mwRow(it, i) {
 }
 
 function mwBody() {
-  const d = MW.data, items = d.items.filter(it => MW.flt === "all" || it.source === MW.flt);
+  const d = MW.data, items = d.items.filter(it => MW.flt === "all" || (MW.flt === "sign" ? it.sign : it.source === MW.flt));
   if (!d.items.length) return `<div class="card mw-empty">${ico("checkc", 30)}<b>Hammasi joyida</b><span class="muted">Hozircha sizdan kutilayotgan ish yo'q: majlis topshiriqlari, portal xatlari, imzo va tasdiqlar — barchasi bajarilgan.</span>
       <div class="mw-empty-acts"><button class="btn sm" type="button" data-go="tasks">${ico("tasks", 15)} Majlislar</button><button class="btn sm" type="button" data-go="portal">${ico("mail", 15)} Portal</button></div></div>`;
   if (!items.length) return `<div class="card mw-empty">${ico("checkc", 26)}<b>Bu manbada ish yo'q</b><span class="muted">Boshqa manbalarni ko'rish uchun «Hammasi»ni tanlang.</span></div>`;
@@ -86,14 +100,15 @@ function mwBody() {
 function mwDraw() {
   const el = $("#v-mywork"), d = MW.data, c = d.counts;
   const srcs = Object.keys(MW_SRC).filter(s => c.by_source[s]);
-  if (MW.flt !== "all" && !srcs.includes(MW.flt)) MW.flt = "all";
+  if (MW.flt !== "all" && !(MW.flt === "sign" && c.sign) && !srcs.includes(MW.flt)) MW.flt = "all";
   const tile = (k, label, n, cls, icon) => `<div class="mw-st ${cls}${n ? "" : " zero"}"><span class="mw-st-ic">${ico(icon, 16)}</span><b>${fmt(n)}</b><span>${label}</span></div>`;
   const who = (typeof ME !== "undefined" && ME) ? [ME.role, ME.scope && ME.scope !== "Butun institut" ? ME.scope : ""].filter(Boolean).join(" · ") : "";
   el.innerHTML = `<div class="head"><div><h2>Mening vazifalarim</h2><span class="muted">Sizdan kutilayotgan hamma ish bitta joyda: topshiriqlar, portal xatlari va rezolyutsiyalar, Talabalar markazi navbati, buyruqlar (imzo, kelishuv, qaytarilgan), murojaatlar, xodimlar ta'tili, o'quv dasturlari va AI takliflari.${who ? ` <b class="mw-whoami">${esc(who)}</b>` : ""}</span></div>
       <div class="row-actions"><button class="btn sm" type="button" id="mwRefresh">${ico("refresh", 15)} Yangilash</button></div></div>
     <div class="mw-stats">${tile("overdue", "Muddati o'tgan", c.overdue, "bad", "alert")}${tile("today", "Bugun", c.today, "warn", "clock")}${tile("week", "Shu hafta", c.week, "", "calendar")}${tile("total", "Jami ish", c.total, "tot", "list")}</div>
-    ${srcs.length > 1 ? `<div class="pn-tabs mw-tabs" role="tablist" aria-label="Manba bo'yicha saralash">
+    ${srcs.length > 1 || c.sign ? `<div class="pn-tabs mw-tabs" role="tablist" aria-label="Manba bo'yicha saralash">
       <button type="button" role="tab" class="pn-tab${MW.flt === "all" ? " on" : ""}" aria-selected="${MW.flt === "all"}" data-f="all">Hammasi <em>${c.total}</em></button>
+      ${c.sign ? `<button type="button" role="tab" class="pn-tab mw-sign${MW.flt === "sign" ? " on" : ""}" aria-selected="${MW.flt === "sign"}" data-f="sign" title="Imzo yoki tasdig'ingizni kutayotgan hujjatlar">${ico("pen", 15)}Imzo papkasi <em>${c.sign}</em></button>` : ""}
       ${srcs.map(s => `<button type="button" role="tab" class="pn-tab${MW.flt === s ? " on" : ""}" aria-selected="${MW.flt === s}" data-f="${s}">${ico(MW_SRC[s].icon, 15)}${esc(MW_SRC[s].label)} <em>${c.by_source[s]}</em></button>`).join("")}</div>` : ""}
     ${d.partial && d.partial.length ? `<div class="src-note" style="margin-bottom:12px">${ico("info", 15)}<span>Ayrim manbalarni yuklab bo'lmadi: ${esc(d.partial.map(s => (MW_SRC[s] || {}).label || s).join(", "))}. Keyinroq yangilang.</span></div>` : ""}
     <div id="mwBody">${mwBody()}</div>`;

@@ -76,7 +76,8 @@ async function tkList(scope) {
 
 /* ---------- tekshiruv sozlamalari (yangi yoki tahrir) ---------- */
 function tkForm(B) {
-  const M = TK.meta, box = B ? $("#tkCfg") : $("#tkBody");
+  const M = TK.meta, box = B ? tkModal("Tekshiruv sozlamalari") : $("#tkBody");
+  if (B) box.classList.add("tk-modal-wide");
   const kind = B ? B.kind : "mustaqil";
   let rubric = B ? B.rubric.map(x => ({...x})) : M.rubrics[kind].map(x => ({...x}));
   box.innerHTML = `<div class="card tk-card">
@@ -107,10 +108,10 @@ function tkForm(B) {
   $("#tkKind").onchange = () => { if (!B) rubric = M.rubrics[$("#tkKind").value].map(x => ({...x})); drawRub(); kindVis(); };
   $("#tkRubAdd").onclick = () => { rubric.push({name: "", points: 10}); drawRub(); };
   $("#tkRubTpl").onclick = () => { rubric = M.rubrics[$("#tkKind").value].map(x => ({...x})); drawRub(); };
-  $("#tkCfgCancel")?.addEventListener("click", () => { $("#tkCfg").innerHTML = ""; });
+  $("#tkCfgCancel")?.addEventListener("click", tkModalClose);
   $("#tkTaskFile")?.addEventListener("change", async e => {
     const f = e.target.files[0]; if (!f) return;
-    try { TK.batch = await tkApi(`/api/tekshiruv/batches/${B.id}/task?name=${encodeURIComponent(f.name)}`, null, await f.arrayBuffer()); toast("Topshiriq fayli qo'shildi"); tkView(); }
+    try { TK.batch = await tkApi(`/api/tekshiruv/batches/${B.id}/task?name=${encodeURIComponent(f.name)}`, null, await f.arrayBuffer()); toast("Topshiriq fayli qo'shildi"); tkModalClose(); tkView(); }
     catch (er) { toast(er.msg || "Xatolik"); }
   });
   $("#tkSave").onclick = async () => {
@@ -122,50 +123,65 @@ function tkForm(B) {
     b.disabled = true;
     try {
       TK.batch = await tkApi(B ? `/api/tekshiruv/batches/${B.id}` : "/api/tekshiruv/batches", body);
-      toast(B ? "Saqlandi" : "Tekshiruv yaratildi — endi ishlarni yuklang"); tkView();
+      toast(B ? "Saqlandi" : "Tekshiruv yaratildi — endi ishlarni yuklang"); tkModalClose(); tkView(); if (!B) tkUploadDlg();
     } catch (e) { toast(e.msg || "Xatolik"); if (b.isConnected) b.disabled = false; }
   };
 }
 
-/* ---------- tekshiruv sahifasi ---------- */
+/* ---------- modal oyna (yuklash, sozlamalar) ---------- */
+function tkModal(title) {
+  tkModalClose();
+  document.body.insertAdjacentHTML("beforeend", `<div class="tk-modal" id="tkModal" role="dialog" aria-modal="true" aria-label="${esc(title)}"><div class="tk-modal-b">
+    <div class="tk-modal-h"><b>${esc(title)}</b><button type="button" class="btn sm ghost" id="tkModalX" aria-label="Yopish">✕</button></div><div id="tkModalC"></div></div></div>`);
+  const m = $("#tkModal");
+  m.onclick = e => { if (e.target === m) tkModalClose(); };
+  $("#tkModalX").onclick = tkModalClose;
+  return $("#tkModalC");
+}
+function tkModalClose() { $("#tkModal")?.remove(); }
+
+/* ---------- tekshiruv sahifasi: avval jadval; yuklash — tugma/modal yoki sahifaga sudrab tashlash ---------- */
 async function tkOpen(id) {
   try { TK.batch = await tkApi(`/api/tekshiruv/batches/${id}`); tkView(); }
   catch (e) { TK.batch = null; toast(e.msg || "Ochib bo'lmadi"); tkShell(); }
 }
 
+const TK_FLT = [["all", "Hammasi"], ["ai", "AI taklifi"], ["qolda", "Qo'lda"], ["ok", "Tasdiqlangan"], ["sim", "O'xshash"]];
 function tkView() {
   const el = $("#v-tekshiruv"), B = TK.batch, M = TK.meta, ro = !B.can_edit, C = B.counts;
   const pending = (C.yuklandi || 0) + (C.xato || 0);
-  el.innerHTML = tkHead() + `<div class="card tk-card">
-    <div class="tk-top"><button type="button" class="btn ghost sm" id="tkBack">← Ro'yxat</button>
-      <div class="tk-title"><h3>${esc(B.title)}</h3><div class="tk-chips">${tkChip(B.kind_label)}${B.subject ? tkChip(B.subject) : ""}${B.group_name ? tkChip(B.group_name) : ""}${tkChip(`Maks. ${tkNum(B.max_score)} ball`)}${ro ? tkChip(`Muallif: ${B.author} · faqat ko'rish`, "warn") : ""}</div></div></div>
-    <div class="tk-stats">
-      <div><b>${B.works.length}</b><span>ish</span></div><div><b>${C.tasdiqlandi || 0}</b><span>tasdiqlangan</span></div>
-      <div><b>${C.tekshirildi || 0}</b><span>AI taklifi kutmoqda</span></div><div class="${C.qolda ? "warn" : ""}"><b>${C.qolda || 0}</b><span>qo'lda tekshirish</span></div>
-      <div><b>${B.stats.avg === null ? "—" : tkNum(B.stats.avg)}</b><span>o'rtacha (tasdiqlangan)</span></div></div>
-    <div id="tkProg"></div>
-    ${ro ? "" : `<div class="tk-acts tk-left">
-      <button type="button" class="btn primary" id="tkRun" ${pending && !B.progress.running ? "" : "disabled"}>${ico("spark", 15)} Tekshirish${pending ? ` (${pending})` : ""}</button>
-      <button type="button" class="btn" id="tkAll" ${C.tekshirildi ? "" : "disabled"} title="Faqat siz ochib ko'rgan AI takliflari tasdiqlanadi">Ko'rilganlarni tasdiqlash</button>
-      <button type="button" class="btn ghost" id="tkCfgBtn">Sozlamalar</button>
-      <button type="button" class="btn ghost" id="tkDelB">O'chirish</button></div>`}
-    <div id="tkCfg"></div>
-    ${ro ? "" : `<label class="tk-drop" id="tkDrop" tabindex="0"><input type="file" id="tkFiles" multiple hidden accept=".pdf,.docx,.pptx,.xlsx,.txt,.jpg,.jpeg,.png,.zip">
-      ${ico("upload", 24)}<b>Talaba ishlarini shu yerga tashlang yoki tanlang</b>
-      <span class="muted tiny">PDF, Word, PowerPoint, Excel, matn, JPG/PNG yoki ZIP · har biri ${M.max_mb} MB gacha · tekshiruvda ${M.max_works} tagacha ish. Fayl nomida talaba familiyasi bo'lsa — avtomatik taniladi.</span></label>
-      <div id="tkUp"></div>`}
-    <div class="tk-acts tk-left tk-exp"><span class="muted tiny">Eksport:</span>
-      <a class="btn sm" href="/api/tekshiruv/batches/${B.id}/export.xlsx">Baholar (.xlsx)</a><a class="btn sm" href="/api/tekshiruv/batches/${B.id}/export.csv">.csv</a>
-      <a class="btn sm" href="/api/tekshiruv/batches/${B.id}/export.docx">Izohlar varaqasi (.docx)</a>
-      <button type="button" class="btn sm ghost" id="tkSim">O'xshashlikni tekshirish</button></div>
-    <div id="tkSimBox"></div>
-    <div id="tkWorks"></div>
+  TK.flt = TK.flt || "all"; TK.view = "batch";
+  el.innerHTML = `<div class="tk-bv">
+    <div class="tk-bar">
+      <button type="button" class="btn ghost sm" id="tkBack" title="Ro'yxatga qaytish">←</button>
+      <div class="tk-title"><h3>${esc(B.title)}</h3><div class="tk-chips">${tkChip(B.kind_label)}${B.subject ? tkChip(B.subject) : ""}${B.group_name ? tkChip(B.group_name) : ""}${tkChip(`Maks. ${tkNum(B.max_score)} ball`)}${tkChip(M.label, M.engine === "claude" ? "ok" : (M.engine === "fake" ? "warn" : "bad"))}${ro ? tkChip(`Muallif: ${B.author} · faqat ko'rish`, "warn") : ""}</div></div>
+      <div class="tk-bar-r">
+        ${ro ? "" : `<button type="button" class="btn sm" id="tkUpB">${ico("upload", 14)} Ish yuklash</button>
+        <button type="button" class="btn sm primary" id="tkRun" ${pending && !B.progress.running ? "" : "disabled"}>${ico("spark", 14)} Tekshirish${pending ? ` (${pending})` : ""}</button>
+        <button type="button" class="btn sm" id="tkAll" ${C.tekshirildi ? "" : "disabled"} title="Faqat siz ochib ko'rgan AI takliflari tasdiqlanadi">Ko'rilganlarni tasdiqlash</button>`}
+        <div class="tk-dd"><button type="button" class="btn sm ghost" id="tkExpB" aria-haspopup="true">Eksport ▾</button>
+          <div class="tk-ddm" id="tkExpM" hidden><a href="/api/tekshiruv/batches/${B.id}/export.xlsx">Baholar (.xlsx)</a><a href="/api/tekshiruv/batches/${B.id}/export.csv">Baholar (.csv)</a><a href="/api/tekshiruv/batches/${B.id}/export.docx">Izohlar varaqasi (.docx)</a></div></div>
+        <div class="tk-dd"><button type="button" class="btn sm ghost" id="tkMoreB" aria-label="Boshqa amallar">⋯</button>
+          <div class="tk-ddm" id="tkMoreM" hidden><button type="button" id="tkSim">O'xshashlikni tekshirish</button>${ro ? "" : `<button type="button" id="tkCfgBtn">Sozlamalar (topshiriq, mezonlar)</button><button type="button" id="tkDelB" class="bad">Tekshiruvni o'chirish</button>`}</div></div>
+      </div>
+    </div>
+    <div class="tk-line">${tkChip(`${B.works.length} ish`)}${tkChip(`${C.tasdiqlandi || 0} tasdiqlangan`, C.tasdiqlandi ? "ok" : "")}${tkChip(`${C.tekshirildi || 0} AI taklifi kutmoqda`, C.tekshirildi ? "info" : "")}${tkChip(`${C.qolda || 0} qo'lda tekshirish`, C.qolda ? "warn" : "")}${pending ? tkChip(`${pending} tekshirilmagan`) : ""}${tkChip(`o'rtacha: ${B.stats.avg === null ? "—" : tkNum(B.stats.avg)}`)}
+      <span class="tk-flt" role="tablist">${TK_FLT.map(([k, l]) => `<button type="button" role="tab" data-fl="${k}" class="${TK.flt === k ? "on" : ""}">${esc(l)}</button>`).join("")}</span></div>
+    <div id="tkProg"></div><div id="tkUp"></div><div id="tkSimBox"></div>
+    <div id="tkWorks" class="tk-wbox"></div>
+    ${ro ? "" : `<div class="tk-dropov" id="tkDropOv" hidden><div>${ico("upload", 30)}<b>Ishlarni shu yerga tashlang</b><span>PDF, Word, PowerPoint, Excel, matn, JPG/PNG yoki ZIP</span></div></div>`}
   </div>`;
-  $("#tkBack").onclick = () => { TK.batch = null; tkShell(); };
+  $("#tkBack").onclick = () => { TK.batch = null; TK.flt = "all"; tkShell(); };
+  const dd = (b, m) => { $(b).onclick = e => { e.stopPropagation(); const mm = $(m), was = mm.hidden; el.querySelectorAll(".tk-ddm").forEach(x => x.hidden = true); mm.hidden = !was; }; };
+  dd("#tkExpB", "#tkExpM"); dd("#tkMoreB", "#tkMoreM");
+  el.querySelector(".tk-bv").addEventListener("click", e => { if (!e.target.closest(".tk-dd")) el.querySelectorAll(".tk-ddm").forEach(x => x.hidden = true); });
+  el.querySelectorAll("[data-fl]").forEach(b => b.onclick = async () => { TK.flt = b.dataset.fl; if (TK.flt === "sim" && !TK.sim) await tkSimilarity(true); el.querySelectorAll("[data-fl]").forEach(x => x.classList.toggle("on", x === b)); tkWorks(); });
+  $("#tkSim").onclick = () => { $("#tkMoreM").hidden = true; tkSimilarity(); };
+  TK.sim = null;
   tkWorks(); tkProgress();
-  $("#tkSim").onclick = tkSimilarity;
   if (ro) return;
-  $("#tkCfgBtn").onclick = () => tkForm(B);
+  $("#tkUpB").onclick = tkUploadDlg;
+  $("#tkCfgBtn").onclick = () => { $("#tkMoreM").hidden = true; tkForm(B); };
   $("#tkRun").onclick = async () => {
     const b = $("#tkRun"); b.disabled = true;
     try { const r = await tkApi(`/api/tekshiruv/batches/${B.id}/check`, {}); if (r.note) toast(r.note); else toast(`${r.started} ta ish tekshiruvga yuborildi`); TK.batch.progress = {done: 0, total: r.started, running: true}; tkProgress(); }
@@ -181,22 +197,37 @@ function tkView() {
     try { await tkApi(`/api/tekshiruv/batches/${B.id}/delete`, {}); toast("Tekshiruv o'chirildi"); TK.batch = null; TK.tab = "mine"; tkShell(); }
     catch (e) { toast(e.msg || "Xatolik"); }
   };
+  /* butun sahifaga sudrab tashlash */
+  const bv = el.querySelector(".tk-bv"), ov = $("#tkDropOv"); let depth = 0;
+  const hasFiles = e => [...(e.dataTransfer?.types || [])].includes("Files");
+  bv.addEventListener("dragenter", e => { if (!hasFiles(e)) return; e.preventDefault(); depth++; ov.hidden = false; });
+  bv.addEventListener("dragover", e => { if (hasFiles(e)) e.preventDefault(); });
+  bv.addEventListener("dragleave", () => { if (--depth <= 0) { depth = 0; ov.hidden = true; } });
+  bv.addEventListener("drop", e => { if (!hasFiles(e)) return; e.preventDefault(); depth = 0; ov.hidden = true; tkUpload([...e.dataTransfer.files]); });
+}
+
+function tkUploadDlg() {
+  const M = TK.meta, box = tkModal("Talaba ishlarini yuklash");
+  box.innerHTML = `<label class="tk-drop" id="tkDrop" tabindex="0"><input type="file" id="tkFiles" multiple hidden accept=".pdf,.docx,.pptx,.xlsx,.txt,.jpg,.jpeg,.png,.zip">
+      ${ico("upload", 26)}<b>Fayllarni shu yerga tashlang yoki tanlang</b>
+      <span class="muted tiny">PDF, Word, PowerPoint, Excel, matn, JPG/PNG yoki ZIP · har biri ${M.max_mb} MB gacha · tekshiruvda ${M.max_works} tagacha ish.<br>Fayl nomida talaba familiyasi bo'lsa — avtomatik taniladi. Keyingi safar fayllarni to'g'ridan-to'g'ri sahifaga ham tashlashingiz mumkin.</span></label>`;
   const inp = $("#tkFiles"), drop = $("#tkDrop");
-  inp.onchange = () => tkUpload([...inp.files]);
+  inp.onchange = () => { tkModalClose(); tkUpload([...inp.files]); };
   drop.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); inp.click(); } };
   ["dragover", "dragenter"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
   ["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
-  drop.addEventListener("drop", e => tkUpload([...e.dataTransfer.files]));
+  drop.addEventListener("drop", e => { const f = [...e.dataTransfer.files]; tkModalClose(); tkUpload(f); });
+  drop.focus();
 }
 
 async function tkUpload(files) {
-  const B = TK.batch, M = TK.meta, box = $("#tkUp");
+  const B = TK.batch, M = TK.meta;
   if (!files.length) return;
   const bad = [], ok = [];
   for (const f of files) { if (f.size > M.max_mb * 1048576) bad.push(`${f.name}: ${M.max_mb} MB dan katta`); else ok.push(f); }
   let i = 0, added = 0;
   for (const f of ok) {
-    i += 1; box.innerHTML = `<div class="tk-prog"><span class="tk-spin"></span>Yuklanmoqda: ${i} / ${ok.length} — ${esc(f.name)}</div>`;
+    i += 1; const box = $("#tkUp"); if (box) box.innerHTML = `<div class="tk-prog"><span class="tk-spin"></span>Yuklanmoqda: ${i} / ${ok.length} — ${esc(f.name)}</div>`;
     try {
       const r = await tkApi(`/api/tekshiruv/batches/${B.id}/files?name=${encodeURIComponent(f.name)}`, null, await f.arrayBuffer());
       added += r.added.length; r.skipped.forEach(s => bad.push(`${s.file}: ${s.why}`));
@@ -205,20 +236,29 @@ async function tkUpload(files) {
   }
   toast(`${added} ta ish yuklandi`);
   await tkOpen(B.id);
-  if (bad.length) $("#tkUp").innerHTML = `<div class="tk-note warn">${ico("info", 16)}<div><b>Yuklanmaganlar / ogohlantirishlar:</b><ul>${bad.map(x => `<li>${esc(x)}</li>`).join("")}</ul></div></div>`;
+  if (bad.length) $("#tkUp").innerHTML = `<div class="tk-note warn">${ico("info", 16)}<div><b>Yuklanmaganlar / ogohlantirishlar:</b><ul>${bad.map(x => `<li>${esc(x)}</li>`).join("")}</ul></div><button type="button" class="btn sm ghost tk-x" onclick="this.parentElement.remove()" aria-label="Yopish">✕</button></div>`;
 }
 
+function tkFilter(w) {
+  const f = TK.flt || "all";
+  if (f === "ai") return w.status === "tekshirildi";
+  if (f === "qolda") return w.status === "qolda" || w.status === "xato";
+  if (f === "ok") return w.status === "tasdiqlandi";
+  if (f === "sim") return (TK.sim || new Set()).has(w.n);
+  return true;
+}
 function tkWorks() {
   const B = TK.batch, box = $("#tkWorks");
-  if (!B.works.length) { box.innerHTML = `<div class="tk-empty">Hali ish yuklanmagan.</div>`; return; }
-  box.innerHTML = `<div class="tw"><table class="tk-t stack"><thead><tr><th>№</th><th>Talaba</th><th>Fayl</th><th>Holat</th><th>Ball</th><th>Belgilar</th></tr></thead><tbody>
-    ${B.works.map(w => { const st = TK_ST[w.status] || [w.status, ""];
-      return `<tr class="tk-click" data-w="${w.id}" tabindex="0"><td data-l="№">${w.n}</td>
-        <td data-l="Talaba">${w.student ? esc(w.student) + (w.label_auto ? ` <span class="muted tiny" title="Fayl nomidan aniqlandi — tekshiring">(avto)</span>` : "") : `<span class="muted">aniqlanmagan</span>`}</td>
-        <td data-l="Fayl"><span class="tk-file">${esc(w.file)}</span><div class="muted tiny">${esc(w.fkind)}${w.images ? ` · ${w.images} rasm` : ""}</div></td>
+  if (!B.works.length) { box.innerHTML = `<div class="tk-empty">Hali ish yuklanmagan.${B.can_edit ? ` <button type="button" class="btn primary sm" id="tkUpE">${ico("upload", 14)} Ish yuklash</button><div class="muted tiny">yoki fayllarni shu sahifaga sudrab tashlang</div>` : ""}</div>`; $("#tkUpE")?.addEventListener("click", tkUploadDlg); return; }
+  const rows = B.works.filter(tkFilter);
+  box.innerHTML = rows.length ? `<table class="tk-t tk-compact stack"><thead><tr><th>№</th><th>Talaba</th><th>Holat</th><th class="r">Ball</th><th>Belgilar</th></tr></thead><tbody>
+    ${rows.map(w => { const st = TK_ST[w.status] || [w.status, ""];
+      return `<tr class="tk-click" data-w="${w.id}" tabindex="0"><td data-l="№" class="muted">${w.n}</td>
+        <td data-l="Talaba"><b>${w.student ? esc(w.student) : `<span class="muted">aniqlanmagan</span>`}</b>${w.label_auto ? ` <span class="muted tiny" title="Fayl nomidan aniqlandi — tekshiring">(avto)</span>` : ""}<span class="tk-fn">${esc(w.file)}</span></td>
         <td data-l="Holat">${tkChip(st[0], st[1])}${!w.seen && w.status === "tekshirildi" ? ` <span class="tk-dot" title="Hali ochib ko'rilmagan"></span>` : ""}</td>
-        <td data-l="Ball"><b>${tkNum(w.total)}</b> <span class="muted tiny">/ ${tkNum(B.max_score)}</span></td>
-        <td data-l="Belgilar">${(w.flags || []).map(f => tkChip(f.split(" — ")[0], "warn")).join(" ") || (w.err ? tkChip(w.err, "bad") : "—")}</td></tr>`; }).join("")}</tbody></table></div>`;
+        <td data-l="Ball" class="r"><b>${tkNum(w.total)}</b><span class="muted tiny"> / ${tkNum(B.max_score)}</span></td>
+        <td data-l="Belgilar">${(w.flags || []).map(f => tkChip(f.split(" — ")[0], "warn")).join(" ") || (w.err ? tkChip(w.err, "bad") : "")}</td></tr>`; }).join("")}</tbody></table>`
+    : `<div class="tk-empty">Bu filtr bo'yicha ish yo'q.</div>`;
   box.querySelectorAll("tr[data-w]").forEach(tr => {
     const open = () => tkWork(+tr.dataset.w);
     tr.onclick = open; tr.onkeydown = e => { if (e.key === "Enter") open(); };
@@ -239,62 +279,84 @@ async function tkProgress() {
   }, 2000);
 }
 
-async function tkSimilarity() {
-  const box = $("#tkSimBox"); box.innerHTML = `<p class="muted tiny">Hisoblanmoqda…</p>`;
+async function tkSimilarity(quiet) {
+  const box = $("#tkSimBox"); if (!quiet) box.innerHTML = `<p class="muted tiny">Hisoblanmoqda…</p>`;
   try {
     const r = await tkApi(`/api/tekshiruv/batches/${TK.batch.id}/similarity`);
+    TK.sim = new Set(r.pairs.flatMap(p => [p.an, p.bn]));
+    if (quiet) return;
     box.innerHTML = r.pairs.length ? `<div class="tk-note">${ico("info", 16)}<div><b>O'xshash ishlar (${r.pairs.length} juft) — tekshiring:</b><ul>${r.pairs.map(p =>
       `<li>${tkChip(p.level === "yuqori" ? "o'xshashlik yuqori" : "o'xshashlik o'rta", p.level === "yuqori" ? "bad" : "warn")} Ish #${p.an} ${esc(p.al)} ↔ Ish #${p.bn} ${esc(p.bl)} — ${p.jaccard}% umumiy matn (${p.contain}% qamrov)</li>`).join("")}</ul>
-      <span class="muted tiny">Bu faqat ishlar orasidagi matn o'xshashligi; ko'chirma ekanini o'qituvchi hal qiladi.</span></div></div>`
-      : `<div class="tk-note">${ico("check", 16)}<span>Ishlar orasida sezilarli o'xshashlik topilmadi.</span></div>`;
+      <span class="muted tiny">Bu faqat ishlar orasidagi matn o'xshashligi; ko'chirma ekanini o'qituvchi hal qiladi.</span></div><button type="button" class="btn sm ghost tk-x" onclick="this.parentElement.remove()" aria-label="Yopish">✕</button></div>`
+      : `<div class="tk-note">${ico("check", 16)}<span>Ishlar orasida sezilarli o'xshashlik topilmadi.</span><button type="button" class="btn sm ghost tk-x" onclick="this.parentElement.remove()" aria-label="Yopish">✕</button></div>`;
   } catch (e) { box.innerHTML = ""; toast(e.msg || "Xatolik"); }
 }
 
-/* ---------- bitta ish: matn + AI baholash, tahrir va tasdiq ---------- */
+/* ---------- ko'rib chiqish rejimi: chapda ishlar navbati, o'rtada ish, o'ngda baholash ---------- */
 async function tkWork(wid) {
   let W;
   try { W = await tkApi(`/api/tekshiruv/works/${wid}`); } catch (e) { toast(e.msg || "Ochib bo'lmadi"); return; }
   const B = TK.batch, ro = !W.can_edit, F = W.final, A = W.ai;
+  const wi = B.works.find(x => x.id === wid); if (wi) wi.seen = true;
   const st = TK_ST[W.status] || [W.status, ""];
   const ix = B.works.findIndex(x => x.id === wid);
   const el = $("#v-tekshiruv");
-  tkStopPoll();
-  el.innerHTML = tkHead() + `<div class="card tk-card">
-    <div class="tk-top"><button type="button" class="btn ghost sm" id="tkWBack">← ${esc(B.title)}</button>
+  tkStopPoll(); clearTimeout(TK.autoT); TK.view = "work"; TK.wid = wid; TK.confirmNext = null;
+  const dotCls = w => ({tasdiqlandi: "ok", tekshirildi: w.seen ? "info" : "new", qolda: "warn", xato: "bad"})[w.status] || "";
+  const clamp = (t, n) => `<div class="tk-clamp" style="--n:${n}">${t}</div>`;
+  el.innerHTML = `<div class="tk-rv" id="tkRv">
+    <div class="tk-bar">
+      <button type="button" class="btn ghost sm" id="tkWBack" title="Jadvalga qaytish">← ${esc(B.title)}</button>
       <div class="tk-chips">${tkChip(`Ish #${W.n}`)}${tkChip(st[0], st[1])}${W.confidence ? tkChip(...(TK_CONF[W.confidence] || [W.confidence, ""])) : ""}${W.engine ? tkChip(W.engine) : ""}</div>
-      <span class="tk-nav"><button type="button" class="btn sm ghost" id="tkPrev" ${ix > 0 ? "" : "disabled"}>‹ Oldingi</button><button type="button" class="btn sm ghost" id="tkNext" ${ix < B.works.length - 1 ? "" : "disabled"}>Keyingi ›</button></span></div>
-    ${(W.flags || []).length ? `<div class="tk-note warn">${ico("info", 16)}<div>${W.flags.map(f => `<div>${esc(f)}</div>`).join("")}</div></div>` : ""}
-    ${W.err ? `<div class="tk-note bad">${ico("info", 16)}<span>${esc(W.err)}</span></div>` : ""}
-    <div class="tk-split">
-      <div class="tk-src">
+      <span class="muted tiny tk-keys">J / K — keyingi / oldingi · Enter — tasdiqlash</span>
+      <span class="tk-nav"><button type="button" class="btn sm ghost" id="tkPrev" ${ix > 0 ? "" : "disabled"}>‹</button><span class="muted tiny">${ix + 1} / ${B.works.length}</span><button type="button" class="btn sm ghost" id="tkNext" ${ix < B.works.length - 1 ? "" : "disabled"}>›</button></span>
+    </div>
+    <div class="tk-3">
+      <nav class="tk-q" aria-label="Ishlar navbati">${B.works.map(w => `<button type="button" class="tk-qi ${w.id === wid ? "on" : ""}" data-w="${w.id}">
+        <i class="tk-sd ${dotCls(w)}" title="${esc((TK_ST[w.status] || [w.status])[0])}"></i><span><b>${w.n}. ${esc(w.student || "aniqlanmagan")}</b><small>${esc((TK_ST[w.status] || [w.status])[0])}</small></span><em>${tkNum(w.total)}</em></button>`).join("")}</nav>
+      <section class="tk-doc">
         <div class="tk-src-h"><b>${esc(W.file)}</b><a class="btn sm ghost" href="/api/tekshiruv/works/${W.id}/file">Asl fayl</a></div>
+        ${(W.flags || []).length ? `<div class="tk-note warn">${ico("info", 16)}<div>${W.flags.map(f => `<div>${esc(f)}</div>`).join("")}</div></div>` : ""}
+        ${W.err ? `<div class="tk-note bad">${ico("info", 16)}<span>${esc(W.err)}</span></div>` : ""}
         ${W.img_names.length ? `<div class="tk-imgs">${W.img_names.map(n => `<a href="/api/tekshiruv/works/${W.id}/img/${n}" target="_blank" rel="noopener"><img src="/api/tekshiruv/works/${W.id}/img/${n}" alt="${esc(n)}" loading="lazy"></a>`).join("")}</div>` : ""}
         <pre class="tk-text">${esc(W.text || "(matn yo'q)")}${W.text_cut ? "\n…" : ""}</pre>
-      </div>
-      <div class="tk-eval">
-        <label class="tk-stud">Talaba<div class="tk-stud-row"><input id="tkStud" list="tkStuds" value="${esc(W.student)}" ${ro ? "disabled" : ""} placeholder="Familiya bo'yicha qidiring"><datalist id="tkStuds"></datalist></div></label>
-        ${A ? `<div class="tk-ai"><span class="tk-lbl">AI xulosasi</span><p>${esc(A.summary || "")}</p>
-          ${(A.strengths || []).length ? `<span class="tk-lbl ok">Kuchli tomonlar</span><ul>${A.strengths.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
-          ${(A.mistakes || []).length ? `<span class="tk-lbl bad">Kamchiliklar</span><ul>${A.mistakes.map(m => `<li>${m.quote ? `<q>${esc(m.quote)}</q> — ` : ""}${esc(m.issue)}</li>`).join("")}</ul>` : ""}</div>` : `<div class="tk-note">${ico("info", 16)}<span>AI taklifi yo'q — mezonlar bo'yicha ballni o'zingiz qo'ying.</span></div>`}
-        <span class="tk-lbl">Mezonlar bo'yicha ball</span>
-        <div class="tk-crit">${F.criteria.map((c, i) => `<div class="tk-cr"><div class="tk-cr-h"><span>${esc(c.name)}</span><span class="tk-cr-in"><input type="number" data-c="${i}" min="0" max="${c.points}" step="0.5" value="${c.score === null || c.score === undefined ? "" : tkNum(c.score)}" ${ro ? "disabled" : ""} aria-label="${esc(c.name)} balli"> / ${tkNum(c.points)}</span></div>
-          <textarea data-cc="${i}" rows="1" ${ro ? "disabled" : ""} placeholder="Izoh">${esc(c.comment || "")}</textarea></div>`).join("")}</div>
-        <div class="tk-total">Jami: <b id="tkTot">${tkNum(F.total)}</b> / ${tkNum(W.max_score)}</div>
-        <label class="tk-fb">Talabaga izoh<textarea id="tkFb" rows="5" ${ro ? "disabled" : ""}>${esc(F.feedback || "")}</textarea></label>
-        ${ro ? "" : `<div class="tk-acts"><button type="button" class="btn ghost" id="tkWDel">O'chirish</button><a class="btn ghost" href="/api/tekshiruv/works/${W.id}/docx">Izoh (.docx)</a>
-          <button type="button" class="btn" id="tkWSave">Saqlash</button><button type="button" class="btn primary" id="tkWOk">${ico("check", 15)} ${W.status === "tasdiqlandi" ? "Qayta tasdiqlash" : "Tasdiqlash"}</button></div>
-          ${W.confirmed_at ? `<p class="muted tiny">Tasdiqlangan: ${dmy(W.confirmed_at)}. Tahrirlasangiz, qayta tasdiqlang.</p>` : ""}`}
-      </div></div></div>`;
-  const back = () => tkOpen(B.id);
+      </section>
+      <aside class="tk-ev">
+        <div class="tk-ev-s">
+          <label class="tk-stud">Talaba<input id="tkStud" list="tkStuds" value="${esc(W.student)}" ${ro ? "disabled" : ""} placeholder="Familiya bo'yicha qidiring"><datalist id="tkStuds"></datalist></label>
+          ${A ? `<div class="tk-ai">${clamp(`<b>AI xulosasi.</b> ${esc(A.summary || "")}`, 3)}
+            ${(A.strengths || []).length || (A.mistakes || []).length ? `<details><summary>batafsil${(A.mistakes || []).length ? ` · ${A.mistakes.length} kamchilik` : ""}</summary>
+              ${(A.strengths || []).length ? `<span class="tk-lbl ok">Kuchli tomonlar</span><ul>${A.strengths.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
+              ${(A.mistakes || []).length ? `<span class="tk-lbl bad">Kamchiliklar</span><ul>${A.mistakes.map(m => `<li>${m.quote ? `<q>${esc(m.quote)}</q> — ` : ""}${esc(m.issue)}</li>`).join("")}</ul>` : ""}</details>` : ""}</div>`
+            : `<div class="tk-note">${ico("info", 16)}<span>AI taklifi yo'q — ballni o'zingiz qo'ying.</span></div>`}
+          <div class="tk-crh"><span>Mezon</span><span>Ball</span></div>
+          <div class="tk-crit">${F.criteria.map((c, i) => `<div class="tk-cr"><div class="tk-cr-h"><span class="tk-cr-n" title="${esc(c.name)}">${esc(c.name)}</span>
+              <button type="button" class="tk-cmt ${c.comment ? "has" : ""}" data-ct="${i}" title="${esc(c.comment || "Izoh qo'shish")}" aria-label="Izoh">💬</button>
+              <span class="tk-cr-in"><input type="number" data-c="${i}" min="0" max="${c.points}" step="0.5" value="${c.score === null || c.score === undefined ? "" : tkNum(c.score)}" ${ro ? "disabled" : ""} aria-label="${esc(c.name)} balli"><span>/ ${tkNum(c.points)}</span></span></div>
+            <textarea data-cc="${i}" rows="2" ${ro ? "disabled" : ""} placeholder="Izoh" hidden>${esc(c.comment || "")}</textarea></div>`).join("")}</div>
+          <label class="tk-fb">Talabaga izoh<textarea id="tkFb" rows="3" ${ro ? "disabled" : ""}>${esc(F.feedback || "")}</textarea></label>
+        </div>
+        <div class="tk-ev-f">
+          <div class="tk-total">Jami: <b id="tkTot">${tkNum(F.total)}</b> / ${tkNum(W.max_score)} <span class="muted tiny" id="tkAuto">${W.confirmed_at ? `· tasdiqlangan ${dmy(W.confirmed_at)}` : ""}</span></div>
+          ${ro ? "" : `<div class="tk-ev-a"><div class="tk-dd"><button type="button" class="btn sm ghost" id="tkWMore" aria-label="Boshqa amallar">⋯</button>
+              <div class="tk-ddm up" id="tkWMoreM" hidden><a href="/api/tekshiruv/works/${W.id}/docx">Izoh varaqasi (.docx)</a><button type="button" id="tkWDel" class="bad">Ishni o'chirish</button></div></div>
+            <button type="button" class="btn primary" id="tkWOk">${ico("check", 15)} ${W.status === "tasdiqlandi" ? "Qayta tasdiqlash" : "Tasdiqlash"} va keyingi →</button></div>`}
+        </div>
+      </aside>
+    </div>
+  </div>`;
+  const back = () => { clearTimeout(TK.autoT); TK.view = "batch"; tkOpen(B.id); };
   $("#tkWBack").onclick = back;
   $("#tkPrev").onclick = () => tkWork(B.works[ix - 1].id);
   $("#tkNext").onclick = () => tkWork(B.works[ix + 1].id);
+  el.querySelectorAll(".tk-qi").forEach(b => b.onclick = () => tkWork(+b.dataset.w));
+  el.querySelector(".tk-qi.on")?.scrollIntoView({block: "nearest"});
+  el.querySelectorAll("[data-ct]").forEach(b => b.onclick = () => { const t = el.querySelector(`[data-cc="${b.dataset.ct}"]`); t.hidden = !t.hidden; if (!t.hidden) t.focus(); });
   if (ro) return;
   const recalc = () => {
     const sc = F.criteria.map((c, i) => $(`[data-c="${i}"]`).value), pts = F.criteria.reduce((a, c) => a + c.points, 0) || 1;
     $("#tkTot").textContent = sc.every(v => v !== "") ? tkNum(Math.min(sc.reduce((a, v) => a + +v, 0) / pts * W.max_score, W.max_score)) : "—";
   };
-  el.querySelectorAll("[data-c]").forEach(i => i.oninput = recalc);
   let studT, studMap = {};
   $("#tkStud").oninput = () => {
     clearTimeout(studT);
@@ -311,18 +373,49 @@ async function tkWork(wid) {
     if (name !== W.student) { if (sid) b.student_id = sid; else b.student_label = name; }
     return b;
   };
-  const save = async (btn, confirm) => {
-    btn.disabled = true;
-    try { await tkApi(`/api/tekshiruv/works/${W.id}`, body(confirm)); toast(confirm ? "Tasdiqlandi" : "Saqlandi");
+  /* avtomatik saqlash: tahrirdan 1.5 s keyin (tasdiqlamasdan) */
+  let dirty = false;
+  const autosave = async () => {
+    if (!dirty || TK.wid !== W.id) return;
+    dirty = false; const a = $("#tkAuto"); if (a) a.textContent = "· saqlanmoqda…";
+    try { await tkApi(`/api/tekshiruv/works/${W.id}`, body(false)); if ($("#tkAuto")) $("#tkAuto").textContent = "· saqlandi"; W.confirmed_at = null; }
+    catch (e) { if ($("#tkAuto")) $("#tkAuto").textContent = "· saqlanmadi"; toast(e.msg || "Saqlab bo'lmadi"); }
+  };
+  const touched = () => { dirty = true; const a = $("#tkAuto"); if (a) a.textContent = "· o'zgartirildi"; clearTimeout(TK.autoT); TK.autoT = setTimeout(autosave, 1500); };
+  el.querySelectorAll("[data-c]").forEach(i => i.addEventListener("input", () => { recalc(); touched(); }));
+  el.querySelectorAll("[data-cc]").forEach(t => t.addEventListener("input", () => { el.querySelector(`[data-ct="${t.dataset.cc}"]`)?.classList.toggle("has", !!t.value.trim()); touched(); }));
+  $("#tkFb").addEventListener("input", touched);
+  $("#tkStud").addEventListener("change", touched);
+  const confirmNext = async () => {
+    const btn = $("#tkWOk"); if (!btn || btn.disabled) return;
+    btn.disabled = true; clearTimeout(TK.autoT); dirty = false;
+    try { await tkApi(`/api/tekshiruv/works/${W.id}`, body(true)); toast("Tasdiqlandi");
       TK.batch = await tkApi(`/api/tekshiruv/batches/${B.id}`);
-      if (confirm) { const nx = TK.batch.works.find((x, j) => j > ix && x.status !== "tasdiqlandi"); return nx ? tkWork(nx.id) : tkView(); }
-      tkWork(W.id);
+      const L = TK.batch.works, j = L.findIndex(x => x.id === W.id);
+      const nx = L.find((x, k) => k > j && x.status !== "tasdiqlandi") || L.find(x => x.status !== "tasdiqlandi" && x.id !== W.id);
+      return nx ? tkWork(nx.id) : (toast("Barcha ishlar tasdiqlandi"), tkView());
     } catch (e) { toast(e.msg || "Xatolik"); if (btn.isConnected) btn.disabled = false; }
   };
-  $("#tkWSave").onclick = () => save($("#tkWSave"), false);
-  $("#tkWOk").onclick = () => save($("#tkWOk"), true);
+  TK.confirmNext = confirmNext;
+  $("#tkWOk").onclick = confirmNext;
+  $("#tkWMore").onclick = e => { e.stopPropagation(); $("#tkWMoreM").hidden = !$("#tkWMoreM").hidden; };
+  el.querySelector(".tk-rv").addEventListener("click", e => { if (!e.target.closest(".tk-dd")) { const m = $("#tkWMoreM"); if (m) m.hidden = true; } });
   $("#tkWDel").onclick = async () => {
     const b = $("#tkWDel"); if (!arm(b, "Ha, o'chirish")) return;
     try { await tkApi(`/api/tekshiruv/works/${W.id}/delete`, {}); toast("Ish o'chirildi"); back(); } catch (e) { toast(e.msg || "Xatolik"); }
   };
 }
+
+/* klaviatura (ko'rib chiqish rejimi): J/K — keyingi/oldingi, Enter — tasdiqlash va keyingi */
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") { if ($("#tkModal")) { tkModalClose(); return; } }
+  const rv = $("#tkRv"); if (!rv || !rv.offsetParent || TK.view !== "work" || e.altKey || e.ctrlKey || e.metaKey || $("#tkModal")) return;
+  const tag = e.target?.tagName || "";
+  if (e.key === "Enter" && tag !== "TEXTAREA" && tag !== "BUTTON" && tag !== "A" && !e.target.closest?.("summary")) {
+    if (tag === "INPUT" && e.target.id === "tkStud") return;
+    e.preventDefault(); TK.confirmNext?.(); return;
+  }
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test(tag)) return;
+  if (e.key === "j" || e.key === "J") { e.preventDefault(); $("#tkNext")?.click(); }
+  if (e.key === "k" || e.key === "K") { e.preventDefault(); $("#tkPrev")?.click(); }
+});

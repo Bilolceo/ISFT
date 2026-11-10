@@ -113,7 +113,7 @@ async function mlPayments(box) {
       <select class="ml-in" id="mlSt"><option value="">Barcha holatlar</option><option value="faol" ${P.status === "faol" ? "selected" : ""}>Faol</option><option value="storno" ${P.status === "storno" ? "selected" : ""}>Storno</option></select>
       ${can.enter ? `<button type="button" class="btn primary" id="mlNew">${ico("plus", 15)} To'lov kiritish</button>` : ""}</div>
     <p class="muted">${fmt(d.total)} ta yozuv · faol summasi ${mlS(d.sum)}</p>
-    ${mlTable([["Sana", r => `${mlD(r.paid_on)}${r.day_closed ? `<small>kun yopilgan</small>` : ""}`], ["Kvitansiya", r => `<b>${esc(r.receipt_no)}</b><small>${esc(r.method_label)}</small>`],
+    ${mlTable([["Sana", r => `${mlD(r.paid_on)}${r.day_closed ? `<small>kun yopilgan</small>` : ""}`], ["Kvitansiya", r => `<b>${esc(r.receipt_no)}</b><small>${esc(r.method_label)}${r.kind && r.kind !== "kontrakt" ? ` · ${esc(r.kind_label)}` : ""}</small>`],
       ["Talaba", r => `${esc(r.full_name)}<small>${esc(r.grp || "")} · ${esc(r.hemis_id || "")}</small>`], ["Summa", r => `<span class="ml-sum">${mlS(r.amount)}</span>`, "num"],
       ["Holat", r => mlChip(r.status, mlStCls(r.status)) + (r.storno_reason ? `<small>${esc(r.storno_reason)}</small>` : "")],
       ["", r => r.status === "faol" && (can.enter && !r.day_closed || can.approve) ? `<button type="button" class="btn sm ghost" data-storno="${r.id}">Storno</button>` : ""]],
@@ -138,6 +138,7 @@ function mlPayForm() {
   let pick = null;
   const m = mlModal("To'lov kiritish", `
     <label>Talaba (F.I.Sh. yoki HEMIS ID)<input id="mlSq" autocomplete="off" placeholder="Kamida 2 belgi"></label><div class="ml-pick" id="mlSl"></div><div id="mlSi"></div>
+    <label>To'lov turi<select id="mlKind"><option value="kontrakt|">Kontrakt</option></select></label>
     <div class="row2"><label>Kvitansiya / to'lov hujjati raqami<input id="mlRec" maxlength="40" placeholder="TP-261110-0001"></label>
       <label>To'lov sanasi<input type="date" id="mlDt" value="${ML.meta.today}" max="${ML.meta.today}"></label></div>
     <div class="row2"><label>Summa (so'm)<input id="mlAmt" inputmode="numeric" placeholder="2 500 000"></label>
@@ -147,19 +148,23 @@ function mlPayForm() {
       if (!pick) { toast("Talabani tanlang"); return false; }
       const body = {student_id: pick.id, receipt_no: m.querySelector("#mlRec").value.trim(), paid_on: m.querySelector("#mlDt").value, amount: mlMoney(m.querySelector("#mlAmt").value),
         method: m.querySelector("#mlMt").value, payer: m.querySelector("#mlPayer").value.trim(), note: m.querySelector("#mlNote").value.trim()};
+      const [pk, pref] = m.querySelector("#mlKind").value.split("|"); body.kind = pk; body.ref_id = pref ? +pref : null;
       if (body.receipt_no.length < 3) { toast("Kvitansiya raqamini kiriting"); return false; }
       if (!body.amount) { toast("Summani kiriting"); return false; }
       const r = await mlApi("/api/moliya/payments", body); if (!r) return false;
-      toast(`To'lov kiritildi: ${r.receipt_no} · qoldiq qarz ${mlS(r.contract.debt)}`); ML.pay.page = 1; mlTab(); return true; }, "Kiritish");
+      toast(`To'lov kiritildi: ${r.receipt_no}${r.label ? ` (${r.label})` : ""} · qoldiq ${mlS(r.left)}`); ML.pay.page = 1; mlTab(); return true; }, "Kiritish");
   const inp = m.querySelector("#mlSq"), list = m.querySelector("#mlSl"); let t;
   inp.addEventListener("input", () => { clearTimeout(t); t = setTimeout(async () => {
     const q = inp.value.trim(); if (q.length < 2) { list.innerHTML = ""; return; }
     const rs = (await mlApi("/api/moliya/students?q=" + encodeURIComponent(q)).catch(() => ({items: []}))).items;
-    list.innerHTML = rs.map((s, i) => `<button type="button" data-i="${i}" ${s.payment_type !== "kontrakt" ? "disabled" : ""}>${esc(s.full_name)} <small class="muted">${esc(s.grp || "")} · ${esc(s.hemis_id || "")} · ${s.payment_type === "kontrakt" ? "qarz " + mlS(s.debt) : esc(s.payment_type)}</small></button>`).join("") || `<small class="muted">Topilmadi</small>`;
+    list.innerHTML = rs.map((s, i) => `<button type="button" data-i="${i}">${esc(s.full_name)} <small class="muted">${esc(s.grp || "")} · ${esc(s.hemis_id || "")} · ${s.payment_type === "kontrakt" ? "qarz " + mlS(s.debt) : esc(s.payment_type)}</small></button>`).join("") || `<small class="muted">Topilmadi</small>`;
     list.querySelectorAll("button[data-i]").forEach(b => b.onclick = async () => {
       list.querySelectorAll("button").forEach(x => x.classList.remove("on")); b.classList.add("on"); pick = rs[+b.dataset.i];
       const s = await mlApi(`/api/moliya/student/${pick.id}`); m.querySelector("#mlSi").innerHTML = mlStuBox(s, true);
       const amt = m.querySelector("#mlAmt"); if (!amt.value && s.contract?.overdue) amt.value = fmt(s.contract.overdue.short);
+      const ob = (await mlApi(`/api/moliya/obligations/${pick.id}`).catch(() => ({items: []}))).items;   /* qayta o'qish / turar joy hisoblari */
+      m.querySelector("#mlKind").innerHTML = (s.contract ? `<option value="kontrakt|">Kontrakt — qarz ${mlS(s.contract.debt)}</option>` : "") +
+        ob.map(o => `<option value="${o.kind}|${o.ref_id}">${esc(o.label)} — qoldiq ${mlS(o.left)}</option>`).join("") || `<option value="kontrakt|">Ochiq hisob yo'q</option>`;
     });
   }, 250); });
 }
@@ -342,7 +347,8 @@ ${ML.meta.today};2500000;Karimov Odil;O'g'lim Nodirbek uchun kontrakt;PP-1201"><
         purpose: m.querySelector("#b1u").value, doc_no: m.querySelector("#b1n").value}]}); if (!r) return false;
       toast(r.auto ? "Avtomatik biriktirildi" : r.duplicates ? "Bu qator allaqachon bor" : r.errors.length ? r.errors[0] : "Aniqlanmagan navbatiga qo'shildi"); renderMoliya(); return true; }, "Qo'shish"));
   box.querySelectorAll("[data-bok]").forEach(b => b.onclick = () => { if (!arm(b, "Ha, biriktirish")) return;
-    busy(b, async () => { const r = await mlApi(`/api/moliya/bank/${b.dataset.line}/confirm`, {student_id: +b.dataset.bok}); if (r) { toast(`Biriktirildi — qoldiq qarz ${mlS(r.contract.debt)}`); renderMoliya(); } }); });
+    busy(b, async () => { const r = await mlApi(`/api/moliya/bank/${b.dataset.line}/confirm`, {student_id: +b.dataset.bok, pay_kind: b.dataset.pk || "kontrakt", ref_id: b.dataset.ref ? +b.dataset.ref : null});
+      if (r) { toast(`Biriktirildi${r.label ? ` (${r.label})` : ""} — qoldiq ${mlS(r.left)}`); renderMoliya(); } }); });
   box.querySelectorAll("[data-bother]").forEach(b => b.onclick = () => mlBankOther(+b.dataset.bother));
   box.querySelectorAll("[data-bdis]").forEach(b => b.onclick = () => mlModal(b.dataset.kind === "qaytarish" ? "Qaytarishga belgilash" : "Shartnoma to'lovi emas",
     `<p class="ml-note">${b.dataset.kind === "qaytarish" ? "To'lovchiga qaytariladi (masalan, talaba topilmadi yoki ortiqcha to'lov)." : "Boshqa daromad (ijara, xizmat va h.k.) — talaba kontraktiga o'tkazilmaydi."}</p>
@@ -362,8 +368,8 @@ function mlBankItem(L) {
   }
   return `<div class="ml-item">${head}${L.resolve_note ? `<div class="ml-alert warn" style="margin-top:8px">${esc(L.resolve_note)}</div>` : ""}
     <div class="ml-list" style="margin-top:10px">${L.candidates.map((c, i) => `<div class="ml-stu" style="margin:0">
-      <div class="ml-item-h"><div>${mlChip(`${c.score}%`, mlScoreCls(c.score))} <b>${esc(c.full_name)}</b> <small class="muted">${esc(c.grp)} · HEMIS ${esc(c.hemis_id)} · shartnoma ${esc(c.contract_no)} · qarz ${mlS(c.debt)}</small></div>
-      ${can ? `<button type="button" class="btn sm ${i === 0 ? "primary" : "ghost"}" data-line="${L.id}" data-bok="${c.student_id}">Tasdiqlash</button>` : ""}</div>
+      <div class="ml-item-h"><div>${mlChip(`${c.score}%`, mlScoreCls(c.score))} ${mlChip(c.ref_label || "Kontrakt", c.pay_kind && c.pay_kind !== "kontrakt" ? "warn" : "")} <b>${esc(c.full_name)}</b> <small class="muted">${esc(c.grp)} · HEMIS ${esc(c.hemis_id)}${c.contract_no ? ` · shartnoma ${esc(c.contract_no)}` : ""} · ${c.pay_kind && c.pay_kind !== "kontrakt" ? "qoldiq" : "qarz"} ${mlS(c.debt)}</small></div>
+      ${can ? `<button type="button" class="btn sm ${i === 0 ? "primary" : "ghost"}" data-line="${L.id}" data-bok="${c.student_id}" data-pk="${esc(c.pay_kind || "kontrakt")}" data-ref="${c.ref_id ?? ""}">Tasdiqlash</button>` : ""}</div>
       <div class="ml-plan">${c.reasons.map(r => mlChip(r, /mos emas|katta|holati/.test(r) ? "bad" : "")).join("")}</div></div>`).join("") || `<div class="ml-empty">Mos talaba topilmadi — qidiruv orqali tanlang yoki shartnoma to'lovi emas deb belgilang</div>`}</div>
     ${can ? `<div class="ml-acts"><button type="button" class="btn sm ghost" data-bother="${L.id}">Boshqa talabani tanlash</button>
       <button type="button" class="btn sm ghost" data-bdis="${L.id}" data-kind="shartnoma emas">Shartnoma to'lovi emas</button>
@@ -375,7 +381,7 @@ function mlBankOther(lid) {
     <label>Izoh (nega boshqa talaba)<input id="mlOn" maxlength="300"></label>`, async m => {
       if (!pick) { toast("Talabani tanlang"); return false; }
       const r = await mlApi(`/api/moliya/bank/${lid}/confirm`, {student_id: pick.id, note: m.querySelector("#mlOn").value.trim()}); if (!r) return false;
-      toast(`Biriktirildi — qoldiq qarz ${mlS(r.contract.debt)}`); renderMoliya(); return true; }, "Biriktirish");
+      toast(`Biriktirildi — qoldiq qarz ${mlS(r.left)}`); renderMoliya(); return true; }, "Biriktirish");
   const inp = m.querySelector("#mlOq"), list = m.querySelector("#mlOl"); let t;
   inp.addEventListener("input", () => { clearTimeout(t); t = setTimeout(async () => {
     const q = inp.value.trim(); if (q.length < 2) { list.innerHTML = ""; return; }

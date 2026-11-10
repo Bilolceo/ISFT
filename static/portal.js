@@ -84,7 +84,7 @@ async function renderPortal() {
   if (!PT.units) PT.units = await J("/api/portal/units");
   const me = ptUnit(PT.units.me) || {name: ME.role};
   const tabs = [["mail", "Yozishmalar", "mail"], ["files", "Fayllar", "folder"], ["data", `<span class="pt-tl">Umumiy bazalar</span><span class="pt-ts">Bazalar</span>`, "db"], ["org", "Bo'limlar", "org"]];
-  el.innerHTML = `<div class="head pt-head"><div><h2>Bo'limlararo portal</h2><span class="muted">${esc(me.name)} · bo'limlar o'rtasida rasmiy xat, ish fayllari va umumiy bazalar. Rasmiy hujjat chiqarish — «Hujjatlar markazi»da.</span></div>
+  el.innerHTML = `<div class="head pt-head"><div><h2>Yozishmalar</h2><span class="muted">${esc(me.name)} · bo'limlar o'rtasida rasmiy xat, ish fayllari va umumiy bazalar. Rasmiy hujjat chiqarish — «Hujjatlar markazi»da.</span></div>
       <div class="row-actions"><button class="btn" id="ptUpBtn">${ico("upload", 16)}Fayl yuklash</button><button class="btn primary" id="ptNewBtn">${ico("pen", 16)}Yangi xat</button></div></div>
     <div class="pn-tabs pt-tabs" role="tablist">${tabs.map(([k, l, i]) => `<button class="pn-tab${PT.tab === k ? " on" : ""}" role="tab" aria-selected="${PT.tab === k}" data-pt="${k}">${ico(i, 16)}${l}${k === "mail" ? `<em ${PT.sum?.unread ? "" : "hidden"}>${PT.sum?.unread || 0}</em>` : ""}</button>`).join("")}</div>
     <div id="ptBody"></div>`;

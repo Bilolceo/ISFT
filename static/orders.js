@@ -83,7 +83,7 @@ async function renderOrders() {
   const c = orCan();
   if (!OR.tab) OR.tab = ME.role_key === "malumotlar_bazasi" ? "audit" : "reg";
   if (!orTabs().some(([k]) => k === OR.tab)) OR.tab = "reg";
-  if (!OR.f.status) OR.f.status = c.sign || c.forward ? "imzo" : c.register ? (OR.meta.pending.register ? "jurnal" : "") : c.edit || c.edit_staff ? "jarayonda" : "";
+  if (!OR.f.status) OR.f.status = c.sign || c.forward ? "imzo" : c.register ? "jurnal" : c.edit || c.edit_staff ? "jarayonda" : "";
   orShell();
 }
 function orTabs() {

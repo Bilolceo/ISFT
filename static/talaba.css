@@ -245,3 +245,7 @@ body.tk{background:var(--bg-solid);overflow-x:hidden}
 .tk-row>.tk-up{flex:1 1 100%}
 .tk-up:empty{display:none}
 .tk-main-c .tk-pill{white-space:nowrap}
+
+/* menyu guruhlari (talaba.js renderShell) */
+.tk-nav-h{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);padding:12px 12px 4px}
+.tk-nav-h:first-child{padding-top:2px}

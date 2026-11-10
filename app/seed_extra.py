@@ -57,7 +57,7 @@ MORE_TASKS = [
     (4, "O'qituvchi (Buxgalteriya hisobi kafedrasi)", "oqituvchi", "Oraliq nazoratdan o'tmaganlar uchun qayta topshirish jadvalini berish", "2026-11-01", "bajarildi"),
     (4, "O'qituvchi (Buxgalteriya hisobi kafedrasi)", "oqituvchi", "Xavf ostidagi talabalar bilan individual konsultatsiya o'tkazish", "2026-11-13", "jarayonda"),
     (4, "Registrator ofisi", "talabalar", "2-kurs talabalarining ota-onalari bilan uchrashuv o'tkazish (fakultet tyutori bilan)", "2026-11-08", "jarayonda"),
-    (5, "Devonxona", "kengash", "Kuzatuv kengashi uchun choraklik KPI hisobotini tayyorlash", "2026-11-25", "jarayonda"),
+    (5, "Strategik bo'lim", "strategik", "Kuzatuv kengashi uchun choraklik KPI hisobotini tayyorlash", "2026-11-25", "jarayonda"),
     (5, "Ilmiy ishlar va innovatsiyalar bo'yicha prorektor", "prorektor_ilmiy", "Innovatsion rivojlanish agentligiga 2 ta grant arizasini topshirish", "2026-10-29", "bajarildi"),
     (5, "Kadrlar bo'limi", "kadrlar", "O'qituvchilar malaka oshirish rejasini tasdiqlash", "2026-12-01", "jarayonda"),
     (5, "Buxgalteriya", "buxgalteriya", "3-chorak moliyaviy hisobotini kengashga taqdim etish", "2026-11-18", "jarayonda"),

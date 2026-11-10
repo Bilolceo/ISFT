@@ -185,7 +185,7 @@ tbody tr:last-child td{border-bottom:0}
 /* ---------- formalar ---------- */
 input,select,textarea{font:inherit;color:var(--ink)}
 .chatform input,#mTitle,textarea,select,.form-grid input,.form-grid select,.form-grid textarea{flex:1;padding:11px 14px;border:1px solid var(--line-2);border-radius:12px;background:var(--surface);transition:border-color .2s,box-shadow .2s}
-textarea{width:100%;min-height:180px;resize:vertical}
+textarea{width:100%;min-height:64px;resize:vertical;field-sizing:content;max-height:60vh}
 .chatform input:focus,#mTitle:focus,textarea:focus,select:focus,.form-grid input:focus,.form-grid select:focus,.form-grid textarea:focus{outline:none;border-color:var(--teal);box-shadow:0 0 0 3px var(--teal-soft)}
 .form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 16px}
 .form-grid .full,.form-grid .span2{grid-column:1/-1}
@@ -582,3 +582,23 @@ details.script ol{margin:8px 0;padding-left:18px;display:flex;flex-direction:col
   .top-logo{display:block;width:0;opacity:0;margin-right:-12px;transition:width .2s var(--ease),opacity .2s var(--ease),margin .2s var(--ease)}
   #app:is(.rail,.rail-closing) .top-logo{width:40px;opacity:1;margin-right:0}
 }
+
+/* ---------- bosh sahifa: «Sizdan kutilmoqda» va lavozim ko'rsatkichlari (app/pending.py) ---------- */
+.pn-todo{margin-bottom:16px;padding:16px 18px}
+.pn-todo-h{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
+.pn-todo-h h3{margin:0;display:flex;align-items:center;gap:8px;font-size:16px;flex-wrap:wrap}
+.pn-todo-l{display:flex;flex-direction:column}
+.pn-todo-i{display:grid;grid-template-columns:28px minmax(0,1fr) auto;gap:10px;align-items:center;text-align:left;background:none;border:0;border-top:1px solid var(--line);padding:9px 4px;cursor:pointer;color:inherit;font:inherit}
+.pn-todo-i:first-child{border-top:0}
+.pn-todo-i:hover{background:var(--soft,rgba(0,0,0,.03))}
+.pn-todo-i b{display:block;font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pn-todo-i small{display:block;color:var(--muted);font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pn-todo-i.over b{color:var(--bad,#b42318)}
+.pn-todo-ic{width:28px;height:28px;border-radius:8px;display:grid;place-items:center;background:var(--soft,rgba(0,0,0,.05))}
+.pn-own .pn-ok-k{text-align:left;cursor:pointer;display:flex;flex-direction:column;gap:4px;border:1px solid var(--line);font:inherit;color:inherit}
+.pn-own .kpi-l{font-size:13px;font-weight:600;color:var(--muted)}
+.pn-own .kpi-v{font-size:30px;line-height:1.1}
+.pn-own .t-bad .kpi-v{color:var(--bad,#b42318)} .pn-own .t-warn .kpi-v{color:var(--warn,#b54708)} .pn-own .t-good .kpi-v{color:var(--good,#067647)}
+.pn-hero.compact .pn-qs,.pn-hero.compact .pn-ok{display:none}
+.pn-hero.compact .pn-ask{padding:12px 16px}
+.pn-hero.compact .pn-ask-h{margin-bottom:8px}

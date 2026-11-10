@@ -1,0 +1,28 @@
+/* =====================================================================
+   UX: yon menyu guruhlari, tezkor (pin) bandlar, sahifa izohlari va KPI manbasi (nav.js, density.js)
+   ===================================================================== */
+#nav a.g-closed:not(.on){display:none!important}
+#nav .nav-g .nav-gn{font-size:10.5px;font-weight:700;color:var(--muted);background:var(--surface-2);border-radius:999px;padding:1px 7px;letter-spacing:0}
+#nav .nav-g.has-nb .nav-tg-l::after{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--brand);margin-left:7px;vertical-align:middle}
+#nav .nav-g.closed .nav-chev{transform:none!important}
+#nav .nav-g:not(.closed) .nav-chev{transform:rotate(180deg)}
+#nav .nav-g-flat{cursor:default}
+/* pin — sichqoncha ustida ko'rinadi */
+#nav a .nav-pin{margin-left:auto;display:inline-grid;place-items:center;width:22px;height:22px;border-radius:7px;color:var(--muted);opacity:0;transition:opacity .15s;cursor:pointer;flex:none}
+#nav a .nb + .nav-pin{margin-left:4px}
+#nav a:hover .nav-pin,#nav a[data-pinned] .nav-pin{opacity:.85}
+#nav a .nav-pin:hover{background:var(--surface);color:var(--brand);opacity:1}
+#nav a[data-pinned] .nav-pin{color:var(--brand)}
+#nav a.on .nav-pin{color:#fff}
+#nav a .nav-pin svg{width:13px!important;height:13px!important;display:block}
+#app.rail #nav a .nav-pin{display:none}
+@media (max-width:980px){#nav a .nav-pin{opacity:.6}}
+/* KPI kartalaridagi «Manba: …» — faqat ikonka, matn sichqoncha ostida (title) */
+.kc-src>span{display:none}
+.kc-src{cursor:help}
+/* sahifa izohi: bitta qisqa qator + «Qanday ishlaydi» */
+.dn-more{display:none}
+.dn-open .dn-more{display:inline}
+.dn-tg{all:unset;cursor:pointer;color:var(--teal,#0f766e);font-weight:600;font-size:12.5px;margin-left:6px;white-space:nowrap}
+.dn-tg:hover{text-decoration:underline}
+.dn-tg:focus-visible{outline:2px solid var(--teal);outline-offset:2px;border-radius:4px}

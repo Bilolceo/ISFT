@@ -197,6 +197,15 @@ def finance_summary(con, ctx: Ctx, quiet=False):
     over = db.rows(con, """SELECT category, month, planned, actual, ROUND(100.0*actual/planned-100,1) over_pct FROM budget
         WHERE actual > planned*1.1 ORDER BY month DESC, over_pct DESC""")
     tot = {"planned": sum(c["planned"] for c in cats), "actual": sum(c["actual"] for c in cats)}
+    # Reja — Moliya modulidagi yillik byudjet moddalari (fin_budget_lines), Moliya sahifasi bilan bir xil raqam chiqishi uchun
+    try:
+        yr = int(str(months[-1]["month"])[:4]) if months else clock.today().year
+        yp = {r["category"]: r["plan"] for r in db.rows(con, "SELECT category, plan FROM fin_budget_lines WHERE year=?", (yr,))}
+        if yp:
+            for c in cats:
+                if yp.get(c["category"]): c["planned"] = yp[c["category"]]; c["pct"] = round(100 * c["actual"] / c["planned"], 1)
+            tot["planned"] = sum(yp.values()); tot["year"] = yr; tot["basis"] = "yillik reja"
+    except Exception: pass
     tot["pct"] = round(100 * tot["actual"] / tot["planned"], 1)
     return {"total": tot, "categories": cats, "months": months, "overruns": over}
 
@@ -447,8 +456,10 @@ def kpis(con, ctx: Ctx):
         out.append(_k("qabul", "Qabul 2026", f"{ad['total']:,}".replace(",", " "), "ariza", "Qabul bazasi", sync,
                       [w["n"] for w in wk], "bars", [w["start"] for w in wk]))
     t = safe(tasks_list)
-    if t: out.append(_k("topshiriqlar", "Topshiriqlar", f"{t['done']}/{len(t['tasks'])}", f"{t['overdue']} tasi muddati o'tgan",
-                        "ISFT Core · majlis topshiriqlari", _now_iso(), [t["done"], len(t["tasks"])], "progress", bad=t["overdue"] > 0))
+    if t and t["tasks"]:   # bo'sh (0/0) karta ko'rsatilmaydi; qiymat — ochiq topshiriqlar (Majlislar sahifasi va tugma bilan bir xil sanoq)
+        opn = len(t["tasks"]) - t["done"]
+        out.append(_k("topshiriqlar", "Topshiriqlar (ochiq)", opn, f"jami {len(t['tasks'])} · bajarildi {t['done']} · {t['overdue']} tasi muddati o'tgan",
+                      "ISFT Core · majlis topshiriqlari", _now_iso(), [t["done"], len(t["tasks"])], "progress", bad=t["overdue"] > 0))
     y = safe(youth_summary)
     if y:
         wk = [(clock.today() - dt.timedelta(days=7 * (5 - j) + 6), clock.today() - dt.timedelta(days=7 * (5 - j))) for j in range(6)]   # oxirgi 6 hafta

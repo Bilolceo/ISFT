@@ -227,9 +227,9 @@
             <td class="${l.ok ? "ok" : "bad"}">${l.ok ? "Muvaffaqiyatli" : esc(l.reason || "Rad etildi")}</td></tr>`).join("")}</tbody></table></details>` : ""}
       </section>
 
-      <section class="xt-pf-sec"><h4>Ruxsatlar</h4>
+      <section class="xt-pf-sec"><h4>Sizning ruxsatlaringiz</h4>
         <p class="xt-pf-note">${perms.length} ta ma'lumot turiga ruxsat. Ruxsatlarni AT bo'limi lavozimga qarab belgilaydi.</p>
-        <details class="xt-pf-det"><summary>Batafsil</summary><dl class="xt-pf-dl">
+        <details class="xt-pf-det"${["it_head", "rektor"].includes(ME?.role_key) ? "" : " open"}><summary>Batafsil</summary><dl class="xt-pf-dl">
           ${groups.map(([g, xs]) => row(esc(g), xs.map(x => esc(x.label) + (x.agg ? ` <span class="xt-pf-agg" title="Faqat jamlangan ko'rinishda, shaxsiy ma'lumotlarsiz">jamlangan</span>` : "")).join("<br>"))).join("")}
         </dl></details>
       </section>
@@ -507,11 +507,19 @@
     return new Promise(res => { const t0 = Date.now(); (function poll() { let v = null; try { v = fn(); } catch (e) {} if (v) return res(v); if (Date.now() - t0 > ms) return res(null); setTimeout(poll, 120); })(); });
   }
   const flash = el => { if (!el) return; el.scrollIntoView({block: "center", behavior: "smooth"}); el.classList.add("xt-flash"); setTimeout(() => el.classList.remove("xt-flash"), 2600); };
+  /* yangi modullar: {view, tab} — modul holatidagi yorliq tanlanadi (pending.py havolalari) */
+  const MOD_STATE = () => ({moliya: typeof ML !== "undefined" && ML, kadrlar: typeof KD !== "undefined" && KD, ilmiy: typeof IL !== "undefined" && IL,
+    xalqaro: typeof XQ !== "undefined" && XQ, yoshlar: typeof YJ !== "undefined" && YJ, amaliyot: typeof AM !== "undefined" && AM,
+    flows: typeof FL !== "undefined" && FL, tekshiruv: typeof TK !== "undefined" && TK});
   function openLink(l) {
-    if (!l || !l.view) return;
+    if (!l) return;
+    if (l.href) { location.href = l.href; return; }
+    if (!l.view) return;
+    { const st = MOD_STATE()[l.view]; if (st && l.tab) st.tab = l.tab; }
     const hasPT = typeof PT !== "undefined";
     switch (l.view) {
       case "ops":
+        if (l.student && window.openKarta) { openKarta(l.student); break; }   /* talaba_karta.js: 360° karta */
         if (typeof OPSV !== "undefined") { OPSV.student = l.student; }
         go("ops"); break;
       case "portal":

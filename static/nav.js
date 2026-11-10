@@ -16,34 +16,111 @@
   if (!ICONS.gear) ICONS.gear = '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>';
   if (!ICONS.chev) ICONS.chev = '<path d="m6 9 6 6 6-6"/>';
 
-  /* ---------- 1) "Sozlamalar va xavfsizlik" guruhi ---------- */
-  const CFG_KEY = "isft-nav-cfg";
-  function cfgSet(open, save) {
-    nav.classList.toggle("cfg-closed", !open);
-    if (cfg) { cfg.setAttribute("aria-expanded", String(open)); cfg.title = open ? "Guruhni yig'ish" : "Guruhni ochish"; }
-    if (save) store.set(CFG_KEY, open ? "1" : "0");
+  /* ---------- 1–2) Guruhlar, tezkor (sevimlilar) va lavozimga ko'ra yorliqlar ----------
+     Menyu bandlari ma'noli guruhlarga bo'linadi. 12 tadan ko'p band ko'radigan lavozimlarda guruhlar yig'iladi
+     (holati localStorage'da; joriy sahifa guruhi doim ochiq), kamroq bandda — tekis ro'yxat (sarlavhasiz).
+     «Tezkor» — foydalanuvchi pin bilan yuqoriga chiqargan bandlar (localStorage). boot() oxirida navGroup() chaqiriladi. */
+  if (cfg) cfg.remove();
+  nav.querySelectorAll(".nav-h").forEach(h => h.remove());
+  nav.querySelectorAll("a[data-g]").forEach(a => a.removeAttribute("data-g"));
+  if (!ICONS.pin2) ICONS.pin2 = '<path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/>';
+  const GROUPS = [["tez", "Tezkor", "pin2"], ["ish", "Ish stoli", "dashboard"], ["talaba", "Talabalar va o'quv", "cap"], ["ilm", "Ilm va xalqaro", "flask"],
+                  ["moliya", "Moliya va xodimlar", "money"], ["kampus", "Kampus", "wrench"], ["hujjat", "Hujjatlar", "folder"], ["tizim", "Tizim", "gear"]];
+  const VG = {panel: "ish", mywork: "ish", chat: "ish", agents: "ish", tasks: "ish",
+              ops: "talaba", flows: "talaba", reyting: "talaba", syllabus: "talaba", amaliyot: "talaba", taqdimot: "talaba", tekshiruv: "talaba",
+              ilmiy: "ilm", xalqaro: "ilm", moliya: "moliya", kadrlar: "moliya", staffabs: "moliya",
+              yoshlar: "kampus", service: "kampus", spaces: "kampus", cams: "kampus",
+              kiruvchi: "hujjat", qabul: "talaba", rejalar: "ish", portal: "hujjat", documents: "hujjat", orders: "hujjat", reports: "hujjat", docs: "hujjat", rbac: "tizim", audit: "tizim", accounts: "tizim"};
+  /* lavozimga xos nom: bitta sahifa turli lavozimda turli ish (xarid — so'rovlar, xo'jalik — nosozliklar, yoshlar — murojaatlar) */
+  const LBL = {service: {xarid: "Xarid so'rovlari", xojalik: "Nosozliklar", it_head: "Nosozliklar", it_staff: "Nosozliklar", manaviyat: "Murojaatlar", komendant: "Murojaatlar"}};
+  const PIN_KEY = "isft-nav-pins", G_KEY = "isft-nav-groups";
+  const jget = (k, d) => { try { return JSON.parse(store.get(k) || "") || d; } catch (e) { return d; } };
+  const label = a => { if (!a.dataset.lbl0) a.dataset.lbl0 = [...a.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join("").trim(); return a.dataset.lbl0; };
+  function setLabel(a, t) {
+    const tn = [...a.childNodes].filter(n => n.nodeType === 3);
+    tn.forEach((n, i) => { n.textContent = i ? "" : t; });
+    if (!tn.length) a.insertBefore(document.createTextNode(t), a.querySelector(".nb, .nav-pin"));
+    a.dataset.lbl = t;
   }
-  if (cfg) {
-    const label = cfg.textContent.trim();
-    cfg.innerHTML = `${ico("gear", 15)}<span class="nav-tg-l">${label}</span><span class="nav-chev">${ico("chev", 14)}</span>`;
-    cfg.dataset.tip = label;
-    cfg.onclick = () => cfgSet(nav.classList.contains("cfg-closed"), true);
+  let ROLE = "", OPEN = {};
+  function groupOf(a) { return a.dataset.pinned ? "tez" : (VG[a.dataset.v] || "ish"); }
+  function applyOpen() {
+    const many = nav.classList.contains("nav-many");
+    nav.querySelectorAll("a[data-v]").forEach(a => a.classList.toggle("g-closed", many && OPEN[a.dataset.grp] === false));
+    nav.querySelectorAll(".nav-g").forEach(h => {
+      const k = h.dataset.g, open = !many || OPEN[k] !== false;
+      h.setAttribute("aria-expanded", String(open)); h.classList.toggle("closed", !open);
+      const dot = [...nav.querySelectorAll(`a[data-grp="${k}"]:not(.hidden) .nb`)].length;
+      h.classList.toggle("has-nb", !open && dot > 0);
+    });
   }
-  cfgSet(store.get(CFG_KEY) === "1", false);
-
-  /* ---------- 2) lavozimga ko'ra tartib ---------- */
-  const ORDER = [...nav.children];
-  const PROMOTE = {xojalik: ["spaces", "cams"], xalqaro: ["docs"], yuridik: ["docs"], qabul: ["cams"]};   /* shu lavozimlar uchun kundalik ish — guruhdan tashqarida */
-  function heads() {
-    nav.querySelectorAll(".nav-h").forEach(h => { let n = h.nextElementSibling, any = false; while (n && n.tagName === "A") { any ||= !n.classList.contains("hidden"); n = n.nextElementSibling; } h.classList.toggle("hidden", !any); });
-  }
-  window.navLayout = function (role) {
-    ORDER.forEach(el => { nav.appendChild(el); delete el.dataset.promoted; });
-    (PROMOTE[role] || []).forEach(v => { const a = nav.querySelector(`a[data-v="${v}"]`); if (a && cfg) { nav.insertBefore(a, cfg); a.dataset.promoted = "1"; } });
-    heads();
+  window.navGroup = function (role) {
+    ROLE = role || ROLE;
+    const anchors = [...nav.querySelectorAll("a[data-v]")];
+    const pins = jget(PIN_KEY, []);
+    anchors.forEach(a => {
+      label(a);
+      const t = (LBL[a.dataset.v] || {})[ROLE]; setLabel(a, t || a.dataset.lbl0);
+      if (!a.querySelector(".nav-pin")) {
+        const p = document.createElement("span"); p.className = "nav-pin"; p.setAttribute("role", "button"); p.tabIndex = -1;
+        p.innerHTML = ico("pin2", 13);
+        p.addEventListener("click", e => {
+          e.preventDefault(); e.stopPropagation();
+          const v = a.dataset.v, cur = jget(PIN_KEY, []);
+          store.set(PIN_KEY, JSON.stringify(cur.includes(v) ? cur.filter(x => x !== v) : [...cur, v]));
+          navGroup(ROLE);
+        });
+        a.appendChild(p);
+      }
+      const pinned = pins.includes(a.dataset.v) && !a.classList.contains("hidden");
+      a.toggleAttribute("data-pinned", pinned);
+      a.querySelector(".nav-pin").title = pinned ? "Tezkordan olib tashlash" : "Tezkor bo'limga qo'shish (yuqoriga)";
+      a.dataset.grp = groupOf(a);
+    });
+    nav.querySelectorAll(".nav-g").forEach(h => h.remove());
+    const vis = anchors.filter(a => !a.classList.contains("hidden"));
+    const many = vis.length > 12;
+    nav.classList.toggle("nav-many", many);
+    const saved = jget(G_KEY, {})[ROLE] || {};
+    /* standart: Tezkor, Ish stoli va lavozimning eng ko'p bandli (asosiy) guruhi ochiq, qolganlari yig'iq */
+    const cnt = {}; vis.forEach(a => { if (!["tez", "ish"].includes(a.dataset.grp)) cnt[a.dataset.grp] = (cnt[a.dataset.grp] || 0) + 1; });
+    const PRI = ["oquv", "talaba", "talabalar"];   /* teng bo'lsa — talabalar/o'quv guruhi ustun */
+    const main = Object.entries(cnt).sort((x, y) => (y[1] - x[1]) || (PRI.some(p => y[0].includes(p)) - PRI.some(p => x[0].includes(p))))[0]?.[0];
+    OPEN = {};
+    GROUPS.forEach(([k]) => { OPEN[k] = k in saved ? saved[k] : (["tez", "ish", main].includes(k)); });
+    const cur = nav.querySelector("a.on"); if (cur) OPEN[cur.dataset.grp] = true;
+    GROUPS.forEach(([k, name, ic]) => {
+      const items = anchors.filter(a => a.dataset.grp === k);
+      const shown = items.filter(a => !a.classList.contains("hidden"));
+      let h = null;
+      if (shown.length && (many || (k === "tez") || (pins.length && k === "ish" && vis.some(a => a.dataset.pinned)))) {
+        if (many && k !== "tez") {
+          h = document.createElement("button"); h.type = "button"; h.className = "nav-h nav-tg nav-g"; h.dataset.g = k; h.dataset.tip = name;
+          h.innerHTML = `${ico(ic, 15)}<span class="nav-tg-l">${name}</span><span class="nav-gn">${shown.length}</span><span class="nav-chev">${ico("chev", 14)}</span>`;
+          h.onclick = () => {
+            OPEN[k] = !(OPEN[k] !== false);
+            const all = jget(G_KEY, {}); all[ROLE] = {...(all[ROLE] || {}), [k]: OPEN[k]}; store.set(G_KEY, JSON.stringify(all));
+            applyOpen();
+          };
+        } else {
+          h = document.createElement("div"); h.className = "nav-h nav-g nav-g-flat"; h.dataset.g = k;
+          h.textContent = k === "tez" ? name : (many ? name : "Bo'limlar");
+        }
+        nav.appendChild(h);
+      }
+      items.forEach(a => nav.appendChild(a));
+    });
+    applyOpen();
   };
-  /* app.js boot() nav.js yuklanishidan oldin tugagan bo'lsa */
-  try { if (typeof ME !== "undefined" && ME && ME.role_key) navLayout(ME.role_key); } catch (e) {}
+  /* joriy sahifa guruhi doim ochiq (saqlanmaydi) */
+  window.navOpenFor = function (v) {
+    const a = nav.querySelector(`a[data-v="${v}"]`); if (!a || !nav.classList.contains("nav-many")) return;
+    if (OPEN[a.dataset.grp] === false) { OPEN[a.dataset.grp] = true; applyOpen(); }
+  };
+  /* yig'iq guruhdagi bandga raqamli belgi qo'shilsa — sarlavhada nuqta */
+  let nbT; new MutationObserver(() => { clearTimeout(nbT); nbT = setTimeout(applyOpen, 80); }).observe(nav, {childList: true, subtree: true});
+  /* eski chaqiruv (boot() boshida) — endi tartibni navGroup() quradi */
+  window.navLayout = function (role) { ROLE = role; };
 
   /* ---------- 3) ixcham rejim (faqat ikonkalar) ----------
      #menuBtn — yon menyuning brend qatorida ("ISFT Core" yonida): kompyuterda menyuni yig'adi/yoyadi,
@@ -115,11 +192,11 @@
   /* ---------- 4) ixcham rejimda nom ko'rsatkichi (tooltip) ---------- */
   const tip = document.createElement("div");
   tip.className = "nav-tip"; tip.id = "navTip"; tip.setAttribute("role", "tooltip"); document.body.appendChild(tip);
-  const TIP_SEL = "#nav a, #navCfg, #menuBtn, .side-foot .me";
+  const TIP_SEL = "#nav a, #nav .nav-g, #menuBtn, .side-foot .me";
   function tipText(el) {
     if (el.dataset.tip) return el.dataset.tip;
     if (el.classList.contains("me")) { const n = el.querySelector("b"), s = el.querySelector("small"); return [n && n.textContent, s && s.textContent].filter(Boolean).join(" · "); }
-    const c = el.cloneNode(true); c.querySelectorAll(".nb, svg").forEach(x => x.remove());
+    const c = el.cloneNode(true); c.querySelectorAll(".nb, svg, .nav-pin, .nav-gn").forEach(x => x.remove());
     const n = el.querySelector(".nb");
     return c.textContent.trim() + (n ? ` · ${n.textContent}` : "");
   }

@@ -31,8 +31,10 @@ _ctx = None
 def bind(con, ctx_fn):
     global _con, _ctx
     _con, _ctx = con, ctx_fn
+    from . import pending as PD; PD.bind(con)   # yangi modullar (moliya, kadrlar, ilmiy, xalqaro, yoshlar, amaliyot, harakat, tekshiruv, talaba)
 
-SOURCES = ("majlis", "portal", "markaz", "buyruq", "murojaat", "xodim", "agent", "sillabus")
+SOURCES = ("majlis", "portal", "markaz", "buyruq", "murojaat", "xodim", "agent", "sillabus",
+           "moliya", "kadrlar", "ilmiy", "xalqaro", "yoshlar", "amaliyot", "harakat", "tekshiruv", "talaba", "devon", "qabul", "rejalar", "it_req")
 OPS_ROLES = ("call_center", "tyutor", "talabalar", "sirtqi")     # Talabalar markazida o'z navbati bor lavozimlar (student_ops._can_act; sirtqi — sirtqi talabalar xatlari)
 OPS_LIST_MAX = 5                                      # bundan ko'p bo'lsa — tur bo'yicha jamlanadi
 DOC_LIST_MAX = 12
@@ -302,6 +304,11 @@ def _sillabus(c: Ctx) -> list[dict]:   # O'quv dasturlari (app/syllabus.py): bir
 
 COLLECT = [("majlis", _majlis), ("portal", _portal), ("markaz", _markaz), ("buyruq", _buyruq), ("murojaat", _murojaat), ("xodim", _xodim),
            ("agent", _agent), ("sillabus", _sillabus)]
+def _pd(fn): return lambda c: fn(c, _item)
+from . import pending as _PD
+COLLECT += [(k, _pd(f)) for k, f in _PD.ADAPTERS]
+
+SIGN_KINDS = {("buyruq", "imzo"), ("buyruq", "kelishuv")}   # buyruqlar: imzo / kelishuv — «Imzo papkasi»
 _PRIO_ORDER = {"high": 0, "mid": 1, "low": 2}
 _BUCKET_ORDER = {"overdue": 0, "today": 1, "week": 2, "later": 3, "none": 4}
 
@@ -320,6 +327,8 @@ def collect(c: Ctx) -> dict:
         except Exception as e:                    # bitta manbadagi xato butun sahifani yiqitmasin
             print(f"mywork.{key}:", repr(e)); errors.append(key)
     for it in items:
+        if (it["source"], it["kind"]) in SIGN_KINDS: it["sign"] = True
+        it.setdefault("sign", False)
         it["bucket"], it["overdue"] = _bucket(it["due"], today, now)
         if not it["priority"]:
             it["priority"] = "high" if it["bucket"] in ("overdue", "today") else "mid" if it["bucket"] == "week" or it["who"] == "nazorat" else "low"
@@ -333,10 +342,18 @@ def collect(c: Ctx) -> dict:
               "week": sum(it["bucket"] == "week" for it in items), "later": sum(it["bucket"] == "later" for it in items),
               "none": sum(it["bucket"] == "none" for it in items), "units": sum(it.get("count") or 1 for it in items),
               "badge": len(items),   # menyudagi raqam = «Jami ish» (har bir qator — mendan harakat kutayotgan bitta ish yoki jamlangan navbat)
-              "by_source": {k: v for k, v in by.items() if v}}
+              "by_source": {k: v for k, v in by.items() if v}, "sign": sum(1 for it in items if it.get("sign"))}
     return {"items": items, "counts": counts, "today": today.isoformat(), "now": now.replace(microsecond=0).isoformat(timespec="seconds"),
             "partial": errors}
 
 @router.get("/api/mywork")
 def api_mywork(request: Request):
     return collect(_ctx(request))
+
+@router.get("/api/bugun")
+def api_bugun(request: Request):
+    """Bosh sahifa: «Sizdan kutilmoqda» (shu sahifadagi ro'yxatning eng yaqinlari) + lavozimning o'z sohasidagi ko'rsatkichlar."""
+    from . import pending as PD
+    c = _ctx(request)
+    d = collect(c)
+    return {"items": d["items"][:5], "counts": d["counts"], "kpis": PD.bugun(c), "institute": c.role.key in ("rektor", "kengash")}

@@ -44,7 +44,7 @@ const kdEmpty = (t, s = "") => `<div class="kd-empty"><b>${esc(t)}</b>${s ? `<sp
 async function kadrlarNav() {
   const a = document.querySelector('#nav a[data-v="kadrlar"]');
   if (!a || !a.classList.contains("hidden")) return;
-  try { const m = await kdApi("/api/hr/meta"); if (m.mode !== "own") { a.classList.remove("hidden"); const h = a.parentElement && [...a.parentElement.querySelectorAll(".nav-h")].filter(x => x.compareDocumentPosition(a) & 4).pop(); h && h.classList.remove("hidden"); } } catch (e) {}
+  try { const m = await kdApi("/api/hr/meta"); if (m.mode !== "own") { a.classList.remove("hidden"); const h = a.parentElement && [...a.parentElement.querySelectorAll(".nav-h")].filter(x => x.compareDocumentPosition(a) & 4).pop(); h && h.classList.remove("hidden"); if (typeof navGroup === "function") navGroup(); } } catch (e) {}
 }
 
 /* «Shaxsiy ma'lumotlar» oynasi: o'z shaxsiy ishi (faqat o'qish) */

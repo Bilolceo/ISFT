@@ -1,0 +1,31 @@
+/* W5: Kiruvchi xatlar, Qabul, KPI maqsadlari / Sifat amallari, AT akkaunt so'rovlari */
+.w5-bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 12px}
+.w5-search{display:flex;align-items:center;gap:6px;flex:1;min-width:200px;border:1px solid var(--line,#e5e5e5);border-radius:10px;padding:0 10px}
+.w5-search input{border:0;outline:0;background:transparent;padding:8px 0;width:100%;min-height:0}
+.w5-seg{display:flex;gap:4px;flex-wrap:wrap;margin:0 0 12px}
+.w5-seg button{border:1px solid var(--line,#e5e5e5);background:var(--card,#fff);border-radius:999px;padding:6px 12px;font:inherit;font-size:13px;cursor:pointer;color:inherit}
+.w5-seg button.on{background:var(--brand,#7a1430);color:#fff;border-color:transparent}
+.w5-seg button b{margin-left:4px}
+.w5-tbl td{vertical-align:top}
+.w5-tbl .nw,.w5-ak .nw{white-space:nowrap}
+.w5-bad{color:var(--bad,#c0392b);font-weight:600}
+.w5-funnel{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin:0 0 14px}
+.w5-step{border:1px solid var(--line,#e5e5e5);background:var(--card,#fff);border-radius:12px;padding:10px 12px;text-align:left;cursor:pointer;font:inherit;color:inherit;display:flex;flex-direction:column;gap:2px}
+.w5-step b{font-size:22px}
+.w5-step span{font-size:12px;color:var(--muted,#666)}
+.w5-step.on{outline:2px solid var(--brand,#7a1430)}
+.w5-step.rad b{color:var(--bad,#c0392b)}
+.w5-sec{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted,#666);margin:12px 0 4px}
+.w5-ak{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line,#eee)}
+.w5-ak:last-child{border-bottom:0}
+.w5-itreq{margin:0 0 14px;border-left:3px solid var(--brand,#7a1430)}
+.w5-bg{position:fixed;inset:0;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;z-index:1000;padding:16px}
+.w5-modal{background:var(--card,#fff);color:inherit;border-radius:14px;max-width:620px;width:100%;max-height:90vh;overflow:auto;padding:18px 20px;box-shadow:0 20px 50px rgba(0,0,0,.25)}
+.w5-modal h3{margin:0 0 12px}
+.w5-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.w5-grid label,.w5-mb>label{display:flex;flex-direction:column;gap:4px;font-size:13px}
+.w5-mb>label{margin:0 0 10px}
+.w5-full{grid-column:1/-1}
+.w5-modal textarea{min-height:0}
+.w5-acts{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
+@media (max-width:760px){.w5-funnel{grid-template-columns:repeat(3,minmax(0,1fr))}.w5-grid{grid-template-columns:1fr}}

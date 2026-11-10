@@ -361,8 +361,12 @@ def pay(c: Ctx, cid: int, amount: int | None, receipt: str):
         if left <= 0: _bad("Bu oy uchun to'lov allaqachon to'liq")
         amt = left if amount is None else int(amount)
         if amt <= 0 or amt > left: _bad(f"Summa 1 … {left} so'm oralig'ida bo'lishi kerak")
-        _con.execute("UPDATE yj_charges SET paid=paid+?, paid_at=?, receipt=?, by_user=? WHERE id=?", (amt, _now(), receipt, c.user["id"], cid)); _con.commit()
-    return {"ok": True, "paid": ch["paid"] + amt, "left": left - amt}
+        sid = db.one(_con, "SELECT student_id FROM yj_residents WHERE id=?", (ch["resident_id"],))["student_id"]
+        # Qisqa yo'l: to'lov Moliya yagona kvitansiya reyestri orqali (app/moliya.py _post_payment, turi «turar_joy») — yj_charges ham o'sha yerda yangilanadi
+        from . import moliya as ML
+        res = ML._post_payment(c, sid, receipt, _today().isoformat(), amt, "kassa" if c.role.key == "komendant" else "bank",
+                               note=f"Turar joy: {ch['period']}", kind="turar_joy", ref_id=cid)
+    return {"ok": True, "paid": ch["paid"] + amt, "left": left - amt, "receipt_no": res["receipt_no"], "payment_id": res["id"]}
 
 # ---------------------------------------------------------------------------------------------
 # Tartib

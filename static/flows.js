@@ -67,7 +67,7 @@ async function renderFlows() {
   if (!el.innerHTML) el.innerHTML = `<p class="muted">Yuklanmoqda…</p>`;
   FL.meta = await flApi("/api/flows/meta");
   if (!FL.tab || !FL.meta.tabs.some(t => t.key === FL.tab)) FL.tab = FL.meta.tabs[0].key;
-  el.innerHTML = `<div class="fl-head"><div><h2>Talaba harakati</h2><span class="muted">${esc(FL.meta.mode_note)} · ${esc(FL.meta.scope)}. Buyruq talab qiladigan har bir qaror
+  el.innerHTML = `<div class="fl-head"><div><h2>Akademik jarayonlar</h2><span class="muted">${esc(FL.meta.mode_note)} · ${esc(FL.meta.scope)}. Buyruq talab qiladigan har bir qaror
       Registrator ofisi orqali «Buyruqlar» bo'limiga loyiha sifatida tushadi va Rektor imzosidan keyin bazaga o'tadi.</span></div></div>
     <div class="fl-tabs" role="tablist">${FL.meta.tabs.map(t => `<button type="button" role="tab" data-tab="${t.key}" class="${t.key === FL.tab ? "on" : ""}" aria-selected="${t.key === FL.tab}">${esc(t.title)}${t.count ? ` <span class="n">${fmt(t.count)}</span>` : ""}</button>`).join("")}</div>
     <div id="flBody"><p class="muted">Yuklanmoqda…</p></div>`;

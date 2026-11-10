@@ -7,9 +7,12 @@
 <script>try{const t=localStorage.getItem("jarvis-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
 <link rel="preload" href="/fonts/manrope-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="ux.css">
 <link rel="stylesheet" href="cams.css">
 <link rel="stylesheet" href="registrar.css">
 <link rel="stylesheet" href="facecam.css">
+<link rel="stylesheet" href="talaba_karta.css">
+<link rel="stylesheet" href="ops_focus.css">
 <script src="/api/public/config.js"></script><!-- extras: ISFT_HIDE_DEMO_HINT -->
 <script>
 /* Kirish sahifasi dizayn variantlari: ?login=1..3 yoki localStorage "jarvis-login". 0 — avvalgi dizayn. */
@@ -31,7 +34,7 @@ document.write('<link rel="stylesheet" href="/login/switcher.css">');})();
       <h1>ISFT Core</h1>
       <p>Institut ma'lumotlari, hujjatlar va xizmatlar bir joyda. Rahbariyat qaror qabul qilishi uchun kerakli raqamlar har kuni yangilanib turadi.</p>
       <ul class="hero-points">
-        <li><span class="hp-ic" data-ico="server"></span><div><b>Ma'lumot institutdan chiqmaydi</b><small>Sun'iy intellekt institut serverida ishlaydi</small></div></li>
+        <li><span class="hp-ic" data-ico="server"></span><div><b>Shaxsiy ma'lumot himoyalangan</b><small>Talaba va xodim ma'lumoti tashqariga chiqmaydi; AI faqat anonim matn bilan ishlaydi</small></div></li>
         <li><span class="hp-ic" data-ico="shield"></span><div><b>Har bir lavozim o'z ko'lamida</b><small>Tyutor — o'z fakultetini, o'qituvchi — o'z guruhlarini ko'radi</small></div></li>
         <li><span class="hp-ic" data-ico="history"></span><div><b>Har bir so'rov qayd etiladi</b><small>Kim, qachon va nimani ko'rgani audit jurnalida</small></div></li>
       </ul>
@@ -62,22 +65,22 @@ document.write('<link rel="stylesheet" href="/login/switcher.css">');})();
   <aside class="side" id="side">
     <div class="side-brand"><img class="logo" src="/brand/logo-sm.png" alt="ISFT"><div><b>ISFT Core</b></div>
       <button type="button" class="side-tg" id="menuBtn" aria-label="Menyuni yig'ish" aria-controls="side" aria-expanded="true"><span data-ico="menu"></span></button></div>
-    <!-- IA: kundalik bo'limlar tepada; kam ishlatiladiganlari yig'iladigan "Sozlamalar va xavfsizlik" guruhida (nav.js) -->
+    <!-- IA: guruhlar, tezkor bandlar va lavozimga xos nomlar nav.js navGroup() da quriladi -->
     <nav id="nav" aria-label="Asosiy menyu">
       <div class="nav-h">Asosiy</div>
       <a href="#" data-v="panel" data-i="dashboard" class="on">Boshqaruv paneli</a>
       <a href="#" data-v="mywork" data-i="mywork">Mening vazifalarim</a>
       <a href="#" data-v="chat" data-i="chat">ISFT Core bilan suhbat</a>
-      <a href="#" data-v="agents" data-i="spark">AI agentlar</a>
+      <a href="#" data-v="agents" data-i="spark">AI takliflari</a>
       <a href="#" data-v="tasks" data-i="tasks">Majlislar va topshiriqlar</a>
       <div class="nav-h">Ish jarayonlari</div>
-      <a href="#" data-v="portal" data-i="portal">Portal</a>
-      <a href="#" data-v="documents" data-i="folder">Hujjatlar markazi</a>
+      <a href="#" data-v="portal" data-i="portal">Yozishmalar</a>
+      <a href="#" data-v="documents" data-i="folder">Hujjat chiqarish</a>
       <a href="#" data-v="orders" data-i="scroll" class="hidden">Buyruqlar</a>
       <a href="#" data-v="syllabus" data-i="book" class="hidden">O'quv dasturlari</a>
-      <a href="#" data-v="ops" data-i="users">Talabalar markazi</a>
+      <a href="#" data-v="ops" data-i="users">Talabalar navbati</a>
       <a href="#" data-v="reyting" data-i="trophy" class="hidden">Reyting</a>
-      <a href="#" data-v="flows" data-i="cap" class="hidden">Talaba harakati</a>
+      <a href="#" data-v="flows" data-i="cap" class="hidden">Akademik jarayonlar</a>
       <a href="#" data-v="ilmiy" data-i="flask" class="hidden">Ilmiy faoliyat</a>
       <a href="#" data-v="taqdimot" data-i="monitor" class="hidden">Taqdimot</a>
       <a href="#" data-v="tekshiruv" data-i="check" class="hidden">Ishlarni tekshirish</a>
@@ -88,6 +91,9 @@ document.write('<link rel="stylesheet" href="/login/switcher.css">');})();
       <a href="#" data-v="service" data-i="wrench">Murojaatlar va nosozliklar</a>
       <a href="#" data-v="staffabs" data-i="plane" class="hidden">Xodimlar ta'tili</a>
       <a href="#" data-v="kadrlar" data-i="idcard" class="hidden">Kadrlar</a>
+      <a href="#" data-v="kiruvchi" data-i="inbox" class="hidden">Kiruvchi xatlar</a>
+      <a href="#" data-v="qabul" data-i="users" class="hidden">Qabul</a>
+      <a href="#" data-v="rejalar" data-i="chart" class="hidden">KPI maqsadlari</a>
       <a href="#" data-v="reports" data-i="report">Hisobotlar</a>
       <button type="button" class="nav-h nav-tg" id="navCfg" aria-expanded="false">Sozlamalar va xavfsizlik</button>
       <a href="#" data-v="spaces" data-i="camera" data-g="cfg">Auditoriyalar</a>
@@ -138,6 +144,9 @@ document.write('<link rel="stylesheet" href="/login/switcher.css">');})();
       <section id="v-accounts" class="view hidden"></section>
       <section id="v-staffabs" class="view hidden"></section>
       <section id="v-kadrlar" class="view hidden"></section>
+      <section id="v-kiruvchi" class="view hidden"></section>
+      <section id="v-qabul" class="view hidden"></section>
+      <section id="v-rejalar" class="view hidden"></section>
       <section id="v-syllabus" class="view hidden"></section>
       <section id="v-reyting" class="view hidden"></section>
       <section id="v-flows" class="view hidden"></section>
@@ -159,6 +168,7 @@ document.write('<link rel="stylesheet" href="/login/switcher.css">');})();
 <script src="cams.js"></script>
 <script src="facecam.js"></script>
 <script src="nav.js"></script>
+<script src="density.js"></script>
 <script src="extras.js"></script>
 <script src="mywork.js"></script>
 <script src="accounts.js"></script>
@@ -166,8 +176,11 @@ document.write('<link rel="stylesheet" href="/login/switcher.css">');})();
 <script src="syllabus.js"></script>
 <script src="staffabs.js"></script>
 <script src="kadrlar.js"></script>
+<script src="w5.js"></script>
 <script src="orders.js"></script>
 <script src="reyting.js"></script>
+<script src="talaba_karta.js"></script>
+<script src="ops_focus.js"></script>
 <script src="flows.js"></script>
 <script src="ilmiy.js"></script>
 <script src="taqdimot.js"></script>

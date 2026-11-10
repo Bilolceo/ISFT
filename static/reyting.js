@@ -194,6 +194,7 @@ async function rtCard(sid) {
       <div class="rt-sh"><div><h3 class="rt-sn">${esc(s.full_name)}</h3>
         <div class="muted tiny">HEMIS ID ${esc(s.hemis_id)} · ${esc(s.grp)} · ${s.course}-kurs · ${esc(s.direction || "")} · ${esc(s.faculty || "")} · ${esc(C.form_label)}</div>
         <div class="rt-tags">${sem && sem.n_f ? `<span class="rt-tag bad">akademik qarzdor · ${sem.n_f} ta «F»</span>` : ""}${sem && sem.subjects.every(g => g.score >= RT.meta.methodology.excellent_min) ? `<span class="rt-tag ok">a'lochi</span>` : ""}${C.ranked ? "" : `<span class="rt-tag warn">reytingda ishtirok etmaydi (${esc(s.status)})</span>`}</div></div>
+        ${window.openKarta && s.id && ["talabalar", "registrator_xodim", "sirtqi", "akademik", "imtihon", "kafedra", "tyutor", "prorektor_oquv"].includes(ME.role_key) ? `<button class="btn sm" type="button" onclick="openKarta(${+s.id})">Talaba kartasi (360°)</button>` : ""}
       </div>
       <div class="rt-kpis rt-k4">
         <div class="rt-kpi"><span>Semestr GPA (5)</span><b>${rtG(sem?.gpa)}</b><small>${esc(sem?.short || "yakunlangan semestr yo'q")}</small></div>

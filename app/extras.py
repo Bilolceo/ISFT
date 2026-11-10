@@ -465,6 +465,16 @@ def notifications(c: Ctx) -> list[dict]:
                           "sub": " · ".join(x for x in [r["category"], (r["text"] or "")[:60]] if x), "ts": _ts(r.get("taken_at") or r["created_at"]),
                           "link": {"view": "service", "tab": "requests", "request": r["id"]}})
     except Exception as e: print("notifications.service:", repr(e))
+    try:   # yangi modullar — Mening vazifalarim bilan bir xil manba (app/pending.py)
+        from . import pending as PD, mywork as MW
+        day0 = _iso(dt.datetime.combine(_today(), dt.time(0, 0)))
+        for key, fn in PD.ADAPTERS:
+            try: rows = fn(c, MW._item)
+            except Exception: continue
+            for r in rows[:6]:
+                items.append({"id": r["id"], "kind": key, "icon": r.get("icon") or "list", "level": "bad" if r.get("priority") == "high" else "warn" if r.get("sign") else "info",
+                              "title": r["title"], "sub": r.get("sub") or "", "ts": day0, "link": r["link"]})
+    except Exception as e: print("notifications.pending:", repr(e))
     now = _iso(_now())
     for it in items: it["ts"] = min(it["ts"], now)      # kelajakdagi vaqt "… oldin" deb ko'rinmasin
     items.sort(key=lambda x: x["ts"], reverse=True)

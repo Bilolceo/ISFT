@@ -106,7 +106,7 @@ async function renderAgents() {
   const focus = AGS.focus; AGS.focus = null;
   if (focus && d.pending.some(p => p.id === +focus)) AGS.open.add(+focus);
   const L = d.levels, ro = d.read_only, mine = d.pending.filter(p => p.can_approve);
-  let h = `<div class="head"><div><h2>AI agentlar markazi</h2><span class="muted">ISFT Core ichidagi ixtisoslashgan yordamchilar · ${dmy(d.today)}</span></div>
+  let h = `<div class="head"><div><h2>AI takliflari</h2><span class="muted">ISFT Core ichidagi ixtisoslashgan yordamchilar · ${dmy(d.today)}</span></div>
     ${d.can_run ? `<button class="btn" id="agRun">${ico("refresh", 16)}Hozir ishga tushirish</button>` : ""}</div>
     <div class="ag-explain"><span class="ag-explain-ic">${ico("shield", 20)}</span><div>
       <b>Agentlar faqat ruxsat etilgan ma'lumotni ko'radi. Xavfli amal — faqat inson tasdig'idan keyin. Har bir amal audit jurnalida.</b>

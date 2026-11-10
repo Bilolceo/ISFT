@@ -244,6 +244,37 @@ try:
     ok(q1("SELECT COUNT(*) FROM audit_log WHERE action='moliya: to''lov qo''lda biriktirildi'") >= 3 and
        q1("SELECT COUNT(*) FROM audit_log WHERE action LIKE 'moliya: bank qatori — %'") >= 2, "Biriktirish va belgilashlar audit jurnalida")
 
+    print("— Yagona kvitansiya reyestri: qayta o'qish va turar joy —")
+    obl = []
+    r1 = q("""SELECT r.id, r.student_id, COALESCE(r.amount,0)-COALESCE(r.paid,0), s.full_name FROM restudy r JOIN students s ON s.id=r.student_id
+              WHERE r.decision='qayta_oqish' AND COALESCE(r.paid,0)<COALESCE(r.amount,0) ORDER BY r.id LIMIT 1""")
+    r2 = q("""SELECT ch.id, rs.student_id, ch.amount-ch.paid, s.full_name FROM yj_charges ch JOIN yj_residents rs ON rs.id=ch.resident_id
+              JOIN students s ON s.id=rs.student_id WHERE ch.paid<ch.amount ORDER BY ch.id LIMIT 1""")
+    if r1: obl.append(("qayta_oqish", r1[0], "qayta o'qish uchun to'lov", "SELECT COALESCE(paid,0) FROM restudy WHERE id=?"))
+    if r2: obl.append(("turar_joy", r2[0], "yotoqxona (turar joy) uchun oylik to'lov", "SELECT paid FROM yj_charges WHERE id=?"))
+    ok(len(obl) == 2, f"Demo ma'lumotda ochiq qayta o'qish va turar joy hisoblari bor ({len(obl)})")
+    for i, (kind, (ref, sid_o, left, fn), why, sql) in enumerate(obl):
+        nm = " ".join(fn.split(":")[-1].split()[:2])
+        doc = f"PQ{TAG}{i}"
+        before = q1(sql, (ref,))
+        imp = bux.post(P + "/bank/import", json={"lines": [{"date": today, "amount": left, "payer": nm, "purpose": f"{nm} {why}", "doc_no": doc}]}).json()
+        ok(imp["added"] == 1 and imp["auto"] == 0, f"{kind}: bank qatori aniqlanmagan navbatiga tushdi (avto yo'q)")
+        Lr = [x for x in bux.get(P + "/bank", params={"q": doc}).json()["items"] if x["doc_no"] == doc][0]
+        top = Lr["candidates"][0] if Lr["candidates"] else {}
+        ok(top.get("pay_kind") == kind and top.get("ref_id") == ref and top.get("student_id") == sid_o,
+           f"{kind}: birinchi taklif — to'g'ri talaba va hisob ({top.get('score')}%, {top.get('reasons')})")
+        ok(any("summa" in x for x in top.get("reasons", [])), f"{kind}: sabablarda summa mosligi bor")
+        cr = bux.post(f"{P}/bank/{Lr['id']}/confirm", json={"student_id": sid_o, "pay_kind": kind, "ref_id": ref})
+        ok(cr.status_code == 200 and cr.json()["left"] == 0, f"{kind}: tasdiqlandi, qoldiq 0")
+        ok(q1(sql, (ref,)) == before + left, f"{kind}: tegishli hisob yangilandi (+{left})")
+        ok(bux.post(f"{P}/bank/{Lr['id']}/confirm", json={"student_id": sid_o, "pay_kind": kind, "ref_id": ref}).status_code == 409, f"{kind}: ikkinchi tasdiq — 409")
+        pid_o = q1("SELECT payment_id FROM fin_bank_lines WHERE id=?", (Lr["id"],))
+        ok(q1("SELECT kind FROM fin_payments WHERE id=?", (pid_o,)) == kind, f"{kind}: fin_payments turi saqlandi")
+        dupr = bux.post(P + "/payments", json={"student_id": sid, "receipt_no": doc, "paid_on": today, "amount": 1000, "method": "bank"})
+        ok(dupr.status_code == 409, f"{kind}: shu kvitansiya kontrakt to'loviga ham qayta kiritilmaydi (turlar bo'yicha yagona)")
+        ok(bux.post(f"{P}/payments/{pid_o}/storno", json={"reason": "Test: yagona reyestr tozalash"}).status_code == 200 and q1(sql, (ref,)) == before,
+           f"{kind}: storno — hisob asl holiga qaytdi")
+
     print("— Hisobotlar —")
     m = today[:7]
     for kind in ("payments", "recon", "budget"):
@@ -266,6 +297,8 @@ finally:
         if st_ == "faol": db.execute("UPDATE students SET paid_amount=paid_amount-? WHERE id=?", (amt_, sid_))
         db.execute("UPDATE fin_payments SET status='storno', storno_reason=COALESCE(storno_reason,'test tozalash'), bank_line_id=NULL WHERE id=?", (pid,))
     db.execute("DELETE FROM fin_bank_lines WHERE doc_no LIKE ?", (f"PP{TAG}%",))
+    db.execute("UPDATE fin_payments SET bank_line_id=NULL WHERE bank_line_id IN (SELECT id FROM fin_bank_lines WHERE doc_no LIKE ?)", (f"PQ{TAG}%",))
+    db.execute("DELETE FROM fin_bank_lines WHERE doc_no LIKE ?", (f"PQ{TAG}%",))
     # tozalash: test xarajatlari budget.actual dan qaytariladi, yozuvlar o'chiriladi
     for eid in created_exp:
         e = db.execute("SELECT spent_on, category, amount, posted FROM fin_expenses WHERE id=?", (eid,)).fetchone()

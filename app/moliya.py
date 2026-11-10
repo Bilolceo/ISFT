@@ -23,7 +23,7 @@ Ruxsat (rbac.ROLES o'zgartirilmaydi — modul ichidagi qoida, resurslar CONTRACT
   talabalar (Registrator ofisi) — talaba bo'yicha to'lov holati va tarixi (faqat o'qish). Call-markaz — avvalgidek Talabalar markazi orqali.
 Har bir ko'rish, o'zgartirish va rad etilgan urinish audit jurnaliga yoziladi.
 """
-import csv, datetime as dt, io, json, random, re
+import csv, datetime as dt, difflib, io, json, random, re, sqlite3
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
@@ -47,6 +47,11 @@ EXP_ST = ["kutilmoqda", "tasdiqlandi", "rad etildi", "bekor qilindi"]
 BACKDATE_DAYS = 60
 UNMATCHED_ALERT_DAYS = 3   # aniqlanmagan to'lov shuncha kundan ortiq tursa — qizil ogohlantirish
 PREFIX = {"bank": "TP", "click": "CL", "payme": "PM", "uzum": "UZ", "kassa": "KO"}
+# Yagona kvitansiya reyestri: to'lov turlari (kvitansiya raqami barcha turlar bo'yicha yagona; kunlik solishtirish hammasini qamraydi).
+# Talaba harakati (qayta o'qish) va Yoshlar (turar joy) dagi «To'lov» tugmalari shu yerdagi _post_payment orqali o'tadi.
+PAY_KINDS = {"kontrakt": "Kontrakt", "qayta_oqish": "Qayta o'qish", "turar_joy": "Turar joy"}
+OBL_WORDS = {"qayta_oqish": ("qayta oqish", "qayta o qish", "qaytaoqish", "povtorn", "qayta topshir", "retake", "fan qarzi", "akademik qarz", "qayta uqish"),
+             "turar_joy": ("turar joy", "turarjoy", "yotoqxona", "yotoq xona", "obshejit", "obshchezhit", "obshezhit", "ijara", "dorm", "yashash joy")}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS fin_payments(id INTEGER PRIMARY KEY, student_id INT, receipt_no TEXT, paid_on TEXT, amount INT, method TEXT,
@@ -82,8 +87,10 @@ def init(con):
     cols = {r[1] for r in con.execute("PRAGMA table_info(procurements)")}
     if cols and "fin_expense_id" not in cols:
         con.execute("ALTER TABLE procurements ADD COLUMN fin_expense_id INT")
-    if "bank_line_id" not in {r[1] for r in con.execute("PRAGMA table_info(fin_payments)")}:
-        con.execute("ALTER TABLE fin_payments ADD COLUMN bank_line_id INT")
+    pc = {r[1] for r in con.execute("PRAGMA table_info(fin_payments)")}
+    if "bank_line_id" not in pc: con.execute("ALTER TABLE fin_payments ADD COLUMN bank_line_id INT")
+    if "kind" not in pc: con.execute("ALTER TABLE fin_payments ADD COLUMN kind TEXT DEFAULT 'kontrakt'")
+    if "ref_id" not in pc: con.execute("ALTER TABLE fin_payments ADD COLUMN ref_id INT")
     con.commit()
     try:
         seed_demo(con)
@@ -342,7 +349,7 @@ def student(sid: int, request: Request):
             "note": "Tizimdagi to'lovlar reyestri ISFT Core'da kiritilganlarni ko'rsatadi; oldingi to'lovlar «to'langan» summasiga kiritilgan."}
 
 @router.get(P + "/payments")
-def payments(request: Request, day: str = "", month: str = "", method: str = "", status: str = "", q: str = "", page: int = 1):
+def payments(request: Request, day: str = "", month: str = "", method: str = "", status: str = "", q: str = "", page: int = 1, kind: str = ""):
     c = C(request); _need(c, {"enter", "approve"}, "moliya: to'lovlar reyestri")
     _audit(c, "moliya: to'lovlar reyestri", CONTRACTS, True, day or month or "")
     w, a = ["1=1"], []
@@ -350,6 +357,7 @@ def payments(request: Request, day: str = "", month: str = "", method: str = "",
     elif month: w.append("substr(p.paid_on,1,7)=?"); a.append(month[:7])
     if method in METHODS: w.append("p.method=?"); a.append(method)
     if status in ("faol", "storno"): w.append("p.status=?"); a.append(status)
+    if kind in PAY_KINDS: w.append("COALESCE(p.kind,'kontrakt')=?"); a.append(kind)
     if q.strip(): w.append("(s.full_name LIKE ? COLLATE NOCASE OR p.receipt_no LIKE ? OR s.hemis_id LIKE ?)"); a += [f"%{q.strip()}%"] * 2 + [f"{q.strip()}%"]
     where = " AND ".join(w); page = max(1, page)
     tot = db.one(_con, f"""SELECT COUNT(*) n, COALESCE(SUM(CASE WHEN p.status='faol' THEN p.amount END),0) s FROM fin_payments p
@@ -358,6 +366,7 @@ def payments(request: Request, day: str = "", month: str = "", method: str = "",
                              LEFT JOIN groups_ g ON g.id=s.group_id WHERE {where} ORDER BY p.paid_on DESC, p.id DESC LIMIT 50 OFFSET ?""", a + [(page - 1) * 50])
     for r in rows:
         r["method_label"] = METHODS.get(r["method"], r["method"]); r["created_by_name"] = _short(r["created_by_name"])
+        r["kind"] = r.get("kind") or "kontrakt"; r["kind_label"] = PAY_KINDS.get(r["kind"], r["kind"])
         r["day_closed"] = _closed(_con, r["paid_on"])
     return {"items": rows, "total": tot["n"], "sum": tot["s"], "page": page, "pages": max(1, -(-tot["n"] // 50))}
 
@@ -369,16 +378,55 @@ class PayIn(BaseModel):
     method: str
     payer: str = Field("", max_length=120)
     note: str = Field("", max_length=300)
+    kind: str = "kontrakt"
+    ref_id: int | None = None
 
 @router.post(P + "/payments")
 def pay_create(body: PayIn, request: Request):
     c = C(request); _need(c, {"enter"}, "moliya: to'lov kiritish", detail=body.receipt_no, msg="⛔ To'lovni buxgalteriya kiritadi.")
-    return _post_payment(c, body.student_id, body.receipt_no, body.paid_on, body.amount, body.method, body.payer, body.note)
+    return _post_payment(c, body.student_id, body.receipt_no, body.paid_on, body.amount, body.method, body.payer, body.note,
+                         kind=body.kind, ref_id=body.ref_id)
+
+@router.get(P + "/obligations/{sid}")
+def obligations(sid: int, request: Request):
+    """Talabaning ochiq qayta o'qish va turar joy hisoblari — to'lov kiritish formasi uchun."""
+    c = C(request); _need(c, {"enter", "approve"}, "moliya: talaba hisoblari", detail=f"#{sid}")
+    return {"items": [o for o in _obligations(_con) if o["sid"] == sid], "kinds": PAY_KINDS}
+
+def _obligation(con, kind: str, ref_id, student_id: int) -> dict:
+    """Qayta o'qish yoki turar joy hisobi: {ref_id, sid, amount, paid, left, label}. Topilmasa — HTTPException."""
+    if kind == "qayta_oqish":
+        r = db.one(con, "SELECT id, student_id, subject, amount, COALESCE(paid,0) paid, decision FROM restudy WHERE id=?", (int(ref_id or 0),))
+        if not r or r["decision"] != "qayta_oqish": raise HTTPException(404, "Qayta o'qish to'lov qatori topilmadi")
+        o = {"ref_id": r["id"], "sid": r["student_id"], "amount": r["amount"] or 0, "paid": r["paid"], "label": f"Qayta o'qish: {r['subject']}"}
+    elif kind == "turar_joy":
+        r = db.one(con, """SELECT ch.id, rs.student_id, ch.period, ch.amount, ch.paid FROM yj_charges ch JOIN yj_residents rs ON rs.id=ch.resident_id
+                           WHERE ch.id=?""", (int(ref_id or 0),))
+        if not r: raise HTTPException(404, "Turar joy hisobi topilmadi")
+        o = {"ref_id": r["id"], "sid": r["student_id"], "amount": r["amount"] or 0, "paid": r["paid"] or 0, "label": f"Turar joy: {r['period']}"}
+    else:
+        raise HTTPException(400, "To'lov turi noto'g'ri")
+    if o["sid"] != student_id: raise HTTPException(409, "Hisob boshqa talabaga tegishli")
+    o["left"] = max(0, o["amount"] - o["paid"])
+    return o
+
+def _oldest_obligation(con, kind: str, student_id: int, amount: int):
+    """Talabaning shu turdagi eng eski ochiq hisobi (summa sig'adigani afzal)."""
+    if kind == "qayta_oqish":
+        rs = db.rows(con, """SELECT id FROM restudy WHERE student_id=? AND decision='qayta_oqish' AND COALESCE(paid,0)<COALESCE(amount,0)
+                             ORDER BY (COALESCE(amount,0)-COALESCE(paid,0) < ?), pay_due, id""", (student_id, amount))
+    else:
+        rs = db.rows(con, """SELECT ch.id FROM yj_charges ch JOIN yj_residents rs ON rs.id=ch.resident_id WHERE rs.student_id=? AND ch.paid<ch.amount
+                             ORDER BY (ch.amount-ch.paid < ?), ch.period, ch.id""", (student_id, amount))
+    return rs[0]["id"] if rs else None
 
 def _post_payment(c: Ctx, student_id: int, receipt_no: str, paid_on: str, amount: int, method: str, payer: str = "", note: str = "",
-                  bank_line_id: int | None = None, commit: bool = True) -> dict:
-    """Yagona to'lov o'tkazish: tekshiruvlar → fin_payments + students.paid_amount. Qo'lda kiritish va bank qatori shu yerdan o'tadi."""
+                  bank_line_id: int | None = None, commit: bool = True, kind: str = "kontrakt", ref_id: int | None = None) -> dict:
+    """Yagona to'lov o'tkazish (barcha turlar): tekshiruvlar → fin_payments + tegishli hisob (kontrakt: students.paid_amount;
+    qayta o'qish: restudy.paid; turar joy: yj_charges.paid). Qo'lda kiritish, bank qatori, Talaba harakati va Yoshlar shu yerdan o'tadi."""
+    if kind not in PAY_KINDS: raise HTTPException(400, "To'lov turi noto'g'ri")
     rec = _norm_receipt(receipt_no)
+    if len(rec) < 3: raise HTTPException(400, "Kvitansiya / to'lov hujjati raqamini kiriting")
     try: d = _d(paid_on)
     except Exception: raise HTTPException(400, "Sana noto'g'ri")
     today = _today()
@@ -389,24 +437,41 @@ def _post_payment(c: Ctx, student_id: int, receipt_no: str, paid_on: str, amount
     if _closed(_con, d.isoformat()): raise HTTPException(409, f"{d.strftime('%d.%m.%Y')} kuni solishtirilib yopilgan — avval moliya prorektori qayta ochishi kerak")
     s = _contract(_con, student_id)
     if not s: raise HTTPException(404, "Talaba topilmadi")
-    if s["payment_type"] != "kontrakt" or not s["contract_amount"]: raise HTTPException(409, "Talaba kontrakt asosida o'qimaydi")
-    dup = db.one(_con, """SELECT p.id, p.paid_on, p.amount, s.full_name FROM fin_payments p JOIN students s ON s.id=p.student_id
+    dup = db.one(_con, """SELECT p.id, p.paid_on, p.amount, p.kind, s.full_name FROM fin_payments p JOIN students s ON s.id=p.student_id
                           WHERE p.receipt_no=? AND p.status='faol'""", (rec,))
     if dup:
         _audit(c, "moliya: takroriy kvitansiya rad etildi", CONTRACTS, False, rec)
         raise HTTPException(409, f"Kvitansiya {rec} allaqachon kiritilgan: {_d(dup['paid_on']).strftime('%d.%m.%Y')}, "
-                                 f"{dup['amount']:,} so'm — {_short(dup['full_name'])}".replace(",", " "))
-    debt = (s["contract_amount"] or 0) - (s["paid_amount"] or 0)
-    if amount > debt:
-        raise HTTPException(409, f"Summa qarzdan oshadi: qolgan qarz {max(debt, 0):,} so'm. Ortiqcha to'lov qaytariladi yoki keyingi o'quv yiliga alohida hisoblanadi".replace(",", " "))
-    cur = _con.execute("""INSERT INTO fin_payments(student_id,receipt_no,paid_on,amount,method,payer,note,status,created_by,created_by_name,created_at,bank_line_id)
-                          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""", (s["id"], rec, d.isoformat(), amount, method, (payer or "").strip(), (note or "").strip(),
-                                                               "faol", c.user["id"], c.user["full_name"], _now(), bank_line_id))
-    _con.execute("UPDATE students SET paid_amount=COALESCE(paid_amount,0)+? WHERE id=?", (amount, s["id"]))
+                                 f"{dup['amount']:,} so'm — {_short(dup['full_name'])} ({PAY_KINDS.get(dup['kind'] or 'kontrakt', '')})".replace(",", " "))
+    ob = None
+    if kind == "kontrakt":
+        if s["payment_type"] != "kontrakt" or not s["contract_amount"]: raise HTTPException(409, "Talaba kontrakt asosida o'qimaydi")
+        debt = (s["contract_amount"] or 0) - (s["paid_amount"] or 0)
+        if amount > debt:
+            raise HTTPException(409, f"Summa qarzdan oshadi: qolgan qarz {max(debt, 0):,} so'm. Ortiqcha to'lov qaytariladi yoki keyingi o'quv yiliga alohida hisoblanadi".replace(",", " "))
+    else:
+        if ref_id is None: ref_id = _oldest_obligation(_con, kind, s["id"], amount)
+        if ref_id is None: raise HTTPException(404, f"Talabada ochiq «{PAY_KINDS[kind]}» hisobi yo'q")
+        ob = _obligation(_con, kind, ref_id, s["id"])
+        if ob["left"] <= 0: raise HTTPException(409, f"{ob['label']} — to'lov allaqachon to'liq")
+        if amount > ob["left"]: raise HTTPException(409, f"Summa qoldiqdan oshadi: {ob['label']} bo'yicha qolgan {ob['left']:,} so'm".replace(",", " "))
+    cur = _con.execute("""INSERT INTO fin_payments(student_id,receipt_no,paid_on,amount,method,payer,note,status,created_by,created_by_name,created_at,bank_line_id,kind,ref_id)
+                          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (s["id"], rec, d.isoformat(), amount, method, (payer or "").strip(), (note or "").strip(),
+                                                                   "faol", c.user["id"], c.user["full_name"], _now(), bank_line_id, kind, ob["ref_id"] if ob else None))
+    if kind == "kontrakt":
+        _con.execute("UPDATE students SET paid_amount=COALESCE(paid_amount,0)+? WHERE id=?", (amount, s["id"]))
+    elif kind == "qayta_oqish":
+        _con.execute("UPDATE restudy SET paid=COALESCE(paid,0)+?, paid_at=? WHERE id=?", (amount, _now(), ob["ref_id"]))
+    else:
+        _con.execute("UPDATE yj_charges SET paid=paid+?, paid_at=?, receipt=?, by_user=? WHERE id=?", (amount, _now(), rec, c.user["id"], ob["ref_id"]))
     if commit: _con.commit()
-    _audit(c, "moliya: to'lov kiritildi", CONTRACTS, True, f"{rec} · {amount} so'm · #{s['id']} {_short(s['full_name'])}" + (f" · bank qatori #{bank_line_id}" if bank_line_id else ""))
-    s2 = _contract(_con, s["id"])
-    return {"ok": True, "id": cur.lastrowid, "receipt_no": rec, "contract": _plan_status(_con, s2)}
+    _audit(c, "moliya: to'lov kiritildi", CONTRACTS, True, f"{rec} · {PAY_KINDS[kind]} · {amount} so'm · #{s['id']} {_short(s['full_name'])}"
+           + (f" · {ob['label']}" if ob else "") + (f" · bank qatori #{bank_line_id}" if bank_line_id else ""))
+    if kind == "kontrakt":
+        st = _plan_status(_con, _contract(_con, s["id"]))
+        return {"ok": True, "id": cur.lastrowid, "receipt_no": rec, "kind": kind, "contract": st, "left": st["debt"]}
+    return {"ok": True, "id": cur.lastrowid, "receipt_no": rec, "kind": kind, "ref_id": ob["ref_id"], "label": ob["label"], "contract": None,
+            "paid": ob["paid"] + amount, "amount": ob["amount"], "left": ob["left"] - amount}
 
 class StornoIn(BaseModel):
     reason: str = Field(..., min_length=5, max_length=300)
@@ -422,7 +487,13 @@ def pay_storno(pid: int, body: StornoIn, request: Request):
         raise AccessDenied("⛔ Kun solishtirilib yopilgan — stornoni moliya prorektori qiladi.")
     _con.execute("UPDATE fin_payments SET status='storno', storno_reason=?, storno_by=?, storno_at=? WHERE id=?",
                  (body.reason.strip(), c.user["full_name"], _now(), pid))
-    _con.execute("UPDATE students SET paid_amount=MAX(0, COALESCE(paid_amount,0)-?) WHERE id=?", (p["amount"], p["student_id"]))
+    k = p.get("kind") or "kontrakt"
+    if k == "qayta_oqish" and p.get("ref_id"):
+        _con.execute("UPDATE restudy SET paid=MAX(0, COALESCE(paid,0)-?) WHERE id=?", (p["amount"], p["ref_id"]))
+    elif k == "turar_joy" and p.get("ref_id"):
+        _con.execute("UPDATE yj_charges SET paid=MAX(0, paid-?) WHERE id=?", (p["amount"], p["ref_id"]))
+    else:
+        _con.execute("UPDATE students SET paid_amount=MAX(0, COALESCE(paid_amount,0)-?) WHERE id=?", (p["amount"], p["student_id"]))
     if p.get("bank_line_id"):   # bank qatoridan o'tgan to'lov storno → qator yana «aniqlanmagan» navbatiga qaytadi
         _con.execute("""UPDATE fin_bank_lines SET status='aniqlanmagan', student_id=NULL, payment_id=NULL, match_kind=NULL,
                         resolve_note=? WHERE id=?""", (f"To'lov storno qilindi: {body.reason.strip()[:200]}", p["bank_line_id"]))
@@ -654,13 +725,13 @@ def procurement_fund(pid: int, body: FundIn, request: Request):
 # ---------------------------------------------------------------------------------------------
 def _report(kind: str, month: str):
     if kind == "payments":
-        head = ["Sana", "Kvitansiya", "Talaba", "HEMIS ID", "Guruh", "Usul", "Summa (so'm)", "Holat", "Kiritgan"]
+        head = ["Sana", "Kvitansiya", "Talaba", "HEMIS ID", "Guruh", "Usul", "Summa (so'm)", "Holat", "Kiritgan", "Turi"]
         rows = [(r["paid_on"], r["receipt_no"], r["full_name"], r["hemis_id"], r["grp"], METHODS.get(r["method"], r["method"]), r["amount"],
-                 r["status"] + (f" ({r['storno_reason']})" if r["storno_reason"] else ""), _short(r["created_by_name"]))
+                 r["status"] + (f" ({r['storno_reason']})" if r["storno_reason"] else ""), _short(r["created_by_name"]), PAY_KINDS.get(r.get("kind") or "kontrakt", ""))
                 for r in db.rows(_con, """SELECT p.*, s.full_name, s.hemis_id, g.name grp FROM fin_payments p JOIN students s ON s.id=p.student_id
                                           LEFT JOIN groups_ g ON g.id=s.group_id WHERE substr(p.paid_on,1,7)=? ORDER BY p.paid_on, p.id""", (month,))]
         tot = sum(r[6] for r in rows if r[7] == "faol")
-        return "To'lovlar reyestri", head, rows, ["", "", "Jami (faol)", "", "", "", tot, "", ""]
+        return "To'lovlar reyestri", head, rows, ["", "", "Jami (faol)", "", "", "", tot, "", "", ""]
     if kind == "recon":
         head = ["Kun", "To'lovlar soni", "Tizim (so'm)", "Ko'chirma (so'm)", "Farq (so'm)", "Holat", "Izoh", "Yopgan"]
         R = recon_rows(month)
@@ -781,10 +852,87 @@ def _parse_csv(text: str) -> list[dict]:
         rows = rows[1:]
     return [dict(zip(cols, [x.strip() for x in r])) for r in rows if any(x.strip() for x in r)]
 
+# --- kontraktdan boshqa ochiq hisoblar (qayta o'qish, turar joy) — bank qatorini ularga ham moslashtirish ---
+def _obligations(con) -> list[dict]:
+    out = []
+    q = [("qayta_oqish", """SELECT r.id ref, r.student_id sid, 'Qayta o''qish: ' || r.subject label, COALESCE(r.amount,0)-COALESCE(r.paid,0) lft,
+                             s.full_name, s.hemis_id, g.name grp FROM restudy r JOIN students s ON s.id=r.student_id LEFT JOIN groups_ g ON g.id=s.group_id
+                             WHERE r.decision='qayta_oqish' AND COALESCE(r.paid,0) < COALESCE(r.amount,0)"""),
+         ("turar_joy", """SELECT ch.id ref, rs.student_id sid, 'Turar joy: ' || ch.period label, ch.amount-ch.paid lft, s.full_name, s.hemis_id, g.name grp
+                          FROM yj_charges ch JOIN yj_residents rs ON rs.id=ch.resident_id JOIN students s ON s.id=rs.student_id
+                          LEFT JOIN groups_ g ON g.id=s.group_id WHERE ch.paid < ch.amount""")]
+    for kind, sql in q:
+        try:
+            for r in db.rows(con, sql):
+                out.append({"kind": kind, "ref_id": r["ref"], "sid": r["sid"], "left": r["lft"], "label": r["label"], "full_name": r["full_name"],
+                            "hemis_id": r["hemis_id"] or "", "grp": r["grp"] or ""})
+        except sqlite3.OperationalError:      # modul jadvali hali yo'q
+            pass
+    return out
+
+def _obl_index(con) -> dict:
+    obs = _obligations(con); by_root, by_hemis = {}, {}
+    for o in obs:
+        tk = MM.tokens(o["full_name"]); o["sur"] = tk[0] if tk else ""; o["giv"] = tk[1] if len(tk) > 1 else ""
+        if o["sur"]: by_root.setdefault(MM.root(o["sur"]), []).append(o)
+        if o["hemis_id"]: by_hemis.setdefault(o["hemis_id"], []).append(o)
+    return {"obs": obs, "by_root": by_root, "roots": list(by_root), "by_hemis": by_hemis}
+
+def _hint(purpose: str, payer: str) -> set:
+    t = MM.norm(f"{purpose} {payer}")
+    return {k for k, ws in OBL_WORDS.items() if any(w in t for w in ws)}
+
+def _obl_candidates(OI: dict, purpose: str, payer: str, doc_no: str, amount: int, limit: int = 4) -> list[dict]:
+    hint = _hint(purpose, payer)
+    seqs = MM.digit_seqs(purpose, doc_no)
+    toks = [t for t in MM.tokens(purpose) + MM.tokens(payer) if t not in MM.STOP and len(t) >= 3]
+    pool = {}
+    for t in set(toks):
+        r = MM.root(t)
+        for k in ([r] if r in OI["by_root"] else []) + difflib.get_close_matches(r, OI["roots"], n=3, cutoff=0.8):
+            for o in OI["by_root"].get(k, ()): pool[(o["kind"], o["ref_id"])] = o
+    for sq in seqs:
+        for o in OI["by_hemis"].get(sq, ()): pool[(o["kind"], o["ref_id"])] = o
+    out = []
+    for o in pool.values():
+        sc, why = 0.0, []
+        if o["hemis_id"] and o["hemis_id"] in seqs: sc += 100; why.append("HEMIS ID aniq mos")
+        sur = max((MM.ratio(MM.root(o["sur"]), MM.root(x)) for x in toks), default=0) if o["sur"] else 0
+        giv = max((MM.ratio(o["giv"], x) for x in toks), default=0) if o["giv"] else 0
+        if sur >= 0.8 and giv >= 0.8:
+            sim = round(100 * (sur + giv) / 2); sc += 30 + (sim - 80) * 0.75; why.append(f"F.I.Sh. o'xshash {sim}%")
+        elif sur >= 0.85:
+            sc += 12; why.append(f"familiya mos ({o['sur'].capitalize()})")
+        if amount and amount == o["left"]:
+            sc += 15; why.append("summa qayta o'qish to'loviga teng" if o["kind"] == "qayta_oqish" else "summa turar joy oylik to'loviga teng")
+        elif amount and amount > o["left"]:
+            sc -= 25; why.append(f"summa qoldiqdan katta (qoldiq {o['left']:,} so'm)".replace(",", " "))
+        if o["kind"] in hint:
+            sc += 15; why.append("maqsadda «qayta o'qish» deyilgan" if o["kind"] == "qayta_oqish" else "maqsadda turar joy / yotoqxona deyilgan")
+        if sc < 25: continue
+        out.append({"student_id": o["sid"], "full_name": o["full_name"], "hemis_id": o["hemis_id"], "grp": o["grp"], "contract_no": None,
+                    "debt": o["left"], "score": max(1, min(97, round(sc))), "reasons": why, "kinds": [], "exact": False,
+                    "pay_kind": o["kind"], "ref_id": o["ref_id"], "ref_label": o["label"]})
+    out.sort(key=lambda x: (-x["score"], x["full_name"]))
+    return out[:limit]
+
+def _match_all(con, L: dict, plan: list, OI: dict | None = None) -> dict:
+    """Kontrakt (moliya_match) + qayta o'qish va turar joy nomzodlari — bitta ro'yxat. Avto-biriktirish faqat kontrakt uchun."""
+    m = MM.match(con, L["purpose"], L["payer"], L["doc_no"], L["amount"], plan)
+    hint = _hint(L["purpose"], L["payer"])
+    for c in m["candidates"]:
+        c.update(pay_kind="kontrakt", ref_id=None, ref_label="Kontrakt")
+        if hint:
+            c["score"] = max(1, c["score"] - 15); c["reasons"].append("maqsadda kontrakt emas, " + ("qayta o'qish" if "qayta_oqish" in hint else "turar joy") + " deyilgan")
+    if hint: m["auto"] = None
+    other = _obl_candidates(OI or _obl_index(con), L["purpose"], L["payer"], L["doc_no"], L["amount"])
+    m["candidates"] = sorted(m["candidates"] + other, key=lambda x: (-x["score"], x["full_name"]))[:6]
+    return m
+
 def _bank_process(c: Ctx, line_id: int) -> dict:
     """Bitta qatorni moslashtirish: avto bo'lsa — to'lov o'tkaziladi; aks holda nomzodlar saqlanadi."""
     L = db.one(_con, "SELECT * FROM fin_bank_lines WHERE id=?", (line_id,))
-    m = MM.match(_con, L["purpose"], L["payer"], L["doc_no"], L["amount"], _plan_rows(_con))
+    m = _match_all(_con, L, _plan_rows(_con))
     rec = _norm_receipt(L["doc_no"]) if (L["doc_no"] or "").strip() else f"BK-{line_id}"
     dup = db.one(_con, "SELECT id, student_id FROM fin_payments WHERE receipt_no=? AND status='faol'", (rec,))
     note = None
@@ -852,10 +1000,10 @@ def bank_list(request: Request, status: str = "aniqlanmagan", q: str = ""):
     rows = db.rows(_con, f"""SELECT b.*, s.full_name, s.hemis_id, g.name grp FROM fin_bank_lines b LEFT JOIN students s ON s.id=b.student_id
                              LEFT JOIN groups_ g ON g.id=s.group_id {'WHERE ' + ' AND '.join(w) if w else ''}
                              ORDER BY CASE b.status WHEN 'aniqlanmagan' THEN 0 ELSE 1 END, b.line_date, b.id LIMIT 200""", a)
-    plan = _plan_rows(_con); today = _today()
+    plan = _plan_rows(_con); today = _today(); OI = _obl_index(_con)
     for r in rows:
         if r["status"] == "aniqlanmagan":    # qarzlar o'zgargan bo'lishi mumkin — nomzodlar har safar yangilanadi
-            m = MM.match(_con, r["purpose"], r["payer"], r["doc_no"], r["amount"], plan)
+            m = _match_all(_con, r, plan, OI)
             r["candidates"] = m["candidates"]
             _con.execute("UPDATE fin_bank_lines SET candidates=? WHERE id=?", (json.dumps(m["candidates"], ensure_ascii=False), r["id"]))
         else:
@@ -871,6 +1019,8 @@ def bank_list(request: Request, status: str = "aniqlanmagan", q: str = ""):
 class BankConfirm(BaseModel):
     student_id: int
     note: str = Field("", max_length=300)
+    pay_kind: str = "kontrakt"
+    ref_id: int | None = None
 
 @router.post(P + "/bank/{lid}/confirm")
 def bank_confirm(lid: int, body: BankConfirm, request: Request):
@@ -881,14 +1031,18 @@ def bank_confirm(lid: int, body: BankConfirm, request: Request):
         _audit(c, "moliya: qayta biriktirish rad etildi", CONTRACTS, False, f"bank #{lid} · {L['status']}")
         raise HTTPException(409, f"Qator allaqachon ko'rib chiqilgan: {BANK_ST.get(L['status'], L['status'])}")
     cands = json.loads(L["candidates"] or "[]")
-    pos = next((i for i, x in enumerate(cands) if x["student_id"] == body.student_id), None)
+    if body.pay_kind not in PAY_KINDS: raise HTTPException(400, "To'lov turi noto'g'ri")
+    pos = next((i for i, x in enumerate(cands) if x["student_id"] == body.student_id and (x.get("pay_kind") or "kontrakt") == body.pay_kind
+                and (body.ref_id is None or x.get("ref_id") == body.ref_id)), None)
+    ref = body.ref_id if body.ref_id is not None else (cands[pos].get("ref_id") if pos is not None else None)
     rec = _norm_receipt(L["doc_no"]) if (L["doc_no"] or "").strip() else f"BK-{lid}"
     try:
         r = _post_payment(c, body.student_id, rec, L["line_date"], L["amount"], "bank", L["payer"], f"Bank ko'chirmasi: {L['purpose'][:200]}",
-                          bank_line_id=lid, commit=False)
+                          bank_line_id=lid, commit=False, kind=body.pay_kind, ref_id=ref)
     except Exception:
         _con.rollback(); raise
-    how = f"taklif #{pos + 1} tasdiqlandi ({cands[pos]['score']} ball)" if pos is not None else "qidiruv orqali boshqa talaba tanlandi"
+    how = (f"taklif #{pos + 1} tasdiqlandi ({cands[pos]['score']} ball)" if pos is not None else "qidiruv orqali boshqa talaba tanlandi") + \
+          ("" if body.pay_kind == "kontrakt" else f" · {r.get('label') or PAY_KINDS[body.pay_kind]}")
     cur = _con.execute("""UPDATE fin_bank_lines SET status='qo''lda', student_id=?, payment_id=?, match_kind='qo''lda', match_score=?, match_reasons=?,
                           resolved_by=?, resolved_at=?, resolve_note=? WHERE id=? AND status='aniqlanmagan'""",
                        (body.student_id, r["id"], cands[pos]["score"] if pos is not None else None,
@@ -898,7 +1052,7 @@ def bank_confirm(lid: int, body: BankConfirm, request: Request):
         _con.rollback(); raise HTTPException(409, "Qator boshqa xodim tomonidan allaqachon biriktirildi")
     _con.commit()
     _audit(c, "moliya: to'lov qo'lda biriktirildi", CONTRACTS, True, f"bank #{lid} → talaba #{body.student_id} · {how}")
-    return {"ok": True, "payment_id": r["id"], "contract": r["contract"], "how": how}
+    return {"ok": True, "payment_id": r["id"], "contract": r["contract"], "kind": body.pay_kind, "left": r["left"], "label": r.get("label"), "how": how}
 
 class BankDismiss(BaseModel):
     kind: str
@@ -913,6 +1067,33 @@ def bank_dismiss(lid: int, body: BankDismiss, request: Request):
     if cur.rowcount != 1: raise HTTPException(409, "Qator topilmadi yoki allaqachon ko'rib chiqilgan")
     _con.commit(); _audit(c, f"moliya: bank qatori — {body.kind}", CONTRACTS, True, f"bank #{lid} · {body.reason[:150]}")
     return {"ok": True}
+
+# ---------------------------------------------------------------------------------------------
+# Kutilayotgan ishlar (Mening vazifalarim / qo'ng'iroqcha / bosh sahifa uchun): [{kind,title,sub,due,view,src,sign}]
+# ---------------------------------------------------------------------------------------------
+def pending(c: Ctx) -> list[dict]:
+    m = mode(c); out = []
+    if m not in ("enter", "approve"): return out
+    sp = lambda v: f"{v:,}".replace(",", " ")
+    bk = bank_stats(_con)
+    if bk["n"] and m == "enter":
+        out.append({"kind": "moliya_bank", "title": f"Aniqlanmagan to'lovlar: {bk['n']} ta — talabaga biriktiring",
+                    "sub": f"{sp(bk['sum'])} so'm" + (f" · {bk['stale']} tasi {UNMATCHED_ALERT_DAYS} kundan eski" if bk["stale"] else ""),
+                    "due": bk["oldest"], "view": "moliya", "tab": "bank", "src": "Moliya", "sign": False})
+    today = _today()
+    days = [r["d"] for r in db.rows(_con, "SELECT DISTINCT paid_on d FROM fin_payments WHERE status='faol' AND paid_on>=? AND paid_on<? ORDER BY paid_on",
+                                     ((today - dt.timedelta(days=20)).isoformat(), today.isoformat()))]
+    open_days = [d for d in days if not _closed(_con, d)]
+    if open_days and m == "enter":
+        out.append({"kind": "moliya_recon", "title": f"Solishtirilmagan kunlar: {len(open_days)} ta",
+                    "sub": ", ".join(_d(x).strftime("%d.%m") for x in open_days[:6]), "due": open_days[0], "view": "moliya", "tab": "recon",
+                    "src": "Moliya", "sign": False})
+    if m == "approve":
+        for e in db.rows(_con, "SELECT * FROM fin_expenses WHERE status='kutilmoqda' ORDER BY created_at LIMIT 20"):
+            out.append({"kind": "moliya_expense", "title": f"Xarajat tasdig'i: {e['payee'] or e['category']} — {sp(e['amount'] or 0)} so'm",
+                        "sub": f"{e['category']} · {(e['purpose'] or '')[:120]}" + (f" · {e['reason_route']}" if e.get("reason_route") else ""),
+                        "due": (e["created_at"] or e["spent_on"] or "")[:10], "view": "moliya", "tab": "expenses", "src": "Moliya", "sign": True})
+    return out
 
 # --- demo: haqiqiy hayotdagi xatoli ko'chirma qatorlari (sintetik, mavjud demo talabalar bo'yicha) ---
 _L2C = [("sh", "ш"), ("ch", "ч"), ("o'", "ў"), ("g'", "ғ"), ("yo", "ё"), ("ye", "е"), ("yu", "ю"), ("ya", "я"), ("a", "а"), ("b", "б"), ("d", "д"), ("e", "е"), ("f", "ф"),

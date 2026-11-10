@@ -738,15 +738,18 @@ def restudy_decide(c: Ctx, sid: int, decision: str, note="") -> dict:
     rbac.audit(_con, c, "talaba harakati: qayta o'qish qarori", RES, True, f"talaba #{sid} · {decision} · {len(rs)} ta fan")
     return res
 
-def restudy_pay(c: Ctx, rid: int, amount: int) -> dict:
+def restudy_pay(c: Ctx, rid: int, amount: int, receipt: str = "", method: str = "bank") -> dict:
+    """Qisqa yo'l: to'lov Moliya yagona kvitansiya reyestri orqali o'tadi (app/moliya.py _post_payment, turi «qayta_oqish»)."""
     if c.role.key != "buxgalteriya": _deny(c, "qayta o'qish: to'lov", "To'lovni Buxgalteriya qayd etadi", f"#{rid}")
     r = db.one(_con, "SELECT * FROM restudy WHERE id=?", (rid,))
     if not r or r["decision"] != "qayta_oqish": _bad("To'lov qatori topilmadi", 404)
     if amount <= 0: _bad("Summa musbat bo'lishi kerak")
-    paid = min(r["amount"] or 0, (r["paid"] or 0) + int(amount))
-    _con.execute("UPDATE restudy SET paid=?, paid_at=? WHERE id=?", (paid, _now(), rid)); _con.commit()
-    rbac.audit(_con, c, "talaba harakati: qayta o'qish to'lovi", RES, True, f"#{rid} · +{amount} → {paid}/{r['amount']}")
-    return {"ok": True, "paid": paid, "amount": r["amount"]}
+    from . import moliya as ML
+    rec = (receipt or "").strip() or f"QO-{rid}-{clock.now().strftime('%y%m%d%H%M%S')}"
+    res = ML._post_payment(c, r["student_id"], rec, _today().isoformat(), int(amount), method or "bank",
+                           note=f"Qayta o'qish: {r['subject']}", kind="qayta_oqish", ref_id=rid)
+    rbac.audit(_con, c, "talaba harakati: qayta o'qish to'lovi", RES, True, f"#{rid} · +{amount} → {res['paid']}/{r['amount']} · {res['receipt_no']}")
+    return {"ok": True, "paid": res["paid"], "amount": r["amount"], "receipt_no": res["receipt_no"], "payment_id": res["id"]}
 
 def expulsion_candidates(c: Ctx) -> list:
     today = _today().isoformat()
@@ -1409,10 +1412,12 @@ def api_restudy_decide(sid: int, body: DecIn, request: Request):
 
 class PayIn(BaseModel):
     amount: int
+    receipt: str = ""
+    method: str = "bank"
 
 @router.post(P + "/restudy/{rid}/pay")
 def api_restudy_pay(rid: int, body: PayIn, request: Request):
-    c = C(request); guard(c, "qayta", "qayta o'qish to'lovi", f"#{rid}", roles=("buxgalteriya",)); return restudy_pay(c, rid, body.amount)
+    c = C(request); guard(c, "qayta", "qayta o'qish to'lovi", f"#{rid}", roles=("buxgalteriya",)); return restudy_pay(c, rid, body.amount, body.receipt, body.method)
 
 @router.get(P + "/restudy/expulsion")
 def api_expulsion(request: Request):

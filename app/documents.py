@@ -101,7 +101,7 @@ CATALOG = [
          desc="Muddati o'tgan topshiriq bo'yicha mas'ulga rasmiy xat. 'Barchasi' — hamma qarzdor ijrochilarga birdan.",
          roles={"rektor", "kotib"}, params=[("task", "task")]),
     dict(key="memo", cat="Rektorat va ijro nazorati", title="Xizmat xati", prefix="XX",
-         desc="Qabul qiluvchi, mavzu va asosiy fikrlarni yozing — ISFT Core rasmiy uslubda matnni tuzadi (mahalliy AI).",
+         desc="Qabul qiluvchi, mavzu va asosiy fikrlarni yozing — ISFT Core rasmiy uslubda matnni tuzadi.",
          roles=EVERYONE_STAFF, params=[("recipient", "text"), ("subject_line", "text"), ("points", "textarea"), ("use_ai", "check")]),
     dict(key="work_cert", cat="Kadrlar", title="Ish joyidan ma'lumotnoma", prefix="IJ",
          desc="Xodim ishlashini tasdiqlovchi ma'lumotnoma, ixtiyoriy ravishda o'rtacha oylik bilan.",

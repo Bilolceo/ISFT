@@ -461,6 +461,9 @@ from . import reyting as RT   # Reyting: talabalar o'zlashtirish reytingi (GPA),
 RT.init(con)   # kesh (rating_cache) yo'q yoki manba o'zgargan bo'lsa — mavjud baholardan quriladi; qayta seed shart emas
 RT.bind(con, ctx)
 app.include_router(RT.router)
+from . import talaba_karta as TKR   # Talaba kartasi (360°): bitta talaba haqidagi hamma bo'limlar bir joyda (ko'lam — Talabalar markazi)
+TKR.bind(con, ctx)
+app.include_router(TKR.router)
 from . import student_portal as STP   # Talaba kabineti (/talaba): HEMIS ID + parol, alohida sessiya; xodimlar uchun «Talaba murojaatlari» (/talaba/xodim)
 STP.init(con)
 STP.bind(con, ctx)
@@ -499,6 +502,9 @@ from . import tekshiruv as TKS   # Ishlarni tekshirish: o'qituvchi talaba ishlar
 TKS.init(con)
 TKS.bind(con, ctx)
 app.include_router(TKS.router)
+from . import devon as DVN, qabul as QBL, rejalar as RJL, it_requests as ITR   # Kiruvchi xatlar (Devonxona), Qabul (abituriyentlar), KPI maqsadlari / Sifat amallari, AT akkaunt so'rovlari
+for _m in (DVN, QBL, RJL, ITR):
+    _m.init(con); _m.bind(con, ctx); app.include_router(_m.router)
 class _NoCacheStatic(StaticFiles):
     """JS/CSS/HTML har safar ETag bilan qayta tekshiriladi — yangi deploydan keyin brauzer eski kodni ishlatib qolmasin."""
     async def get_response(self, path, scope):

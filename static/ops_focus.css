@@ -1,0 +1,24 @@
+/* Talabalar navbati: fokus rejimi (static/ops_focus.js) va ixcham navbat qatorlari */
+.ops-tasks{grid-template-columns:1fr;gap:8px}
+.ops-task{padding:10px 14px}
+.ops-task .ot-h{margin-bottom:2px}
+.ops-task details.script{margin-top:6px;padding:6px 12px}
+.ops-task .ops-out{flex-direction:row;flex-wrap:wrap;align-items:center;margin-top:8px;padding-top:8px}
+.ops-task .ops-out input[type=text]{flex:1 1 220px;padding:7px 10px}
+.of-offer{margin-bottom:10px}
+.of-bar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:10px}
+.of-prog{flex:1 1 160px;height:6px;border-radius:6px;background:var(--surface-2,#eee);overflow:hidden}
+.of-prog span{display:block;height:100%;background:var(--teal,#2a7);transition:width .2s}
+.of-grid{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(280px,1fr);gap:12px;align-items:start}
+.of-name{margin:6px 0 2px;font-size:20px}
+.of-phone{display:inline-flex;gap:8px;align-items:center;font-size:22px;font-weight:800;margin:10px 0 4px;font-variant-numeric:tabular-nums;color:var(--ink);text-decoration:none}
+.of-script{background:var(--surface-2,#f4f4f6);border-radius:12px;padding:10px 14px;font-size:14px}
+.of-script ol{margin:6px 0;padding-left:18px;display:flex;flex-direction:column;gap:5px}
+.of-right{position:sticky;top:12px;display:flex;flex-direction:column;gap:8px}
+.of-right h3{margin:0 0 4px}
+.of-right .btn{justify-content:flex-start;width:100%;padding:12px 14px;font-size:15px}
+.of-right kbd{display:inline-grid;place-items:center;min-width:22px;height:22px;border-radius:6px;border:1px solid currentColor;font-size:12px;opacity:.75;margin-right:6px}
+.of-vada{display:flex;gap:6px}
+.of-vada .btn{flex:1}
+.of-vada input,.of-note{padding:9px 10px;border:1px solid var(--line-2,#ddd);border-radius:10px;background:var(--surface,#fff)}
+@media (max-width:860px){.of-grid{grid-template-columns:1fr}.of-right{position:static}}

@@ -29,7 +29,7 @@ CREATE INDEX IF NOT EXISTS ix_legal_reviews_p ON legal_reviews(partner_id, id);
 # Ishlash tezligi: guruh bo'yicha talabalar (o'qituvchi paneli — «Mening guruhlarim», Talabalar markazi, reyting) — 57 s → 0.2 s
 PERF_INDEXES = ["CREATE INDEX IF NOT EXISTS ix_students_group ON students(group_id, status)"]
 
-DESK_RES = {"strategik": rbac.KPI, "sifat": rbac.ACADEMIC, "marketing": rbac.ADMISSIONS, "yuridik": rbac.INTL}
+DESK_RES = {"strategik": rbac.KPI, "sifat": rbac.ACADEMIC, "marketing": rbac.ADMISSIONS, "qabul": rbac.ADMISSIONS, "yuridik": rbac.INTL}
 LEGAL_ST = {"korib_chiqildi": "Ko'rib chiqildi — e'tiroz yo'q", "etiroz": "E'tiroz bor — tuzatish kerak", "uzaytirish": "Uzaytirish tavsiya etiladi",
             "tugatish": "Tugatish tavsiya etiladi"}
 
@@ -136,7 +136,8 @@ def quality(con) -> dict:
                "overdue": db.one(con, "SELECT COUNT(*) n FROM syl_items WHERE status!='tasdiqlangan' AND due IS NOT NULL AND due < ?", (td,))["n"]}
     ind = [_ind("ball", AR.SCORE_LABEL, tot["gpa"], "", "institut o'rtachasi", tot["gpa_prev"], source="HEMIS"),
            _ind("davomat", "Davomat", tot["att"], "%", "faol talabalar", source="HEMIS"),
-           _ind("ozlashtirmagan", "O'zlashtirmaganlar", tot["below"], "%", f"o'rtacha ball {AR.PASS} dan past", good="down", source="HEMIS"),
+           _ind("ozlashtirmagan", f"O'rtacha bali {AR.PASS} dan past", tot["below"], "%", f"faol talabalar ulushi · bu «{AR.RISK_LABEL}» emas", good="down", source="HEMIS",
+                tip=f"«{AR.RISK_LABEL}» (Talabalar markazi, bosh sahifa) boshqa ko'rsatkich: {AR.RISK_DEF}"),
            _ind("alo", "A'lochilar ulushi", tot["excellent"], "%", f"o'rtacha ball {AR.EXCELLENT_MIN}+", source="HEMIS"),
            _ind("pasaygan", "Keskin pasaygan guruhlar", drops, "", "o'rtacha ball 4+ ga tushgan", good="down", source="HEMIS"),
            _ind("sillabus", "Tasdiqlangan sillabuslar", _pct(sum(r["n"] for r in syl["by_status"] if r["status"] == "tasdiqlangan"), syl["total"]), "%",
@@ -176,31 +177,22 @@ def admissions(con) -> dict:
 # Yuridik bo'lim: shartnomalar ekspertizasi
 # --------------------------------------------------------------------------------------------------
 def legal(con) -> dict:
+    """Yagona yuridik navbat — Xalqaro hamkorlik modulidagi «Yuridik ko'rikda» shartnomalar (app/xalqaro.py). Xulosa o'sha yerda beriladi."""
     td = _today()
-    ps = db.rows(con, "SELECT * FROM partners ORDER BY expires") if _tbl(con, "partners") else []
-    last = {r["partner_id"]: r for r in db.rows(con, """SELECT r.* FROM legal_reviews r JOIN (SELECT partner_id, MAX(id) mid FROM legal_reviews GROUP BY 1) x
-                                                         ON x.mid=r.id""")}
-    out = []
-    for p in ps:
-        d = (dt.date.fromisoformat(p["expires"]) - td).days
-        bucket = "otgan" if d < 0 else "60" if d <= 60 else "180" if d <= 180 else "amalda"
-        rv = last.get(p["id"])
-        # yuridik xulosa kerak: 180 kun ichida tugaydi (uzaytirish/tugatish) yoki oxirgi xulosada e'tiroz bor — va xulosa shu muddatdan keyin yozilmagan
-        need = (bucket in ("60", "180") and not (rv and rv["status"] in ("korib_chiqildi", "uzaytirish", "tugatish") and rv["at"][:10] >= (td - dt.timedelta(days=90)).isoformat())) \
-               or bool(rv and rv["status"] == "etiroz")
-        out.append({"id": p["id"], "name": p["name"], "country": p["country"], "kind": p["kind"], "signed": p["signed"], "expires": p["expires"],
-                    "status": p["status"], "days_left": d, "bucket": bucket, "need_review": need,
-                    "review": {"status": rv["status"], "label": LEGAL_ST.get(rv["status"], rv["status"]), "note": rv["note"], "by": rv["by_name"], "at": rv["at"]} if rv else None})
-    out.sort(key=lambda r: (not r["need_review"], r["days_left"] if r["days_left"] >= 0 else 10**6))
-    cnt = {b: sum(1 for r in out if r["bucket"] == b) for b in ("otgan", "60", "180", "amalda")}
-    ind = [_ind("navbat", "Xulosa kutmoqda", sum(r["need_review"] for r in out), "", "180 kun ichida tugaydigan yoki e'tirozli", good="down", source="Shartnomalar reyestri"),
-           _ind("60", "60 kun ichida tugaydi", cnt["60"], "", "uzaytirish yoki tugatish bo'yicha xulosa", good="down", source="Shartnomalar reyestri"),
-           _ind("amalda", "Amaldagi shartnomalar", cnt["amalda"] + cnt["60"] + cnt["180"], "", f"muddati o'tgan: {cnt['otgan']}", source="Shartnomalar reyestri")]
-    return {"kind": "yuridik", "title": "Shartnomalar ekspertizasi", "indicators": ind, "agreements": out, "statuses": LEGAL_ST,
-            "note": "Xalqaro va hamkorlik shartnomalari reyestri (Xalqaro hamkorlik bo'limi yuritadi) — faqat o'qish; yuridik xulosa shu yerda qayd etiladi. "
-                    "Shartnoma matnini tekshirish: «Tarjima va shartnoma» → «Shartnoma» (AI o'chiq bo'lsa ham qoida asosida ishlaydi)."}
+    if not _tbl(con, "intl_agreements"):
+        return {"kind": "yuridik", "title": "Shartnomalar ekspertizasi", "indicators": [], "queue": [], "expiring": []}
+    q = db.rows(con, "SELECT id, partner_name, country, kind, title, start, end, updated_at FROM intl_agreements WHERE status='yuridik' ORDER BY updated_at")
+    exp = db.rows(con, "SELECT id, partner_name, country, kind, title, end FROM intl_agreements WHERE status='faol' AND end <= ? ORDER BY end",
+                  ((td + dt.timedelta(days=90)).isoformat(),))
+    for r in exp: r["days_left"] = (dt.date.fromisoformat(r["end"]) - td).days if r["end"] else None
+    act = db.one(con, "SELECT COUNT(*) n FROM intl_agreements WHERE status='faol'")["n"]
+    ind = [_ind("navbat", "Yuridik xulosa kutmoqda", len(q), "", "Xalqaro hamkorlik → Shartnomalar", good="down", source="Xalqaro hamkorlik"),
+           _ind("90", "90 kun ichida tugaydi", len(exp), "", "uzaytirish loyihasi Xalqaro bo'limdan keladi", good="down", source="Xalqaro hamkorlik"),
+           _ind("amalda", "Amaldagi shartnomalar", act, "", "", source="Xalqaro hamkorlik")]
+    return {"kind": "yuridik", "title": "Shartnomalar ekspertizasi", "indicators": ind, "queue": q, "expiring": exp,
+            "note": "Yagona navbat: xulosa (mos / e'tiroz) «Xalqaro hamkorlik» → «Shartnomalar» da beriladi."}
 
-BUILD = {"strategik": strategic, "sifat": quality, "marketing": admissions, "yuridik": legal}
+BUILD = {"strategik": strategic, "sifat": quality, "marketing": admissions, "qabul": admissions, "yuridik": legal}
 
 def desk_for(c: Ctx, quiet=False) -> dict | None:
     k = c.role.key
@@ -222,7 +214,7 @@ def api_desk(request: Request):
 @router.get("/api/desk/export.csv")
 def api_desk_csv(request: Request):
     c = _ctx(request)
-    if c.role.key not in ("strategik", "sifat", "marketing"): raise AccessDenied("⛔ Eksport faqat KPI, sifat va qabul ish stollari uchun.")
+    if c.role.key not in ("strategik", "sifat", "marketing", "qabul"): raise AccessDenied("⛔ Eksport faqat KPI, sifat va qabul ish stollari uchun.")
     d = desk_for(c)
     rbac.audit(_con, c, "ish stoli eksporti (CSV)", DESK_RES[c.role.key], True, c.role.key)
     buf = io.StringIO(); w = csv.writer(buf, delimiter=";")
@@ -230,28 +222,12 @@ def api_desk_csv(request: Request):
     for i in d["indicators"]:
         w.writerow([i["label"], i["value"], i["unit"], i["prev"] if i["prev"] is not None else "", i["delta"] if i["delta"] is not None else "", i["sub"], i["source"]])
     rows = d.get("by_faculty") or []
-    if c.role.key == "marketing": rows = d.get("by_direction") or []
+    if c.role.key in ("marketing", "qabul"): rows = d.get("by_direction") or []
     if rows:
         w.writerow([]); keys = list(rows[0].keys()); w.writerow(keys)
         for r in rows: w.writerow([r.get(k) for k in keys])
-    name = {"strategik": "kpi", "sifat": "sifat", "marketing": "qabul"}[c.role.key]
+    name = {"strategik": "kpi", "sifat": "sifat", "marketing": "qabul", "qabul": "qabul"}[c.role.key]
     return Response("﻿" + buf.getvalue(), media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition": f'attachment; filename="isft-{name}-{_today().isoformat()}.csv"'})
 
-class LegalIn(BaseModel):
-    status: str
-    note: str = Field("", max_length=600)
-
-@router.post("/api/desk/legal/{pid}")
-def api_legal_review(pid: int, body: LegalIn, request: Request):
-    c = _ctx(request)
-    if c.role.key != "yuridik": raise AccessDenied("⛔ Yuridik xulosani faqat Yuridik bo'lim qayd etadi.")
-    rbac.require(_con, c, rbac.INTL, "shartnoma bo'yicha yuridik xulosa", f"#{pid} → {body.status}")
-    if body.status not in LEGAL_ST: raise HTTPException(400, "Noto'g'ri xulosa turi")
-    if body.status in ("etiroz", "tugatish") and len(body.note.strip()) < 5: raise HTTPException(400, "E'tiroz yoki tugatish uchun izoh yozing")
-    if not db.one(_con, "SELECT 1 x FROM partners WHERE id=?", (pid,)): raise HTTPException(404)
-    now = clock.now().replace(microsecond=0).isoformat()
-    _con.execute("INSERT INTO legal_reviews(partner_id,status,note,by_user,by_name,at) VALUES(?,?,?,?,?,?)",
-                 (pid, body.status, body.note.strip(), c.user["id"], c.user["full_name"], now))
-    _con.commit()
-    return {"ok": True}
+# Eski «/api/desk/legal» xulosa navbati olib tashlandi — yagona navbat: Xalqaro hamkorlik → Shartnomalar (app/xalqaro.py).

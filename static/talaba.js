@@ -143,7 +143,16 @@
   function renderShell() {
     $("#tk-who").innerHTML = `${esc(ME.name)}<small>${esc(ME.group)} · ${esc(ME.course)}-kurs · HEMIS ${esc(ME.hemis_id)}</small>`;
     $("#tk-side-sub").textContent = ME.group + " · " + ME.course + "-kurs";
-    $("#tk-nav").innerHTML = PAGES.map((p) => `<a href="#${p.k}" data-p="${p.k}">${ico(p.i)}<span>${esc(p.t)}</span></a>`).join("");
+    /* menyu guruhlari: O'qish · Hujjat va to'lov · Hayot · Profil (kengaytma sahifalar ham k bo'yicha joylashadi) */
+    const GRP = [["", ["bosh"]], ["O'qish", ["baholar", "reyting", "davomat", "otrabotka", "imtihonlar", "apellyatsiya"]],
+                 ["Hujjat va to'lov", ["malumotnoma", "kontrakt"]], ["Hayot", ["turarjoy", "tadbirlar", "amaliyot", "xalqaro"]], ["Profil", ["profil"]]];
+    const known = new Set(GRP.flatMap((g) => g[1]));
+    const link = (p) => `<a href="#${p.k}" data-p="${p.k}">${ico(p.i)}<span>${esc(p.t)}</span></a>`;
+    $("#tk-nav").innerHTML = GRP.map(([name, ks], gi) => {
+      const ps = ks.map((k) => PAGES.find((x) => x.k === k)).filter(Boolean)
+        .concat(gi === 3 ? PAGES.filter((x) => !known.has(x.k)) : []);
+      return ps.length ? (name ? `<div class="tk-nav-h">${esc(name)}</div>` : "") + ps.map(link).join("") : "";
+    }).join("");
     $("#tk-bottom").innerHTML = BOTTOM.map((k) => { const p = PAGES.find((x) => x.k === k); return `<a href="#${p.k}" data-p="${p.k}">${ico(p.i)}<span>${esc(p.s)}</span></a>`; }).join("")
       + `<a href="#" data-act="sheet" data-p="_more">${ico("menu")}<span>Menyu</span></a>`;
     $("#tk-sheet-list").innerHTML = PAGES.map((p) => `<a href="#${p.k}" data-p="${p.k}">${ico(p.i)}<span>${esc(p.s)}</span></a>`).join("");
