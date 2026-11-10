@@ -38,7 +38,9 @@ ok(ngr == nkun and 8 <= ngr / ntut <= 12 and {24, 25, 26} <= {u for (u,) in q("S
 ok(all(r[0] == "tyutor" for r in q("SELECT u.role FROM tutor_groups t JOIN users u ON u.id=t.user_id")), "Biriktirmada faqat tyutor akkauntlari")
 gid_of = lambda sid: q("SELECT group_id FROM students WHERE id=?", (sid,))[0][0]
 ok(all(gid_of(c["student_id"]) in tg24 for c in dc), "Tyutor (24): holatlar — faqat o'ziga biriktirilgan guruhlar talabalari")
-ok(not any(u["id"] in {r[0] for r in q("SELECT DISTINCT user_id FROM tutor_groups")} for u in httpx.get(B + "/api/users").json()), "Tyutorlar kirish ro'yxatida ko'rsatilmaydi")
+_tut = {r[0] for r in q("SELECT DISTINCT user_id FROM tutor_groups")}
+ok(all(u.get("search_only") for u in httpx.get(B + "/api/users").json() if u["id"] in _tut),
+   "Tyutorlar kirish ro'yxatining bo'limlarida ko'rsatilmaydi — faqat qidiruvda (search_only)")
 ok(all(reg.get(f"/api/ops/cases?faculty={f}").json() for f in (1, 2, 3)), "Registrator ofisi: uchala fakultet holatlari (fakultet darajasidagi ko'rinish)")
 t2 = ty2.get("/api/ops/tasks").json(); ok(t2 and all(t["assignee_role"] == "tyutor" and gid_of(t["student_id"]) in tg24 for t in t2), f"Tyutor navbati: faqat o'z guruhlari talabalari ({len(t2)})")
 ok(not q("""SELECT 1 FROM ops_tasks t JOIN students s ON s.id=t.student_id WHERE t.assignee_role='tyutor' AND t.status='yangi'

@@ -305,7 +305,12 @@ async def status():
         tq = _TQ.status()
     except Exception as e:
         tq = {"engine": None, "error": type(e).__name__}
-    return {"llm": a["ai"], "model": ai.MODEL, "ai": a, "bot": b, "taqdimot": tq, "db": str(db.DB_PATH.name),
+    try:
+        from . import tekshiruv as _TK
+        tk = _TK.status()
+    except Exception as e:
+        tk = {"engine": None, "error": type(e).__name__}
+    return {"llm": a["ai"], "model": ai.MODEL, "ai": a, "bot": b, "taqdimot": tq, "tekshiruv": tk, "db": str(db.DB_PATH.name),
             "students": db.one(con, "SELECT COUNT(*) n FROM students")["n"],
             "audit": db.one(con, "SELECT COUNT(*) n FROM audit_log")["n"]}
 
@@ -490,6 +495,10 @@ from . import taqdimot as TQD   # Taqdimot: o'qituvchi materiali (.docx/.pdf/.tx
 TQD.init(con)
 TQD.bind(con, ctx)
 app.include_router(TQD.router)
+from . import tekshiruv as TKS   # Ishlarni tekshirish: o'qituvchi talaba ishlarini yuklaydi → AI taklifi (Claude yoki qo'lda) → o'qituvchi tasdiqlaydi
+TKS.init(con)
+TKS.bind(con, ctx)
+app.include_router(TKS.router)
 class _NoCacheStatic(StaticFiles):
     """JS/CSS/HTML har safar ETag bilan qayta tekshiriladi — yangi deploydan keyin brauzer eski kodni ishlatib qolmasin."""
     async def get_response(self, path, scope):

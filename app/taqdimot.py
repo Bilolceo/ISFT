@@ -273,51 +273,14 @@ def _img_blocks(images: list, img_dir: Path) -> list:
     return out
 
 
-class AIError(Exception):
-    pass
+from .claude_client import AIError   # noqa: E402  (umumiy mijoz — app/claude_client.py)
 
 
 def claude_outline(text: str, truncated: bool, images: list, img_dir: Path, meta: dict) -> tuple[dict, dict]:
-    import anthropic
-    key = os.getenv("ANTHROPIC_API_KEY", "").strip()
-    client = anthropic.Anthropic(api_key=key, timeout=300.0, max_retries=2)
+    from . import claude_client as CC
     content = _img_blocks(images, img_dir) + [{"type": "text", "text": _material_prompt(text, truncated, images, meta)}]
-    req = dict(model=model_name(), max_tokens=32000, system=SYSTEM, messages=[{"role": "user", "content": content}],
-               output_config={"effort": "medium", "format": {"type": "json_schema", "schema": OUTLINE_SCHEMA}})
-    try:
-        try:
-            with client.beta.messages.stream(betas=["server-side-fallback-2026-07-01"], fallbacks="default", **req) as st:
-                msg = st.get_final_message()
-        except anthropic.BadRequestError as e:
-            if "fallback" not in str(e).lower():
-                raise
-            with client.messages.stream(**req) as st:      # zaxira modeli qo'llab-quvvatlanmasa — oddiy so'rov
-                msg = st.get_final_message()
-    except anthropic.AuthenticationError:
-        raise AIError("AI kaliti noto'g'ri yoki bekor qilingan (ANTHROPIC_API_KEY). Administratorga murojaat qiling.")
-    except anthropic.PermissionDeniedError:
-        raise AIError("AI kalitiga bu model uchun ruxsat yo'q. Administratorga murojaat qiling.")
-    except anthropic.RateLimitError:
-        raise AIError("AI xizmati hozir band (so'rovlar cheklovi). Bir necha daqiqadan keyin qayta urinib ko'ring.")
-    except anthropic.APITimeoutError:
-        raise AIError("AI javobi kechikdi. Materialni qisqartirib yoki keyinroq qayta urinib ko'ring.")
-    except anthropic.APIConnectionError:
-        raise AIError("AI xizmatiga ulanib bo'lmadi (internet). Keyinroq qayta urinib ko'ring.")
-    except anthropic.BadRequestError as e:
-        raise AIError(f"AI so'rovni qabul qilmadi: {str(getattr(e, 'message', e))[:160]}")
-    except anthropic.APIStatusError as e:
-        raise AIError(f"AI xizmatida xatolik ({e.status_code}). Keyinroq qayta urinib ko'ring.")
-    if msg.stop_reason == "refusal":
-        raise AIError("AI bu material bo'yicha reja tuzishni rad etdi. Materialni tekshirib, qayta urinib ko'ring.")
-    if msg.stop_reason == "max_tokens":
-        raise AIError("Material juda katta — reja to'liq chiqmadi. Materialni ikki qismga bo'lib yuklang.")
-    txt = next((b.text for b in msg.content if getattr(b, "type", "") == "text"), "")
-    try:
-        data = json.loads(txt)
-    except json.JSONDecodeError:
-        raise AIError("AI javobini o'qib bo'lmadi. Qayta urinib ko'ring.")
-    u = getattr(msg, "usage", None)
-    return data, {"in": getattr(u, "input_tokens", 0) or 0, "out": getattr(u, "output_tokens", 0) or 0, "model": getattr(msg, "model", model_name())}
+    data, info = CC.call_json(model=model_name(), system=SYSTEM, content=content, schema=OUTLINE_SCHEMA, max_tokens=32000, what="reja")
+    return data, info
 
 
 # =============================================================================================

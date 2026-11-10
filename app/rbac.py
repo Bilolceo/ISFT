@@ -41,6 +41,8 @@ PRACTICE = "practice"            # talabalar amaliyoti: bazalar, davrlar, birikt
 LABELS[PRACTICE] = "Talabalar amaliyoti: bazalar, biriktirish, hisobot va baho"
 PRESENT = "presentations"         # o'qituvchi taqdimotlari: material → reja (AI/shablon) → ISFT shablonida .pptx (app/taqdimot.py) — kirish moduldagi jadval bo'yicha
 LABELS[PRESENT] = "Taqdimot tayyorlash (o'qituvchi): material, reja, .pptx"
+CHECKS = "work_checks"            # o'qituvchi: talaba ishlarini yuklash, AI tekshiruv taklifi, tasdiqlash (app/tekshiruv.py) — kirish moduldagi jadval bo'yicha
+LABELS[CHECKS] = "Ishlarni tekshirish (o'qituvchi): talaba ishlari, AI taklifi, baholar"
 
 @dataclass(frozen=True)
 class Role:
