@@ -196,7 +196,7 @@ async function boot() {
   if (typeof navLayout === "function") navLayout(ME.role_key);   /* nav.js: lavozimga ko'ra menyu tartibi */
   const NAV_HIDE_AGENTS = !(["rektor", "kengash", "kotib"].includes(ME.role_key) || ME.role_key.startsWith("prorektor_"));
   document.querySelector('#nav a[data-v="agents"]')?.classList.toggle("hidden", NAV_HIDE_AGENTS);
-  const NAV_NEED = {service: ["facilities", "requests", "youth", "procurement"], spaces: ["spaces"], cams: ["spaces"], audit: ["audit"], ops: ["ops"], tasks: ["tasks"], reports: ["reports"]};
+  const NAV_NEED = {service: ["facilities", "requests", "youth", "procurement"], spaces: ["spaces"], cams: ["spaces"], audit: ["audit"], ops: ["ops"], tasks: ["tasks"], reports: ["reports"], qabul: ["admissions"]};   /* qabul: w5.js (app/qabul.py) — ko'rinish rbac ADMISSIONS dan */
   /* tor vazifali lavozimlar uchun keraksiz bo'limlar yashiriladi (server baribir ruxsatni tekshiradi) */
   const NAV_HIDE = {call_center: ["chat", "reports", "documents", "docs", "rbac"], tyutor: ["reports", "docs"], kengash: ["cams"]};
   document.querySelectorAll("#nav a").forEach(a => { if (a.dataset.v === "agents") return; const need = NAV_NEED[a.dataset.v]; a.classList.toggle("hidden", (!!need && !need.some(x => ME.allow.includes(x))) || (NAV_HIDE[ME.role_key] || []).includes(a.dataset.v)); });
@@ -213,7 +213,6 @@ async function boot() {
   document.querySelector('#nav a[data-v="moliya"]')?.classList.toggle("hidden", !["buxgalteriya", "prorektor_moliya", "rektor", "kengash", "talabalar"].includes(ME.role_key));   /* moliya.js: to'lovlar, solishtirish, byudjet (ruxsat — app/moliya.py) */
   document.querySelector('#nav a[data-v="kadrlar"]')?.classList.toggle("hidden", !["kadrlar", "rektor", "kafedra"].includes(ME.role_key));   /* kadrlar.js: Kadrlar (bo'lim rahbarlari — kadrlarNav) */
   document.querySelector('#nav a[data-v="kiruvchi"]')?.classList.toggle("hidden", !["devonxona", "rektor", "prorektor_oquv", "prorektor_ilmiy", "prorektor_moliya", "prorektor_yoshlar", "kotib"].includes(ME.role_key));   /* w5.js: Kiruvchi xatlar (app/devon.py) */
-  document.querySelector('#nav a[data-v="qabul"]')?.classList.toggle("hidden", !["qabul", "rektor", "prorektor_oquv", "marketing", "kengash", "prorektor_moliya"].includes(ME.role_key));   /* w5.js: Qabul — abituriyentlar (app/qabul.py) */
   { const a = document.querySelector('#nav a[data-v="rejalar"]'); if (a) { a.classList.toggle("hidden", !["strategik", "sifat", "rektor", "kengash", "prorektor_oquv"].includes(ME.role_key)); if (ME.role_key === "sifat") { const t = [...a.childNodes].find(n => n.nodeType === 3 && n.textContent.trim()); if (t) t.textContent = "Sifat amallari"; } } }   /* w5.js: KPI maqsadlari / Sifat amallari (app/rejalar.py) */
   document.querySelector('#nav a[data-v="yoshlar"]')?.classList.toggle("hidden", !["prorektor_yoshlar", "manaviyat", "komendant", "tyutor", "buxgalteriya", "rektor", "talabalar"].includes(ME.role_key));   /* yoshlar.js: Yoshlar ishlari — turar joy va tadbirlar (ruxsat — app/yoshlar.py MODES) */
   if (typeof kadrlarNav === "function") kadrlarNav();

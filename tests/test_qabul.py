@@ -76,10 +76,16 @@ for cl, nm in ((ken, "Kuzatuv kengashi"), (pmo, "Moliya prorektori")):
     ok(cl.get(X + "/applicants").status_code == 403, f"{nm}: abituriyentlar ro'yxati (shaxsiy ma'lumot) → 403")
     ok(cl.post(X + "/applicants", json={"full_name": "TEST Xulosa Rol", "direction": "x"}).status_code == 403, f"{nm}: ariza kirita olmaydi → 403")
     ok(cl.post(X + "/order", params={"direction": "x"}).status_code == 403, f"{nm}: buyruq loyihasi → 403")
+    _aid = q1("SELECT id FROM qb_applicants WHERE stage='ariza' ORDER BY id LIMIT 1"); _st = q1("SELECT stage FROM qb_applicants WHERE id=?", (_aid,))
+    ok(cl.post(f"{X}/applicants/{_aid}/advance", json={"exam_score": 90}).status_code == 403, f"{nm}: bosqichga o'tkaza olmaydi (advance → 403)")
+    ok(cl.post(f"{X}/applicants/{_aid}/reject", json={"note": "TEST sabab"}).status_code == 403, f"{nm}: rad eta olmaydi (reject → 403)")
+    ok(q1("SELECT stage FROM qb_applicants WHERE id=?", (_aid,)) == _st, f"{nm}: urinishdan keyin abituriyent bosqichi o'zgarmagan")
+    ok(not ({"directions", "desk", "next", "pass_score"} & set(sm)), f"{nm}: meta ish ma'lumotlarisiz (desk, CSV havola, yo'nalishlar ro'yxati yo'q)")
 m = J(qb.get(X + "/meta"))
 ok(m["can_edit"] is True and m["pass_score"] == 56 and m["next"] == {"ariza": "hujjat", "hujjat": "imtihon", "imtihon": "shartnoma"}, "Qabul komissiyasi: tahrir huquqi, o'tish bali 56, bosqichlar")
 for cl, nm in ((rek, "Rektor"), (oquv, "O'quv prorektori"), (mkt, "Marketing")):
     mm = J(cl.get(X + "/meta"))
+    ok(mm["by_payment"] and "desk" in mm and "directions" in mm, f"{nm}: to'lov turi taqsimoti va ish ma'lumotlari bor")
     ok(mm["can_edit"] is False and mm["summary_only"] is False and cl.get(X + "/applicants").status_code == 200, f"{nm}: faqat ko'rish (can_edit=false, ro'yxat 200)")
 dirs = m["directions"]
 ok(len(dirs) >= 3, f"Yo'nalishlar ro'yxati: {len(dirs)} ta")

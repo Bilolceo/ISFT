@@ -13,6 +13,7 @@
 .w5-step{border:1px solid var(--line,#e5e5e5);background:var(--card,#fff);border-radius:12px;padding:10px 12px;text-align:left;cursor:pointer;font:inherit;color:inherit;display:flex;flex-direction:column;gap:2px}
 .w5-step b{font-size:22px}
 .w5-step span{font-size:12px;color:var(--muted,#666)}
+div.w5-step{cursor:default}
 .w5-step.on{outline:2px solid var(--brand,#7a1430)}
 .w5-step.rad b{color:var(--bad,#c0392b)}
 .w5-sec{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted,#666);margin:12px 0 4px}

@@ -60,7 +60,7 @@ def R(*a): return frozenset(a)
 
 ROLES = {r.key: r for r in [
     Role("kengash", "Kuzatuv kengashi", 1, R(KPI, ACADEMIC, FINANCE, CONTRACTS, SCIENCE, INTL, ADMISSIONS, TASKS, REPORTS, SPACES),
-         aggregate_only=R(ACADEMIC, FINANCE, CONTRACTS), deny_note="Shaxsiy ma'lumotlar va kunlik operativ tafsilotlar"),
+         aggregate_only=R(ACADEMIC, FINANCE, CONTRACTS, ADMISSIONS), deny_note="Shaxsiy ma'lumotlar va kunlik operativ tafsilotlar"),
     Role("rektor", "Rektor", 1, R(KPI, ACADEMIC, STUDENTS, CONTRACTS, FINANCE, PAYROLL, SCIENCE, INTL, ADMISSIONS, YOUTH, MASTERS, TASKS, AUDIT, REPORTS, FACILITIES, REQUESTS, SPACES, OPS),
          aggregate_only=R(STUDENTS, PAYROLL, OPS), deny_note="Xom hujjatlar, individual kartochkalar (maxsus so'rovsiz), xodimlar shaxsiy ma'lumoti"),
     Role("prorektor_oquv", "O'quv ishlari bo'yicha prorektor", 2, R(KPI, ACADEMIC, STUDENTS, ADMISSIONS, MASTERS, TASKS, REPORTS, REQUESTS, SPACES, OPS),
@@ -69,7 +69,7 @@ ROLES = {r.key: r for r in [
          deny_note="Talaba baholari, moliyaviy tafsilotlar"),
     # tuzilma (04.09.2024): Buxgalteriya, Xarid, Marketing, Xo'jalik va texnik bo'lim — moliya-iqtisod prorektori kuratorligida
     Role("prorektor_moliya", "Moliya-iqtisod ishlari bo'yicha prorektor", 2, R(KPI, FINANCE, CONTRACTS, PAYROLL, TASKS, REPORTS, FACILITIES, SPACES, ADMISSIONS, PROCUREMENT),
-         aggregate_only=R(PAYROLL), deny_note="Talaba baholari, ilmiy faoliyat tafsilotlari"),
+         aggregate_only=R(PAYROLL, ADMISSIONS), deny_note="Talaba baholari, ilmiy faoliyat tafsilotlari"),
     # tadbirlar (Majlislar zali to'lishi — kamera signali shu yerga keladi) va talabalar bilan ishlash — jamlangan ko'rinishda
     Role("prorektor_yoshlar", "Yoshlar masalalari va ma'naviy-ma'rifiy ishlar bo'yicha birinchi prorektor", 2, R(KPI, YOUTH, TASKS, FACILITIES, SPACES, OPS, REPORTS),
          aggregate_only=R(OPS), deny_note="Moliyaviy ma'lumot, individual o'quv baholari"),
