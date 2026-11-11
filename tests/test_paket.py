@@ -1,6 +1,9 @@
 """Kontent paketlari moduli (app/paket.py) — ruxsatlar, YouTube havolalari, HTML tozalash, ma'ruza matni → reja va HTML, PPTX tahlili,
 manbalar (HTTP), yig'ish (har bir tur: SCORM 1.2 / SCORM 2004 / xAPI / oddiy) + validate_zip + manifestlar (ElementTree), deterministik zip,
 versiyalar, kurs paketi, ko'rish (preview) yo'li, yuklab olish nomi, avtomatik joylash, qamrov (SQL bilan), «Mening vazifalarim».
+NEXTID (kontrakt v2): darslar ro'yxati (L/A/S/Lab/MT) tahlili, migratsiya idempotentligi, Word rasmlari (izoh bilan) / jadvallar / adabiyotlar,
+figure/img tozalash, PDF → slayd rasmlari (pypdfium2), shablon bloklari tartibi va bo'lim sarlavhalari, reflect / keypoints, AI xulosalar
+(claude_client.call_json jarayon ichida almashtiriladi — serverda AI chaqirilmaydi), har tur uchun validate_zip, dars bo'yicha fayl nomlari.
 
 Ishga tushirish:  ISFT_TEST_URL=http://127.0.0.1:8000 ISFT_CORE_DB=data/jarvis.db .venv/bin/python tests/test_paket.py
    (yoki hammasi toza muhitda: python tests/run_all.py --only paket)
@@ -106,6 +109,29 @@ for bad in ("https://youtu.be/demo190x3", "https://www.youtube.com/watch?v=short
 ok(PK.parse_video(f"https://youtu.be/{ID}?t=30")["url"] == f"https://www.youtube.com/watch?v={ID}&t=30s", "Kanonik havola (watch?v=…&t=Ns)")
 bl = PK.parse_bulk(f"https://youtu.be/{ID}\n\n# izoh\nhttps://youtu.be/aaaaaaaaaaa\n5: https://youtu.be/bbbbbbbbbbb\nhttps://youtu.be/xx\n20) https://youtu.be/ccccccccccc", 15)
 ok([(r["topic_no"], r["ok"]) for r in bl] == [(1, True), (2, True), (5, True), (6, False), (20, False)], "Ommaviy ro'yxat: ketma-ket, «N: havola», xato ID, oraliqdan tashqari")
+bl = PK.parse_bulk(f"A2: https://youtu.be/{ID}\nL3: https://youtu.be/aaaaaaaaaaa\nhttps://youtu.be/bbbbbbbbbbb\nA9: https://youtu.be/ccccccccccc", 15, list(range(1, 16)) + [1001, 1002])
+ok([(r["code"], r["ok"]) for r in bl] == [("A2", True), ("L3", True), ("L4", True), ("A9", False)] and "A9" in bl[-1]["error"], "Ommaviy ro'yxat: dars kodlari (A2:, L3:), ketma-ketlik L bo'yicha, yo'q dars — xato")
+
+print("== 2b. Darslar ro'yxati (NEXTID nomlari)")
+LESSON_CASES = [
+    ("L1-1-dars: AXBOROT TEXNOLOGIYALARI FANIGA KIRISH", ("L1", "maruza", 1, "AXBOROT TEXNOLOGIYALARI FANIGA KIRISH", None, 1)),
+    ("L12-12-dars: Tarmoqlar", ("L12", "maruza", 12, "Tarmoqlar", None, 12)),
+    ("A1- AMALIY MASHG'ULOT: Excel bilan ishlash", ("A1", "amaliy", 1, "Excel bilan ishlash", None, 1001)),
+    ("A2- Amaliy: Word hujjatlari (3-mavzu)", ("A2", "amaliy", 2, "Word hujjatlari", 3, 1002)),
+    ("A30- AMALIY MASHG‘ULOT: Ma’lumotlar bazasi", ("A30", "amaliy", 30, "Ma'lumotlar bazasi", None, 1030)),
+    ("A3: Amaliy statistika asoslari", ("A3", "amaliy", 3, "Amaliy statistika asoslari", None, 1003)),
+    ("S1 Seminar: Raqamli iqtisodiyot | 2", ("S1", "seminar", 1, "Raqamli iqtisodiyot", 2, 2001)),
+    ("Lab1 - Laboratoriya ishi: Tarmoq sozlash [4]", ("Lab1", "laboratoriya", 1, "Tarmoq sozlash", 4, 3001)),
+    ("MT2. Mustaqil ta'lim: Esse", ("MT2", "mustaqil", 2, "Esse", None, 4002)),
+]
+for line, (code, kind, no, title, topic, key) in LESSON_CASES:
+    r = PK.parse_lessons(line)[0]
+    ok(r["ok"] and (r["code"], r["kind"], r["no"], r["title"], r["topic"], r["key"]) == (code, kind, no, title, topic, key), f"{line!r} → {code} {kind} «{title}»{f' → {topic}-mavzu' if topic else ''}")
+bad = PK.parse_lessons("# izoh\n\nSalom dunyo\nA1:\nL1000: katta\nA4: Birinchi\nA4: Ikkinchi")
+ok([(r["ok"], bool(r["error"])) for r in bad] == [(False, True), (False, True), (False, True), (False, True), (True, False)] and bad[-1]["title"] == "Ikkinchi",
+   "Noto'g'ri qatorlar: kodsiz, nomsiz, 1000+, takror (oxirgisi olinadi); izoh/bo'sh qatorlar e'tiborsiz")
+ok([PK.lesson_code(k) for k in (1, 15, 1001, 2003, 3001, 4012)] == ["L1", "L15", "A1", "S3", "Lab1", "MT12"] and PK.lesson_file_code(1001) == "A01" and PK.split_key(3002) == ("laboratoriya", 2),
+   "Dars kaliti ↔ kod: L1=1, A1=1001, S3=2003, Lab1=3001, MT12=4012")
 
 # =============================================================================================
 print("== 3. HTML tozalash (server tomonda)")
@@ -130,6 +156,15 @@ ok(PK.sanitize('<button>Bos</button><p>x</p>') == 'Bos<p>x</p>' and "<p>x</p>" i
 ok("rest" in PK.sanitize('<textarea>abc<p>rest</p>') and PK.html_unsafe(PK.sanitize('<textarea>abc<p>rest<script>x</script>')) is None
    and PK.sanitize('<script>bad()</script><p>ok</p>') == '<p>ok</p>' and PK.sanitize('<script>bad()') == '',
    "Yopilmagan textarea — matni escape qilinib qaytadi; script/style mazmuni bilan tashlanadi")
+fig = PK.sanitize('<figure><img src="assets/img/ab12.png" alt="Sxema" onerror="x()" width="9"><figcaption>1.1-rasm. Sxema</figcaption></figure><p>a<img src="assets/img/c.jpg"/></p>')
+ok(fig == '<figure><img src="assets/img/ab12.png" alt="Sxema"><figcaption>1.1-rasm. Sxema</figcaption></figure><p>a<img src="assets/img/c.jpg" alt=""></p>' and PK.html_unsafe(fig) is None,
+   "figure / figcaption / img (faqat nisbiy assets/…, src + alt) — saqlanadi, audit o'tadi")
+for bad_src in ("http://evil.com/x.png", "https://isft.uz/x.png", "//evil.com/x.png", "data:image/png;base64,AAAA", "javascript:alert(1)", "JaVaScRiPt:x",
+                "/assets/img/x.png", "assets/../../etc/passwd", "assets//x.png", "assets/img/a b.png", "assets\\x.png", "img/x.png", " assets/x.png", "assets/x.png%00"):
+    cl_ = PK.sanitize(f'<img src="{bad_src}" alt="x">')
+    ok("<img" not in cl_ and PK.html_unsafe(f'<img src="{bad_src}">') is not None, f"img src {bad_src!r} — olib tashlanadi, audit rad etadi")
+ok(PK.html_unsafe('<img alt="x">') and PK.html_unsafe('<img src="assets/img/a.png" onload="x">') and PK.html_unsafe('<figure class="x"></figure>'),
+   "Audit: src siz img, img on* atributi, figure atributi — rad etiladi")
 ok(PK.html_unsafe('<p onclick="x">a</p>') and PK.html_unsafe("<script>a</script>") and PK.html_unsafe('<a href="javascript:1">x</a>')
    and PK.html_unsafe('<a href="https://isft.uz" rel="noopener noreferrer" target="_blank">x</a>') is None, "Haqiqiy xavfli teg/atributlar ushlanadi (HTML tahlili bilan)")
 
@@ -175,6 +210,58 @@ ok(PK.structure_text("Reja:\nKirish\nAsosiy tushunchalar\nXulosa\n\nKirish\nMatn
 ok(PK.structure_text("IQTISODIYOT ASOSLARI\nBirinchi paragraf.\nIKKINCHI BO'LIM\nIkkinchi paragraf.")["plan"] == ["IQTISODIYOT ASOSLARI", "IKKINCHI BO'LIM"], "KATTA HARFLI qatorlar — sarlavha")
 ok(PK.structure_text("Faqat bitta paragraf matni.")["plan"] == [], "Sarlavhasiz matn — reja bo'sh")
 ok("<ol><li>Yer</li><li>Mehnat</li></ol>" in PK.structure_text("Omillar:\n1. Yer\n2. Mehnat\nMatn davom etadi.")["html"], "Ketma-ket «1. 2.» — raqamli ro'yxat (sarlavha emas)")
+MARK = """1-MAVZU: AXBOROT
+Reja:
+1. Kirish
+2. Asosiy qism
+1. Kirish
+Birinchi paragraf matni shu yerda.
+[RASM:abc123.png]
+1.1-rasm. Mini cho'ntak kompyuteri
+[JADVAL:1]
+[RASM:yoq999.png]
+2. Asosiy qism
+Ikkinchi paragraf.
+Foydalanilgan adabiyotlar ro'yxati
+1. Karimov I. Iqtisodiyot. T., 2020.
+2. Sobirov A. Informatika
+asoslari. T., 2019.
+"""
+mst = PK.structure_text(MARK, "Axborot", {"images": {"abc123.png": {"caption": ""}}, "tables": {"1": [["Birlik", "Qiymat"], ["bayt", "8 bit"]]}})
+ok('<figure><img src="assets/img/abc123.png" alt="Mini cho&#x27;ntak kompyuteri"><figcaption>1.1-rasm. Mini cho\'ntak kompyuteri</figcaption></figure>' in mst["html"]
+   and mst["images"] == ["abc123.png"] and "yoq999" not in mst["html"], "«[RASM:fayl]» → figure (keyingi «1.1-rasm.» qatori — izoh); noma'lum rasm tashlanadi")
+ok("<table><thead><tr><th>Birlik</th><th>Qiymat</th></tr></thead><tbody><tr><td>bayt</td><td>8 bit</td></tr></tbody></table>" in mst["html"], "«[JADVAL:N]» → table (thead + tbody)")
+ok(mst["refs"] == ["Karimov I. Iqtisodiyot. T., 2020.", "Sobirov A. Informatika asoslari. T., 2019."] and "Karimov" not in mst["html"] and "adabiyot" not in mst["html"].lower(),
+   f"«Foydalanilgan adabiyotlar ro'yxati» → refs (uzilgan qator qo'shildi), matndan olib tashlandi: {mst['refs']}")
+ok(mst["plan"] == ["Kirish", "Asosiy qism"] and PK.html_unsafe(mst["html"]) is None, "Reja va xavfsiz HTML (rasm, jadval bilan)")
+ok(PK.structure_text("Matn bu yerda.\nFoydalanilgan adabiyotlar ro'yxati 1. A kitob. 2. B kitob.")["refs"] == ["A kitob.", "B kitob."], "Bir qatorda: «… ro'yxati 1. … 2. …»")
+r_ = PK.structure_text("# Kirish\nMatn.\n# Adabiyotlar\n- A kitob\n- B kitob\n# Ilova\nX matn.")
+ok(r_["refs"] == ["A kitob", "B kitob"] and "<h2>Ilova</h2>" in r_["html"], "«# Adabiyotlar» sarlavhasi — keyingi sarlavhagacha")
+ok(PK.structure_text("Литература:\n1. Иванов И. Экономика.\n")["refs"] == ["Иванов И. Экономика."] and
+   PK.structure_text("Adabiyotlar ro'yxati shuni ko'rsatadiki, mavzu muhim.")["refs"] == [], "Kirill «Литература»; oddiy gap — refs emas")
+# regressiya: reja bandi «3. Foydalanilgan adabiyotlar» adabiyotlar sarlavhasi emas (matnni yutib yubormasin)
+RJ = ("Reja:\n1. Kirish\n2. Asosiy tushunchalar\n3. Foydalanilgan adabiyotlar\n\n1. Kirish\nIqtisodiyot fani jamiyatdagi resurslar taqsimotini o'rganadi.\n"
+      "2. Asosiy tushunchalar\nTalab va taklif bozorning asosiy tushunchalaridir.\n\nFoydalanilgan adabiyotlar\n1. Karimov I. Iqtisodiyot. T., 2020.\n2. Smith A. Wealth of Nations. 1776.")
+rj = PK.structure_text(RJ, "x")
+ok(rj["plan"] == ["Kirish", "Asosiy tushunchalar", "Foydalanilgan adabiyotlar"] and rj["refs"] == ["Karimov I. Iqtisodiyot. T., 2020.", "Smith A. Wealth of Nations. 1776."]
+   and "resurslar taqsimotini" in rj["html"] and "<h2>Asosiy tushunchalar</h2>" in rj["html"] and "Karimov" not in rj["html"],
+   f"Reja bandi «3. Foydalanilgan adabiyotlar» — reja (3 band), matn joyida, refs — haqiqiy ro'yxat ({rj['plan']}, {len(rj['refs'])} ta)")
+rj2 = PK.structure_text("Reja:\n1. Kirish\n2. Xulosa\n\n3. Foydalanilgan adabiyotlar\n\n1. Kirish\nMatn birinchi.\n2. Xulosa\nMatn ikkinchi.\n"
+                        "3. Foydalanilgan adabiyotlar\n- Karimov I. Iqtisodiyot.", "x")
+ok(rj2["plan"] == ["Kirish", "Xulosa", "Foydalanilgan adabiyotlar"] and rj2["refs"] == ["Karimov I. Iqtisodiyot."] and "Matn ikkinchi." in rj2["html"],
+   "Bo'sh qatordan keyin rejaning davomi (3.) ham reja; matndagi «3. Foydalanilgan adabiyotlar» — adabiyotlar")
+# regressiya: adabiyotlar ro'yxati «Nazorat savollari» da tugaydi, qolgani matnga qaytadi
+rq = PK.structure_text("Asosiy matn shu yerda yozilgan.\n\nFoydalanilgan adabiyotlar\n1. Karimov I. Iqtisodiyot. T., 2020.\n2. Smith A. Wealth of Nations.\n"
+                       "Nazorat savollari:\n1. Talab nima?\n2. Taklif nima?", "x")
+ok(rq["refs"] == ["Karimov I. Iqtisodiyot. T., 2020.", "Smith A. Wealth of Nations."] and "Nazorat savollari" in rq["html"]
+   and "<ol><li>Talab nima?</li><li>Taklif nima?</li></ol>" in rq["html"] and rq["html"].index("Asosiy matn") < rq["html"].index("Nazorat savollari"),
+   f"Adabiyotlar «Nazorat savollari:» da tugaydi — savollar matnda (asosiy matndan keyin): {rq['refs']}")
+rq2 = PK.structure_text("Matn.\nAdabiyotlar\n1. A kitob.\n2. B kitob.\n\nShu bilan ma'ruza yakunlanadi, keyingi mavzuga tayyorlaning.", "x")
+ok(rq2["refs"] == ["A kitob.", "B kitob."] and "keyingi mavzuga" in rq2["html"], "Ro'yxatdan keyin bo'sh qator va oddiy matn — matnga qaytadi")
+rq3 = PK.structure_text("Matn.\nAsosiy adabiyotlar\n1. A kitob.\nQo'shimcha adabiyotlar\n1. B kitob.\nGlossariy\nTalab — xohish.", "x")
+ok(rq3["refs"] == ["A kitob.", "B kitob."] and "Glossariy" in rq3["html"] and "Talab — xohish." in rq3["html"], "«Asosiy» + «Qo'shimcha adabiyotlar» — bitta ro'yxat; «Glossariy» matnda")
+ok([bool(PK.CAPTION_RX.match(x)) for x in ("1.1-rasm. Mini kompyuter", "2 - rasm Sxema", "Rasm 3. Grafik", "Рисунок 2. Схема", "Rasmda ko'rsatilgan", "Rasm bu")] ==
+   [True, True, True, True, False, False], "Rasm izohi: «1.1-rasm.», «Rasm 3.», «Рисунок 2.»; «Rasmda …» — izoh emas")
 
 # =============================================================================================
 print("== 5. PPTX tahlili (python-pptx, rasm bilan)")
@@ -307,6 +394,155 @@ r = teach.post(f"{P}/courses/{C1}/topics/{T}/settings", json={"reset": True}).js
 ok(r["override"] == {} and r["settings"]["mode"] == m["defaults"]["mode"], "Standartga qaytarildi")
 
 # =============================================================================================
+print("== 6b. Darslar (L/A), Word rasmlari, PDF slaydlar, xulosalar (HTTP)")
+def png_bytes(color, size=(480, 320)) -> bytes:
+    from PIL import Image, ImageDraw
+    im = Image.new("RGB", size, color); d = ImageDraw.Draw(im)
+    if min(size) > 60: d.rectangle([20, 20, size[0] - 20, size[1] - 20], outline="white", width=6)
+    bio = io.BytesIO(); im.save(bio, "PNG"); return bio.getvalue()
+def make_rich_docx() -> bytes:
+    """Word: sarlavha, reja, 2 rasm (1-izohi keyin, 2-izohi oldin), jadval, «Foydalanilgan adabiyotlar» ro'yxati, ikonka (tashlanadi)."""
+    import docx
+    from docx.shared import Inches
+    d = docx.Document()
+    d.add_heading("1-MAVZU: AXBOROT TEXNOLOGIYALARI", 1)
+    d.add_paragraph("Reja:")
+    for x in ("Kompyuter turlari", "Axborot o'lchov birliklari", "Xulosa"): d.add_paragraph(x, style="List Number")
+    d.add_heading("1. Kompyuter turlari", 2)
+    d.add_paragraph("Kompyuterlar o'lchami va vazifasiga ko'ra bir necha turga bo'linadi. Eng kichigi — cho'ntak kompyuteri. " * 3)
+    d.add_picture(io.BytesIO(png_bytes((139, 0, 51))), width=Inches(3))
+    d.add_paragraph("1.1-rasm. Mini cho'ntak kompyuteri")
+    d.add_picture(io.BytesIO(png_bytes((0, 0, 0), (20, 20))), width=Inches(0.2))      # ikonka — tashlanadi
+    d.add_heading("2. Axborot o'lchov birliklari", 2)
+    d.add_paragraph("Axborot o'lchov birliklari jadvalda keltirilgan. Bayt — sakkiz bitdan iborat asosiy o'lchov birligi.")
+    t = d.add_table(rows=3, cols=2)
+    for i, (a_, b_) in enumerate((("Birlik", "Qiymati"), ("1 bayt", "8 bit"), ("1 KB", "1024 bayt"))):
+        t.cell(i, 0).text, t.cell(i, 1).text = a_, b_
+    d.add_paragraph("1.2-rasm. Axborot uzatish sxemasi")
+    d.add_picture(io.BytesIO(png_bytes((0, 90, 140))), width=Inches(3))
+    d.add_heading("3. Xulosa", 2)
+    d.add_paragraph("Axborot texnologiyalari zamonaviy jamiyatning asosidir va har bir sohada qo'llaniladi.")
+    d.add_paragraph("Foydalanilgan adabiyotlar ro'yxati")
+    for x in ("Karimov I. Informatika asoslari. T.: Fan, 2020.", "Sobirov A. Axborot texnologiyalari. T., 2019."): d.add_paragraph(x, style="List Number")
+    bio = io.BytesIO(); d.save(bio); return bio.getvalue()
+def make_pdf(n=3) -> bytes:
+    from PIL import Image, ImageDraw
+    pages = []
+    for i in range(n):
+        im = Image.new("RGB", (960, 540), (255, 255, 255)); dr = ImageDraw.Draw(im)
+        dr.rectangle([0, 0, 960, 80], fill=(139, 0, 51)); dr.text((40, 200), f"Slayd {i + 1}", fill=(0, 0, 0)); pages.append(im)
+    bio = io.BytesIO(); pages[0].save(bio, "PDF", save_all=True, append_images=pages[1:]); return bio.getvalue()
+RICH, PDF3 = make_rich_docx(), make_pdf(3)
+dx = PK.docx_lecture(RICH)
+ok(len(dx["images"]) == 2 and [v["caption"] for v in dx["images"].values()] == ["1.1-rasm. Mini cho'ntak kompyuteri", "1.2-rasm. Axborot uzatish sxemasi"],
+   f"Word: 2 rasm hujjat tartibida, izohlari (keyingi va oldingi paragraf); ikonka tashlandi ({len(dx['images'])})")
+ok(dx["tables"] == {"1": [["Birlik", "Qiymati"], ["1 bayt", "8 bit"], ["1 KB", "1024 bayt"]]}, "Word: jadval qatorlari/kataklari saqlandi")
+order = [l for l in dx["text"].split("\n") if l.startswith("[")]
+ok(len(order) == 3 and order[0].startswith("[RASM:") and order[1] == "[JADVAL:1]" and order[2].startswith("[RASM:") and "rasm." not in dx["text"],
+   f"Word: rasm → jadval → rasm tartibi, izoh paragraflari matndan olindi ({order})")
+ok(all(re.fullmatch(r"[0-9a-f]{20}\.png", fn) for fn in dx["images"]), "Rasm nomi — sha256 (assets/img/<hash>.png)")
+from PIL import Image as _I
+big = io.BytesIO(); _I.new("RGB", (3200, 2000), (10, 120, 60)).save(big, "PNG")
+ok(max(_I.open(io.BytesIO(PK._norm_image(big.getvalue())[0])).size) == 1600, "Katta rasm 1600 px gacha kichraytiriladi")
+# regressiya: <w:b w:val="0"/> (qalin EMAS) — qisqa qator paragraf bo'lib qoladi; <w:b/> va qalin belgi uslubi (rStyle) — sarlavha
+def make_bold_docx() -> bytes:
+    import docx
+    from docx.enum.style import WD_STYLE_TYPE
+    d = docx.Document()
+    st = d.styles.add_style("QalinBelgi", WD_STYLE_TYPE.CHARACTER); st.font.bold = True
+    p_ = d.add_paragraph(); r_ = p_.add_run("Qalin emas qisqa qator"); r_.bold = False
+    p_ = d.add_paragraph(); r_ = p_.add_run("Haqiqiy qalin sarlavha"); r_.bold = True
+    p_ = d.add_paragraph(); r_ = p_.add_run("Uslubdan qalin sarlavha"); r_.style = st
+    p_ = d.add_paragraph(); r_ = p_.add_run("Uslubi qalin, lekin o'chirilgan"); r_.style = st; r_.bold = False
+    d.add_paragraph("Oddiy uzun paragraf matni shu yerda davom etadi va nuqta bilan tugaydi.")
+    bio = io.BytesIO(); d.save(bio); return bio.getvalue()
+BD = make_bold_docx()
+with zipfile.ZipFile(io.BytesIO(BD)) as z_: _dx = z_.read("word/document.xml").decode()
+bl = PK.docx_lecture(BD)["text"].split("\n")
+ok('w:val="0"' in _dx and bl[:4] == ["Qalin emas qisqa qator", "## Haqiqiy qalin sarlavha", "## Uslubdan qalin sarlavha", "Uslubi qalin, lekin o'chirilgan"],
+   f"Word: <w:b w:val=\"0\"/> — paragraf; <w:b/> va qalin rStyle — sarlavha ({bl[:4]})")
+# PDF: pdfium qulfi va sahifani chizishdagi xato → 415
+import pypdfium2 as _pdfium, threading as _th
+_orig_render, _orig_gw = _pdfium.PdfPage.render, _pdfium.PdfPage.get_width
+_locked = []
+def _spy_render(self, *a, **kw): _locked.append(PK._PDFIUM_LOCK.locked()); return _orig_render(self, *a, **kw)
+_pdfium.PdfPage.render = _spy_render
+try:
+    _res, _errs = [], []
+    def _rp():
+        try: _res.append(len(PK.render_pdf(make_pdf(3))["images"]))
+        except Exception as e: _errs.append(repr(e))
+    _ts = [_th.Thread(target=_rp) for _ in range(4)]
+    [t_.start() for t_ in _ts]; [t_.join() for t_ in _ts]
+    ok(_res == [3, 3, 3, 3] and not _errs and _locked and all(_locked), f"render_pdf: 4 oqimda parallel — hammasi 3 sahifa, chizish doim _PDFIUM_LOCK ostida ({_res}, {_errs[:1]})")
+    def _bad_render(self, *a, **kw): raise _pdfium.PdfiumError("Failed to render page")
+    _pdfium.PdfPage.render = _bad_render
+    try: PK.render_pdf(make_pdf(2)); ok(False, "chizish xatosi yutildi")
+    except PK.HTTPException as e: ok(e.status_code == 415 and "rasmga aylantirib bo'lmadi" in e.detail and not PK._PDFIUM_LOCK.locked(), f"Sahifani chizishda pdfium xatosi → 415 ({e.detail[:70]}…), qulf bo'shatildi")
+    _pdfium.PdfPage.get_width = lambda self: (_ for _ in ()).throw(RuntimeError("boom"))
+    try: PK.render_pdf(make_pdf(1)); ok(False, "get_width xatosi yutildi")
+    except PK.HTTPException as e: ok(e.status_code == 415, "Sahifa o'lchamini o'qishdagi xato → 415")
+finally:
+    _pdfium.PdfPage.render, _pdfium.PdfPage.get_width = _orig_render, _orig_gw
+# HTTP: darslar ro'yxati
+LTXT = "A1- AMALIY MASHG'ULOT: Excel bilan ishlash (2-mavzu)\nA2- Amaliy: Word hujjatlari\nS1 Seminar: Muhokama\nnoto'g'ri qator"
+r = teach.post(f"{P}/courses/{C1}/lessons", json={"text": LTXT, "apply": False}).json()
+ok([(x["code"], x["ok"]) for x in r["rows"]] == [("A1", True), ("A2", True), ("S1", True), (None, False)] and not r["applied"], "HTTP: darslar ro'yxati — tekshirish (saqlanmaydi)")
+ok(kaf.post(f"{P}/courses/{C1}/lessons", json={"text": LTXT, "apply": True}).status_code == 403 and rek.get(f"{P}/courses/{C1}/lessons").status_code == 403
+   and teach.post(f"{P}/courses/{mikro['id']}/lessons", json={"text": LTXT, "apply": True}).status_code == 403, "Darslar ro'yxati: kafedra/rektor/begona o'qituvchi — 403")
+r = teach.post(f"{P}/courses/{C1}/lessons", json={"text": LTXT, "apply": True}).json()
+codes = [x["code"] for x in r["lessons"]]
+ok(r["saved"] == 3 and {"A1", "A2", "S1"} <= set(codes) and codes.index("L1") < codes.index("A1") < codes.index("S1") and
+   next(x for x in r["lessons"] if x["code"] == "A1")["topic"] == 2, "HTTP: darslar saqlandi (L…, A1, A2, S1 tartibda; A1 → 2-mavzu)")
+cv_ = teach.get(f"{P}/courses/{C1}").json()
+ok(any(t_["code"] == "A2" and t_["no"] == 1002 and t_["kind"] == "amaliy" for t_ in cv_["topics"]) and cv_["course"]["lessons"] == len(cv_["topics"]), "Kurs ko'rinishida A darslar (kalit 1002)")
+ok(teach.get(f"{P}/courses/{C1}/topics/1009").status_code == 400, "Yo'q dars (A9) — 400")
+A1 = 1001
+r = teach.post(f"{P}/courses/{C1}/topics/{A1}/text", params={"name": "amaliy1.docx"}, content=RICH)
+ok(r.status_code == 200 and r.json()["images"] == 2 and r.json()["tables"] == 1 and r.json()["refs"] == 2 and r.json()["plan"] == ["Kompyuter turlari", "Axborot o'lchov birliklari", "Xulosa"],
+   f"HTTP: A1 ga Word — 2 rasm, 1 jadval, 2 adabiyot, reja ({r.text[:160]})")
+ok(len(q("SELECT id FROM pk_assets WHERE course_id=? AND topic_no=? AND purpose='rasm' AND deleted=0", (C1, A1))) == 2, "Rasmlar pk_assets'da (purpose='rasm')")
+tv = teach.get(f"{P}/courses/{C1}/topics/{A1}").json()
+ok(tv["lesson"]["code"] == "A1" and tv["heading"] == "1-AMALIY MASHG'ULOT: Excel bilan ishlash" and tv["ready"]["images"]["n"] == 2 and tv["ready"]["refs"]["n"] == 2
+   and tv["text_html"].count("<figure>") == 2 and "<table>" in tv["text_html"] and tv["file_name"].endswith("_A01_" + tv["settings"]["mode"] + ".zip"),
+   "Dars ko'rinishi: sarlavha, 2 rasm, jadval, adabiyotlar, fayl nomi …_A01_…")
+im_url = re.search(r'src="(/api/paket/courses/[^"]+/img/[0-9a-f]{20}\.png)"', tv["text_html"])
+ok(im_url and teach.get(im_url.group(1)).status_code == 200 and teach.get(im_url.group(1)).headers["content-type"] == "image/png" and rek.get(im_url.group(1)).status_code == 403,
+   "Ilovada rasm ko'rinadi (ko'lam bilan; rektor — 403)")
+ok(not any(a_["purpose"] == "rasm" for a_ in tv["assets"]), "Word ichidagi rasmlar fayllar ro'yxatini to'ldirmaydi")
+r = teach.post(f"{P}/courses/{C1}/topics/{A1}/images", params={"name": "sxema.png", "caption": "1.3-rasm. Qo'lda yuklangan sxema"}, content=png_bytes((200, 120, 0)))
+ok(r.status_code == 200 and r.json()["marker"].startswith("[RASM:") and r.json()["caption"].startswith("1.3-rasm"), f"HTTP: qo'lda rasm — {r.json().get('marker')}")
+ok(teach.post(f"{P}/courses/{C1}/topics/{A1}/images", params={"name": "x.pdf"}, content=b"%PDF-1.4 x").status_code == 415, "Rasm emas — 415")
+tv = teach.get(f"{P}/courses/{C1}/topics/{A1}").json()
+ok(tv["text_html"].count("<figure>") == 3 and "Qo'lda yuklangan sxema" in tv["text_html"] and any(a_["purpose"] == "rasm" and a_.get("marker") for a_ in tv["assets"]),
+   "Qo'lda yuklangan (havolasiz) rasm matn oxirida; fayllar ro'yxatida marker bilan")
+r = teach.post(f"{P}/courses/{C1}/topics/{A1}/slides", params={"name": "taqdimot.pdf"}, content=PDF3)
+ok(r.status_code == 200 and r.json()["kind"] == "pdf" and r.json()["count"] == 3 and r.json()["images"] == 3, f"HTTP: PDF taqdimot → 3 slayd rasmi ({r.text[:120]})")
+tv = teach.get(f"{P}/courses/{C1}/topics/{A1}").json()
+ok(tv["ready"]["slides"]["src"] == "pdf" and tv["ready"]["slides"]["display"] == "images" and tv["ready"]["slides"]["n"] == 3, "Tayyorgarlik: slaydlar PDF rasmlaridan (display=images)")
+r = teach.post(f"{P}/courses/{C1}/topics/{A1}/slides", params={"name": "taqdimot.pptx"}, content=PPTX)
+tv = teach.get(f"{P}/courses/{C1}/topics/{A1}").json()
+ok(tv["ready"]["slides"]["src"] == "pptx" and tv["ready"]["slides"]["file"] and not tv["ready"]["slides"]["pdf"],
+   f"PDF'dan KEYIN .pptx yuklandi — .pptx ishlatiladi, eskirgan PDF rasmlari/fayli paketga kirmaydi ({tv['ready']['slides']['src']})")
+r = teach.post(f"{P}/courses/{C1}/topics/{A1}/slides", params={"name": "taqdimot2.pdf"}, content=PDF3)
+tv = teach.get(f"{P}/courses/{C1}/topics/{A1}").json()
+pdfs = q("SELECT deleted FROM pk_assets WHERE course_id=? AND topic_no=? AND purpose='taqdimot' AND kind='pdf' ORDER BY id", (C1, A1))
+ok(tv["ready"]["slides"]["src"] == "pdf" and tv["ready"]["slides"]["file"] and tv["ready"]["slides"]["pdf"] and tv["ready"]["slides"]["n"] == 3
+   and [x["deleted"] for x in pdfs][-2:] == [2, 0] and sum(1 for a_ in tv["assets"] if a_["purpose"] == "taqdimot" and a_["kind"] == "pdf") == 1,
+   "PPTX'dan keyin PDF — PDF rasmlari ustun, .pptx yuklab olish uchun; eski PDF «almashtirildi» (deleted=2, ro'yxatda yo'q)")
+ok(teach.post(f"{P}/courses/{C1}/topics/{A1}/slides", params={"name": "buzuq.pdf"}, content=b"%PDF-1.4\nbuzilgan").status_code == 415, "Buzilgan PDF — 415")
+if not os.environ.get("ANTHROPIC_API_KEY"):
+    r = teach.post(f"{P}/courses/{C1}/topics/{A1}/keypoints/ai")
+    ok(r.status_code == 503 and "ANTHROPIC_API_KEY" in r.json()["detail"], "AI xulosalar: kalit yo'q — 503 (aniq xabar)")
+ok(kaf.post(f"{P}/courses/{C1}/topics/{A1}/keypoints/ai").status_code == 403 and kaf.post(f"{P}/courses/{C1}/topics/{A1}/keypoints", json={"items": ["x"], "approve": True}).status_code == 403,
+   "AI / xulosalar: kafedra mudiri — 403")
+r = teach.post(f"{P}/courses/{C1}/topics/{A1}/keypoints", json={"items": ["Kompyuterlar turlarga bo'linadi.", "Bayt — 8 bit."], "approve": True})
+ok(r.status_code == 200 and r.json()["keypoints"]["approved"]["items"] == ["Kompyuterlar turlarga bo'linadi.", "Bayt — 8 bit."], "Xulosalar qo'lda yozildi va tasdiqlandi")
+tv = teach.get(f"{P}/courses/{C1}/topics/{A1}").json()
+ok([b_["type"] for b_ in tv["blocks"]] == ["section", "plan", "text", "keypoints", "refs", "section", "slides", "file", "reflect"],
+   f"A1 bloklari shablon tartibida: {[b_['type'] for b_ in tv['blocks']]}")
+
+# =============================================================================================
 print("== 7. Yig'ish (jarayon ichida: bazaning nusxasi + soxta pleyer)")
 from app import rbac as RB
 tmp = Path(tempfile.mkdtemp(prefix="pkbuild-"))
@@ -327,6 +563,21 @@ try:
     PK.bind(dst, None)
     hctx = RB.ctx_for(dst, head_uid); tctx = RB.ctx_for(dst, teach_uid)
     MID = mikro["id"]
+    # migratsiya — idempotent (ikkinchi marta hech narsa o'zgarmaydi)
+    snap = lambda: (dst.execute("SELECT COUNT(*), COUNT(lesson), GROUP_CONCAT(lesson) FROM pk_packages").fetchone()[:], dst.execute("SELECT COUNT(*) FROM pk_lessons").fetchone()[0],
+                    dst.execute("SELECT v FROM pk_meta WHERE k='defaults'").fetchone()[0])
+    dst.execute("UPDATE pk_packages SET lesson=NULL WHERE id IN (SELECT id FROM pk_packages ORDER BY id LIMIT 3)"); dst.commit()
+    m1 = PK.migrate(dst); s1 = snap(); m2 = PK.migrate(dst); s2 = snap()
+    ok(s1 == s2 and m2["packages"] == 0 and m2["columns"] == [] and not m2["defaults"] and s1[0][0] == s1[0][1], f"Migratsiya idempotent: 1-marta {m1['packages']} qator, 2-marta 0; barcha paketlarda lesson ustuni")
+    ok(all(re.fullmatch(r"L\d+|kurs", x[0]) for x in dst.execute("SELECT lesson FROM pk_packages WHERE topic_no<1000")), "Eski mavzu paketlari — L darslar (lesson='L<N>', kurs paketi — 'kurs')")
+    tmpm = sqlite3.connect(":memory:"); tmpm.executescript(PK.SCHEMA)          # 3-bosqich sxemasi (lesson/keypoints ustunlarisiz)
+    tmpm.executescript("INSERT INTO pk_packages(course_id,topic_no,version) VALUES(1,3,1),(1,0,1);")
+    tmpm.execute("INSERT INTO pk_meta VALUES('defaults', ?)", (json.dumps({**PK._OLD_DEFAULTS, "blocks": {}}),))
+    o1 = PK.migrate(tmpm); o2 = PK.migrate(tmpm)
+    ok(o1["columns"] == ["pk_topics.keypoints", "pk_packages.lesson"] and o1["packages"] == 2 and o1["defaults"] and o2 == {"columns": [], "packages": 0, "defaults": False}
+       and [r_[0] for r_ in tmpm.execute("SELECT lesson FROM pk_packages ORDER BY id")] == ["L3", "kurs"] and json.loads(tmpm.execute("SELECT v FROM pk_meta WHERE k='defaults'").fetchone()[0])["mode"] == "xapi",
+       "Eski sxemadan migratsiya: ustunlar qo'shildi, L3/kurs, o'zgartirilmagan standart → xAPI; qayta — o'zgarishsiz")
+    tmpm.close()
     zips = {}
     for mode in ("scorm12", "scorm2004", "xapi", "none"):
         r = PK.build_topic(hctx, MID, 1, mode)
@@ -344,10 +595,17 @@ try:
     ok(cj["v"] == 1 and re.fullmatch(rf"isft-{MID}-1-v\d+", cj["id"]) and cj["lang"] == "uz" and cj["topic"]["no"] == 1 and cj["course"]["subject"] == "Mikroiqtisodiyot"
        and cj["brand"]["logo"] == "assets/logo.png" and cj["brand"]["color"] == "#8B0033", "Kontrakt: v, id, lang, course, topic, brand")
     types = [b["type"] for b in cj["blocks"]]
-    ok(types[:4] == ["plan", "text", "slides", "video"] and types[-1] == "quiz" and [b["id"] for b in cj["blocks"]] == [f"b{i}" for i in range(1, len(types) + 1)],
-       f"Bloklar tartibi va id: {types}")
+    ok(types == ["section", "video", "section", "plan", "text", "section", "slides", "quiz", "reflect"] and [b["id"] for b in cj["blocks"]] == [f"b{i}" for i in range(1, len(types) + 1)],
+       f"Bloklar tartibi (kafedra shabloni) va id: {types}")
+    ok([b["title"] for b in cj["blocks"] if b["type"] == "section"] == ["VIDEODARS", "MA'RUZA MATNI", "DARS TAQDIMOTI"], "Bo'lim sarlavhalari: VIDEODARS, MA'RUZA MATNI, DARS TAQDIMOTI")
+    pb_ = next(b for b in cj["blocks"] if b["type"] == "plan")
+    ok(pb_["heading"].startswith("1-MAVZU: ") and pb_["heading"] == pb_["heading"].upper() and len(pb_["items"]) == 4, f"Reja bloki: heading «{pb_['heading'][:40]}…» + 4 band")
+    rb_ = cj["blocks"][-1]
+    ok(rb_["question"] == "Darsni to'liq o'zlashtirdingizmi?" and [o["text"] for o in rb_["options"]] == ["Ha, albatta", "Yo'q, to'liq o'zlashtirmadim"]
+       and rb_["options"][1]["feedback"] == "Ma'ruza matni va videodarsni qayta ko'rib chiqing.", "Reflect bloki (baholanmaydi): savol, 2 javob, izohlar")
+    ok(cj["layout"] == "steps" and cj["lesson"] == {"code": "L1", "kind": "maruza", "no": 1, "title": cj["title"]} and cj["topic"]["no"] == 1, "Kontrakt v2: layout=steps, lesson {code L1, kind maruza}, topic saqlangan")
     sb = next(b for b in cj["blocks"] if b["type"] == "slides")
-    ok(sb["file"] == "assets/taqdimot.pptx" and sb["pdf"] is None and len(sb["slides"]) == 4 and all(s["image"] is None or s["image"] in names for s in sb["slides"]), "Slaydlar bloki: .pptx fayl, rasm yo'llari zip ichida")
+    ok(sb["file"] == "assets/taqdimot.pptx" and sb["pdf"] is None and len(sb["slides"]) == 4 and sb["display"] == "text" and all(s["image"] is None or s["image"] in names for s in sb["slides"]), "Slaydlar bloki: .pptx fayl, rasm yo'llari zip ichida")
     vb = next(b for b in cj["blocks"] if b["type"] == "video")
     ok(vb["provider"] == "youtube" and vb["video_id"] == "ISFTdemo001" and vb["start"] == 0, "Video bloki (namuna ID)")
     qb = next(b for b in cj["blocks"] if b["type"] == "quiz")
@@ -409,17 +667,109 @@ try:
     # o'qituvchi: begona kurs / tasdiqlash
     try: PK.build_topic(tctx, MID, 1); ok(False, "o'qituvchi begona kursni yig'di")
     except RB.AccessDenied: ok(True, "O'qituvchi begona kurs paketini yig'olmaydi")
+    # shablon sozlamasi: bo'lim nomlari, layout, reflect o'chirish (dars bo'yicha)
+    PK.set_topic_settings(hctx, MID, 2, {"layout": "scroll", "sections": {"video": "VIDEO DARS"}, "blocks": {"reflect": False, "sections": True},
+                                         "reflect": {"question": "Tushundingizmi?", "options": [{"text": "Ha"}]}})
+    g2 = PK.gather(MID, 2)["content"]
+    ok(g2["layout"] == "scroll" and g2["blocks"][0] == {"id": "b1", "type": "section", "title": "VIDEO DARS"} and all(b["type"] != "reflect" for b in g2["blocks"]),
+       "Dars sozlamasi: layout=scroll, bo'lim nomi o'zgardi, reflect o'chirildi (1 javobli reflect — e'tiborsiz)")
+    PK.set_topic_settings(hctx, MID, 2, {"blocks": {"sections": False}}, reset=True)
+    PK.set_topic_settings(hctx, MID, 2, {"blocks": {"sections": False, "reflect": True}})
+    ok(all(b["type"] != "section" for b in PK.gather(MID, 2)["content"]["blocks"]), "Bo'lim sarlavhalari o'chirilishi mumkin")
+    PK.set_topic_settings(hctx, MID, 2, {}, reset=True)
+    # amaliy dars (A1 — namuna ro'yxatdan): Word (rasmlar, jadval, adabiyotlar), PDF slaydlar, AI xulosalar (soxta Claude)
+    from app import claude_client as CC
+    AK = 1001
+    ok(any(l_["code"] == "A1" and l_["topic"] == 1 for l_ in PK.lessons(MID)), "Namuna: Mikroiqtisodiyot A1, A2 (NEXTID uslubi)")
+    PK.upload_text(hctx, MID, AK, RICH, None, "amaliy1.docx")
+    PK.upload_slides(hctx, MID, AK, PDF3, "taqdimot.pdf")
+    src_txt = PK._plain(PK._text_source(MID, AK)["text"])
+    calls = []
+    def fake_call_json(**kw):
+        calls.append(kw)
+        return {"points": [{"text": "Kompyuterlar o'lchami va vazifasiga ko'ra turlarga bo'linadi.", "quote": "Kompyuterlar o'lchami va vazifasiga ko'ra bir necha turga bo'linadi"},
+                           {"text": "Bayt sakkiz bitdan iborat.", "quote": "Bayt — sakkiz bitdan iborat asosiy o'lchov birligi"},
+                           {"text": "Kvant kompyuterlari 1950-yilda yaratilgan.", "quote": "Kvant kompyuterlari 1950-yilda yaratilgan"},     # matnda yo'q — tashlanadi
+                           {"text": "Axborot texnologiyalari jamiyat asosidir.", "quote": "Axborot texnologiyalari zamonaviy jamiyatning asosidir"},
+                           {"text": "Bo'sh iqtibos", "quote": ""}]}, {"in": 1200, "out": 300, "model": "claude-opus-5-5"}
+    saved_cc = (CC.call_json, CC.has_key)
+    try:
+        CC.has_key = lambda: False
+        try: PK.ai_keypoints(hctx, MID, AK); ok(False, "kalitsiz AI chaqirildi")
+        except PK.HTTPException as e: ok(e.status_code == 503 and "ANTHROPIC_API_KEY" in e.detail, "AI kalitsiz — 503, o'zbekcha aniq xabar")
+        CC.has_key = lambda: True; CC.call_json = fake_call_json
+        r = PK.ai_keypoints(hctx, MID, AK)
+        ok([i["text"] for i in r["draft"]["items"]] == ["Kompyuterlar o'lchami va vazifasiga ko'ra turlarga bo'linadi.", "Bayt sakkiz bitdan iborat.", "Axborot texnologiyalari jamiyat asosidir."]
+           and r["dropped"] == 2, f"AI xulosalar: matnda topilmagan iqtibosli 2 ta band tashlandi ({r['dropped']})")
+        kw = calls[-1]
+        sent = kw["content"][0]["text"]
+        ok(kw["model"] == "claude-opus-5-5" and kw["schema"]["properties"]["points"]["items"]["required"] == ["text", "quote"] and kw["schema"]["additionalProperties"] is False
+           and "Bayt — sakkiz bitdan" in sent and "[RASM:" not in sent and "[JADVAL:" not in sent, "AI so'rovi: model, qat'iy sxema; faqat dars matni (belgilarsiz) yuboriladi")
+        ok(not re.search(r"talaba|student|baho|ism", sent.split("MA'RUZA MATNI:")[0], re.I), "AI so'roviga talaba ma'lumoti qo'shilmaydi")
+        ok(all(b["type"] != "keypoints" for b in PK.gather(MID, AK)["content"]["blocks"]), "Qoralama xulosa paketga kirmaydi (tasdiq kerak)")
+        PK.save_keypoints(hctx, MID, AK, [i["text"] for i in r["draft"]["items"]][:2] + ["O'qituvchi qo'shgan xulosa."], approve=True)
+        def boom(**kw): raise CC.AIError("AI xizmati hozir band (so'rovlar cheklovi).")
+        CC.call_json = boom
+        try: PK.ai_keypoints(hctx, MID, AK); ok(False, "AI xatosi yutildi")
+        except PK.HTTPException as e: ok(e.status_code == 502 and "band" in e.detail, "AI xatosi — 502, tasdiqlangan xulosalar saqlanib qoladi")
+        os.environ["ISFT_CORE_PK_DAILY"] = "1"
+        try: PK.ai_keypoints(hctx, MID, AK); ok(False, "kunlik cheklov ishlamadi")
+        except PK.HTTPException as e: ok(e.status_code == 429, "Kunlik cheklov (ISFT_CORE_PK_DAILY) — 429")
+        os.environ.pop("ISFT_CORE_PK_DAILY", None)
+    finally:
+        CC.call_json, CC.has_key = saved_cc
+    ga = PK.gather(MID, AK)
+    ca = ga["content"]
+    ok([b["type"] for b in ca["blocks"]] == ["section", "plan", "text", "keypoints", "refs", "section", "slides", "file", "quiz", "reflect"]
+       and ga["ready"]["quiz"]["approved"] == dst.execute("SELECT COUNT(*) FROM tb_questions WHERE course_id=? AND topic_no=1 AND status='tasdiqlandi' AND deleted=0", (MID,)).fetchone()[0] > 0,
+       f"A1 (1-mavzuga bog'langan) bloklari — test 1-mavzu savollaridan: {[b['type'] for b in ca['blocks']]}")
+    kb = next(b for b in ca["blocks"] if b["type"] == "keypoints"); rfb = next(b for b in ca["blocks"] if b["type"] == "refs")
+    ok(kb["items"][-1] == "O'qituvchi qo'shgan xulosa." and len(kb["items"]) == 3 and rfb["items"] == ["Karimov I. Informatika asoslari. T.: Fan, 2020.", "Sobirov A. Axborot texnologiyalari. T., 2019."],
+       "keypoints (tasdiqlangan, tahrirlangan) va refs bloklari")
+    ok(ca["lesson"] == {"code": "A1", "kind": "amaliy", "no": 1, "title": ca["title"]} and ca["tracking"]["activity_id"] == f"https://isft.uz/xapi/paket/{MID}/A1"
+       and next(b for b in ca["blocks"] if b["type"] == "plan")["heading"].startswith("1-AMALIY MASHG'ULOT: "), "A1: lesson, activity_id …/A1, reja sarlavhasi")
+    slb = next(b for b in ca["blocks"] if b["type"] == "slides")
+    ok(slb["display"] == "images" and [x_["image"] for x_ in slb["slides"]] == ["assets/slides/p1.jpg", "assets/slides/p2.jpg", "assets/slides/p3.jpg"] and slb["pdf"] == "assets/taqdimot.pdf",
+       "PDF → slayd rasmlari (pypdfium2): display=images, 3 ta p*.jpg")
+    _I2 = _I.open(Path(ga["files"]["assets/slides/p1.jpg"])); ok(_I2.size[0] == 1600 and _I2.format == "JPEG", f"Slayd rasmi ~1600 px kenglikda ({_I2.size})")
+    for mode in ("xapi", "scorm12", "scorm2004", "none"):
+        r = PK.build_topic(hctx, MID, AK, mode)
+        data = (PK.store() / dst.execute("SELECT file FROM pk_packages WHERE id=?", (r["package"]["id"],)).fetchone()[0]).read_bytes()
+        v = PK.validate_zip(data)
+        za = zipfile.ZipFile(io.BytesIO(data)); cja = json.loads(za.read("content.json"))
+        tbx = next(b for b in cja["blocks"] if b["type"] == "text")
+        imgs_ = re.findall(r'<img src="(assets/img/[0-9a-f]{20}\.png)"', tbx["html"])
+        ok(v["ok"] and len(imgs_) == 2 and all(x_ in za.namelist() for x_ in imgs_) and tbx["html"].count("<figcaption>") == 2 and "<table>" in tbx["html"]
+           and PK.html_unsafe(tbx["html"]) is None and r["package"]["lesson"] == "A1", f"A1 {mode}: validate_zip o'tdi, 2 rasm zip ichida, izohlar, jadval{'' if v['ok'] else v['errors']}")
+        if mode == "xapi":
+            ok("index.html" in za.namelist() and "tincan.xml" in za.namelist() and "imsmanifest.xml" not in za.namelist()
+               and ET.fromstring(za.read("tincan.xml")).find("{http://projecttincan.com/tincan.xsd}activities/{http://projecttincan.com/tincan.xsd}activity").get("id").endswith("/A1"),
+               "NEXTID (xAPI): zip ildizida index.html + tincan.xml, activity …/A1")
+    zt = PK.zip_bytes({**{n_: zipfile.ZipFile(io.BytesIO(data)).read(n_) for n_ in zipfile.ZipFile(io.BytesIO(data)).namelist()}})
+    bad_c = json.loads(zipfile.ZipFile(io.BytesIO(zt)).read("content.json"))
+    for b in bad_c["blocks"]:
+        if b["type"] == "text" and b["title"] == "Ma'ruza matni": b["html"] += '<img src="assets/img/yoq.png" alt="">'
+    ent = {n_: zipfile.ZipFile(io.BytesIO(zt)).read(n_) for n_ in zipfile.ZipFile(io.BytesIO(zt)).namelist()}; ent["content.js"] = PK.content_js(bad_c)
+    v = PK.validate_zip(PK.zip_bytes(ent))
+    ok(not v["ok"] and any("assets/img/yoq.png" in x_ for x_ in v["errors"]), "Validator: matndagi rasm zip ichida yo'q — xato")
+    for b in bad_c["blocks"]:
+        if b["type"] == "text" and b["title"] == "Ma'ruza matni": b["html"] = '<p>x</p><img src="https://evil.com/x.png">'
+    ent["content.js"] = PK.content_js(bad_c)
+    ok(not PK.validate_zip(PK.zip_bytes(ent))["ok"], "Validator: tashqi rasm (http) — xavfli HTML")
+    ok(PK.download_name(mikro, AK, "xapi") == "ISFT_Mikroiqtisodiyot_A01_xapi.zip" and PK.download_name(mikro, 3002, "scorm12") == "ISFT_Mikroiqtisodiyot_Lab02_scorm12.zip",
+       "Fayl nomi: ISFT_<fan>_A01_xapi.zip, …_Lab02_…")
     # kurs paketi
     PK.build_topic(hctx, MID, 2, "scorm12")
     for mode in ("scorm12", "scorm2004", "xapi"):
         r = PK.build_course(hctx, MID, mode)
-        ok(r["validation"]["ok"] and r["validation"]["scos"] == 2 and r["package"]["topic_no"] == 0, f"Kurs paketi ({mode}): 2 ta SCO, validate_zip o'tdi")
+        ok(r["validation"]["ok"] and r["validation"]["scos"] == 3 and r["package"]["topic_no"] == 0, f"Kurs paketi ({mode}): 3 ta SCO (L1, L2, A1), validate_zip o'tdi")
     kz = zipfile.ZipFile(PK.store() / dst.execute("SELECT file FROM pk_packages WHERE course_id=? AND topic_no=0 AND mode='scorm2004' ORDER BY version DESC", (MID,)).fetchone()[0])
     kr = ET.fromstring(kz.read("imsmanifest.xml"))
     hrefs = [x.get("href") for x in kr.iter("{http://www.imsglobal.org/xsd/imscp_v1p1}resource")]
-    ok(hrefs == ["t01/index.html", "t02/index.html"] and json.loads(kz.read("t02/content.json"))["tracking"]["mode"] == "scorm2004", "Kurs paketi: har mavzu o'z papkasida, tracking.mode qayta yozildi")
+    ok(hrefs == ["t01/index.html", "t02/index.html", "a01/index.html"] and json.loads(kz.read("t02/content.json"))["tracking"]["mode"] == "scorm2004",
+       f"Kurs paketi: har dars o'z papkasida (t01, t02, a01), tracking.mode qayta yozildi ({hrefs})")
     r = PK.build_course(hctx, MID, "scorm12", only_approved=True)
-    ok(r["topics"] == [{"no": 1, "version": r["topics"][0]["version"], "status": "tasdiqlandi"}], "Kurs paketi: faqat tasdiqlangan mavzular")
+    ok(r["topics"] == [{"no": 1, "code": "L1", "version": r["topics"][0]["version"], "status": "tasdiqlandi"}], "Kurs paketi: faqat tasdiqlangan darslar")
     # validator — buzilgan paketlar
     def tamper(fn):
         zin = zipfile.ZipFile(io.BytesIO(zips["scorm12"])); ent = {n: zin.read(n) for n in zin.namelist()}; fn(ent); return PK.zip_bytes(ent)
@@ -470,9 +820,9 @@ try:
         except PK.HTTPException as e: ok(e.status_code == 400, f"Preview: {bad!r} — 400")
     try: PK.preview_file(hctx, pid, "yoq.html"); ok(False, "yo'q fayl")
     except PK.HTTPException as e: ok(e.status_code == 404, "Preview: zip ichida yo'q fayl — 404")
-    ok(PK.download_name(mikro, 5, "scorm12") == "ISFT_Mikroiqtisodiyot_05_scorm12.zip" and PK.download_name({"subject": "Iqtisodiyotda o'yinlar nazariyasi"}, 0, "xapi") ==
-       "ISFT_Iqtisodiyotda_oyinlar_nazariyasi_kurs_xapi.zip" and PK.download_name({"subject": "Бизнес-план"}, 1, "scorm2004") == "ISFT_Biznes_plan_01_scorm2004.zip",
-       "Yuklab olish nomi: ISFT_<fan>_<mavzu>_<tur>.zip (ASCII)")
+    ok(PK.download_name(mikro, 5, "scorm12") == "ISFT_Mikroiqtisodiyot_L05_scorm12.zip" and PK.download_name({"subject": "Iqtisodiyotda o'yinlar nazariyasi"}, 0, "xapi") ==
+       "ISFT_Iqtisodiyotda_oyinlar_nazariyasi_kurs_xapi.zip" and PK.download_name({"subject": "Бизнес-план"}, 1, "scorm2004") == "ISFT_Biznes_plan_L01_scorm2004.zip",
+       "Yuklab olish nomi: ISFT_<fan>_<dars kodi L01/A01>_<tur>.zip (ASCII)")
     # to'g'ri / noto'g'ri savol — har doim ["To'g'ri", "Noto'g'ri"], [0] = to'g'ri (bazada teskari saqlangan bo'lsa ham)
     tfq = dst.execute("SELECT id FROM tb_questions WHERE course_id=? AND topic_no=1 AND qtype='tf' AND status='tasdiqlandi' AND deleted=0 LIMIT 1", (MID,)).fetchone()
     ok(PK._tf_correct(["Noto'g'ri", "To'g'ri"], [1]) == 0 and PK._tf_correct(["Noto‘g‘ri", "To‘g‘ri"], [0]) == 1 and PK._tf_correct(PK.TF_OPTIONS, [1]) == 1,
@@ -486,6 +836,12 @@ try:
     if (saved[0] / "index.html").is_file():
         PK.PLAYER_DIR = saved[0]
         integ = tmp / "integ"
+        PK.upload_text(hctx, MID, 1, RICH, None, "1-mavzu.docx")          # brauzerda rasm, jadval, adabiyotlar, xulosalar ham ko'rinsin
+        PK.save_keypoints(hctx, MID, 1, ["Kompyuterlar turlarga bo'linadi.", "Bayt — 8 bit."], approve=True)
+        PK.upload_slides(hctx, MID, 1, make_pdf(4), "taqdimot.pdf")       # .pptx (4 slayd) + PDF (4 bet) — galereya, sarlavhalar .pptx dan
+        sl1 = next(b for b in PK.gather(MID, 1)["content"]["blocks"] if b["type"] == "slides")
+        ok(sl1["display"] == "images" and sl1["slides"][0]["title"] == "Iqtisodiyot fani predmeti" and sl1["file"] == "assets/taqdimot.pptx",
+           "Bir xil taqdimotning .pptx va PDF'i: PDF rasmlari + .pptx sarlavha/izohlari, .pptx yuklab olish uchun")
         for mode in ("scorm12", "scorm2004", "xapi"):
             r = PK.build_topic(hctx, MID, 1, mode, force=True)
             ok(r["validation"]["ok"], f"Haqiqiy pleyer bilan {mode} paketi validate_zip dan o'tdi")
@@ -498,6 +854,70 @@ try:
             ok(pr.returncode == 0, "Brauzer: haqiqiy paket mock LMS'da — barcha bloklar, test, holat/ball, konsol xatosiz (tools/paket_build_check.js)")
         else:
             print("  · brauzer sinovi o'tkazib yuborildi (PW va CHROME muhit o'zgaruvchilari berilmagan)")
+    # --- dars → manba mavzusi (topic_ref): zaxira matn / video / test bog'langan mavzudan; o'z manbalari ustun
+    PK.save_lessons(hctx, MID, "A7- Amaliy: Bog'langan dars (2-mavzu)\nA8- Amaliy: Bog'lanmagan dars", True)
+    A7, A8 = 1007, 1008
+    dst.execute("UPDATE dl_items SET url='https://youtu.be/dQw4w9WgXcQ' WHERE course_id=? AND topic_no=2 AND kind='video'", (MID,)); dst.commit()
+    q2 = dst.execute("SELECT COUNT(*) FROM tb_questions WHERE course_id=? AND topic_no=2 AND status='tasdiqlandi' AND deleted=0", (MID,)).fetchone()[0]
+    l7 = PK.lesson_info(mikro, A7)
+    ok(l7["topic"] == 2 and PK.source_topic(l7) == 2 and PK.source_topic(PK.lesson_info(mikro, A8)) is None and PK.source_topic(PK.lesson_info(mikro, 3)) == 3,
+       "source_topic: bog'langan → topic_ref, L → o'z raqami, bog'lanmagan A → yo'q")
+    g7 = PK.gather(MID, A7)
+    ok(q2 > 0 and g7["ready"]["quiz"]["approved"] == q2 and any(b["type"] == "quiz" for b in g7["content"]["blocks"]), f"A7 (2-mavzu): Test bank 2-mavzu tasdiqlangan savollari ({q2} ta)")
+    ok(g7["ready"]["video"]["src"] == "monitoring" and g7["ready"]["video"]["video_id"] == "dQw4w9WgXcQ" and g7["ready"]["text"]["src"] == "testbank",
+       "A7: o'z manbasi yo'q — kontent monitoringi videosi va Test bank matni 2-mavzudan")
+    g8 = PK.gather(MID, A8)
+    ok(not g8["ready"]["quiz"]["approved"] and not g8["ready"]["video"]["ok"] and not g8["ready"]["text"]["ok"], "A8 (bog'lanmagan): zaxira manba yo'q")
+    rd_ = PK.readiness_map()
+    ok(rd_.get((MID, A7), {}).get("quiz") and rd_.get((MID, A7), {}).get("video") and rd_.get((MID, A7), {}).get("text") and not any((rd_.get((MID, A8)) or {}).values()),
+       "Qamrov (readiness_map) bog'lanishni hisobga oladi: A7 — test/video/matn bor, A8 — yo'q")
+    PK.set_video(hctx, MID, A7, "https://youtu.be/aaaaaaaaaaa")
+    PK.upload_text(hctx, MID, A7, None, "Amaliy mashg'ulotning o'z matni. Talabalar talab egri chizig'ini chizadi va taklif bilan solishtiradi. " * 2, "a7.txt")
+    g7 = PK.gather(MID, A7)
+    ok(g7["ready"]["video"]["src"] == "paket" and g7["ready"]["video"]["video_id"] == "aaaaaaaaaaa" and g7["ready"]["text"]["src"] == "paket" and g7["ready"]["quiz"]["approved"] == q2,
+       "A7: o'z videosi va matni ustun (zaxira emas), test — 2-mavzudan")
+    # --- taqdimot manbasi: eng oxirgi yuklangan; eski taqdimot (o'sha tur) «almashtirildi»
+    PK.upload_slides(hctx, MID, A7, PPTX, "t1.pptx"); PK.upload_slides(hctx, MID, A7, PDF3, "t1.pdf")
+    g7 = PK.gather(MID, A7)
+    ok(g7["ready"]["slides"]["src"] == "pdf" and "assets/taqdimot.pdf" in g7["files"] and "assets/taqdimot.pptx" in g7["files"], ".pptx → .pdf: PDF rasmlari, .pptx yuklab olish uchun")
+    PK.upload_slides(hctx, MID, A7, PPTX, "t2.pptx")
+    g7 = PK.gather(MID, A7)
+    tq = dst.execute("SELECT name, deleted, path FROM pk_assets WHERE course_id=? AND topic_no=? AND purpose='taqdimot' ORDER BY id", (MID, A7)).fetchall()
+    ok(g7["ready"]["slides"]["src"] == "pptx" and not g7["ready"]["slides"]["pdf"] and "assets/taqdimot.pdf" not in g7["files"]
+       and not any(k_.startswith("assets/slides/p") for k_ in g7["files"]), ".pdf → .pptx: .pptx ishlatiladi, eskirgan PDF rasmlari va fayli paketga kirmaydi")
+    ok([(x_[0], x_[1]) for x_ in tq] == [("t1.pptx", 2), ("t1.pdf", 0), ("t2.pptx", 0)] and (PK.store() / tq[0][2]).is_file(),
+       "Yangi .pptx — eski .pptx «almashtirildi» (deleted=2, fayl diskda qoladi); PDF (boshqa tur) tegilmaydi")
+    # --- PDF chizish xatosi → 415 + audit
+    _pdfium.PdfPage.render = _bad_render
+    try:
+        try: PK.upload_slides(hctx, MID, A8, PDF3, "buzuq.pdf"); ok(False, "chizish xatosi yutildi")
+        except PK.HTTPException as e:
+            au = dst.execute("SELECT allowed, detail FROM audit_log WHERE action='paket: PDF taqdimot rad etildi' ORDER BY id DESC LIMIT 1").fetchone()
+            ok(e.status_code == 415 and au and au[0] == 0 and "buzuq.pdf" in au[1] and not dst.execute("SELECT 1 FROM pk_assets WHERE course_id=? AND topic_no=? AND purpose='taqdimot'", (MID, A8)).fetchone(),
+               "PDF chizishda xato — 415, audit jurnalida (rad etildi), fayl saqlanmadi")
+    finally:
+        _pdfium.PdfPage.render = _orig_render
+    # --- ommaviy yig'ish: topics None / [] — barcha darslar; darslar ro'yxati bir marta quriladi
+    calls_l = []
+    _orig_lessons = PK.lessons
+    PK.lessons = lambda *a, **kw: (calls_l.append(1), _orig_lessons(*a, **kw))[1]
+    try:
+        allk = [l_["key"] for l_ in _orig_lessons(MID)]
+        b0 = PK.bulk_build(hctx, MID, None, None, True); n0 = len(calls_l)
+        b1 = PK.bulk_build(hctx, MID, [], None, True); n1 = len(calls_l) - n0
+        b2 = PK.bulk_build(hctx, MID, [A7], "xapi", False)
+        ok([r_["no"] for r_ in b0["results"]] == allk and [r_["no"] for r_ in b1["results"]] == allk and [r_["no"] for r_ in b2["results"]] == [A7] and b2["results"][0]["ok"],
+           f"bulk_build: topics None va [] — barcha {len(allk)} dars (orqaga moslik); [A7] — faqat A7")
+        ok(n0 == 1 and n1 == 1, f"bulk_build: lessons() bir marta ({n0}, {n1})")
+        calls_l.clear()
+        PK.gather(MID, A7); PK.build_topic(hctx, MID, A7, "scorm12"); PK.lesson_info(mikro, A7)
+        ok(not calls_l, f"gather / build_topic / lesson_info — lessons() ni qayta qurmaydi ({len(calls_l)})")
+    finally:
+        PK.lessons = _orig_lessons
+    try: PK.lesson_info(mikro, 1099); ok(False, "yo'q dars topildi")
+    except PK.HTTPException as e: ok(e.status_code == 400, "lesson_info: yo'q dars (A99) — 400")
+    ok(PK.lesson_info(mikro, 1) == next(l_ for l_ in PK.lessons(MID) if l_["key"] == 1) and PK.lesson_info(mikro, A7) == next(l_ for l_ in PK.lessons(MID) if l_["key"] == A7),
+       "lesson_info (to'g'ridan-to'g'ri so'rov) == lessons() dagi yozuv")
     # pending
     pend = PK.pending(hctx)
     ok(any(x["id"] == "approve" and x["view"] == "paket" for x in pend) or not dst.execute("SELECT 1 FROM pk_packages WHERE status='tayyor'").fetchone(), "«Mening vazifalarim»: tasdiq kutayotgan paketlar (bo'lim)")
@@ -517,12 +937,14 @@ else:
     if r.status_code == 200:
         pk_ = r.json()["package"]
         d = teach.get(f"{P}/packages/{pk_['id']}/download")
-        ok(d.status_code == 200 and PK.validate_zip(d.content)["ok"] and f'filename="ISFT_{PK._ascii(own["subject"], 50)}_{T:02d}_scorm12.zip"' in d.headers.get("content-disposition", ""),
+        ok(d.status_code == 200 and PK.validate_zip(d.content)["ok"] and f'filename="ISFT_{PK._ascii(own["subject"], 50)}_L{T:02d}_scorm12.zip"' in d.headers.get("content-disposition", ""),
            "Yuklab olish: zip tekshiruvdan o'tadi, fayl nomi to'g'ri")
         pv0 = teach.get(f"{P}/packages/{pk_['id']}/preview/index.html")
         loc = pv0.headers.get("location", "")
         ok(pv0.status_code == 302 and re.fullmatch(rf"{P}/pv/{pk_['id']}\.{teach_uid}\.\d+\.[0-9a-f]{{40}}/index\.html", loc) is not None,
            f"Preview: cookie bilan ochiladi → imzolangan yo'lga 302 ({loc[:60]}…)")
+        pvq = teach.get(f"{P}/packages/{pk_['id']}/preview/index.html?preview=1&x=<s>")
+        ok(pvq.status_code == 302 and pvq.headers.get("location", "").endswith("/index.html?preview=1"), "Preview: «?preview=1» imzolangan yo'lga o'tkaziladi (xavfli parametrlar tashlanadi)")
         anon = httpx.Client(base_url=B, timeout=60)   # sandbox (opaque origin) ichki so'rovlari cookie yubormaydi
         pv = anon.get(loc)
         ok(pv.status_code == 200 and "default-src 'none'" in pv.headers.get("content-security-policy", "") and "sandbox allow-scripts" in pv.headers.get("content-security-policy", ""),
@@ -561,12 +983,20 @@ print("== 9. Qamrov (SQL bilan solishtirish)")
 cv = head.get(P + "/coverage").json()
 t = cv["total"]
 pairs = lambda sql: {(r["course_id"], r["topic_no"]) for r in q(sql)}
-valid = pairs("SELECT c.id course_id, p.topic_no FROM pk_packages p JOIN dl_courses c ON c.id=p.course_id WHERE p.topic_no BETWEEN 1 AND COALESCE(c.topics,15)")
-appr = pairs("SELECT c.id course_id, p.topic_no FROM pk_packages p JOIN dl_courses c ON c.id=p.course_id WHERE p.status='tasdiqlandi' AND p.topic_no BETWEEN 1 AND COALESCE(c.topics,15)")
-quiz = pairs("SELECT DISTINCT q.course_id, q.topic_no FROM tb_questions q JOIN dl_courses c ON c.id=q.course_id WHERE q.status='tasdiqlandi' AND q.deleted=0 AND q.topic_no BETWEEN 1 AND COALESCE(c.topics,15)")
-text = pairs("SELECT s.course_id, s.topic_no FROM tb_sources s JOIN dl_courses c ON c.id=s.course_id WHERE s.topic_no BETWEEN 1 AND COALESCE(c.topics,15) "
-             "UNION SELECT a.course_id, a.topic_no FROM pk_assets a JOIN dl_courses c ON c.id=a.course_id WHERE a.purpose='matn' AND a.deleted=0 AND a.topic_no BETWEEN 1 AND COALESCE(c.topics,15)")
-ok(t["topics"] == q("SELECT SUM(COALESCE(topics,15)) n FROM dl_courses")[0]["n"] and t["courses"] == q("SELECT COUNT(*) n FROM dl_courses")[0]["n"], f"Jami mavzular: {t['topics']}")
+LES = {(c_["id"], k_) for c_ in q("SELECT id, COALESCE(topics,15) n FROM dl_courses") for k_ in range(1, c_["n"] + 1)} | \
+      {(r["course_id"], r["lkey"]) for r in q("SELECT course_id, lkey FROM pk_lessons WHERE deleted=0")}
+valid = pairs("SELECT course_id, topic_no FROM pk_packages WHERE topic_no>0") & LES
+appr = pairs("SELECT course_id, topic_no FROM pk_packages WHERE status='tasdiqlandi' AND topic_no>0") & LES
+# zaxira manbalar mavzu bo'yicha: dars → bog'langan mavzu (topic_ref), L — o'zi, bog'lanmagan A/S/… — yo'q
+LINK = {(r["course_id"], r["lkey"]): ((r["course_id"], r["topic_ref"]) if r["topic_ref"] else None) for r in q("SELECT course_id, lkey, topic_ref FROM pk_lessons WHERE deleted=0")
+        if r["topic_ref"] or r["lkey"] >= 1000}
+srcof = lambda k: LINK[k] if k in LINK else (k if k[1] < 1000 else None)
+qz = pairs("SELECT DISTINCT course_id, topic_no FROM tb_questions WHERE status='tasdiqlandi' AND deleted=0")
+tbs = pairs("SELECT course_id, topic_no FROM tb_sources")
+quiz = {k for k in LES if srcof(k) in qz}
+text = {k for k in LES if srcof(k) in tbs} | (pairs("SELECT course_id, topic_no FROM pk_assets WHERE purpose='matn' AND deleted=0") & LES)
+ok(t["topics"] == len(LES) and t["courses"] == q("SELECT COUNT(*) n FROM dl_courses")[0]["n"] and t["by_kind"].get("amaliy", 0) >= 2,
+   f"Jami darslar: {t['topics']} (L + qo'shilgan A/S/…: {t['by_kind']})")
 ok(t["built"] == len(valid) and t["approved"] == len(appr), f"Yig'ilgan {t['built']} / tasdiqlangan {t['approved']} — SQL bilan bir xil")
 ok(t["quiz"] == len(quiz) and t["text"] == len(text), f"Test {t['quiz']} / matn {t['text']} — SQL bilan bir xil")
 ok(sum(d["topics"] for d in cv["departments"]) == t["topics"] and sum(d["built"] for d in cv["departments"]) == t["built"], "Kafedralar yig'indisi = jami")

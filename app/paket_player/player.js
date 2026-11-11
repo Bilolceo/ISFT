@@ -5,6 +5,20 @@
  * Ball siyosati: LMS'ga OXIRGI urinish natijasi yuboriladi (eng yaxshisi faqat pleyer ichida ko'rsatiladi);
  * test o'tilgandan keyin qayta urinish berilmaydi (o'tgan natija tasodifan pasaymasin) va LMS'dagi «passed» holati
  * (SCORM 1.2 lesson_status, SCORM 2004 success_status, xAPI kurs natijasi) hech qachon «failed»/boshqasiga tushirilmaydi.
+ *
+ * Kontrakt v2: layout "steps" (Rise kabi — bitta qadam, o'ngda raqamli qadamlar, «Keyingi qadam») yoki "scroll" (yo'q bo'lsa —
+ * eski ko'rinish: chapda mundarija); lesson {code, kind, no, title}; bloklar: section, refs, keypoints, reflect; plan.heading;
+ * slides.display "images" (galereya) | "text"; matn ichida <figure><img src="assets/…"><figcaption> (lightbox).
+ *
+ * LMS API topilmasa (masalan NEXTID.LMS — Rise paketlari iframe'da launch parametrlarisiz): jim «mustaqil» rejim,
+ * holat localStorage'da. «Ko'rish rejimi» banneri FAQAT ?preview=1 bo'lsa (ISFT Core ko'rish oynasi shu parametrni qo'shadi).
+ * SCORM paketi API'siz — ogohlantirish banneri (Preview()).
+ *
+ * Ota oynaga xabarlar (window.parent !== window bo'lsa; hech kim tinglamasa — zararsiz):
+ *   parent.postMessage({source:"isft-paket", v:1, id, event, progress, score, step, steps, complete, success, [block, response]}, "*")
+ *   event: "progress" (progress 0..1 yoki joriy qadam o'zgarganda) | "completed" (sessiyada bir marta) |
+ *          "passed" / "failed" (test topshirilganda) | "answered" (reflect tanlovi; block, response = variant raqami 1..n)
+ *   score: {raw, min:0, max:100, scaled} yoki null; step — joriy qadam (1..steps).
  */
 (function (W, D) {
   'use strict';
@@ -34,10 +48,14 @@
     });
     return e;
   }
-  function icon(name) {   // statik SVG (kontentdan emas)
-    var s = el('span', { cls: 'ic', 'aria-hidden': 'true' });
-    s.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + (ICONS[name] || '') + '</svg>';
+  // Yagona innerHTML joyi: faqat shu fayldagi statik SVG konstantalari (ICONS, AVATAR) — kontentdan hech narsa kelmaydi
+  function staticSvg(cls, attrs, body) {
+    var s = el('span', { cls: cls, 'aria-hidden': 'true' });
+    s.innerHTML = '<svg ' + attrs + '>' + body + '</svg>';
     return s;
+  }
+  function icon(name) {
+    return staticSvg('ic', 'viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"', ICONS[name] || '');
   }
   var ICONS = {
     plan: '<path d="M9 6h11M9 12h11M9 18h11"/><path d="M4 6h.01M4 12h.01M4 18h.01"/>',
@@ -49,10 +67,26 @@
     check: '<path d="M5 12l5 5 9-10"/>', x: '<path d="M6 6l12 12M18 6L6 18"/>',
     left: '<path d="M15 6l-6 6 6 6"/>', right: '<path d="M9 6l6 6-6 6"/>', menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
     ext: '<path d="M14 4h6v6M20 4l-9 9M18 14v6H4V6h6"/>', down: '<path d="M12 4v12M7 11l5 5 5-5M5 20h14"/>',
-    print: '<path d="M7 9V3h10v6M7 18H4v-8h16v8h-3"/><path d="M7 14h10v7H7z"/>', notes: '<path d="M5 4h14v16H5z"/><path d="M9 9h6M9 13h6"/>'
+    print: '<path d="M7 9V3h10v6M7 18H4v-8h16v8h-3"/><path d="M7 14h10v7H7z"/>', notes: '<path d="M5 4h14v16H5z"/><path d="M9 9h6M9 13h6"/>',
+    section: '<path d="M4 6h16M4 12h10M4 18h16"/>', refs: '<path d="M5 4h10a4 4 0 0 1 4 4v12H9a4 4 0 0 1-4-4z"/><path d="M9 9h6M9 13h4"/>',
+    keypoints: '<path d="M12 3l2.6 5.6 6 .7-4.5 4.1 1.2 6L12 16.4 6.7 19.4l1.2-6L3.4 9.3l6-.7z"/>', reflect: '<path d="M4 5h16v11H9l-5 4z"/><path d="M9 10h6"/>',
+    restart: '<path d="M4 4v6h6"/><path d="M5.5 15a7 7 0 1 0 1.6-7.3L4 10"/>', expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
+    zoom: '<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5M11 8v6M8 11h6"/>'
   };
-  var TYPE_LABEL = { plan: 'Reja', text: "Ma'ruza", slides: 'Taqdimot', video: 'Video', file: 'Fayl', quiz: 'Test' };
-  var KNOWN = { plan: 1, text: 1, slides: 1, video: 1, file: 1, quiz: 1 };
+  // Mulohaza bloki personaji — chizilgan (real odam emas), statik
+  var AVATAR = '<circle cx="60" cy="60" r="58" fill="var(--av-bg)"/>' +
+    '<path d="M18 112c6-22 22-32 42-32s36 10 42 32a58 58 0 0 1-84 0z" fill="var(--brand)"/>' +
+    '<path d="M50 80l10 14 10-14z" fill="#fff"/><rect x="52" y="66" width="16" height="16" rx="6" fill="#f2c4a0"/>' +
+    '<ellipse cx="60" cy="50" rx="23" ry="25" fill="#f6d2b4"/>' +
+    '<path d="M36 50c-2-18 10-29 25-29 14 0 25 9 24 27-4-9-12-13-22-14-9 4-18 6-27 16z" fill="#3b2a24"/>' +
+    '<circle cx="51" cy="52" r="3" fill="#2b2b2b"/><circle cx="69" cy="52" r="3" fill="#2b2b2b"/>' +
+    '<path d="M45 44q6-4 11 0M64 44q6-4 11 0" stroke="#3b2a24" stroke-width="2.5" fill="none" stroke-linecap="round"/>' +
+    '<path d="M51 62q9 8 18 0" stroke="#b5523b" stroke-width="3" fill="none" stroke-linecap="round"/>' +
+    '<circle cx="45" cy="60" r="4" fill="#f4a9a0" opacity=".55"/><circle cx="75" cy="60" r="4" fill="#f4a9a0" opacity=".55"/>';
+  var TYPE_LABEL = { plan: 'Reja', text: "Ma'ruza", slides: 'Taqdimot', video: 'Video', file: 'Fayl', quiz: 'Test',
+    section: "Bo'lim", refs: 'Adabiyotlar', keypoints: 'Xulosalar', reflect: 'Mulohaza' };
+  var KNOWN = { plan: 1, text: 1, slides: 1, video: 1, file: 1, quiz: 1, section: 1, refs: 1, keypoints: 1, reflect: 1 };
+  var KIND = { maruza: "Ma'ruza", amaliy: "Amaliy mashg'ulot", seminar: 'Seminar', laboratoriya: 'Laboratoriya ishi', mustaqil: "Mustaqil ta'lim" };
 
   // Nisbiy, xavfsiz manzil (paket ichidagi fayl): boshqaruv belgilari olib tashlanadi («java\tscript:» kabi aylanib o'tishlar),
   // keyin faqat oq ro'yxat belgilari — sxema (":"), "/" bilan boshlanish, "\\", ".." yo'q
@@ -114,7 +148,7 @@
           if (a === 'href') {
             var u = httpUrl(v); if (!u) return;
             out.setAttribute('href', u); out.setAttribute('target', '_blank'); out.setAttribute('rel', 'noopener noreferrer');
-          } else if (a === 'src') { var s = assetUrl(v); if (s) out.setAttribute('src', s); }
+          } else if (a === 'src') { var s = assetUrl(v); if (s && /^assets\//.test(s)) out.setAttribute('src', s); }   // faqat paket ichidagi assets/
           else if (/^(colspan|rowspan|start|width|height)$/.test(a)) { if (/^\d{1,4}$/.test(v)) out.setAttribute(a, v); }
           else if (a === 'scope') { if (/^(row|col|rowgroup|colgroup)$/.test(v)) out.setAttribute(a, v); }
           else out.setAttribute(a, v.slice(0, 300));
@@ -158,13 +192,31 @@
         x.attempts = Math.max(0, Math.floor(num(b.attempts, 0)));
         x.shuffle = b.shuffle !== false; x.show_feedback = b.show_feedback !== false;
       }
-      if (b.type === 'slides') x.slides = arr(b.slides).filter(function (s) { return s && typeof s === 'object'; });
+      if (b.type === 'slides') {
+        x.slides = arr(b.slides).filter(function (s) { return s && typeof s === 'object'; });
+        x.display = b.display === 'images' && x.slides.some(function (s) { return assetUrl(s.image); }) ? 'images' : 'text';
+      }
+      if (b.type === 'plan') { x.heading = str(b.heading).trim(); x.items = arr(b.items).map(str).filter(Boolean); }
+      if (b.type === 'refs' || b.type === 'keypoints') {
+        x.items = arr(b.items).filter(function (it) { return (typeof it === 'string' && it.trim()) || (it && typeof it === 'object' && str(it.text).trim()); });
+        if (!x.items.length) return;
+        if (!str(b.title)) x.title = b.type === 'refs' ? 'Foydalanilgan adabiyotlar' : 'Asosiy xulosalar';
+      }
+      if (b.type === 'reflect') {
+        x.question = str(b.question).trim();
+        x.options = arr(b.options).map(function (o) { return typeof o === 'string' ? { text: o, feedback: '' } : o && typeof o === 'object' ? { text: str(o.text).trim(), feedback: str(o.feedback).trim() } : null; })
+          .filter(function (o) { return o && o.text; }).slice(0, 10);
+        if (!x.question || !x.options.length) return;
+      }
+      if (b.type === 'section' && !str(b.title).trim()) return;
       blocks.push(x);
     });
-    var tr = c.tracking || {};
+    var tr = c.tracking || {}, ls = c.lesson && typeof c.lesson === 'object' ? c.lesson : {};
     return {
-      id: str(c.id, 'isft-paket'), title: str(c.title) || str(c.topic && c.topic.title) || "O'quv paketi", lang: str(c.lang, 'uz'),
+      id: str(c.id, 'isft-paket'), title: str(c.title) || str(ls.title) || str(c.topic && c.topic.title) || "O'quv paketi", lang: str(c.lang, 'uz'),
       course: c.course || {}, topic: c.topic || {}, brand: c.brand || {}, blocks: blocks,
+      layout: c.layout === 'steps' ? 'steps' : 'scroll',
+      lesson: { code: str(ls.code).slice(0, 12), kind: KIND[ls.kind] ? ls.kind : '', no: num(ls.no, 0), title: str(ls.title) },
       tracking: { mode: str(tr.mode, 'none'), completion: /^(view_all|quiz_pass|view_and_quiz)$/.test(tr.completion) ? tr.completion : 'view_all',
         mastery: num(tr.mastery, 60), activity_id: str(tr.activity_id) }
     };
@@ -239,7 +291,7 @@
         set(p + 'type', it.type);
         set(p + 'student_response', it.r12.slice(0, 255));
         arr(it.c12).forEach(function (c, m) { set(p + 'correct_responses.' + m + '.pattern', str(c).slice(0, 255)); });   // har muqobil javob — alohida pattern
-        set(p + 'result', it.ok ? 'correct' : 'wrong');
+        set(p + 'result', it.neutral ? 'neutral' : it.ok ? 'correct' : 'wrong');
         set(p + 'time', clock12(it.when));
       },
       commit: function () { if (dead) return; try { if (String(api.LMSCommit('')) !== 'true') note('LMSCommit xato ' + err()); } catch (e) { /* jim */ } },
@@ -294,7 +346,7 @@
         set(p + 'description', it.desc.slice(0, 250));
         arr(it.c04).forEach(function (c, m) { set(p + 'correct_responses.' + m + '.pattern', str(c).slice(0, 4000)); });
         set(p + 'learner_response', it.r04.slice(0, 4000));
-        set(p + 'result', it.ok ? 'correct' : 'incorrect');
+        set(p + 'result', it.neutral ? 'neutral' : it.ok ? 'correct' : 'incorrect');
         set(p + 'timestamp', stamp2004(it.when));
       },
       commit: function () { if (dead) return; try { if (String(api.Commit('')) !== 'true') note('Commit xato ' + err()); } catch (e) { /* jim */ } },
@@ -423,6 +475,10 @@
         var def = { type: ACT + 'cmi.interaction', name: lm(it.title), description: lm(it.desc), interactionType: it.type === 'true-false' ? 'true-false' : it.type };
         if (it.type === 'choice') def.choices = it.choices.map(function (c, i) { return { id: letter(i), description: lm(c) }; });
         if (arr(it.cX).length) def.correctResponsesPattern = arr(it.cX).map(str);   // har muqobil javob — alohida element
+        if (it.neutral) {   // mulohaza (reflect): baholanmaydi — «responded», success yo'q
+          send(stmt('responded', 'responded', { objectType: 'Activity', id: actId + '/block/' + it.block, definition: def }, { response: it.rX }, true));
+          return;
+        }
         send(stmt('answered', 'answered', { objectType: 'Activity', id: actId + '/block/' + it.block + '/q/' + encodeURIComponent(it.qid), definition: def },
           { success: it.ok, response: it.rX }, true));
       },
@@ -460,10 +516,15 @@
     };
   }
 
+  // LMS API'siz rejim: ?preview=1 — «Ko'rish rejimi» banneri bilan; aks holda jim «mustaqil» rejim (NEXTID.LMS iframe'i va h.k.)
+  function previewParam() { try { return new URLSearchParams(W.location.search).get('preview') === '1'; } catch (e) { return false; } }
+  // SCORM paketi (tracking.mode scorm12/scorm2004) LMS API'sini topmasa — natija saqlanmaydi: ogohlantirish banneri (?preview=1 bo'lmasa).
+  // xAPI / none — NEXTID kabi jim (banner yo'q).
   function Preview(C) {
-    var key = 'isft-paket:' + C.id;
+    var key = 'isft-paket:' + C.id, pv = previewParam(), m = C.tracking.mode;
     return {
-      kind: 'preview', label: "Ko'rish rejimi", limit: 64000, preview: true,
+      kind: pv ? 'preview' : 'standalone', label: pv ? "Ko'rish rejimi" : 'Mustaqil rejim', limit: 64000, preview: pv,
+      nolms: !pv && (m === 'scorm12' || m === 'scorm2004'),
       init: function () { var s = ''; try { s = W.localStorage.getItem(key) || ''; } catch (e) { /* xotira yopiq */ } var st = decodeState(s); return { state: s, location: st ? str(st.c) : '', learner: '', mastery: null }; },
       save: function (s) { try { W.localStorage.setItem(key, s); } catch (e) { /* jim */ } },
       report: function () {}, interaction: function () {}, commit: function () {}, finish: function () {}
@@ -485,7 +546,7 @@
   var brand = /^#[0-9a-f]{6}$/i.test(str(C.brand.color)) ? C.brand.color : '#8B0033';
   D.documentElement.style.setProperty('--brand', brand);
   D.documentElement.style.setProperty('--brand-ink', shade(brand, -0.25));
-  D.documentElement.style.setProperty('--brand-soft', shade(brand, 0.9));
+  D.documentElement.style.setProperty('--brand-soft-l', shade(brand, 0.9));   // qorong'i rejimda CSS o'zi aralashtiradi
   D.documentElement.style.setProperty('--brand-lite', shade(brand, 0.45));
   D.documentElement.lang = /^[a-z]{2}(-[A-Za-z]{2,4})?$/.test(C.lang) ? C.lang : 'uz';
   D.title = C.title + ' — ' + (str(C.brand.name) || 'ISFT');
@@ -495,31 +556,59 @@
     return '#' + [f(r), f(g), f(b)].map(function (c) { return pad(c.toString(16), 2); }).join('');
   }
 
-  var B = C.blocks, quizzes = B.filter(function (b) { return b.type === 'quiz'; }), content = B.filter(function (b) { return b.type !== 'quiz'; });
-  var S = { h: hash(C.id), v: '', c: 0, q: {} };   // saqlanadigan holat
-  var visited = {}, cur = -1, tracker = null, t0 = Date.now(), finished = false, lmsMastery = null, lastCompl = null, rendered = {}, saveT = 0;
+  var STEPS_UI = C.layout === 'steps';
+  var B = C.blocks, quizzes = B.filter(function (b) { return b.type === 'quiz'; });
+  var S = { h: hash(C.id), v: '', c: 0, q: {}, r: {} };   // saqlanadigan holat (v — qadamlar bo'yicha)
+  var visited = {}, seenBlock = {}, cur = -1, tracker = null, t0 = Date.now(), finished = false, lmsMastery = null, lastCompl = null, saveT = 0;
   var R = {};   // DOM havolalari
+  var reduced = false; try { reduced = W.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { /* jim */ }
+
+  // ------------------------------------------------------------------ qadamlar: har blok — bitta qadam; steps rejimida uzun matn h2 bo'yicha bo'linadi
+  function textDom(b) {   // tozalangan matn bir marta: sarlavha id'lari butun blok bo'yicha barqaror, keyin qismlarga ajratiladi
+    if (b._parts) return b._parts;
+    var box = el('div'); box.appendChild(sanitize(b.html));
+    Array.prototype.forEach.call(box.querySelectorAll('h2,h3,h4'), function (h, k) { h.id = b.id + '-h' + k; h.setAttribute('tabindex', '-1'); });
+    var kids = Array.prototype.slice.call(box.childNodes).filter(function (n) { return n.nodeType === 1 || str(n.nodeValue).trim(); });
+    var h2 = kids.filter(function (n) { return n.nodeName === 'H2'; }).length, parts = [[]];
+    if (STEPS_UI && h2 >= 2 && box.textContent.length > 900) {
+      kids.forEach(function (n) {   // yangi qism — har h2 da (kirish matni birinchi h2 qismiga qo'shiladi)
+        if (n.nodeName === 'H2' && parts[parts.length - 1].some(function (x) { return x.nodeName === 'H2'; })) parts.push([]);
+        parts[parts.length - 1].push(n);
+      });
+    } else parts = [kids];
+    b._parts = parts;
+    return parts;
+  }
+  var STEPS = [];
+  B.forEach(function (b, bi) {
+    var n = b.type === 'text' ? textDom(b).length : 1;
+    for (var k = 0; k < n; k++) STEPS.push({ key: b.id + (n > 1 ? '.' + (k + 1) : ''), b: bi, part: k, parts: n });
+  });
+  function blockOf(s) { return B[s.b]; }
 
   function passPct(b) { return lmsMastery != null ? clamp(lmsMastery, 0, 100) : b.pass_pct; }
   function qs(b) { var q = S.q[b.id]; if (!q) q = S.q[b.id] = { n: 0, s: null, b: null, p: 0 }; return q; }
+  function stepDone(s) { var b = blockOf(s); return b.type === 'quiz' ? !!qs(b).p : !!visited[s.key]; }
   function status() {
-    var seen = content.filter(function (b) { return visited[b.id]; }).length, allSeen = seen === content.length;
+    var cs = STEPS.filter(function (s) { return blockOf(s).type !== 'quiz'; });
+    var seen = cs.filter(function (s) { return visited[s.key]; }).length, allSeen = seen === cs.length;
     var tried = quizzes.filter(function (b) { return qs(b).s != null; }), passed = quizzes.length > 0 && quizzes.every(function (b) { return qs(b).p; });
     var score = tried.length ? Math.round(tried.reduce(function (a, b) { return a + qs(b).s; }, 0) / tried.length) : null;
     var success = !tried.length ? 'unknown' : (tried.length === quizzes.length && passed ? 'passed' : tried.some(function (b) { return !qs(b).p; }) ? 'failed' : 'unknown');
     var mode = C.tracking.completion;
     if (!quizzes.length) mode = 'view_all';
     var complete = mode === 'view_all' ? allSeen : mode === 'quiz_pass' ? passed : allSeen && passed;
-    var units = content.length + quizzes.length, done = seen + quizzes.filter(function (b) { return qs(b).p; }).length;
-    return { complete: complete, success: success, score: score, progress: units ? done / units : 1, seen: seen, total: content.length };
+    var qn = mode === 'view_all' ? 0 : quizzes.length;   // view_all: ulush faqat ko'rilgan qadamlar bo'yicha («Yakunlandi» = 100%)
+    var units = cs.length + qn, done = seen + (qn ? quizzes.filter(function (b) { return qs(b).p; }).length : 0);
+    return { complete: complete, success: success, score: score, progress: units ? done / units : 1, seen: seen, total: cs.length };
   }
   function stateString() {
-    S.v = B.map(function (b) { return visited[b.id] ? '1' : '0'; }).join(''); S.c = cur;
+    S.v = STEPS.map(function (s) { return visited[s.key] ? '1' : '0'; }).join(''); S.c = cur;
     return encodeState(S, tracker.limit);
   }
   function save(commit) {
     if (!tracker) return;
-    tracker.save(stateString(), B[cur] ? B[cur].id : '');
+    tracker.save(stateString(), STEPS[cur] ? STEPS[cur].key : '');
     if (commit) tracker.commit();
   }
   function saveSoon() { clearTimeout(saveT); saveT = setTimeout(function () { save(false); }, 400); }
@@ -530,134 +619,297 @@
     if (r.complete && lastCompl === false) announce('Tabriklaymiz! Mavzu yakunlandi.');
     lastCompl = r.complete;
     save(commit);
+    pmTick(r);
     return r;
   }
   function announce(t) { if (!R.live) return; R.live.textContent = ''; setTimeout(function () { R.live.textContent = t; }, 30); }
+
+  // ------------------------------------------------------------------ ota oynaga xabarlar (postMessage) — yuqoridagi izohga qarang
+  var pm = { key: '', completed: false };
+  function emit(ev, r, extra) {
+    if (W.parent === W) return;
+    r = r || status();
+    var msg = { source: 'isft-paket', v: 1, id: C.id, event: ev, progress: Math.round(r.progress * 1000) / 1000,
+      score: r.score == null ? null : { raw: r.score, min: 0, max: 100, scaled: Math.round(r.score * 100) / 10000 },
+      step: cur + 1, steps: STEPS.length, complete: !!r.complete, success: r.success };
+    if (extra) for (var k in extra) msg[k] = extra[k];
+    try { W.parent.postMessage(msg, '*'); } catch (e) { /* jim */ }
+  }
+  function pmTick(r) {
+    if (!NS.ready && cur < 0) return;
+    r = r || status();
+    var key = Math.round(r.progress * 1000) + '|' + cur;
+    if (key !== pm.key) { pm.key = key; emit('progress', r); }
+    if (r.complete && !pm.completed) { pm.completed = true; emit('completed', r); }
+  }
 
   // ------------------------------------------------------------------ layout
   function build(info) {
     app.textContent = '';
     app.removeAttribute('aria-busy');
-    var logo = assetUrl(C.brand.logo);
+    app.classList.add(STEPS_UI ? 'l-steps' : 'l-scroll');
+    var logo = assetUrl(C.brand.logo), L = C.lesson;
     var crs = C.course, meta = [str(crs.subject), crs.course ? crs.course + '-kurs' : '', str(crs.kafedra)].filter(Boolean).join(' · ');
-    var topicNo = C.topic && C.topic.no ? C.topic.no + '-mavzu' : '';
+    var tno = L.code ? [L.code, KIND[L.kind] || ''].filter(Boolean).join(' · ') : C.topic && C.topic.no ? C.topic.no + '-mavzu' : '';
     R.skip = el('a', { cls: 'skip', href: '#main', text: "Asosiy mazmunga o'tish", onclick: function (e) { e.preventDefault(); R.main.focus(); } });
     if (tracker.preview) R.banner = el('div', { cls: 'banner', role: 'note' }, [el('strong', { text: "Ko'rish rejimi" }), " — natija LMS'ga yuborilmaydi"]);
-    R.menuBtn = el('button', { cls: 'btn icon only-m', type: 'button', 'aria-label': 'Mundarijani ochish', 'aria-controls': 'toc', 'aria-expanded': 'false', onclick: function () { toggleToc(); } }, [icon('menu')]);
+    else if (tracker.nolms) R.banner = el('div', { cls: 'banner warn', role: 'alert' }, [el('strong', { text: 'LMS bilan aloqa topilmadi' }), " — natija saqlanmaydi. O'qituvchiga xabar bering."]);
+    R.menuBtn = STEPS_UI ? null : el('button', { cls: 'btn icon only-m', type: 'button', 'aria-label': 'Mundarijani ochish', 'aria-controls': 'toc', 'aria-expanded': 'false', onclick: function () { toggleToc(); } }, [icon('menu')]);
     R.chip = el('span', { cls: 'chip' });
     R.bar = el('div', { cls: 'bar', role: 'progressbar', 'aria-label': "O'zlashtirish", 'aria-valuemin': '0', 'aria-valuemax': '100' }, [el('span')]);
+    R.restart = STEPS_UI ? el('button', { cls: 'btn icon restart', type: 'button', 'aria-label': 'Boshidan boshlash', title: 'Boshidan boshlash',
+      onclick: function () { go(0, true); announce('Birinchi qadamga qaytildi.'); } }, [icon('restart')]) : null;
     var header = el('header', { cls: 'top' }, [
       el('div', { cls: 'top-in' }, [
         R.menuBtn,
         logo ? el('img', { cls: 'logo', src: logo, alt: (str(C.brand.name) || 'ISFT') + ' logotipi', width: '44', height: '44' }) : el('span', { cls: 'logo txt', 'aria-hidden': 'true', text: str(C.brand.name, 'ISFT').slice(0, 4) }),
         el('div', { cls: 'ttl' }, [
           el('div', { cls: 'eyebrow', text: [str(C.brand.name, 'ISFT'), meta].filter(Boolean).join(' — ') }),
-          el('div', { cls: 'h' }, [topicNo ? el('span', { cls: 'tno', text: topicNo }) : null, el('span', { text: C.title })])
+          el('div', { cls: 'h' }, [tno ? el('span', { cls: 'tno', text: tno }) : null, el('span', { text: L.title || C.title })])
         ]),
-        el('div', { cls: 'top-r' }, [info.learner ? el('span', { cls: 'who', text: info.learner }) : null, R.chip])
+        el('div', { cls: 'top-r' }, [info.learner ? el('span', { cls: 'who', text: info.learner }) : null, R.chip, R.restart])
       ]),
       R.bar
     ]);
-    R.toc = el('nav', { cls: 'toc', id: 'toc', 'aria-label': 'Mundarija' });
-    R.tocList = el('ol', { cls: 'toc-l' });
-    B.forEach(function (b, i) {
-      var a = el('button', { type: 'button', cls: 'toc-i', 'data-i': String(i), 'data-type': b.type, onclick: function () { go(i, true); closeToc(); } }, [
-        el('span', { cls: 'tick' }, [icon(b.type)]),
-        el('span', { cls: 'toc-t' }, [el('span', { cls: 'toc-k', text: TYPE_LABEL[b.type] }), el('span', { cls: 'toc-n', text: b.title })]),
-        el('span', { cls: 'vis sr', text: '' })
-      ]);
-      R.tocList.appendChild(el('li', null, [a]));
-    });
-    R.tocHead = el('div', { cls: 'toc-h' }, [el('span', { text: 'Mundarija' }), R.tocCount = el('span', { cls: 'muted' }),
-      el('button', { cls: 'btn icon only-m', type: 'button', 'aria-label': 'Mundarijani yopish', onclick: function () { closeToc(); } }, [icon('x')])]);
-    R.toc.appendChild(R.tocHead); R.toc.appendChild(R.tocList);
-    R.toc.appendChild(el('div', { cls: 'toc-f' }, [el('span', { text: str(C.brand.full) }), el('span', { cls: 'muted', text: tracker.label })]));
     R.scrim = el('div', { cls: 'scrim', onclick: function () { closeToc(); } });
     R.main = el('main', { id: 'main', cls: 'main', tabindex: '-1' });
-    R.prev = el('button', { type: 'button', cls: 'btn ghost', onclick: function () { go(cur - 1, true); } }, [icon('left'), el('span', { text: 'Oldingi' })]);
-    R.next = el('button', { type: 'button', cls: 'btn primary', onclick: function () { go(cur + 1, true); } }, [el('span', { text: 'Keyingi' }), icon('right')]);
-    R.pos = el('span', { cls: 'pos muted' });
-    R.pager = el('div', { cls: 'pager' }, [R.prev, R.pos, R.next]);
+    R.prev = el('button', { type: 'button', cls: 'btn ghost', onclick: function () { go(cur - 1, true); } }, [icon('left'), el('span', { cls: 'pl', text: 'Oldingi' })]);
+    R.next = el('button', { type: 'button', cls: 'btn primary', onclick: function () { go(cur + 1, true); } }, [el('span', { text: STEPS_UI ? 'Keyingi qadam' : 'Keyingi' }), icon('right')]);
     R.live = el('div', { cls: 'sr', 'aria-live': 'polite', role: 'status' });
-    R.wrap = el('div', { cls: 'wrap' }, [R.toc, R.scrim, el('div', { cls: 'col' }, [R.main, R.pager])]);
+    R.items = [];
+    if (STEPS_UI) {
+      R.pos = el('button', { type: 'button', cls: 'pos', 'aria-controls': 'rail', 'aria-expanded': 'false', onclick: function () { toggleToc(); } });
+      R.rail = el('nav', { cls: 'rail', id: 'rail', 'aria-label': 'Qadamlar' });
+      R.list = el('ol', { cls: 'rail-l' });
+      STEPS.forEach(function (s, i) {
+        var b = blockOf(s), label = stepLabel(s);
+        var a = el('button', { type: 'button', cls: 'nav-i step t-' + b.type, 'data-i': String(i), 'data-type': b.type, 'data-block': b.id, 'aria-label': (i + 1) + '-qadam: ' + label,
+          onclick: function () { go(i, true); closeToc(); } }, [el('span', { cls: 'num', 'aria-hidden': 'true', text: String(i + 1) }), el('span', { cls: 'lbl', 'aria-hidden': 'true', text: label })]);
+        R.items.push(a); R.list.appendChild(el('li', null, [a]));
+      });
+      R.rail.appendChild(el('div', { cls: 'toc-h only-m' }, [el('span', { text: 'Qadamlar' }), el('button', { cls: 'btn icon', type: 'button', 'aria-label': 'Yopish', onclick: function () { closeToc(); R.pos.focus(); } }, [icon('x')])]));
+      R.rail.appendChild(R.list);
+      R.pager = el('div', { cls: 'pager' }, [R.prev, R.pos, R.next]);
+      R.wrap = el('div', { cls: 'wrap' }, [el('div', { cls: 'col' }, [R.main, R.pager]), R.scrim, R.rail]);
+    } else {
+      R.pos = el('span', { cls: 'pos muted' });
+      R.toc = el('nav', { cls: 'toc', id: 'toc', 'aria-label': 'Mundarija' });
+      R.list = el('ol', { cls: 'toc-l' });
+      STEPS.forEach(function (s, i) {
+        var b = blockOf(s);
+        var a = el('button', { type: 'button', cls: 'nav-i toc-i', 'data-i': String(i), 'data-type': b.type, 'data-block': b.id, onclick: function () { go(i, true); closeToc(); } }, [
+          el('span', { cls: 'tick' }, [icon(b.type)]),
+          el('span', { cls: 'toc-t' }, [el('span', { cls: 'toc-k', text: TYPE_LABEL[b.type] }), el('span', { cls: 'toc-n', text: b.title })]),
+          el('span', { cls: 'vis sr', text: '' })
+        ]);
+        R.items.push(a); R.list.appendChild(el('li', null, [a]));
+      });
+      R.tocHead = el('div', { cls: 'toc-h' }, [el('span', { text: 'Mundarija' }), R.tocCount = el('span', { cls: 'muted' }),
+        el('button', { cls: 'btn icon only-m', type: 'button', 'aria-label': 'Mundarijani yopish', onclick: function () { closeToc(); } }, [icon('x')])]);
+      R.toc.appendChild(R.tocHead); R.toc.appendChild(R.list);
+      R.toc.appendChild(el('div', { cls: 'toc-f' }, [el('span', { text: str(C.brand.full) }), el('span', { cls: 'muted', text: tracker.label })]));
+      R.pager = el('div', { cls: 'pager' }, [R.prev, R.pos, R.next]);
+      R.wrap = el('div', { cls: 'wrap' }, [R.toc, R.scrim, el('div', { cls: 'col' }, [R.main, R.pager])]);
+    }
     [R.skip, R.banner, header, R.wrap, R.live].forEach(function (n) { if (n) app.appendChild(n); });
-    D.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && app.classList.contains('toc-open')) { closeToc(); R.menuBtn.focus(); }
-    });
+    D.addEventListener('keydown', onKey);
+    W.addEventListener('beforeprint', buildPrint);
+    try { var mq = W.matchMedia('print'), f = function (e) { if (e.matches) buildPrint(); }; mq.addEventListener ? mq.addEventListener('change', f) : mq.addListener(f); } catch (e) { /* jim */ }
   }
-  function toggleToc() { if (app.classList.contains('toc-open')) closeToc(); else { app.classList.add('toc-open'); R.menuBtn.setAttribute('aria-expanded', 'true'); var c = R.tocList.querySelector('[aria-current]'); (c || R.tocList.querySelector('button')).focus(); } }
-  function closeToc() { app.classList.remove('toc-open'); if (R.menuBtn) R.menuBtn.setAttribute('aria-expanded', 'false'); }
+  function stepLabel(s) {
+    var b = blockOf(s);
+    if (b.type === 'text' && s.parts > 1) { var h = textDom(b)[s.part].filter(function (n) { return n.nodeName === 'H2'; })[0]; return h ? h.textContent : b.title + ' (' + (s.part + 1) + ')'; }
+    if (b.type === 'plan' && b.heading) return b.heading;
+    return b.title;
+  }
+  function typing(t) { return t && t.closest && t.closest('input,textarea,select,[contenteditable="true"],.deck,.thumbs,.lb,iframe'); }
+  function onKey(e) {
+    if (e.key === 'Escape' && app.classList.contains('toc-open')) { closeToc(); (R.menuBtn || R.pos).focus(); return; }
+    if (!STEPS_UI || e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || R.lbOpen || R.fsOpen || typing(e.target)) return;
+    if (e.key === 'ArrowRight' || e.key === 'PageDown') { if (cur < STEPS.length - 1) { e.preventDefault(); go(cur + 1, true); } }
+    else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { if (cur > 0) { e.preventDefault(); go(cur - 1, true); } }
+  }
+  function toggleToc() {
+    if (app.classList.contains('toc-open')) return closeToc();
+    app.classList.add('toc-open');
+    var btn = R.menuBtn || R.pos; btn.setAttribute('aria-expanded', 'true');
+    (R.items[cur] || R.items[0]).focus();
+  }
+  function closeToc() { app.classList.remove('toc-open'); var btn = R.menuBtn || (STEPS_UI && R.pos); if (btn) btn.setAttribute('aria-expanded', 'false'); }
   function renderProgress(r) {
     var pct = Math.round(r.progress * 100);
     R.bar.firstChild.style.width = pct + '%'; R.bar.setAttribute('aria-valuenow', String(pct)); R.bar.setAttribute('aria-valuetext', pct + '%');
     var label = r.success === 'failed' ? "O'tmadi" : r.complete ? (r.success === 'passed' ? "O'tdi" : 'Yakunlandi') : 'Jarayonda';
     R.chip.textContent = label + ' · ' + pct + '%';
     R.chip.className = 'chip ' + (r.success === 'failed' ? 'bad' : r.complete ? 'good' : '');
-    R.tocCount.textContent = r.seen + ' / ' + r.total;
-    Array.prototype.forEach.call(R.tocList.querySelectorAll('.toc-i'), function (a) {
-      var b = B[+a.getAttribute('data-i')], done = b.type === 'quiz' ? qs(b).p : visited[b.id];
-      a.classList.toggle('done', !!done);
-      a.classList.toggle('failed', b.type === 'quiz' && qs(b).s != null && !qs(b).p);
-      a.querySelector('.vis').textContent = done ? ' — bajarildi' : visited[b.id] ? " — ko'rildi" : '';
+    if (R.tocCount) R.tocCount.textContent = r.seen + ' / ' + r.total;
+    R.items.forEach(function (a, i) {
+      var s = STEPS[i], b = blockOf(s), done = stepDone(s), fail = b.type === 'quiz' && qs(b).s != null && !qs(b).p;
+      a.classList.toggle('done', done);
+      a.classList.toggle('failed', fail);
+      if (STEPS_UI) { a.setAttribute('aria-label', (i + 1) + '-qadam: ' + stepLabel(s) + (done ? ' — bajarildi' : fail ? " — o'tmadi" : '')); return; }
+      a.querySelector('.vis').textContent = done ? ' — bajarildi' : visited[s.key] ? " — ko'rildi" : '';
       var t = a.querySelector('.tick'); t.textContent = ''; t.appendChild(icon(done ? 'check' : b.type));
     });
   }
 
   function go(i, focus) {
-    if (i < 0 || i >= B.length) return;
+    if (i < 0 || i >= STEPS.length) return;
     var prev = cur; cur = i;
-    var b = B[i];
-    Array.prototype.forEach.call(R.tocList.querySelectorAll('.toc-i'), function (a) { if (+a.getAttribute('data-i') === i) a.setAttribute('aria-current', 'step'); else a.removeAttribute('aria-current'); });
+    var s = STEPS[i], b = blockOf(s);
+    R.items.forEach(function (a, j) { if (j === i) a.setAttribute('aria-current', 'step'); else a.removeAttribute('aria-current'); });
+    if (STEPS_UI && R.items[i] && R.list.scrollHeight > R.list.clientHeight) {   // joriy qadam ko'rinib tursin (sahifa aylantirilmaydi)
+      var it = R.items[i].parentNode; R.list.scrollTop = Math.max(0, it.offsetTop - R.list.clientHeight / 2);
+    }
     R.main.textContent = '';
-    var head = el('div', { cls: 'bh' }, [el('div', { cls: 'kicker' }, [icon(b.type), el('span', { text: TYPE_LABEL[b.type] + ' · ' + (i + 1) + ' / ' + B.length })]), el('h1', { id: 'bt-' + b.id, text: b.title })]);
-    var card = el('section', { cls: 'card t-' + b.type, 'aria-labelledby': 'bt-' + b.id, 'data-block': b.id }, [head]);
+    var hid = 'bt-' + s.key.replace('.', '-'), head = null;
+    var kick = el('div', { cls: 'kicker' }, [icon(b.type), el('span', { text: TYPE_LABEL[b.type] + (s.parts > 1 ? ' · ' + (s.part + 1) + '/' + s.parts : '') + ' · ' + (i + 1) + ' / ' + STEPS.length })]);
+    if (b.type !== 'section') head = el('div', { cls: 'bh' }, [kick, s.part === 0 ? el('h1', { id: hid, text: b.type === 'plan' && b.heading ? b.heading : b.title }) : null]);
+    var card = el('section', { cls: 'card t-' + b.type + (b.type === 'plan' && b.heading ? ' statement' : ''), 'aria-labelledby': hid, 'data-block': b.id, 'data-step': s.key }, [head]);
     R.main.appendChild(card);
-    (RENDER[b.type])(b, card);
-    R.prev.disabled = i === 0; R.next.disabled = i === B.length - 1;
-    R.pos.textContent = (i + 1) + ' / ' + B.length;
-    markVisited(b);
+    (RENDER[b.type])(b, card, s, hid);
+    if (s.part > 0) { var h0 = card.querySelector('.prose h2,.prose h3'); if (h0) card.setAttribute('aria-labelledby', h0.id); else card.removeAttribute('aria-labelledby'); }
+    if (STEPS_UI && prev >= 0 && prev !== i && !reduced) card.classList.add(i > prev ? 'in-r' : 'in-l');
+    R.prev.disabled = i === 0; R.next.disabled = i === STEPS.length - 1;
+    if (STEPS_UI) {
+      R.next.firstChild.textContent = i === STEPS.length - 1 ? 'Oxirgi qadam' : 'Keyingi qadam';
+      R.pos.textContent = ''; R.pos.appendChild(el('span', { cls: 'pn', text: (i + 1) + ' / ' + STEPS.length })); R.pos.appendChild(el('span', { cls: 'pq', text: 'qadam' }));
+      R.pos.setAttribute('aria-label', 'Qadamlar ro\'yxati: ' + (i + 1) + ' / ' + STEPS.length);
+    } else R.pos.textContent = (i + 1) + ' / ' + STEPS.length;
+    markVisited(s);
     if (focus) { R.main.focus({ preventScroll: true }); try { W.scrollTo({ top: 0, behavior: 'auto' }); } catch (e) { W.scrollTo(0, 0); } }
-    if (prev !== i) saveSoon();
+    if (prev !== i) { saveSoon(); pmTick(); }
   }
-  function markVisited(b) {
-    var isNew = !visited[b.id];
-    visited[b.id] = 1;
-    if (tracker.visit) tracker.visit(b);
+  function markVisited(s) {
+    var b = blockOf(s), isNew = !visited[s.key];
+    visited[s.key] = 1;
+    if (!seenBlock[b.id]) { seenBlock[b.id] = 1; if (tracker.visit) tracker.visit(b); }
     if (isNew) report(true); else renderProgress(status());
   }
 
+  // ------------------------------------------------------------------ rasm lightbox (matn ichidagi rasmlar)
+  function lightbox(src, alt, cap, opener) {
+    if (!R.lb) {
+      R.lbImg = el('img', { alt: '' }); R.lbCap = el('figcaption');
+      R.lbX = el('button', { type: 'button', cls: 'lb-x', 'aria-label': 'Yopish', onclick: function () { closeLb(); } }, [icon('x')]);
+      R.lb = el('div', { cls: 'lb', role: 'dialog', 'aria-modal': 'true', hidden: true, onclick: function (e) { if (e.target === R.lb || e.target.tagName === 'FIGURE') closeLb(); } },
+        [R.lbX, el('figure', null, [R.lbImg, R.lbCap])]);
+      R.lb.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') { e.preventDefault(); closeLb(); }
+        else if (e.key === 'Tab') { e.preventDefault(); R.lbX.focus(); }   // fokus dialog ichida qoladi
+      });
+      app.appendChild(R.lb);
+    }
+    R.lbImg.src = src; R.lbImg.alt = alt || ''; R.lbCap.textContent = cap || ''; R.lbCap.hidden = !cap;
+    R.lb.setAttribute('aria-label', cap || alt || 'Rasm');
+    R.lb.hidden = false; R.lbOpen = opener || true; D.body.classList.add('noscroll');
+    R.lbX.focus();
+  }
+  function closeLb() {
+    if (!R.lbOpen) return;
+    var o = R.lbOpen; R.lb.hidden = true; R.lbOpen = null; D.body.classList.remove('noscroll');
+    if (o && o.focus) o.focus();
+  }
+  function zoomable(root) {
+    Array.prototype.forEach.call(root.querySelectorAll('img'), function (img) {
+      var fig = img.closest('figure'), cap = fig && fig.querySelector('figcaption'), capT = cap ? cap.textContent.trim() : '';
+      var btn = el('button', { type: 'button', cls: 'zoom', 'aria-label': 'Rasmni kattalashtirish' + (img.alt || capT ? ': ' + (img.alt || capT) : '') });
+      img.parentNode.replaceChild(btn, img); btn.appendChild(img); btn.appendChild(icon('zoom'));
+      btn.addEventListener('click', function () { lightbox(img.getAttribute('src'), img.alt, capT, btn); });
+    });
+  }
+
   // ------------------------------------------------------------------ bloklar
+  function linkify(t) {   // adabiyotlar: matndagi http(s) havolalar — faqat shular bosiladi
+    var out = [], re = /https?:\/\/[^\s<>"']+/g, m, last = 0;
+    t = str(t);
+    while ((m = re.exec(t))) {
+      var u = m[0].replace(/[.,;:)\]]+$/, ''), safe = httpUrl(u);
+      out.push(t.slice(last, m.index));
+      out.push(safe ? el('a', { href: safe, target: '_blank', rel: 'noopener noreferrer', text: u }) : u);
+      last = m.index + u.length; re.lastIndex = last;
+    }
+    out.push(t.slice(last));
+    return out.filter(function (x) { return x !== ''; });
+  }
   var RENDER = {
+    section: function (b, card, s, hid) {
+      card.appendChild(el('div', { cls: 'band' }, [el('h1', { cls: 'pill', id: hid, text: b.title })]));
+      if (STEPS_UI && cur < STEPS.length - 1) card.appendChild(el('p', { cls: 'band-hint muted', text: "Davom etish uchun «Keyingi qadam» tugmasini bosing" }));
+    },
     plan: function (b, card) {
       var heads = textHeadings();
+      if (b.heading && b.items.length) card.appendChild(el('p', { cls: 'reja', text: 'Reja:' }));
       var ol = el('ol', { cls: 'plan' });
-      arr(b.items).forEach(function (it, k) {
-        var t = str(it), h = heads[norm(t)];
-        var inner = h ? el('button', { type: 'button', cls: 'link', onclick: function () { go(h.block, true); setTimeout(function () { var x = D.getElementById(h.id); if (x) { x.scrollIntoView({ block: 'start' }); x.focus({ preventScroll: true }); } }, 0); } }, [t]) : el('span', { text: t });
+      b.items.forEach(function (t, k) {
+        var h = heads[norm(t)];
+        var inner = h ? el('button', { type: 'button', cls: 'link', onclick: function () {
+          go(h.step, true);
+          setTimeout(function () { var x = D.getElementById(h.id); if (x) { x.scrollIntoView({ block: 'start' }); x.focus({ preventScroll: true }); } }, 0);
+        } }, [t]) : el('span', { text: t });
         ol.appendChild(el('li', null, [el('span', { cls: 'n', 'aria-hidden': 'true', text: String(k + 1) }), inner]));
       });
-      card.appendChild(ol);
+      if (b.items.length) card.appendChild(ol);
     },
-    text: function (b, card) {
+    text: function (b, card, s) {
       var body = el('div', { cls: 'prose' });
-      body.appendChild(sanitize(b.html));
-      Array.prototype.forEach.call(body.querySelectorAll('h2,h3,h4'), function (h, k) { h.id = b.id + '-h' + k; h.setAttribute('tabindex', '-1'); });
+      textDom(b)[s.part].forEach(function (n) { body.appendChild(n.cloneNode(true)); });
+      zoomable(body);
       card.appendChild(body);
-      card.appendChild(el('div', { cls: 'tools no-print' }, [el('button', { type: 'button', cls: 'btn ghost sm', onclick: function () { W.print(); } }, [icon('print'), el('span', { text: 'Chop etish' })])]));
+      if (s.part === s.parts - 1) card.appendChild(el('div', { cls: 'tools no-print' }, [el('button', { type: 'button', cls: 'btn ghost sm', onclick: function () { W.print(); } }, [icon('print'), el('span', { text: 'Chop etish' })])]));
+    },
+    refs: function (b, card) {
+      card.appendChild(el('ol', { cls: 'refs' }, b.items.map(function (it) {
+        if (typeof it === 'string') return el('li', null, linkify(it));
+        var u = httpUrl(it.url);
+        return el('li', null, linkify(it.text).concat(u ? [' ', el('a', { href: u, target: '_blank', rel: 'noopener noreferrer', text: u })] : []));
+      })));
+    },
+    keypoints: function (b, card) {
+      card.appendChild(el('ul', { cls: 'kp' }, b.items.map(function (it, k) {
+        return el('li', null, [el('span', { cls: 'kp-n', 'aria-hidden': 'true', text: String(k + 1) }), el('span', { text: typeof it === 'string' ? it : str(it.text) })]);
+      })));
+    },
+    reflect: function (b, card) {
+      var chosen = S.r && S.r[b.id] != null ? +S.r[b.id] : -1;
+      var fb = el('div', { cls: 'scn-fb', role: 'status', 'aria-live': 'polite' });
+      var list = el('ol', { cls: 'choices', role: 'list' });
+      var show = function (k, fresh) {
+        Array.prototype.forEach.call(list.querySelectorAll('button'), function (x, j) { x.setAttribute('aria-pressed', String(j === k)); });
+        fb.textContent = '';
+        if (k < 0 || !b.options[k]) return;
+        fb.appendChild(el('div', { cls: 'bub reply' + (fresh ? ' pop' : '') }, [el('p', { text: b.options[k].feedback || 'Javobingiz qabul qilindi. Rahmat!' })]));
+      };
+      b.options.forEach(function (o, k) {
+        list.appendChild(el('li', null, [el('button', { type: 'button', cls: 'choice', 'data-k': String(k), 'aria-pressed': 'false', onclick: function () { answerReflect(b, k); show(k, true); } },
+          [el('span', { cls: 'cn', 'aria-hidden': 'true', text: String(k + 1) }), el('span', { text: o.text })])]));
+      });
+      card.appendChild(el('div', { cls: 'scn' }, [
+        el('div', { cls: 'scn-row' }, [staticSvg('av', 'viewBox="0 0 120 120" width="112" height="112"', AVATAR), el('div', { cls: 'bub q' }, [el('p', { text: b.question })])]),
+        list, fb
+      ]));
+      show(chosen, false);
     },
     slides: function (b, card) {
-      var sl = b.slides, k = 0;
-      if (!sl.length) { card.appendChild(el('p', { cls: 'muted', text: "Slaydlar yo'q." })); }
+      var sl = b.slides, k = 0, imgs = b.display === 'images';
+      if (!sl.length) card.appendChild(el('p', { cls: 'muted', text: "Slaydlar yo'q." }));
       else {
         var stage = el('div', { cls: 'stage' }), counter = el('span', { cls: 'counter', 'aria-live': 'polite' });
-        var notesBox = el('div', { cls: 'notes', id: b.id + '-notes', hidden: true });
-        var notesBtn = el('button', { type: 'button', cls: 'btn ghost sm', 'aria-expanded': 'false', 'aria-controls': b.id + '-notes',
+        var hasNotes = sl.some(function (x) { return str(x.notes).trim(); });
+        var notesBox = el('div', { cls: 'notes', id: b.id + '-notes', hidden: true }), notesBtn = null;
+        if (hasNotes || !imgs) notesBtn = el('button', { type: 'button', cls: 'btn ghost sm', 'aria-expanded': 'false', 'aria-controls': b.id + '-notes',
           onclick: function () { var o = notesBox.hidden; notesBox.hidden = !o; notesBtn.setAttribute('aria-expanded', String(o)); } }, [icon('notes'), el('span', { text: 'Izohlar' })]);
         var prevB = el('button', { type: 'button', cls: 'nav-a l', 'aria-label': 'Oldingi slayd', onclick: function () { show(k - 1); } }, [icon('left')]);
         var nextB = el('button', { type: 'button', cls: 'nav-a r', 'aria-label': 'Keyingi slayd', onclick: function () { show(k + 1); } }, [icon('right')]);
-        var dots = el('div', { cls: 'dots', role: 'group', 'aria-label': 'Slaydlar' });
-        sl.forEach(function (_, j) { dots.appendChild(el('button', { type: 'button', 'aria-label': (j + 1) + '-slayd', onclick: function () { show(j); } })); });
+        var dots = el('div', { cls: imgs ? 'thumbs' : 'dots', role: 'group', 'aria-label': 'Slaydlar' });
+        sl.forEach(function (x, j) {
+          var src = imgs && assetUrl(x.image);
+          dots.appendChild(el('button', { type: 'button', 'aria-label': (j + 1) + '-slayd', onclick: function () { show(j); } },
+            src ? [el('img', { src: src, alt: '', loading: 'lazy', draggable: 'false' })] : imgs ? [el('span', { text: String(j + 1) })] : null));
+        });
         var deck = el('div', { cls: 'deck', tabindex: '0', role: 'region', 'aria-roledescription': 'karusel', 'aria-label': b.title + ' (← → tugmalari bilan almashtiring)' }, [stage, prevB, nextB]);
+        var gal = el('div', { cls: 'gal' + (imgs ? ' g-img' : '') }, [deck]);
+        var fsB = el('button', { type: 'button', cls: 'btn ghost sm fs-btn', 'aria-pressed': 'false', onclick: function () { toggleFs(gal, fsB); } }, [icon('expand'), el('span', { text: "To'liq ekran" })]);
         var show = function (j) {
           k = clamp(j, 0, sl.length - 1);
           var s = sl[k], img = assetUrl(s.image);
@@ -674,11 +926,15 @@
           counter.textContent = (k + 1) + ' / ' + sl.length;
           prevB.disabled = k === 0; nextB.disabled = k === sl.length - 1;
           Array.prototype.forEach.call(dots.children, function (d, j2) { if (j2 === k) d.setAttribute('aria-current', 'true'); else d.removeAttribute('aria-current'); });
+          if (imgs) {   // joriy eskiz ko'rinib tursin (faqat lenta ichida, sahifa aylanmaydi) + keyingi rasm oldindan yuklanadi
+            var th = dots.children[k]; if (th) dots.scrollLeft = Math.max(0, th.offsetLeft - (dots.clientWidth - th.offsetWidth) / 2);
+            var nx = sl[k + 1] && assetUrl(sl[k + 1].image); if (nx) { var pre = new Image(); pre.src = nx; }
+          }
           notesBox.textContent = str(s.notes) || "Bu slayd uchun izoh yo'q.";
         };
         deck.addEventListener('keydown', function (e) {
-          if (e.key === 'ArrowLeft') { e.preventDefault(); show(k - 1); } else if (e.key === 'ArrowRight') { e.preventDefault(); show(k + 1); }
-          else if (e.key === 'Home') { e.preventDefault(); show(0); } else if (e.key === 'End') { e.preventDefault(); show(sl.length - 1); }
+          var h = { ArrowLeft: k - 1, ArrowRight: k + 1, Home: 0, End: sl.length - 1 }[e.key];
+          if (h != null) { e.preventDefault(); e.stopPropagation(); show(h); }
         });
         var x0 = null, y0 = 0;
         deck.addEventListener('pointerdown', function (e) { x0 = e.clientX; y0 = e.clientY; });
@@ -686,8 +942,9 @@
           if (x0 == null) return; var dx = e.clientX - x0, dy = e.clientY - y0; x0 = null;
           if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) show(k + (dx < 0 ? 1 : -1));
         });
-        card.appendChild(deck);
-        card.appendChild(el('div', { cls: 'deck-bar' }, [counter, dots, notesBtn]));
+        gal.appendChild(el('div', { cls: 'deck-bar' }, [counter, imgs ? null : dots, el('span', { cls: 'grow' }), notesBtn, fsB]));
+        if (imgs) gal.appendChild(dots);
+        card.appendChild(gal);
         card.appendChild(notesBox);
         show(0);
       }
@@ -723,14 +980,77 @@
     },
     quiz: function (b, card) { card.appendChild(el('div', { cls: 'quiz' })); quizView(b, card.lastChild); }
   };
+  // To'liq ekran: Fullscreen API (LMS iframe'ida allowfullscreen bo'lmasa rad etiladi) → zaxira: oyna bo'ylab qoplama
+  function toggleFs(gal, btn) {
+    var fsEl = D.fullscreenElement || D.webkitFullscreenElement;
+    function pseudo(on) {
+      gal.classList.toggle('pseudo-fs', on); D.body.classList.toggle('noscroll', on); R.fsOpen = on ? gal : null;
+      btn.setAttribute('aria-pressed', String(on));
+      if (on) { R.fsKey = function (e) { if (e.key === 'Escape') { e.preventDefault(); pseudo(false); btn.focus(); } }; D.addEventListener('keydown', R.fsKey); }
+      else if (R.fsKey) { D.removeEventListener('keydown', R.fsKey); R.fsKey = null; }
+      gal.querySelector('.deck').focus({ preventScroll: true });
+    }
+    if (gal.classList.contains('pseudo-fs')) return pseudo(false);
+    if (fsEl) { try { (D.exitFullscreen || D.webkitExitFullscreen).call(D); } catch (e) { /* jim */ } return; }
+    var req = gal.requestFullscreen || gal.webkitRequestFullscreen;
+    if (req && (D.fullscreenEnabled || D.webkitFullscreenEnabled)) {
+      var onCh = function () {
+        var on = (D.fullscreenElement || D.webkitFullscreenElement) === gal;
+        btn.setAttribute('aria-pressed', String(on)); R.fsOpen = on ? gal : null;
+        if (!on) D.removeEventListener('fullscreenchange', onCh);
+      };
+      D.addEventListener('fullscreenchange', onCh);
+      try { var p = req.call(gal); if (p && p.catch) p.catch(function () { D.removeEventListener('fullscreenchange', onCh); pseudo(true); }); }
+      catch (e) { D.removeEventListener('fullscreenchange', onCh); pseudo(true); }
+    } else pseudo(true);
+  }
   function textHeadings() {
     var map = {};
-    B.forEach(function (b, bi) {
-      if (b.type !== 'text') return;
-      var tmp = el('div'); tmp.appendChild(sanitize(b.html));
-      Array.prototype.forEach.call(tmp.querySelectorAll('h2,h3,h4'), function (h, k) { var n = norm(h.textContent); if (n && !map[n]) map[n] = { block: bi, id: b.id + '-h' + k }; });
+    STEPS.forEach(function (s, si) {
+      var b = blockOf(s); if (b.type !== 'text') return;
+      textDom(b)[s.part].forEach(function (n) {
+        if (n.nodeType !== 1) return;
+        var hs = /^H[234]$/.test(n.nodeName) ? [n] : n.querySelectorAll('h2,h3,h4');
+        Array.prototype.forEach.call(hs, function (h) { var k = norm(h.textContent); if (k && !map[k]) map[k] = { step: si, id: h.id }; });
+      });
     });
     return map;
+  }
+  function answerReflect(b, k) {
+    S.r = S.r && typeof S.r === 'object' ? S.r : {};
+    S.r[b.id] = k;
+    var l = letter(k);
+    tracker.interaction({ id: b.id, block: b.id, qid: b.id, neutral: true, ok: false, when: new Date(), title: b.question.slice(0, 120), desc: b.question,
+      type: 'choice', choices: b.options.map(function (o) { return o.text; }), r12: l, r04: l, rX: l, c12: [], c04: [], cX: [] });
+    save(true);
+    emit('answered', null, { block: b.id, response: k + 1 });
+  }
+
+  // ------------------------------------------------------------------ chop etish: barcha qadamlar ketma-ket (beforeprint / print media)
+  function buildPrint() {
+    if (R.print) return;
+    var box = R.print = el('div', { cls: 'print-all', 'aria-hidden': 'true' });
+    box.appendChild(el('h1', { text: (C.lesson.code ? C.lesson.code + ' — ' : '') + (C.lesson.title || C.title) }));
+    B.forEach(function (b) {
+      if (b.type === 'section') { box.appendChild(el('div', { cls: 'p-sec', text: b.title })); return; }
+      var sec = el('section', { cls: 'p-blk t-' + b.type }, [el('h2', { text: b.type === 'plan' && b.heading ? b.heading : b.title })]);
+      if (b.type === 'plan') sec.appendChild(el('ol', null, b.items.map(function (t) { return el('li', { text: t }); })));
+      else if (b.type === 'text') { var d = el('div', { cls: 'prose' }); textDom(b).forEach(function (p) { p.forEach(function (n) { d.appendChild(n.cloneNode(true)); }); });
+        Array.prototype.forEach.call(d.querySelectorAll('[id]'), function (x) { x.removeAttribute('id'); x.removeAttribute('tabindex'); });
+        Array.prototype.forEach.call(d.querySelectorAll('img'), function (x) { x.removeAttribute('loading'); }); sec.appendChild(d); }
+      else if (b.type === 'refs' || b.type === 'keypoints') sec.appendChild(el(b.type === 'refs' ? 'ol' : 'ul', null, b.items.map(function (t) { return el('li', { text: typeof t === 'string' ? t : str(t.text) + (t.url ? ' ' + t.url : '') }); })));
+      else if (b.type === 'slides') b.slides.forEach(function (s, j) {
+        var src = assetUrl(s.image);
+        sec.appendChild(src ? el('figure', { cls: 'p-sl' }, [el('img', { src: src, alt: str(s.title) || (j + 1) + '-slayd' })])
+          : el('div', { cls: 'p-sl' }, [el('strong', { text: (j + 1) + '. ' + str(s.title) }), el('ul', null, arr(s.bullets).map(function (x) { return el('li', { text: str(x) }); }))]));
+      });
+      else if (b.type === 'video') sec.appendChild(el('p', { text: 'Videodars: ' + (/^[A-Za-z0-9_-]{6,20}$/.test(str(b.video_id)) ? 'https://www.youtube.com/watch?v=' + b.video_id : str(httpUrl(b.url))) }));
+      else if (b.type === 'file') sec.appendChild(el('p', { text: 'Fayl: ' + str(assetUrl(b.href)).split('/').pop() }));
+      else if (b.type === 'quiz') sec.appendChild(el('p', { text: b.questions.length + " ta savoldan iborat test — onlayn topshiriladi." }));
+      else if (b.type === 'reflect') { sec.appendChild(el('p', { text: b.question })); sec.appendChild(el('ol', null, b.options.map(function (o) { return el('li', { text: o.text }); }))); }
+      box.appendChild(sec);
+    });
+    app.appendChild(box);
   }
 
   // ------------------------------------------------------------------ test
@@ -828,6 +1148,7 @@
     st.a = answers.map(function (a, i) { return b.questions[i].type === 'fill' ? str(a).slice(0, 60) : a; });
     if (tracker.quizResult) tracker.quizResult(b, { pct: pct, passed: passed });
     report(true);
+    emit(passed ? 'passed' : 'failed', null, { block: b.id });
     quizResult(b, box, true);
   }
   function quizResult(b, box, fresh) {
@@ -888,16 +1209,18 @@
       lmsMastery = info.mastery;
       var st = decodeState(info.state);
       if (st && st.h === S.h) {
-        S = st; S.q = S.q && typeof S.q === 'object' ? S.q : {};
-        str(S.v).split('').forEach(function (c, i) { if (c === '1' && B[i]) visited[B[i].id] = 1; });
+        S = st; S.q = S.q && typeof S.q === 'object' ? S.q : {}; S.r = S.r && typeof S.r === 'object' ? S.r : {};
+        str(S.v).split('').forEach(function (c, i) { if (c === '1' && STEPS[i]) visited[STEPS[i].key] = 1; });
       }
-      var start = 0, loc = str(info.location);
-      B.forEach(function (b, i) { if (b.id === loc || String(i) === loc) start = i; });
-      if (!loc && st && st.h === S.h && B[S.c]) start = S.c;
+      var start = -1, loc = str(info.location);
+      if (loc) STEPS.forEach(function (s, i) { if (start < 0 && (s.key === loc || blockOf(s).id === loc)) start = i; });
+      if (start < 0 && st && st.h === S.h && STEPS[S.c]) start = S.c;
+      if (start < 0) start = 0;
       build(info);
       lastCompl = status().complete;
       report(false);
       go(start, false);
+      pmTick();
       if (start > 0) announce('Oxirgi joydan davom ettirildi.');
       W.addEventListener('pagehide', exit);
       W.addEventListener('beforeunload', exit);
@@ -907,7 +1230,8 @@
     }).catch(function (e) { note('init xato: ' + (e && e.message)); });
   }
   NS.debug = { encodeState: encodeState, norm: norm, assetUrl: assetUrl, sanitize: function (h) { var d = el('div'); d.appendChild(sanitize(h)); return d.innerHTML; },
-    status: function () { return status(); }, state: function () { return S; }, time12: time12, iso8601: iso8601 };
+    status: function () { return status(); }, state: function () { return S; }, time12: time12, iso8601: iso8601,
+    steps: function () { return STEPS.map(function (s) { return { key: s.key, type: blockOf(s).type, block: blockOf(s).id }; }); }, step: function () { return cur; } };
   NS.exit = exit;
   start();
 })(window, document);

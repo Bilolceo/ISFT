@@ -1,7 +1,7 @@
 /* ISFT Core — o'quv paket pleyeri. Brend rangi JS orqali --brand ga yoziladi (content.brand.color). */
 /* Manrope shrifti fonts/fonts.css dan JS orqali ulanadi (opaque origin/sandbox'da CORS xatosi bo'lmasligi uchun) */
 :root{
-  --brand:#8B0033;--brand-ink:#680026;--brand-soft:#f9e6ec;--brand-lite:#c97a96;
+  --brand:#8B0033;--brand-ink:#680026;--brand-soft:var(--brand-soft-l,#f9e6ec);--brand-lite:#c97a96;
   --bg:#f4f5f7;--surface:#fff;--surface-2:#f8f9fb;--ink:#1d2129;--ink-2:#4a5160;--muted:#6b7280;--line:#e3e6eb;
   --good:#16794a;--good-bg:#e7f6ee;--bad:#b42318;--bad-bg:#fdecea;--warn-bg:#fff4d6;--warn-ink:#6b4e00;
   --link:var(--brand);--focus:#2563eb;--radius:14px;--shadow:0 1px 2px rgba(16,24,40,.06),0 4px 16px rgba(16,24,40,.06);
@@ -11,7 +11,7 @@
 @media (prefers-color-scheme:dark){
   :root{--bg:#0f1115;--surface:#171a21;--surface-2:#1d212a;--ink:#e8eaee;--ink-2:#c3c8d1;--muted:#9aa2b1;--line:#2a2f3a;
     --good:#4ade80;--good-bg:#11291c;--bad:#f87171;--bad-bg:#2d1414;--warn-bg:#2f2610;--warn-ink:#f5d78a;
-    --link:var(--brand-lite);--brand-soft:#2a1620;--focus:#60a5fa;--shadow:0 1px 2px rgba(0,0,0,.4);color-scheme:dark}
+    --link:var(--brand-lite);--brand-soft:color-mix(in srgb,var(--brand) 24%,#171a21);--focus:#60a5fa;--shadow:0 1px 2px rgba(0,0,0,.4);color-scheme:dark}
 }
 *,*::before,*::after{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
@@ -36,6 +36,7 @@ a{color:var(--link)}
 
 /* banner va sarlavha */
 .banner{background:var(--warn-bg);color:var(--warn-ink);text-align:center;font-size:.875rem;padding:6px 16px;border-bottom:1px solid var(--line)}
+.banner.warn{background:var(--bad-bg);color:var(--bad);font-weight:500}
 .top{position:sticky;top:0;z-index:20;background:var(--surface);border-bottom:1px solid var(--line)}
 .top-in{display:flex;align-items:center;gap:14px;padding:10px 20px;max-width:1440px;margin:0 auto}
 .logo{width:44px;height:44px;border-radius:10px;object-fit:contain;flex:none}
@@ -231,14 +232,178 @@ a{color:var(--link)}
 }
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 
-/* chop etish: faqat joriy blok (asosan ma'ruza matni) */
+
+/* ================================================================ kontrakt v2: bo'limlar, qadamlar (Rise uslubi) */
+:root{--sec:#2e8c56;--sec-ink:#1f6b3f;--sec-bg:#e9f6ee;--av-bg:#dff0e5}
+@media (prefers-color-scheme:dark){:root{--sec:#3fae6e;--sec-ink:#7fd6a2;--sec-bg:#14261c;--av-bg:#1d3326}}
+
+/* bo'lim ajratgichi — och yashil tasma, yashil «tabletka» */
+.card.t-section{padding:0;overflow:hidden;background:var(--sec-bg);border-color:transparent;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:200px}
+.l-steps .card.t-section{min-height:min(52vh,460px)}
+.band{width:100%;padding:56px 24px;display:flex;justify-content:center;position:relative}
+.band::before{content:"";position:absolute;left:0;right:0;top:50%;height:2px;background:color-mix(in srgb,var(--sec) 30%,transparent)}
+.pill{position:relative;margin:0;background:var(--sec);color:#fff;font-size:clamp(1.1rem,.9rem + 1vw,1.55rem);letter-spacing:.09em;font-weight:800;line-height:1.2;
+  padding:14px 44px;border-radius:999px;text-transform:uppercase;text-align:center;box-shadow:0 8px 22px color-mix(in srgb,var(--sec) 35%,transparent);outline-offset:6px}
+@media (prefers-color-scheme:dark){.pill{color:#06130b}}
+.band-hint{margin:-18px 0 30px;font-size:.88rem;text-align:center;padding:0 16px}
+
+/* bayonot: «1-MAVZU: …» + «Reja:» */
+.statement .bh{padding:22px 0 18px;border-top:5px solid var(--brand);border-bottom:1px solid var(--line);margin-bottom:22px}
+.statement .bh h1{font-size:clamp(1.45rem,1.05rem + 1.6vw,2.25rem);font-weight:800;letter-spacing:-.005em}
+.reja{margin:0 0 12px;font-weight:800;color:var(--brand);text-transform:uppercase;letter-spacing:.08em;font-size:.85rem}
+@media (prefers-color-scheme:dark){.reja{color:var(--brand-lite)}}
+
+/* rasmlar va izohlar */
+.prose figure{margin:1.8em 0;text-align:center}
+.prose figcaption{font-size:.9rem;color:var(--ink-2);margin-top:.7em;font-style:italic;line-height:1.5}
+.zoom{position:relative;display:block;width:fit-content;max-width:100%;margin:1.2em auto;padding:0;border:0;background:none;cursor:zoom-in;border-radius:10px}
+.prose figure .zoom{margin:0 auto}
+.prose .zoom img{margin:0;display:block}
+.zoom>.ic{position:absolute;right:10px;bottom:10px;background:rgba(0,0,0,.6);color:#fff;border-radius:50%;padding:7px;opacity:0;transition:opacity .15s}
+.zoom>.ic svg{width:18px;height:18px}
+.zoom:hover>.ic,.zoom:focus-visible>.ic{opacity:1}
+@media (hover:none){.zoom>.ic{opacity:.85}}
+.prose th{background:var(--surface-2);border-bottom:2px solid color-mix(in srgb,var(--brand) 55%,var(--line));white-space:nowrap}
+.prose tbody tr:nth-child(even) td{background:color-mix(in srgb,var(--surface-2) 60%,transparent)}
+.tbl{max-width:100%;-webkit-overflow-scrolling:touch}
+.lb{position:fixed;inset:0;z-index:100;background:rgba(8,10,14,.95);-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:60px 16px 24px}
+.lb[hidden]{display:none}
+.lb figure{margin:0;max-width:min(1200px,100%);max-height:100%;display:flex;flex-direction:column;align-items:center}
+.lb img{max-width:100%;max-height:calc(100vh - 150px);object-fit:contain;border-radius:8px;background:#fff}
+.lb figcaption{color:#eceef2;margin-top:12px;text-align:center;font-size:.95rem;max-width:70ch}
+.lb-x{position:absolute;top:12px;right:12px;width:44px;height:44px;border-radius:50%;border:0;background:rgba(255,255,255,.16);color:#fff;display:grid;place-items:center;cursor:pointer}
+.lb-x:hover{background:rgba(255,255,255,.28)}
+body.noscroll{overflow:hidden}
+
+/* xulosalar va adabiyotlar */
+.kp{list-style:none;margin:0;padding:0;display:grid;gap:12px}
+.kp li{display:flex;gap:14px;align-items:flex-start;padding:16px 18px;border-radius:12px;background:var(--sec-bg);border-left:5px solid var(--sec);font-weight:600;line-height:1.5}
+.kp-n{width:30px;height:30px;flex:none;border-radius:50%;display:grid;place-items:center;background:var(--sec);color:#fff;font-weight:800;font-size:.85rem}
+@media (prefers-color-scheme:dark){.kp-n{color:#06130b}}
+.refs{margin:0;padding-left:1.7em;display:flex;flex-direction:column;gap:12px}
+.refs li{padding-left:6px;line-height:1.55;overflow-wrap:anywhere}
+.refs li::marker{color:var(--brand);font-weight:800}
+@media (prefers-color-scheme:dark){.refs li::marker{color:var(--brand-lite)}}
+
+/* galereya (taqdimot rasmlari) */
+.gal{position:relative}
+.grow{flex:1}
+.g-img .deck{background:#0f1012}
+.g-img .slide.img{background:#0f1012}
+.thumbs{display:flex;gap:8px;overflow-x:auto;padding:12px 2px 6px;scrollbar-width:thin}
+.thumbs button{flex:none;width:104px;aspect-ratio:16/9;padding:0;border:2px solid transparent;border-radius:8px;overflow:hidden;background:var(--surface-2);cursor:pointer;opacity:.6;transition:opacity .15s,border-color .15s;color:var(--muted);font-weight:700}
+.thumbs button img{width:100%;height:100%;object-fit:cover;display:block}
+.thumbs button:hover{opacity:.9}
+.thumbs button[aria-current]{border-color:var(--brand);opacity:1}
+.gal:fullscreen,.gal.pseudo-fs{background:#0b0c0f;display:flex;flex-direction:column;justify-content:center;padding:16px;color:#e8eaee}
+.gal.pseudo-fs{position:fixed;inset:0;z-index:90}
+.gal:fullscreen .deck,.gal.pseudo-fs .deck{flex:1;min-height:0;border-radius:0;background:#0b0c0f}
+.gal:fullscreen .stage,.gal.pseudo-fs .stage{aspect-ratio:auto;height:100%}
+.gal:fullscreen .slide.img,.gal.pseudo-fs .slide.img{background:#0b0c0f}
+.gal:fullscreen .btn.ghost,.gal.pseudo-fs .btn.ghost{background:transparent;color:#e8eaee;border-color:#3a3f4b}
+.gal:fullscreen .thumbs button,.gal.pseudo-fs .thumbs button{background:#1d212a}
+
+/* mulohaza — personaj, savol pufakchasi, raqamli javoblar */
+.scn{display:flex;flex-direction:column;gap:16px}
+.scn-row{display:flex;gap:18px;align-items:flex-end}
+.av{flex:none;width:112px;height:112px;display:block}
+.av svg{width:100%;height:100%;display:block}
+.bub{position:relative;background:var(--surface-2);border:1px solid var(--line);border-radius:20px;padding:16px 22px;flex:1;min-width:0}
+.bub p{margin:0}
+.bub.q{font-size:1.2rem;font-weight:750;line-height:1.4;border-bottom-left-radius:6px}
+.bub.q::before{content:"";position:absolute;left:-8px;bottom:14px;width:14px;height:14px;background:var(--surface-2);border-left:1px solid var(--line);border-bottom:1px solid var(--line);transform:rotate(45deg)}
+.choices{list-style:none;margin:0;padding:0 0 0 130px;display:flex;flex-direction:column;gap:10px;align-items:flex-end}
+.choice{display:inline-flex;align-items:center;gap:12px;padding:11px 20px 11px 12px;border-radius:999px;border:2px solid var(--sec);background:var(--surface);color:var(--ink);font-weight:700;cursor:pointer;text-align:left;transition:background .15s,color .15s}
+.choice .cn{width:30px;height:30px;flex:none;border-radius:50%;background:var(--sec);color:#fff;display:grid;place-items:center;font-size:.85rem;font-weight:800}
+.choice:hover{background:var(--sec-bg)}
+.choice[aria-pressed="true"]{background:var(--sec);color:#fff}
+.choice[aria-pressed="true"] .cn{background:#fff;color:var(--sec-ink)}
+@media (prefers-color-scheme:dark){.choice[aria-pressed="true"]{color:#06130b}.choice .cn{color:#06130b}}
+.scn-fb:empty{display:none}
+.bub.reply{background:var(--sec-bg);border-color:transparent;margin-right:130px;border-bottom-left-radius:6px;font-weight:500}
+.pop{animation:pop .28s ease}
+@keyframes pop{from{opacity:0;transform:translateY(8px) scale(.98)}to{opacity:1;transform:none}}
+
+/* qadamlar rejimi: o'ngda raqamli qadamlar, katta «Keyingi qadam» */
+.l-steps .wrap{grid-template-columns:minmax(0,1fr) 84px;max-width:1240px}
+.l-steps .col{padding:32px 28px 40px 40px}
+.l-steps .main,.l-steps .pager{max-width:860px}
+.rail{position:sticky;top:69px;align-self:start;max-height:calc(100vh - 69px);padding:24px 18px 24px 4px;display:flex;flex-direction:column}
+.rail-l{list-style:none;margin:0;padding:4px 6px;display:flex;flex-direction:column;align-items:center;gap:12px;overflow-y:auto;scrollbar-width:thin;position:relative}
+.rail-l li{position:relative;display:flex;justify-content:center}
+.rail-l li+li::before{content:"";position:absolute;left:50%;top:-12px;height:12px;width:2px;margin-left:-1px;background:var(--line)}
+.step{display:flex;align-items:center;gap:12px;padding:0;border:0;background:none;cursor:pointer;color:var(--ink);text-align:left;border-radius:50%}
+.step .num{width:34px;height:34px;flex:none;border-radius:50%;display:grid;place-items:center;font-weight:750;font-size:.82rem;font-variant-numeric:tabular-nums;
+  background:var(--surface);border:2px solid var(--line);color:var(--muted);transition:background .15s,border-color .15s,color .15s,transform .15s}
+.step:hover .num{border-color:var(--brand-lite);color:var(--ink)}
+.step.done .num{background:var(--sec-bg);border-color:var(--sec);color:var(--sec-ink)}
+.step.failed .num{background:var(--bad-bg);border-color:var(--bad);color:var(--bad)}
+.step[aria-current] .num{background:var(--brand);border-color:var(--brand);color:#fff;transform:scale(1.12);box-shadow:0 0 0 4px var(--brand-soft)}
+.step .lbl{display:none}
+.rail>.toc-h{display:none}
+.l-steps .pager .btn.primary:disabled{background:var(--surface-2);color:var(--muted);border-color:var(--line);opacity:1}
+.l-steps .pager{gap:16px}
+.l-steps .pager .btn.primary{min-height:52px;padding:10px 26px;font-size:1.02rem;border-radius:12px;box-shadow:0 4px 14px color-mix(in srgb,var(--brand) 30%,transparent)}
+.l-steps .pager .btn.primary:disabled{box-shadow:none}
+button.pos{background:none;border:0;display:flex;flex-direction:column;align-items:center;line-height:1.15;color:var(--ink-2);cursor:pointer;padding:4px 10px;border-radius:8px}
+button.pos:hover{background:var(--surface)}
+.pos .pn{font-weight:800;font-size:.95rem;font-variant-numeric:tabular-nums}
+.pos .pq{font-size:.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:.07em}
+.restart{color:var(--ink-2)}
+.restart:hover{color:var(--brand)}
+.card.in-r{animation:inR .3s ease}
+.card.in-l{animation:inL .3s ease}
+@keyframes inR{from{opacity:0;transform:translateX(26px)}to{opacity:1;transform:none}}
+@keyframes inL{from{opacity:0;transform:translateX(-26px)}to{opacity:1;transform:none}}
+.print-all{display:none}
+
+@media (max-width:960px){
+  .l-steps .wrap{grid-template-columns:minmax(0,1fr)}
+  .l-steps .col{padding:16px 14px 0}
+  .l-steps .main{flex:1}
+  .rail>.toc-h{display:flex}
+  .rail{position:fixed;z-index:40;top:0;right:0;bottom:0;width:min(340px,88vw);height:100vh;height:100dvh;max-height:none;background:var(--bg);padding:16px 12px;
+    transform:translateX(102%);visibility:hidden;transition:transform .25s ease,visibility 0s .25s;box-shadow:0 0 40px rgba(0,0,0,.25)}
+  .toc-open .rail{transform:none;visibility:visible;transition:transform .25s ease}
+  .rail-l{align-items:stretch;gap:4px;padding:0}
+  .rail-l li{justify-content:flex-start}
+  .rail-l li+li::before{display:none}
+  .step{width:100%;padding:8px 10px;border-radius:10px}
+  .step[aria-current]{background:var(--surface);box-shadow:var(--shadow)}
+  .step .lbl{display:block;font-weight:650;font-size:.92rem;min-width:0;overflow-wrap:anywhere}
+  .l-steps .pager{position:sticky;bottom:0;z-index:15;max-width:none;width:auto;margin:0 -14px;background:var(--surface);border-top:1px solid var(--line);
+    padding:10px 14px calc(10px + env(safe-area-inset-bottom));box-shadow:0 -6px 18px rgba(16,24,40,.07)}
+  .l-steps .pager .btn.primary{min-height:46px;padding:8px 18px;flex:1;max-width:240px}
+  .l-steps .pager .pl{display:none}
+  .l-steps .pager .btn.ghost{padding:0;width:46px;min-height:46px}
+}
+@media (max-width:600px){
+  .band{padding:44px 16px}
+  .l-steps .card.t-section{min-height:38vh}
+  .pill{padding:12px 28px;letter-spacing:.07em}
+  .scn-row{gap:10px}
+  .av{width:76px;height:76px}
+  .bub.q{font-size:1.05rem;padding:14px 16px}
+  .choices{padding-left:24px}
+  .bub.reply{margin-right:0}
+  .thumbs button{width:84px}
+  .kp li{padding:14px}
+}
+
+/* chop etish: barcha qadamlar ketma-ket (qadamlar/aylantirish rejimidan qat'i nazar) */
 @media print{
   :root{--ink:#000;--surface:#fff;--bg:#fff;--line:#ccc}
   body{background:#fff;font-size:11pt}
-  .banner,.top,.toc,.scrim,.pager,.skip,.tools,.no-print,.nav-a,.deck-bar{display:none!important}
-  .wrap{display:block}.col{padding:0}
-  .card{box-shadow:none;border:0;padding:0}
+  .banner,.top,.toc,.rail,.scrim,.pager,.skip,.tools,.no-print,.wrap,.lb{display:none!important}
+  .print-all{display:block;color:#000}
+  .print-all h1{font-size:18pt;margin:0 0 12pt}
+  .p-sec{margin:20pt 0 10pt;padding:4pt 14pt;display:inline-block;border:1.5pt solid var(--sec);border-radius:99px;color:var(--sec-ink);font-weight:800;letter-spacing:.08em;break-after:avoid}
+  .p-blk{margin:0 0 14pt}
+  .p-blk>h2{font-size:14pt;margin:10pt 0 6pt;break-after:avoid}
+  .p-sl{break-inside:avoid;margin:6pt 0}
+  .p-sl img{max-height:8cm;border:1px solid #ccc}
   .prose a[href]::after{content:" (" attr(href) ")";font-size:.85em;color:#555}
   .prose h2,.prose h3{break-after:avoid}
-  .prose img,.tbl{break-inside:avoid}
+  .prose img,.prose figure,.tbl{break-inside:avoid}
+  .tbl{overflow:visible}
 }

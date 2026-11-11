@@ -130,3 +130,11 @@
   .pk-t td.num{white-space:normal}
   .tw td:first-child{min-width:0}
 }
+/* NEXTID: darslar guruhi (L / A / …), dars kodi, matndagi rasmlar */
+.pk-kind{margin-top:12px}.pk-kind h4{margin:0;font-size:13.5px}
+.pk-code{display:inline-block;padding:1px 8px;margin-right:4px;border-radius:999px;background:var(--teal-soft);color:var(--teal);font-size:13px;font-weight:800;vertical-align:1px}
+.pk-html figure{margin:10px 0;text-align:center}.pk-html figure img,.pk-html img{max-width:100%;height:auto;border-radius:8px}
+.pk-html figcaption{font-size:12px;color:var(--muted);margin-top:4px}
+.pk-html{min-width:0}.pk-html table{display:block;max-width:100%;overflow-x:auto}
+.pk-form .pk-wide{grid-column:1/-1}
+.pk-plan small{display:block;color:var(--muted);font-size:11.5px}
