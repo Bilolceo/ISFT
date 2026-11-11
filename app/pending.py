@@ -184,7 +184,8 @@ def _simple(mod_name, src_key):
 ADAPTERS = [("devon", _simple("devon", "devon")), ("qabul", _simple("qabul", "qabul")), ("rejalar", _simple("rejalar", "rejalar")),
             ("it_req", _simple("it_requests", "it_req")),
             ("moliya", moliya), ("kadrlar", kadrlar), ("ilmiy", ilmiy), ("xalqaro", xalqaro), ("yoshlar", yoshlar),
-            ("amaliyot", amaliyot), ("harakat", harakat), ("tekshiruv", tekshiruv), ("talaba", talaba)]
+            ("amaliyot", amaliyot), ("harakat", harakat), ("tekshiruv", tekshiruv), ("talaba", talaba),
+            ("masofaviy", _simple("masofaviy", "masofaviy")), ("testbank", _simple("testbank", "testbank"))]
 
 # =============================================================================================
 # «Bugun» — lavozimning o'z sohasidagi 2–4 ko'rsatkichi (bosh sahifa). Institut ko'rsatkichlari — faqat rektor va kengash.
@@ -294,6 +295,9 @@ def bugun(c) -> list:
                 n = _one("SELECT COUNT(*) n FROM intl_agreements WHERE status='faol'")
                 out.append(_k("Faol xalqaro shartnomalar", n, "Xalqaro hamkorlik", "", {"view": "xalqaro"}))
             out = out[:4]
+        elif k in ("masofaviy", "masofaviy_xodim"):
+            from . import masofaviy as DLm
+            out = DLm.bugun(c)
         elif k in ("xalqaro", "yuridik"):
             st = {r["status"]: r["n"] for r in db.rows(_con, "SELECT status, COUNT(*) n FROM intl_agreements GROUP BY status")}
             if k == "yuridik":

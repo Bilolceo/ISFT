@@ -40,6 +40,7 @@ TOP_UNITS = ("rektorat", "kengash")              # rektor/kotib uchun ham maqsad
 #   * kafedralarni yana o'quv ishlari prorektori boshqaradi — u kurator sifatida (org_units.curator), bu xaritada emas.
 SUBORDINATE = {
     "akademik": ["@kafedra"],
+    "masofaviy": ["@kafedra"],     # Masofaviy ta'lim bo'limi → kafedralar (LMS'ga materiallar yuklash)
     "talabalar": [],
 }
 
@@ -58,7 +59,7 @@ COLS = [("origin", "TEXT"), ("parent_id", "INT"), ("issuer_user", "INT"), ("issu
         ("priority", "TEXT"), ("body", "TEXT"), ("expect", "TEXT"), ("attach", "TEXT"), ("result_attach", "TEXT"),
         ("review", "TEXT"), ("review_note", "TEXT"), ("review_at", "TEXT"), ("review_by", "INT"), ("created_at", "TEXT"),
         ("src", "TEXT")]     # manba: 'syl:<so'rov id>' (O'quv dasturlari — kafedra so'rovi), 'portal' / 'portal:<xat id>' (Portal — ma'lumot so'rovi)
-SRC_LABEL = {"syl": "O'quv dasturlari · kafedra so'rovi", "portal": "Portal · ma'lumot so'rovi"}
+SRC_LABEL = {"syl": "O'quv dasturlari · kafedra so'rovi", "portal": "Portal · ma'lumot so'rovi", "dl": "Masofaviy ta'lim · kontent monitoringi"}
 
 def init(con):
     try:

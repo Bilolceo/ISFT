@@ -659,6 +659,8 @@ def run():
     staff_absence.init(con)
     from . import orders   # Buyruqlar: reyestr (qabul, kursga o'tkazish, ta'til) + ataylab nomuvofiqliklar, namuna arizalar, demo loyihalar (idempotent)
     orders.init(con, fresh=True)
+    from . import masofaviy   # Masofaviy ta'lim: bo'lim akkauntlari, kontent rejasi, 8 haftalik LMS faolligi (sun'iy; idempotent)
+    masofaviy.init(con)
     from . import accounts   # bekor qilingan lavozim (dekan, #13) — akkaunt faolsizlantiriladi (startda ham, idempotent)
     print("Faolsizlantirildi (bekor qilingan lavozim):", accounts.retire_legacy(con))
     counts = {t: con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in

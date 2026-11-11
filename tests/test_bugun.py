@@ -136,7 +136,9 @@ EXPECT = {"buxgalteriya": ["Aniqlanmagan to'lovlar", "Bugun kiritilgan to'lovlar
           "kafedra": ["Tasdiqlanadigan ishlar", "O'quv dasturlari", "Amaliyot — baholanmagan", "Nashr arizalari"],
           "tyutor": ["Mening guruhlarim", "O'qishda xavf", "Akademik qarzdorlar", "Ijara — tashrif kerak"],
           "amaliyot": ["Hisobot muddati o'tgan", "Baholanmagan", "Biriktirilmagan talabalar", "Baza shartnomalari"],
-          "xalqaro": ["Faol shartnomalar", "Chet elda", "Suhbat kutayotgan arizalar"], "yuridik": ["Yuridik ko'rikda"]}
+          "xalqaro": ["Faol shartnomalar", "Chet elda", "Suhbat kutayotgan arizalar"], "yuridik": ["Yuridik ko'rikda"],
+          "masofaviy": ["Aktiv talabalar", "Kontent berilgan", "Bugun muddati", "Xavf ostida"],          # Masofaviy ta'lim (app/masofaviy.py bugun())
+          "masofaviy_xodim": ["Aktiv talabalar", "Kontent berilgan", "Bugun muddati", "Xavf ostida"]}
 for role, labels in EXPECT.items():
     if role in D:   # to'liq ro'yxat — bugun() ichidagi xato (except bilan yutilgan) ko'rsatkichlarni yo'qotmagan
         ok([k["label"] for k in D[role][4]["kpis"]] == labels, f"{role}: ko'rsatkichlar to'liq — {', '.join(labels)}")

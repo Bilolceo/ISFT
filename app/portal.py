@@ -68,7 +68,7 @@ def _bump():
 # ---------------------------------------------------------------------------------------------
 # Bo'limlar: org_units jadvali + users.unit
 # ---------------------------------------------------------------------------------------------
-ROLE_UNIT = {"rektor": "rektorat", "kotib": "rektorat", "it_head": "it", "it_staff": "it", "call_center": "talabalar"}   # Call-markaz — Registrator ofisi tarkibida
+ROLE_UNIT = {"rektor": "rektorat", "kotib": "rektorat", "it_head": "it", "it_staff": "it", "call_center": "talabalar", "masofaviy_xodim": "masofaviy"}   # Call-markaz — Registrator ofisi tarkibida
 UNIT_TITLE = {"rektorat": "Rektorat", "it": "Axborot texnologiyalari bo'limi", "kengash": "Kuzatuv kengashi",
               "prorektor_oquv": "O'quv ishlari prorektori", "prorektor_ilmiy": "Ilmiy ishlar prorektori",
               "prorektor_moliya": "Moliya-iqtisod prorektori", "prorektor_yoshlar": "Yoshlar masalalari prorektori",
@@ -90,6 +90,7 @@ LEAD_ORDER = ["rektorat", "prorektor_oquv", "prorektor_ilmiy", "prorektor_moliya
 #   Xalqaro aloqalar va Raqamlashtirish prorektorlari joriy rahbarlar ro'yxatida yo'q: Xalqaro hamkorlik bo'limi — ilmiy ishlar prorektoriga
 #   (RBAC'da ham INTL unda), Axborot texnologiyalari bo'limi — rektorga bevosita. Qabul komissiyasi tuzilmada yo'q — raisi rektor.
 CURATOR = {"akademik": "prorektor_oquv", "talabalar": "prorektor_oquv", "malumotlar_bazasi": "prorektor_oquv", "sirtqi": "prorektor_oquv",
+           "masofaviy": "prorektor_oquv",
            "amaliyot": "prorektor_oquv",
            "ilmiy_bolim": "prorektor_ilmiy", "magistratura": "prorektor_ilmiy", "xalqaro": "prorektor_ilmiy",
            "manaviyat": "prorektor_yoshlar", "buxgalteriya": "prorektor_moliya", "xojalik": "prorektor_moliya", "marketing": "prorektor_moliya", "xarid": "prorektor_moliya"}
@@ -119,6 +120,8 @@ UNIT_INFO = {
     "akademik": {"does": ["Akademik kalendar", "Fanlarga yozilish (enrollment)", "Akademik guruhlarni shakllantirish",
                           "Oraliq va yakuniy nazorat jadvallari", "Yakuniy davlat attestatsiyasi (YDA)"]},
     "sirtqi": {"does": ["Sirtqi ta'lim talabalari bilan ishlash", "Sessiyaga chaqiruv xatlari"]},
+    "masofaviy": {"does": ["Masofaviy ta'lim talabalari: LMS faolligi va videokonferensiyalar", "O'quv kontenti monitoringi (LMS)",
+                           "Kafedralardan materiallar yuklanishini nazorat qilish"]},
     "malumotlar_bazasi": {"does": ["«Registrator» ma'lumotlar bazasini yuritish va yangilash"]},
 }
 

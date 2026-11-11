@@ -510,7 +510,8 @@
   /* yangi modullar: {view, tab} — modul holatidagi yorliq tanlanadi (pending.py havolalari) */
   const MOD_STATE = () => ({moliya: typeof ML !== "undefined" && ML, kadrlar: typeof KD !== "undefined" && KD, ilmiy: typeof IL !== "undefined" && IL,
     xalqaro: typeof XQ !== "undefined" && XQ, yoshlar: typeof YJ !== "undefined" && YJ, amaliyot: typeof AM !== "undefined" && AM,
-    flows: typeof FL !== "undefined" && FL, tekshiruv: typeof TK !== "undefined" && TK});
+    flows: typeof FL !== "undefined" && FL, tekshiruv: typeof TK !== "undefined" && TK, masofaviy: typeof DL !== "undefined" && DL,
+    testbank: typeof TB !== "undefined" && TB});
   function openLink(l) {
     if (!l) return;
     if (l.href) { location.href = l.href; return; }

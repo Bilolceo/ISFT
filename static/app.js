@@ -217,6 +217,8 @@ async function boot() {
   document.querySelector('#nav a[data-v="yoshlar"]')?.classList.toggle("hidden", !["prorektor_yoshlar", "manaviyat", "komendant", "tyutor", "buxgalteriya", "rektor", "talabalar"].includes(ME.role_key));   /* yoshlar.js: Yoshlar ishlari — turar joy va tadbirlar (ruxsat — app/yoshlar.py MODES) */
   if (typeof kadrlarNav === "function") kadrlarNav();
   document.querySelector('#nav a[data-v="amaliyot"]')?.classList.toggle("hidden", !["amaliyot", "kafedra", "oqituvchi", "tyutor", "talabalar", "registrator_xodim", "sirtqi", "rektor", "prorektor_oquv"].includes(ME.role_key));   /* amaliyot.js: Amaliyot (ruxsat — app/amaliyot.py mode) */
+  document.querySelector('#nav a[data-v="masofaviy"]')?.classList.toggle("hidden", !["masofaviy", "masofaviy_xodim", "rektor", "prorektor_oquv", "kafedra", "oqituvchi"].includes(ME.role_key));   /* masofaviy.js: Masofaviy ta'lim (ruxsat — app/masofaviy.py) */
+  document.querySelector('#nav a[data-v="testbank"]')?.classList.toggle("hidden", !["masofaviy", "masofaviy_xodim", "rektor", "prorektor_oquv", "kafedra", "oqituvchi"].includes(ME.role_key));   /* testbank.js: Test bank — mavzu testlari va oraliq banklari (ruxsat — app/testbank.py) */
   if (typeof camsNav === "function") camsNav();   /* cams.js: navbat zonasi mas'ullari (qabul, kassa) o'z navbatini ko'radi */
   /* lavozimga keraksiz bandlar (UX tahlili): ruxsat matritsasi — faqat AT boshlig'i va rektor (qolganlar — profilda «Sizning ruxsatlaringiz»);
      Tarjima va shartnoma — hujjat bilan ishlaydiganlarga; Auditoriyalar — xo'jalik, akademik, AT; Registrator — talaba kartasidagi bo'limlar menyuda emas */

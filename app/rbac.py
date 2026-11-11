@@ -43,6 +43,10 @@ PRESENT = "presentations"         # o'qituvchi taqdimotlari: material → reja (
 LABELS[PRESENT] = "Taqdimot tayyorlash (o'qituvchi): material, reja, .pptx"
 CHECKS = "work_checks"            # o'qituvchi: talaba ishlarini yuklash, AI tekshiruv taklifi, tasdiqlash (app/tekshiruv.py) — kirish moduldagi jadval bo'yicha
 LABELS[CHECKS] = "Ishlarni tekshirish (o'qituvchi): talaba ishlari, AI taklifi, baholar"
+DISTANCE = "distance"            # masofaviy ta'lim: LMS faolligi, kontent monitoringi, xavf, AI xulosa (app/masofaviy.py) — kirish moduldagi jadval bo'yicha
+LABELS[DISTANCE] = "Masofaviy ta'lim: talabalar faolligi va o'quv kontenti monitoringi"
+TESTBANK = "testbank"             # test bank: mavzu testlari, AI generatsiya, sifat nazorati, oraliq banklari va eksport (app/testbank.py) — kirish moduldagi jadval bo'yicha
+LABELS[TESTBANK] = "Test bank: mavzu testlari va oraliq nazorat banklari"
 
 @dataclass(frozen=True)
 class Role:
@@ -79,6 +83,10 @@ ROLES = {r.key: r for r in [
          deny_note="Moliya va kadrlar ma'lumoti"),
     # Sirtqi bo'lim va Ma'lumotlar bazasi bo'limi — vazifalari app/academic_rules.py (DUTIES) da
     Role("sirtqi", "Sirtqi bo'lim", 3, R(ACADEMIC, STUDENTS, TASKS, REQUESTS, OPS), deny_note="Moliya va kadrlar ma'lumoti, institut kontrakt jamlanmasi · Talabalar markazi — faqat sirtqi talabalar (registrator vazifalari; kontrakt — o'qish)"),
+    Role("masofaviy", "Masofaviy ta'lim bo'limi", 3, R(DISTANCE, TASKS, REPORTS),
+         deny_note="Moliya va kadrlar ma'lumoti · talabalar — faqat masofaviy ta'lim shakli (LMS faolligi, o'zlashtirish, buyruq holati)"),
+    Role("masofaviy_xodim", "Masofaviy ta'lim bo'limi xodimi", 3, R(DISTANCE, TASKS),
+         deny_note="Moliya va kadrlar ma'lumoti · talabalar — faqat masofaviy ta'lim shakli; kafedraga topshiriq va qoidalar — bo'lim boshlig'ida"),
     Role("malumotlar_bazasi", "Ma'lumotlar bazasi bo'limi", 3, R(KPI, ACADEMIC, STUDENTS, TASKS),
          deny_note="Moliya, kontrakt va kadrlar ma'lumoti"),
     Role("imtihon", "Imtihon bo'limi", 3, R(ACADEMIC, STUDENTS, TASKS, OPS), deny_note="Moliya, kontrakt va kadrlar ma'lumoti · Talabalar markazi — o'zlashtirish va otrabotka"),

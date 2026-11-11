@@ -34,6 +34,8 @@ const MW_SRC = {
   xalqaro: {label: "Xalqaro", icon: "globe"},
   yoshlar: {label: "Yoshlar", icon: "gift"},
   amaliyot: {label: "Amaliyot", icon: "pin"},
+  masofaviy: {label: "Masofaviy ta'lim", icon: "monitor"},
+  testbank: {label: "Test bank", icon: "checkc"},
   harakat: {label: "Talaba harakati", icon: "cap"},
   tekshiruv: {label: "Ishlar", icon: "check"},
   talaba: {label: "Talaba so'rovlari", icon: "user"},

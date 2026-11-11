@@ -222,7 +222,7 @@ ROLE_PROREKTOR = [("o'quv", "prorektor_oquv"), ("ilmiy", "prorektor_ilmiy"), ("m
 ROLE_UNITS = [("qabul", "qabul"), ("xalqaro", "xalqaro"), ("registrator", "talabalar"), ("axborot texnologiyalari", "it_head"), ("buxgalter", "buxgalteriya"), ("kadr", "kadrlar"), ("talabalar bilan", "talabalar"),
               ("magistr", "magistratura"), ("ilmiy tadqiqot", "ilmiy_bolim"), ("xo'jalik", "xojalik"),
               ("akademik faoliyat", "akademik"), ("imtihon", "imtihon"),
-              ("sirtqi", "sirtqi"), ("ma'lumotlar bazasi", "malumotlar_bazasi")]
+              ("sirtqi", "sirtqi"), ("ma'lumotlar bazasi", "malumotlar_bazasi"), ("masofaviy", "masofaviy")]
 
 def role_for(who: str) -> str:
     low = ai.norm(who or "")
@@ -472,6 +472,15 @@ from . import xalqaro as XQ   # Xalqaro hamkorlik: shartnomalar hayotiy sikli (y
 XQ.init(con)
 XQ.bind(con, ctx)
 app.include_router(XQ.router)
+
+from . import masofaviy as DL   # Masofaviy ta'lim: LMS faolligi, o'quv kontenti monitoringi, xavf ostidagilar, AI xulosa va hisobot (docs/masofaviy.md)
+DL.init(con)   # jadvallar, qoidalar, demo akkauntlar va demo ma'lumot (idempotent — qayta seed shart emas)
+DL.bind(con, ctx)
+app.include_router(DL.router)
+from . import testbank as TB   # Test bank: mavzu matni → AI savollar (Claude) → qoidaviy sifat nazorati → tasdiq → oraliq banklari, Moodle XML/GIFT/Aiken/.docx (docs/testbank.md)
+TB.init(con)   # jadvallar va namuna savollar (idempotent; kurslar/mavzular — masofaviy dl_courses/dl_items dan)
+TB.bind(con, ctx)
+app.include_router(TB.router)
 from . import moliya as MOL   # Moliya: to'lovlar reyestri (qo'lda), kunlik solishtirish, byudjet ijrosi, xarajat tasdig'i, xarid moliyalashtirish, oylik hisobotlar
 MOL.init(con)
 MOL.bind(con, ctx)
