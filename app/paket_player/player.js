@@ -10,6 +10,12 @@
  * eski ko'rinish: chapda mundarija); lesson {code, kind, no, title}; bloklar: section, refs, keypoints, reflect; plan.heading;
  * slides.display "images" (galereya) | "text"; matn ichida <figure><img src="assets/…"><figcaption> (lightbox).
  *
+ * Kontrakt v3 (qo'shimcha, hammasi ixtiyoriy): cover {image, author} — muqova (qadamlar rejimida birinchi qadam, «Boshlash»; scroll'da —
+ * birinchi sahifa ustida); video provider "file" (src, poster, captions[]) — <video> + <track>, tezlik, joy va ko'rilgan ulush holatda
+ * (S.m), ≥ 90% ko'rilganda postMessage «progress» xabarida video:{block, watched}; slides[].caption / .audio; test savollari
+ * "match" (pairs) va "sort" (categories) — sichqoncha, sensor va klaviatura bilan (bosib tanlash; sudrash — qo'shimcha), LMS'ga
+ * «matching» interaction; flashcards (aylanadigan kartochkalar) va assignment (topshiriq) bloklari — baholanmaydi.
+ *
  * LMS API topilmasa (masalan NEXTID.LMS — Rise paketlari iframe'da launch parametrlarisiz): jim «mustaqil» rejim,
  * holat localStorage'da. «Ko'rish rejimi» banneri FAQAT ?preview=1 bo'lsa (ISFT Core ko'rish oynasi shu parametrni qo'shadi).
  * SCORM paketi API'siz — ogohlantirish banneri (Preview()).
@@ -18,6 +24,7 @@
  *   parent.postMessage({source:"isft-paket", v:1, id, event, progress, score, step, steps, complete, success, [block, response]}, "*")
  *   event: "progress" (progress 0..1 yoki joriy qadam o'zgarganda) | "completed" (sessiyada bir marta) |
  *          "passed" / "failed" (test topshirilganda) | "answered" (reflect tanlovi; block, response = variant raqami 1..n)
+ *   fayl-video ≥ 90% ko'rilganda: event "progress" + video:{block, watched} (sessiyada har video uchun bir marta)
  *   score: {raw, min:0, max:100, scaled} yoki null; step — joriy qadam (1..steps).
  */
 (function (W, D) {
@@ -71,7 +78,11 @@
     section: '<path d="M4 6h16M4 12h10M4 18h16"/>', refs: '<path d="M5 4h10a4 4 0 0 1 4 4v12H9a4 4 0 0 1-4-4z"/><path d="M9 9h6M9 13h4"/>',
     keypoints: '<path d="M12 3l2.6 5.6 6 .7-4.5 4.1 1.2 6L12 16.4 6.7 19.4l1.2-6L3.4 9.3l6-.7z"/>', reflect: '<path d="M4 5h16v11H9l-5 4z"/><path d="M9 10h6"/>',
     restart: '<path d="M4 4v6h6"/><path d="M5.5 15a7 7 0 1 0 1.6-7.3L4 10"/>', expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
-    zoom: '<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5M11 8v6M8 11h6"/>'
+    zoom: '<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5M11 8v6M8 11h6"/>',
+    flashcards: '<rect x="3" y="7" width="14" height="12" rx="2"/><path d="M7 7V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2"/>',
+    assignment: '<path d="M9 4h6v3H9z"/><path d="M9 5H6v16h12V5h-3M9 12h6M9 16h4"/>', cover: '<path d="M4 11l8-7 8 7v9H4z"/><path d="M10 20v-6h4v6"/>',
+    info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5h.01"/>', flip: '<path d="M4 9a8 8 0 0 1 14-3l2 2M20 4v4h-4M20 15a8 8 0 0 1-14 3l-2-2M4 20v-4h4"/>',
+    user: '<circle cx="12" cy="8" r="4"/><path d="M4 21c1-4.5 4-6.5 8-6.5s7 2 8 6.5"/>'
   };
   // Mulohaza bloki personaji — chizilgan (real odam emas), statik
   var AVATAR = '<circle cx="60" cy="60" r="58" fill="var(--av-bg)"/>' +
@@ -84,8 +95,8 @@
     '<path d="M51 62q9 8 18 0" stroke="#b5523b" stroke-width="3" fill="none" stroke-linecap="round"/>' +
     '<circle cx="45" cy="60" r="4" fill="#f4a9a0" opacity=".55"/><circle cx="75" cy="60" r="4" fill="#f4a9a0" opacity=".55"/>';
   var TYPE_LABEL = { plan: 'Reja', text: "Ma'ruza", slides: 'Taqdimot', video: 'Video', file: 'Fayl', quiz: 'Test',
-    section: "Bo'lim", refs: 'Adabiyotlar', keypoints: 'Xulosalar', reflect: 'Mulohaza' };
-  var KNOWN = { plan: 1, text: 1, slides: 1, video: 1, file: 1, quiz: 1, section: 1, refs: 1, keypoints: 1, reflect: 1 };
+    section: "Bo'lim", refs: 'Adabiyotlar', keypoints: 'Xulosalar', reflect: 'Mulohaza', flashcards: 'Kartochkalar', assignment: 'Topshiriq', cover: 'Muqova' };
+  var KNOWN = { plan: 1, text: 1, slides: 1, video: 1, file: 1, quiz: 1, section: 1, refs: 1, keypoints: 1, reflect: 1, flashcards: 1, assignment: 1 };
   var KIND = { maruza: "Ma'ruza", amaliy: "Amaliy mashg'ulot", seminar: 'Seminar', laboratoriya: 'Laboratoriya ishi', mustaqil: "Mustaqil ta'lim" };
 
   // Nisbiy, xavfsiz manzil (paket ichidagi fayl): boshqaruv belgilari olib tashlanadi («java\tscript:» kabi aylanib o'tishlar),
@@ -94,6 +105,8 @@
     p = str(p).replace(/[\x00-\x20\x7f]/g, '');
     return p && /^(?!\/)(?!.*\.\.)[A-Za-z0-9_\-.\/%]+$/.test(p) ? p : null;
   }
+  function opaqueHttp() { try { return String(W.origin) === 'null' && /^https?:$/.test(W.location.protocol); } catch (e) { return false; } }
+  function mediaUrl(p) { p = assetUrl(p); return p && /^assets\//.test(p) ? p : null; }   // video/audio/subtitr/muqova: faqat paket ichidagi assets/
   function httpUrl(u) { u = str(u).replace(/^[\x00-\x20\x7f]+|[\x00-\x20\x7f]+$/g, ''); return /^https?:\/\/[^\s"'<>\\]+$/i.test(u) ? u : null; }
   function norm(s) {   // fill-in va reja sarlavhalarini taqqoslash: katta-kichik harf, bo'shliq, apostrof variantlari
     return str(s).replace(/[‘’ʻʼ`´′]/g, "'").replace(/\s+/g, ' ').trim().toLocaleLowerCase('uz').replace(/[.!?;:,]+$/, '');
@@ -110,6 +123,7 @@
   function fmtSize(n) { n = num(n, 0); if (!n) return ''; return n < 1024 ? n + ' B' : n < 1048576 ? Math.round(n / 1024) + ' KB' : (n / 1048576).toFixed(1) + ' MB'; }
   function cmiId(s) { return str(s).replace(/[^A-Za-z0-9_\-.]/g, '_').slice(0, 250) || 'x'; }
   function letter(i) { return 'abcdefghijklmnopqrstuvwxyz'.charAt(i) || String(i); }
+  function id36(i) { return '0123456789abcdefghijklmnopqrstuvwxyz'.charAt(i) || 'z'; }   // SCORM 1.2 matching: bir belgili identifikator
 
   // Vaqt formatlari
   function time12(ms) {   // CMITimespan: HHHH:MM:SS.SS (soat 2–4 xona)
@@ -176,21 +190,36 @@
         var qs = {};
         x.questions = arr(b.questions).filter(function (q) {
           if (!q || !q.stem) return false;
-          var t = q.type === 'tf' || q.type === 'fill' ? q.type : 'mcq';
+          var t = /^(tf|fill|match|sort)$/.test(q.type) ? q.type : 'mcq';
           if (t === 'fill') return arr(q.answers).length > 0;
+          if (t === 'match') return matchPairs(q).length > 1;
+          if (t === 'sort') { var sc = sortCats(q); return sc.cats.length > 1 && sc.items.length > 0; }
           if (t === 'tf' && !arr(q.options).length) return arr(q.correct).length > 0;
           return arr(q.options).length > 1 && arr(q.correct).length > 0;
         }).map(function (q, j) {
-          var t = q.type === 'tf' || q.type === 'fill' ? q.type : 'mcq', id2 = cmiId(q.id || ('q' + (j + 1)));
+          var t = /^(tf|fill|match|sort)$/.test(q.type) ? q.type : 'mcq', id2 = cmiId(q.id || ('q' + (j + 1)));
           while (qs[id2]) id2 += '_'; qs[id2] = 1;
           var opts = t === 'tf' && !arr(q.options).length ? ["To'g'ri", "Noto'g'ri"] : arr(q.options).map(str);
-          return { id: id2, type: t, stem: str(q.stem), options: t === 'fill' ? [] : opts, explanation: str(q.explanation),
+          var o = { id: id2, type: t, stem: str(q.stem), options: t === 'mcq' || t === 'tf' ? opts : [], explanation: str(q.explanation),
             correct: arr(q.correct).map(Number).filter(function (n) { return n >= 0 && n < opts.length; }).sort(), answers: arr(q.answers).map(str) };
+          if (t === 'match') o.pairs = matchPairs(q);
+          if (t === 'sort') { var sc = sortCats(q); o.cats = sc.cats; o.items = sc.items; }
+          return o;
         });
         if (!x.questions.length) return;
         x.pass_pct = clamp(num(b.pass_pct, num(c.tracking && c.tracking.mastery, 60)), 0, 100);
         x.attempts = Math.max(0, Math.floor(num(b.attempts, 0)));
         x.shuffle = b.shuffle !== false; x.show_feedback = b.show_feedback !== false;
+      }
+      if (b.type === 'flashcards') {
+        x.cards = arr(b.cards).map(function (c) { return c && typeof c === 'object' ? { front: str(c.front).trim(), back: str(c.back).trim() } : null; })
+          .filter(function (c) { return c && c.front && c.back; }).slice(0, 60);
+        if (!x.cards.length) return;
+      }
+      if (b.type === 'assignment') {
+        x.text = str(b.text).trim(); x.author = str(b.author).trim() || "Sizning professor-o'qituvchingiz";
+        x.questions = arr(b.questions).map(function (q) { return str(q && typeof q === 'object' ? q.text : q).trim(); }).filter(Boolean).slice(0, 60);
+        if (!x.text && !x.questions.length) return;
       }
       if (b.type === 'slides') {
         x.slides = arr(b.slides).filter(function (s) { return s && typeof s === 'object'; });
@@ -212,7 +241,13 @@
       blocks.push(x);
     });
     var tr = c.tracking || {}, ls = c.lesson && typeof c.lesson === 'object' ? c.lesson : {};
+    var cv = c.cover && typeof c.cover === 'object' ? { image: mediaUrl(c.cover.image), author: c.cover.author == null ? null : str(c.cover.author).trim().slice(0, 160) } : null;   // null — berilmagan; '' — «muallifsiz»
+    if (cv && c.layout === 'steps' && blocks.length) {   // muqova — birinchi qadam (sun'iy blok; LMS'ga «experienced» yuborilmaydi)
+      var cid = 'cover'; while (seen[cid]) cid += '_';
+      blocks.unshift({ id: cid, type: 'cover', title: 'Muqova' });
+    }
     return {
+      cover: cv,
       id: str(c.id, 'isft-paket'), title: str(c.title) || str(ls.title) || str(c.topic && c.topic.title) || "O'quv paketi", lang: str(c.lang, 'uz'),
       course: c.course || {}, topic: c.topic || {}, brand: c.brand || {}, blocks: blocks,
       layout: c.layout === 'steps' ? 'steps' : 'scroll',
@@ -222,16 +257,34 @@
     };
   }
 
+  function matchPairs(q) {   // match: [{left, right}] — bo'sh juftlar tashlanadi (≤ 20: SCORM 1.2 identifikatorlari bir belgili)
+    return arr(q.pairs).filter(function (p) { return p && typeof p === 'object' && str(p.left).trim() && str(p.right).trim(); }).slice(0, 20)
+      .map(function (p) { return { left: str(p.left).trim(), right: str(p.right).trim() }; });
+  }
+  function sortCats(q) {     // sort: toifalar (≤ 8) va kartochkalar (≤ 30; c — to'g'ri toifa indeksi)
+    var cats = [], items = [];
+    arr(q.categories).forEach(function (c) {
+      if (!c || typeof c !== 'object' || !str(c.title).trim() || cats.length >= 8) return;
+      var ci = cats.push(str(c.title).trim()) - 1;
+      arr(c.items).forEach(function (t) { if (str(t).trim() && items.length < 30) items.push({ text: str(t).trim(), c: ci }); });
+    });
+    return { cats: cats, items: items };
+  }
+
   // ------------------------------------------------------------------ holat (resume) — ixcham kodlash
-  // {h: paket id xeshi, v: "0101..", c: joriy blok indeksi, q: {blokId: {n, s, b, p, sd, a:[...]}}, cs: completed yuborilgan (xAPI),
-  //  xr: oxirgi yuborilgan kurs natijasi kaliti (xAPI passed/failed + ball)}
+  // {h: paket id xeshi, v: "0101..", c: joriy blok indeksi, q: {blokId: {n, s, b, p, sd, ip, a:[...], d:[...]}}, cs: completed yuborilgan (xAPI),
+  //  xr: oxirgi yuborilgan kurs natijasi kaliti (xAPI passed/failed + ball), r: {blokId: reflect tanlovi}, m: {blokId: {t: soniya, b: 20 bitli ko'rilgan qismlar}}}
+  //  a — oxirgi topshirilgan javoblar, d — tugallanmagan urinish qoralamasi. Javob shakli: mcq/tf — [indeks…], fill — matn,
+  //  match — [har chap band uchun o'ng band indeksi | -1], sort — [har kartochka uchun toifa indeksi | -1]
   function encodeState(st, limit) {
     var s = JSON.stringify(st);
     if (s.length <= limit) return s;
     var c = JSON.parse(s), k;
     for (k in c.q) delete c.q[k].a;                         // 1) oxirgi javoblar tashlanadi
     s = JSON.stringify(c); if (s.length <= limit) return s;
-    for (k in c.q) c.q[k] = { n: c.q[k].n, s: c.q[k].s, p: c.q[k].p }; // 2) faqat natija
+    for (k in c.q) delete c.q[k].d;                         // 2) tugallanmagan urinish qoralamasi
+    s = JSON.stringify(c); if (s.length <= limit) return s;
+    for (k in c.q) c.q[k] = { n: c.q[k].n, s: c.q[k].s, p: c.q[k].p }; // 3) faqat natija
     s = JSON.stringify(c); return s.length <= limit ? s : JSON.stringify({ h: c.h, c: c.c, v: c.v });
   }
   function decodeState(s) { try { var o = JSON.parse(s); return o && typeof o === 'object' ? o : null; } catch (e) { return null; } }
@@ -474,6 +527,7 @@
       interaction: function (it) {
         var def = { type: ACT + 'cmi.interaction', name: lm(it.title), description: lm(it.desc), interactionType: it.type === 'true-false' ? 'true-false' : it.type };
         if (it.type === 'choice') def.choices = it.choices.map(function (c, i) { return { id: letter(i), description: lm(c) }; });
+        if (it.type === 'matching') ['source', 'target'].forEach(function (k) { def[k] = arr(it[k]).map(function (x) { return { id: x.id, description: lm(x.text) }; }); });
         if (arr(it.cX).length) def.correctResponsesPattern = arr(it.cX).map(str);   // har muqobil javob — alohida element
         if (it.neutral) {   // mulohaza (reflect): baholanmaydi — «responded», success yo'q
           send(stmt('responded', 'responded', { objectType: 'Activity', id: actId + '/block/' + it.block, definition: def }, { response: it.rX }, true));
@@ -558,7 +612,16 @@
 
   var STEPS_UI = C.layout === 'steps';
   var B = C.blocks, quizzes = B.filter(function (b) { return b.type === 'quiz'; });
-  var S = { h: hash(C.id), v: '', c: 0, q: {}, r: {} };   // saqlanadigan holat (v — qadamlar bo'yicha)
+  var S = { h: hash(C.id), v: '', c: 0, q: {}, r: {}, m: {} };   // saqlanadigan holat (v — qadamlar bo'yicha)
+  var CLEAN = [], vSent = {};   // CLEAN: qadamdan chiqishda bajariladigan ishlar (audio/video to'xtatish, joyni saqlash)
+  function cleanup() { var c = CLEAN; CLEAN = []; c.forEach(function (f) { try { f(); } catch (e) { /* jim */ } }); }
+  function vstate(b) {   // fayl-video holati: t — oxirgi joy (s), b — 20 ta teng bo'lakdan ko'rilganlari (bit niqobi)
+    S.m = S.m && typeof S.m === 'object' ? S.m : {};
+    var m = S.m[b.id]; if (!m || typeof m !== 'object') m = S.m[b.id] = { t: 0, b: 0 };
+    m.t = Math.max(0, Math.floor(num(m.t, 0))); m.b = num(m.b, 0) & 0xFFFFF;
+    return m;
+  }
+  function watched(m) { var n = 0, x = m.b >>> 0; while (x) { n += x & 1; x >>>= 1; } return Math.min(100, n * 5); }
   var visited = {}, seenBlock = {}, cur = -1, tracker = null, t0 = Date.now(), finished = false, lmsMastery = null, lastCompl = null, saveT = 0;
   var R = {};   // DOM havolalari
   var reduced = false; try { reduced = W.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { /* jim */ }
@@ -722,7 +785,11 @@
     if (b.type === 'plan' && b.heading) return b.heading;
     return b.title;
   }
-  function typing(t) { return t && t.closest && t.closest('input,textarea,select,[contenteditable="true"],.deck,.thumbs,.lb,iframe'); }
+  // Global ←/→/PageUp/PageDown qadam almashtirmaydi: matn kiritish, o'z klaviaturasi bor vidjetlar (taqdimot, lightbox, media) va test/mashq ichida
+  // (form.qform / fieldset.q — variantlar va «yuborish» tugmasi, moslashtirish .m-*, saralash .s-*; kartochkalar .fc-grid): u yerda fokus bilan ishlayotgan talaba qadamdan chiqib ketmasin
+  function typing(t) {
+    return t && t.closest && t.closest('input,textarea,select,[contenteditable="true"],.deck,.thumbs,.lb,iframe,video,audio,form.qform,fieldset.q,.m-slot,.m-tile,.m-bank,.s-card,.s-drop,.fc-grid,.fc');
+  }
   function onKey(e) {
     if (e.key === 'Escape' && app.classList.contains('toc-open')) { closeToc(); (R.menuBtn || R.pos).focus(); return; }
     if (!STEPS_UI || e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || R.lbOpen || R.fsOpen || typing(e.target)) return;
@@ -761,10 +828,12 @@
     if (STEPS_UI && R.items[i] && R.list.scrollHeight > R.list.clientHeight) {   // joriy qadam ko'rinib tursin (sahifa aylantirilmaydi)
       var it = R.items[i].parentNode; R.list.scrollTop = Math.max(0, it.offsetTop - R.list.clientHeight / 2);
     }
+    cleanup();
     R.main.textContent = '';
+    if (!STEPS_UI && i === 0 && C.cover) R.main.appendChild(hero(null));   // scroll rejimi: muqova birinchi sahifa ustida
     var hid = 'bt-' + s.key.replace('.', '-'), head = null;
     var kick = el('div', { cls: 'kicker' }, [icon(b.type), el('span', { text: TYPE_LABEL[b.type] + (s.parts > 1 ? ' · ' + (s.part + 1) + '/' + s.parts : '') + ' · ' + (i + 1) + ' / ' + STEPS.length })]);
-    if (b.type !== 'section') head = el('div', { cls: 'bh' }, [kick, s.part === 0 ? el('h1', { id: hid, text: b.type === 'plan' && b.heading ? b.heading : b.title }) : null]);
+    if (b.type !== 'section' && b.type !== 'cover') head = el('div', { cls: 'bh' }, [kick, s.part === 0 ? el('h1', { id: hid, text: b.type === 'plan' && b.heading ? b.heading : b.title }) : null]);
     var card = el('section', { cls: 'card t-' + b.type + (b.type === 'plan' && b.heading ? ' statement' : ''), 'aria-labelledby': hid, 'data-block': b.id, 'data-step': s.key }, [head]);
     R.main.appendChild(card);
     (RENDER[b.type])(b, card, s, hid);
@@ -783,7 +852,7 @@
   function markVisited(s) {
     var b = blockOf(s), isNew = !visited[s.key];
     visited[s.key] = 1;
-    if (!seenBlock[b.id]) { seenBlock[b.id] = 1; if (tracker.visit) tracker.visit(b); }
+    if (!seenBlock[b.id]) { seenBlock[b.id] = 1; if (tracker.visit && b.type !== 'cover') tracker.visit(b); }
     if (isNew) report(true); else renderProgress(status());
   }
 
@@ -832,7 +901,100 @@
     out.push(t.slice(last));
     return out.filter(function (x) { return x !== ''; });
   }
+  function lessonCode() {   // NEXTID uslubi: «L1-1-dars» (ma'ruza) / «A1 — Amaliy mashg'ulot»
+    var L = C.lesson; if (!L.code) return '';
+    return !L.kind || L.kind === 'maruza' ? L.code + (L.no ? '-' + L.no + '-dars' : '') : L.code + ' — ' + KIND[L.kind];
+  }
+  // Muqova muallifi: cover.author berilmagan (null/undefined) bo'lsa — course.teacher; bo'sh satr ('') — ataylab «muallifsiz»
+  function coverAuthor() { var a = C.cover && C.cover.author; return a != null ? a : str(C.course.teacher).trim(); }
+  function hero(hid) {   // hid berilsa — muqova qadami (h1 + «Boshlash»); aks holda scroll rejimidagi sarlavha
+    var cv = C.cover, logo = assetUrl(C.brand.logo), code = lessonCode(), crs = C.course, author = coverAuthor();
+    var meta = [str(crs.subject), crs.course ? crs.course + '-kurs' : '', str(crs.kafedra)].filter(Boolean).join(' · ');
+    return el('div', { cls: 'hero' + (cv.image ? ' has-img' : '') }, [
+      cv.image ? el('img', { cls: 'hero-bg', src: cv.image, alt: '' }) : null,
+      el('div', { cls: 'hero-in' }, [
+        el('div', { cls: 'hero-brand' }, [logo ? el('img', { src: logo, alt: '', width: '44', height: '44' }) : null, el('span', { text: str(C.brand.full) || str(C.brand.name, 'ISFT') })]),
+        el(hid ? 'h1' : 'p', { cls: 'hero-t', id: hid }, [code ? el('span', { cls: 'hero-code', text: code + ': ' }) : null, el('span', { text: C.lesson.title || C.title })]),
+        meta ? el('p', { cls: 'hero-meta', text: meta }) : null,
+        el('div', { cls: 'hero-f' }, [
+          author ? el('span', { cls: 'hero-au' }, [icon('user'), el('span', { text: author })]) : null,
+          hid && STEPS.length > 1 ? el('button', { type: 'button', cls: 'btn hero-go', 'data-act': 'begin', onclick: function () { go(1, true); } }, [el('span', { text: 'Boshlash' }), icon('right')]) : null])
+      ])
+    ]);
+  }
+  // Fayl-video (kontrakt v3): <video> + <track>, tezlik, joyni eslab qolish (har ~10 s va pauzada), ko'rilgan ulush (20 bo'lak)
+  function fileVideo(b, card) {
+    var src = mediaUrl(b.src);
+    if (!src) { card.appendChild(el('p', { cls: 'muted', text: 'Video fayli topilmadi.' })); return; }
+    var m = vstate(b), saved = m.t, lastT = -1, rates = [0.75, 1, 1.25, 1.5, 2];
+    // crossorigin FAQAT sandboxed ko'rishda (http(s) orqali berilgan, lekin origin «opaque» — iframe sandbox, allow-same-origin'siz): u yerda <track>
+    // CORS'siz yuklanmaydi. file:// (origin ham 'null', lekin CORS so'rovi video va subtitrni buzadi) va oddiy same-origin xizmatda (LMS) — qo'yilmaydi.
+    var v = el('video', { crossorigin: opaqueHttp() ? 'anonymous' : null, controls: true, playsinline: true, preload: 'metadata', src: src, poster: mediaUrl(b.poster), 'aria-label': b.title, 'data-block': b.id });
+    arr(b.captions).forEach(function (c) {
+      var u = c && typeof c === 'object' && mediaUrl(c.src); if (!u) return;
+      v.appendChild(el('track', { kind: 'subtitles', src: u, srclang: /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$/.test(str(c.lang)) ? c.lang : 'uz', label: str(c.label).slice(0, 40) || str(c.lang) || 'Subtitr' }));
+    });
+    var pct = el('span', { cls: 'v-pct', role: 'status' }), err = el('p', { cls: 'alert bad v-err', role: 'alert', hidden: true });
+    var rb = rates.map(function (r) {
+      return el('button', { type: 'button', 'data-rate': String(r), 'aria-pressed': String(r === 1), 'aria-label': 'Tezlik ' + r + '×',
+        onclick: function () { v.playbackRate = r; rb.forEach(function (x, j) { x.setAttribute('aria-pressed', String(rates[j] === r)); }); } }, [r + '×']);
+    });
+    function paint() {
+      var w = watched(m); pct.textContent = "Ko'rildi: " + w + '%'; pct.classList.toggle('good', w >= 90);
+      if (w >= 90 && !vSent[b.id]) { vSent[b.id] = 1; emit('progress', null, { video: { block: b.id, watched: w } }); }
+    }
+    function bucket(t, d) { return clamp(Math.floor(t / d * 20), 0, 19); }
+    function mark(end) {
+      var d = v.duration, t = end ? d : v.currentTime, before = m.b;
+      if (!(d > 0) || !isFinite(d) || !(t >= 0)) return;
+      // uzluksiz ijro (oldinga ozgina siljish) — oraliqdagi bo'laklar ham; sakrab o'tilgan (seek) qism hisoblanmaydi
+      var from = lastT >= 0 && t >= lastT && t - lastT <= 2 * Math.max(1, num(v.playbackRate, 1)) ? bucket(lastT, d) : bucket(t, d);
+      for (var k = from; k <= bucket(t, d); k++) m.b |= 1 << k;
+      lastT = t; m.t = end ? 0 : Math.floor(t);
+      if (m.b !== before) paint();
+    }
+    function keep() { saved = m.t; saveSoon(); }
+    v.addEventListener('loadedmetadata', function () { if (m.t > 1 && m.t < v.duration - 3) { try { v.currentTime = m.t; } catch (e) { /* jim */ } } });
+    v.addEventListener('timeupdate', function () { if (v.paused || v.seeking) return; mark(false); if (Math.abs(m.t - saved) >= 10) keep(); });
+    v.addEventListener('seeking', function () { lastT = -1; });
+    v.addEventListener('pause', function () { if (!v.ended && v.currentTime > 0) m.t = Math.floor(v.currentTime); keep(); });
+    v.addEventListener('ended', function () { mark(true); keep(); });
+    v.addEventListener('error', function () { err.hidden = false; err.textContent = "Videoni ijro etib bo'lmadi. Sahifani yangilab ko'ring yoki o'qituvchiga xabar bering."; });
+    CLEAN.push(function () { try { if (!v.paused) v.pause(); } catch (e) { /* jim */ } if (m.t !== saved) keep(); });
+    card.appendChild(el('div', { cls: 'video file' }, [v]));
+    card.appendChild(err);
+    card.appendChild(el('div', { cls: 'v-bar' }, [
+      el('div', { cls: 'v-speed', role: 'group', 'aria-label': 'Ijro tezligi' }, [el('span', { cls: 'v-l', 'aria-hidden': 'true', text: 'Tezlik' })].concat(rb)),
+      el('span', { cls: 'grow' }), pct]));
+    if (v.textTracks && v.querySelector('track')) card.appendChild(el('p', { cls: 'muted sm v-cc', text: 'Subtitrlarni pleyerdagi «CC» tugmasi orqali yoqish mumkin.' }));
+    paint();
+  }
   var RENDER = {
+    cover: function (b, card, s, hid) { card.appendChild(hero(hid)); },
+    flashcards: function (b, card) {
+      card.appendChild(el('p', { cls: 'fc-hint muted', text: "Kartochkani bosing — orqa tomoni ochiladi." }));
+      card.appendChild(el('ul', { cls: 'fc-grid' }, b.cards.map(function (c, k) {
+        var f = el('span', { cls: 'fc-f' }, [el('span', { cls: 'fc-x', text: c.front }), el('span', { cls: 'fc-k', 'aria-hidden': 'true' }, [icon('flip'), el('span', { text: 'Aylantirish' })])]);
+        var bk = el('span', { cls: 'fc-b', 'aria-hidden': 'true' }, [el('span', { cls: 'fc-x', text: c.back })]);
+        var btn = el('button', { type: 'button', cls: 'fc', 'data-k': String(k), 'aria-pressed': 'false', onclick: function () {
+          var on = btn.getAttribute('aria-pressed') !== 'true';
+          btn.setAttribute('aria-pressed', String(on)); f.setAttribute('aria-hidden', String(on)); bk.setAttribute('aria-hidden', String(!on));
+        } }, [el('span', { cls: 'fc-in' }, [f, bk])]);
+        return el('li', null, [btn]);
+      })));
+    },
+    assignment: function (b, card) {
+      var av = mediaUrl(b.avatar);
+      card.appendChild(el('div', { cls: 'asg' }, [
+        b.text ? el('figure', { cls: 'asg-q' }, [
+          av ? el('img', { cls: 'asg-av', src: av, alt: '', width: '112', height: '112' }) : staticSvg('av asg-av', 'viewBox="0 0 120 120" width="112" height="112"', AVATAR),
+          el('blockquote', null, [el('p', { text: b.text })]), el('figcaption', { text: b.author })]) : null,
+        b.questions.length ? el('ol', { cls: 'asg-list' }, b.questions.map(function (q, k) {
+          return el('li', null, [el('span', { cls: 'kp-n', 'aria-hidden': 'true', text: String(k + 1) }), el('span', { text: q })]);
+        })) : null,
+        el('p', { cls: 'asg-note', role: 'note' }, [icon('info'), el('span', { text: "Javobni LMS'dagi «Vazifa yuklash» orqali yuboring" })])
+      ]));
+    },
     section: function (b, card, s, hid) {
       card.appendChild(el('div', { cls: 'band' }, [el('h1', { cls: 'pill', id: hid, text: b.title })]));
       if (STEPS_UI && cur < STEPS.length - 1) card.appendChild(el('p', { cls: 'band-hint muted', text: "Davom etish uchun «Keyingi qadam» tugmasini bosing" }));
@@ -907,6 +1069,9 @@
           dots.appendChild(el('button', { type: 'button', 'aria-label': (j + 1) + '-slayd', onclick: function () { show(j); } },
             src ? [el('img', { src: src, alt: '', loading: 'lazy', draggable: 'false' })] : imgs ? [el('span', { text: String(j + 1) })] : null));
         });
+        var capBox = el('p', { cls: 's-cap', hidden: true }), audBox = el('div', { cls: 's-aud', hidden: true }), audio = null;
+        var stopAudio = function () { if (audio) { try { audio.pause(); } catch (e) { /* jim */ } audio = null; } };
+        CLEAN.push(stopAudio);
         var deck = el('div', { cls: 'deck', tabindex: '0', role: 'region', 'aria-roledescription': 'karusel', 'aria-label': b.title + ' (← → tugmalari bilan almashtiring)' }, [stage, prevB, nextB]);
         var gal = el('div', { cls: 'gal' + (imgs ? ' g-img' : '') }, [deck]);
         var fsB = el('button', { type: 'button', cls: 'btn ghost sm fs-btn', 'aria-pressed': 'false', onclick: function () { toggleFs(gal, fsB); } }, [icon('expand'), el('span', { text: "To'liq ekran" })]);
@@ -931,6 +1096,10 @@
             var nx = sl[k + 1] && assetUrl(sl[k + 1].image); if (nx) { var pre = new Image(); pre.src = nx; }
           }
           notesBox.textContent = str(s.notes) || "Bu slayd uchun izoh yo'q.";
+          var cap = str(s.caption).trim(), au = mediaUrl(s.audio);
+          capBox.textContent = cap; capBox.hidden = !cap;
+          stopAudio(); audBox.textContent = ''; audBox.hidden = !au;   // slayddan chiqilganda audio to'xtaydi
+          if (au) { audio = el('audio', { controls: true, preload: 'none', src: au, 'aria-label': (k + 1) + '-slayd uchun audio izoh' }); audBox.appendChild(audio); }
         };
         deck.addEventListener('keydown', function (e) {
           var h = { ArrowLeft: k - 1, ArrowRight: k + 1, Home: 0, End: sl.length - 1 }[e.key];
@@ -942,6 +1111,7 @@
           if (x0 == null) return; var dx = e.clientX - x0, dy = e.clientY - y0; x0 = null;
           if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) show(k + (dx < 0 ? 1 : -1));
         });
+        gal.appendChild(el('div', { cls: 's-meta' }, [capBox, audBox]));
         gal.appendChild(el('div', { cls: 'deck-bar' }, [counter, imgs ? null : dots, el('span', { cls: 'grow' }), notesBtn, fsB]));
         if (imgs) gal.appendChild(dots);
         card.appendChild(gal);
@@ -954,6 +1124,7 @@
       if (links.length) card.appendChild(el('div', { cls: 'tools' }, links));
     },
     video: function (b, card) {
+      if (b.provider === 'file') return fileVideo(b, card);
       var id = /^[A-Za-z0-9_-]{6,20}$/.test(str(b.video_id)) ? b.video_id : null, start = Math.max(0, Math.floor(num(b.start, 0)));
       var watch = id ? 'https://www.youtube.com/watch?v=' + id + (start ? '&t=' + start + 's' : '') : (/^https:\/\/(www\.)?(youtube\.com|youtu\.be)\//.test(str(b.url)) ? b.url : null);
       if (id) {
@@ -1031,7 +1202,9 @@
     if (R.print) return;
     var box = R.print = el('div', { cls: 'print-all', 'aria-hidden': 'true' });
     box.appendChild(el('h1', { text: (C.lesson.code ? C.lesson.code + ' — ' : '') + (C.lesson.title || C.title) }));
+    if (C.cover) box.appendChild(el('p', { cls: 'p-cover', text: [lessonCode(), coverAuthor(), str(C.course.subject)].filter(Boolean).join(' · ') }));
     B.forEach(function (b) {
+      if (b.type === 'cover') return;
       if (b.type === 'section') { box.appendChild(el('div', { cls: 'p-sec', text: b.title })); return; }
       var sec = el('section', { cls: 'p-blk t-' + b.type }, [el('h2', { text: b.type === 'plan' && b.heading ? b.heading : b.title })]);
       if (b.type === 'plan') sec.appendChild(el('ol', null, b.items.map(function (t) { return el('li', { text: t }); })));
@@ -1040,10 +1213,21 @@
         Array.prototype.forEach.call(d.querySelectorAll('img'), function (x) { x.removeAttribute('loading'); }); sec.appendChild(d); }
       else if (b.type === 'refs' || b.type === 'keypoints') sec.appendChild(el(b.type === 'refs' ? 'ol' : 'ul', null, b.items.map(function (t) { return el('li', { text: typeof t === 'string' ? t : str(t.text) + (t.url ? ' ' + t.url : '') }); })));
       else if (b.type === 'slides') b.slides.forEach(function (s, j) {
-        var src = assetUrl(s.image);
-        sec.appendChild(src ? el('figure', { cls: 'p-sl' }, [el('img', { src: src, alt: str(s.title) || (j + 1) + '-slayd' })])
-          : el('div', { cls: 'p-sl' }, [el('strong', { text: (j + 1) + '. ' + str(s.title) }), el('ul', null, arr(s.bullets).map(function (x) { return el('li', { text: str(x) }); }))]));
+        var src = assetUrl(s.image), cap = str(s.caption).trim();
+        sec.appendChild(src ? el('figure', { cls: 'p-sl' }, [el('img', { src: src, alt: str(s.title) || (j + 1) + '-slayd' }), cap ? el('figcaption', { text: cap }) : null])
+          : el('div', { cls: 'p-sl' }, [el('strong', { text: (j + 1) + '. ' + str(s.title) }), el('ul', null, arr(s.bullets).map(function (x) { return el('li', { text: str(x) }); })), cap ? el('p', { text: cap }) : null]));
       });
+      else if (b.type === 'video' && b.provider === 'file') {
+        var po = mediaUrl(b.poster);
+        if (po) sec.appendChild(el('figure', { cls: 'p-sl p-video' }, [el('img', { src: po, alt: b.title })]));
+        sec.appendChild(el('p', { text: 'Videodars: ' + b.title + ' — paket ichidagi video fayl (onlayn tomosha qilinadi).' }));
+      }
+      else if (b.type === 'flashcards') sec.appendChild(el('dl', { cls: 'p-fc' }, b.cards.reduce(function (a, c) { return a.concat([el('dt', { text: c.front }), el('dd', { text: c.back })]); }, [])));
+      else if (b.type === 'assignment') {
+        if (b.text) sec.appendChild(el('blockquote', null, [el('p', { text: b.text }), el('p', { text: '— ' + b.author })]));
+        if (b.questions.length) sec.appendChild(el('ol', null, b.questions.map(function (q) { return el('li', { text: q }); })));
+        sec.appendChild(el('p', { text: "Javobni LMS'dagi «Vazifa yuklash» orqali yuboring" }));
+      }
       else if (b.type === 'video') sec.appendChild(el('p', { text: 'Videodars: ' + (/^[A-Za-z0-9_-]{6,20}$/.test(str(b.video_id)) ? 'https://www.youtube.com/watch?v=' + b.video_id : str(httpUrl(b.url))) }));
       else if (b.type === 'file') sec.appendChild(el('p', { text: 'Fayl: ' + str(assetUrl(b.href)).split('/').pop() }));
       else if (b.type === 'quiz') sec.appendChild(el('p', { text: b.questions.length + " ta savoldan iborat test — onlayn topshiriladi." }));
@@ -1054,71 +1238,243 @@
   }
 
   // ------------------------------------------------------------------ test
+  function ident(n) { var a = []; for (var i = 0; i < n; i++) a.push(i); return a; }
   function qOrder(b, seed) {
-    var r = rng(seed), order = b.shuffle ? shuffled(b.questions.length, r) : b.questions.map(function (_, i) { return i; });
+    var r = rng(seed), order = b.shuffle ? shuffled(b.questions.length, r) : ident(b.questions.length);
     var opt = {};
-    b.questions.forEach(function (q, i) { opt[q.id] = b.shuffle && q.type === 'mcq' ? shuffled(q.options.length, r) : q.options.map(function (_, j) { return j; }); });
+    b.questions.forEach(function (q) {
+      if (q.type === 'match') {   // o'ng bandlar har doim aralashtiriladi (tartib javobni oshkor qilmasin)
+        var p = shuffled(q.pairs.length, r); if (p.every(function (x, i) { return x === i; })) p.push(p.shift());
+        opt[q.id] = p;
+      } else if (q.type === 'sort') opt[q.id] = shuffled(q.items.length, r);
+      else opt[q.id] = b.shuffle && q.type === 'mcq' ? shuffled(q.options.length, r) : ident(q.options.length);
+    });
     return { order: order, opt: opt };
   }
   function isTrue(q, i) { return /^(to'g'ri|togri|ha|true|rost|t)$/.test(norm(q.options[i])) || (i === 0 && !/^(noto'g'ri|yo'q|false|yolg'on)$/.test(norm(q.options[0]))); }
-  function grade(q, ans) {   // ans: mcq/tf — tanlangan asl indekslar massivi; fill — matn
+  function pairOk(q, i, j) { return j >= 0 && !!q.pairs[j] && (j === i || norm(q.pairs[j].right) === norm(q.pairs[i].right)); }   // bir xil matnli o'ng bandlar teng kuchli
+  function grade(q, ans) {   // ans: mcq/tf — tanlangan asl indekslar; fill — matn; match — [o'ng indeks | -1]; sort — [toifa indeksi | -1]. Hammasi yoki hech narsa
     if (q.type === 'fill') { var n = norm(ans); return !!n && q.answers.some(function (a) { return norm(a) === n; }); }
+    if (q.type === 'match') return q.pairs.every(function (_, i) { return pairOk(q, i, arr(ans)[i]); });
+    if (q.type === 'sort') return q.items.every(function (it, k) { return arr(ans)[k] === it.c; });
     var a = arr(ans).slice().sort(); return a.length === q.correct.length && a.every(function (x, i) { return x === q.correct[i]; });
+  }
+  function blank(q, a) {
+    if (q.type === 'fill') return !norm(a);
+    if (q.type === 'match' || q.type === 'sort') { var n = (q.pairs || q.items).length; a = arr(a); for (var i = 0; i < n; i++) if (!(a[i] >= 0)) return true; return false; }
+    return !arr(a).length;
+  }
+  function slotList(d, n, max, uniq) {   // saqlangan qoralamadan xavfsiz massiv: butun son 0..max-1 yoki -1
+    var a = [];
+    for (var i = 0; i < n; i++) { var x = Array.isArray(d) ? d[i] : -1; x = typeof x === 'number' && x >= 0 && x < max && Math.floor(x) === x ? x : -1; a.push(uniq && a.indexOf(x) >= 0 ? -1 : x); }
+    return a;
+  }
+  // Sudrash (faqat sichqoncha/pero — qo'shimcha qulaylik; sensor va klaviaturada «bosib tanlash» ishlaydi, sahifa aylanishi buzilmaydi)
+  function dragInit(root, pick, drop) {
+    var d = null, dragged = false;
+    root.addEventListener('pointerdown', function (e) {
+      if (e.pointerType === 'touch' || e.button) return;
+      var p = pick(e.target); if (p) d = { p: p, x: e.clientX, y: e.clientY, g: null, id: e.pointerId };
+    });
+    root.addEventListener('pointermove', function (e) {
+      if (!d || e.pointerId !== d.id) return;
+      if (!d.g) {
+        if (Math.abs(e.clientX - d.x) + Math.abs(e.clientY - d.y) < 8) return;
+        var r = d.p.node.getBoundingClientRect();
+        d.g = d.p.node.cloneNode(true); d.g.className += ' drag-ghost'; d.g.style.width = r.width + 'px'; d.ox = d.x - r.left; d.oy = d.y - r.top;
+        D.body.appendChild(d.g); d.p.node.classList.add('dragging'); root.classList.add('drag-on');
+        try { root.setPointerCapture(e.pointerId); } catch (x) { /* jim */ }
+      }
+      d.g.style.transform = 'translate(' + (e.clientX - d.ox) + 'px,' + (e.clientY - d.oy) + 'px)';
+      e.preventDefault();
+    });
+    function end(e, cancel) {
+      var x = d; d = null;
+      if (!x || !x.g) return;
+      if (x.g.parentNode) x.g.parentNode.removeChild(x.g);
+      x.p.node.classList.remove('dragging'); root.classList.remove('drag-on');
+      dragged = true; setTimeout(function () { dragged = false; }, 0);   // shu ishoraning «click» hodisasi e'tiborsiz qoldiriladi
+      if (!cancel) drop(x.p.data, D.elementFromPoint(e.clientX, e.clientY));
+    }
+    root.addEventListener('pointerup', function (e) { end(e, false); });
+    root.addEventListener('pointercancel', function (e) { end(e, true); });
+    root.addEventListener('click', function (e) { if (dragged) { dragged = false; e.stopPropagation(); e.preventDefault(); } }, true);
+  }
+  // Moslashtirish: chapda bandlar («bo'rtiq» bilan), o'ngda katak; pastda javob plitkalari. Katak → javob yoki javob → katak (bosish/Enter/Space);
+  // to'ldirilgan katakni tanlab boshqa katakka bosish — ko'chiradi/almashtiradi, o'zini qayta bosish — bo'shatadi.
+  function matchWidget(q, perm, a, host, changed) {
+    var sel = null, slots = [], tiles = {}, rowsEl = [];
+    var rows = el('div', { cls: 'm-rows' }), bank = el('div', { cls: 'm-bank', role: 'group', 'aria-label': 'Javob variantlari' });
+    var none = el('span', { cls: 'm-none muted sm', text: 'Barcha javoblar joylashtirildi.' });
+    function paint() {
+      slots.forEach(function (sl, i) {
+        var j = a[i], on = j >= 0;
+        sl.textContent = ''; sl.appendChild(el('span', { text: on ? q.pairs[j].right : 'Javobni tanlang' }));
+        sl.classList.toggle('filled', on); rowsEl[i].classList.toggle('on', on);
+        sl.setAttribute('aria-pressed', String(!!sel && sel.i === i));
+        sl.setAttribute('aria-label', '«' + q.pairs[i].left + '» uchun javob: ' + (on ? '«' + q.pairs[j].right + '»' : "bo'sh"));
+        if (on) sl.setAttribute('data-r', String(j)); else sl.removeAttribute('data-r');
+      });
+      var left = 0;
+      perm.forEach(function (j) { var used = a.indexOf(j) >= 0; tiles[j].hidden = used; if (!used) left++; tiles[j].setAttribute('aria-pressed', String(!!sel && sel.j === j)); });
+      none.hidden = left > 0;
+      host.classList.toggle('armed', !!sel);
+    }
+    function place(i, j) {   // j-javob i-katakka; j boshqa katakda bo'lsa — o'rin almashadi
+      var i0 = a.indexOf(j), old = a[i];
+      if (i0 >= 0 && i0 !== i) a[i0] = old;
+      a[i] = j; sel = null; paint(); changed();
+      announce('«' + q.pairs[i].left + '» — «' + q.pairs[j].right + '»');
+    }
+    function clear(i) { if (a[i] < 0) return; a[i] = -1; sel = null; paint(); changed(); announce("Katak bo'shatildi"); }
+    function nextEmpty(i) { for (var k = 1; k <= slots.length; k++) { var x = (i + k) % slots.length; if (a[x] < 0) return slots[x]; } return slots[i]; }
+    function tapSlot(i) {
+      if (sel && sel.j != null) { place(i, sel.j); return; }
+      if (sel && sel.i === i) { if (a[i] >= 0) clear(i); else { sel = null; paint(); } return; }
+      if (sel && a[sel.i] >= 0) { place(i, a[sel.i]); return; }
+      sel = { i: i }; paint();
+    }
+    function tapTile(j) {
+      if (sel && sel.i != null) { var i = sel.i; place(i, j); nextEmpty(i).focus({ preventScroll: true }); return; }
+      sel = sel && sel.j === j ? null : { j: j }; paint();
+    }
+    q.pairs.forEach(function (p, i) {
+      var sl = el('button', { type: 'button', cls: 'm-slot', 'data-l': String(i), onclick: function () { tapSlot(i); } });
+      slots.push(sl);
+      rowsEl.push(el('div', { cls: 'm-row' }, [el('div', { cls: 'm-left' }, [el('span', { text: p.left })]), sl]));
+      rows.appendChild(rowsEl[i]);
+    });
+    perm.forEach(function (j) {
+      tiles[j] = el('button', { type: 'button', cls: 'm-tile', 'data-r': String(j), 'aria-pressed': 'false', onclick: function () { tapTile(j); } }, [el('span', { text: q.pairs[j].right })]);
+      bank.appendChild(tiles[j]);
+    });
+    bank.appendChild(none);
+    host.appendChild(el('p', { cls: 'hint muted', text: "Katakni, so'ng unga mos javobni bosing (yoki javobni katakka sudrab olib boring). Tanlangan to'ldirilgan katakni qayta bossangiz — bo'shaydi." }));
+    host.appendChild(rows); host.appendChild(bank);
+    dragInit(host, function (t) {
+      var n = t.closest && t.closest('.m-tile,.m-slot.filled');
+      return n ? { node: n, data: { j: +n.getAttribute('data-r') } } : null;
+    }, function (d, under) {
+      var sl = under && under.closest && under.closest('.m-slot'), bk = under && under.closest && under.closest('.m-bank');
+      if (sl) place(+sl.getAttribute('data-l'), d.j);
+      else if (bk && a.indexOf(d.j) >= 0) clear(a.indexOf(d.j));
+    });
+    paint();
+  }
+  // Saralash: kartochkani bosib (Enter/Space), keyin toifani bosish; joylangan kartochkani ham qayta tanlab ko'chirish mumkin
+  // (Delete/Backspace yoki «kartochkalar» maydonini bosish — qaytaradi); sichqoncha bilan sudrash — qo'shimcha.
+  function sortWidget(q, perm, a, host, changed) {
+    var sel = -1, cards = [], lists = [], counts = [];
+    var deck = el('div', { cls: 's-deck', role: 'group', 'aria-label': 'Kartochkalar' }), none = el('span', { cls: 'm-none muted sm', text: 'Barcha kartochkalar joylashtirildi.' });
+    var cats = el('div', { cls: 's-cats' });
+    function paint() {
+      var left = 0, n = q.cats.map(function () { return 0; });
+      perm.forEach(function (k) {
+        var c = a[k], to = c >= 0 ? lists[c] : deck;
+        if (cards[k].parentNode !== to) to.appendChild(cards[k]);
+        if (c >= 0) n[c]++; else left++;
+        cards[k].setAttribute('aria-pressed', String(sel === k));
+        cards[k].setAttribute('aria-label', q.items[k].text + (c >= 0 ? ' — «' + q.cats[c] + '» toifasida' : ' — joylanmagan'));
+      });
+      counts.forEach(function (x, c) { x.textContent = String(n[c]); });
+      deck.appendChild(none); none.hidden = left > 0;
+      host.classList.toggle('armed', sel >= 0);
+    }
+    function put(k, c) {
+      if (a[k] === c) { sel = -1; paint(); return; }
+      var hadFocus = D.activeElement === cards[k] || (D.activeElement && D.activeElement.classList.contains('s-drop'));
+      a[k] = c; sel = -1; paint(); changed();
+      announce(c >= 0 ? '«' + q.items[k].text + '» — «' + q.cats[c] + '» toifasiga' : '«' + q.items[k].text + '» qaytarildi');
+      if (hadFocus) (deck.querySelector('.s-card') || cards[k]).focus({ preventScroll: true });
+    }
+    q.cats.forEach(function (t, c) {
+      var cnt = el('span', { cls: 's-n', 'aria-hidden': 'true', text: '0' }), list = el('div', { cls: 's-list' });
+      counts.push(cnt); lists.push(list);
+      cats.appendChild(el('div', { cls: 's-cat', 'data-c': String(c), onclick: function () { if (sel >= 0) put(sel, c); else announce('Avval kartochkani tanlang'); } }, [
+        el('button', { type: 'button', cls: 's-drop', 'data-c': String(c), 'aria-label': '«' + t + "» toifasiga qo'yish" }, [el('span', { text: t }), cnt]), list]));
+    });
+    q.items.forEach(function (it, k) {
+      cards[k] = el('button', { type: 'button', cls: 's-card', 'data-k': String(k), 'aria-pressed': 'false',
+        onclick: function (e) { e.stopPropagation(); sel = sel === k ? -1 : k; paint(); },
+        onkeydown: function (e) { if ((e.key === 'Delete' || e.key === 'Backspace') && a[k] >= 0) { e.preventDefault(); put(k, -1); } } }, [el('span', { text: it.text })]);
+    });
+    deck.addEventListener('click', function () { if (sel >= 0 && a[sel] >= 0) put(sel, -1); });
+    host.appendChild(el('p', { cls: 'hint muted', text: "Kartochkani bosing, so'ng uning toifasini tanlang (yoki kartochkani toifaga sudrab olib boring)." }));
+    host.appendChild(deck); host.appendChild(cats);
+    dragInit(host, function (t) {
+      var n = t.closest && t.closest('.s-card');
+      return n ? { node: n, data: +n.getAttribute('data-k') } : null;
+    }, function (k, under) {
+      var c = under && under.closest && under.closest('.s-cat'), dk = under && under.closest && under.closest('.s-deck');
+      if (c) put(k, +c.getAttribute('data-c')); else if (dk) put(k, -1);
+    });
+    paint();
   }
   function quizView(b, box) {
     var st = qs(b), left = b.attempts ? b.attempts - st.n : Infinity;
     box.textContent = '';
-    if (st.ip && st.sd != null && left > 0 && !st.p) return renderAttempt(b, box);   // tugallanmagan urinish — o'sha tartibda davom
+    if (st.ip && st.sd != null && left > 0 && !st.p) return renderAttempt(b, box);   // tugallanmagan urinish — o'sha tartibda (va qoralama javoblar bilan) davom
     if (st.s != null && (st.a || st.p)) return quizResult(b, box);   // o'tgan (javoblar suspend_data'dan tushib qolgan bo'lsa ham) — natija, qayta urinishsiz
     var rows = [el('li', null, [el('strong', { text: String(b.questions.length) }), ' ta savol']),
       el('li', null, ["O'tish bali: ", el('strong', { text: passPct(b) + '%' })]),
       el('li', null, ['Urinishlar: ', el('strong', { text: b.attempts ? st.n + ' / ' + b.attempts : st.n + " (cheklanmagan)" })])];
     if (st.s != null) rows.push(el('li', null, ['Oxirgi natija: ', el('strong', { text: st.s + '%' }), st.b != null ? ' · eng yaxshisi: ' + st.b + '%' : '']));
     box.appendChild(el('div', { cls: 'q-intro' }, [el('ul', { cls: 'facts' }, rows),
-      left > 0 && !st.p ? el('button', { type: 'button', cls: 'btn primary', 'data-act': 'start', onclick: function () { startAttempt(b, box); } }, [el('span', { text: st.n ? 'Qayta urinish' : 'Testni boshlash' })])
+      left > 0 && !st.p ? el('button', { type: 'button', cls: 'btn primary kc', 'data-act': 'start', onclick: function () { startAttempt(b, box); } }, [el('span', { text: st.n ? 'Qayta urinish' : 'Testni boshlash' })])
         : el('p', { cls: 'alert bad', text: 'Urinishlar tugagan.' })]));
   }
   function startAttempt(b, box) {
     var st = qs(b);
-    st.sd = (Math.random() * 4294967296) >>> 0; delete st.a; st.ip = 1;
+    st.sd = (Math.random() * 4294967296) >>> 0; delete st.a; delete st.d; st.ip = 1;
     saveSoon(); renderAttempt(b, box);
   }
   function renderAttempt(b, box) {
-    var st = qs(b), o = qOrder(b, st.sd);
+    var st = qs(b), o = qOrder(b, st.sd), dr = Array.isArray(st.d) ? st.d : [], model = {};
     box.textContent = '';
     var form = el('form', { cls: 'qform', novalidate: true });
+    var msg = el('p', { cls: 'q-msg', role: 'status', 'aria-live': 'polite' }), confirmEmpty = false;
+    var submit = el('button', { type: 'submit', cls: 'btn primary kc', 'data-act': 'submit' }, [el('span', { text: 'Javoblarni yuborish' })]);
+    var changed = function () {   // har o'zgarishda qoralama holatga yoziladi — tugallanmagan javoblar qayta ochilganda tiklanadi
+      confirmEmpty = false; submit.firstChild.textContent = 'Javoblarni yuborish'; msg.textContent = '';
+      st.d = collect(b, form, model).map(function (a, i) { return b.questions[i].type === 'fill' ? str(a).slice(0, 60) : a; });
+      saveSoon();
+    };
     o.order.forEach(function (qi, pos) {
-      var q = b.questions[qi], name = b.id + '-' + q.id, fs = el('fieldset', { cls: 'q', 'data-qid': q.id });
+      var q = b.questions[qi], d = dr[qi], name = b.id + '-' + q.id, fs = el('fieldset', { cls: 'q', 'data-qid': q.id, 'data-kind': q.type });
       fs.appendChild(el('legend', null, [el('span', { cls: 'qn', text: (pos + 1) + '.' }), el('span', { text: q.stem })]));
       if (q.type === 'fill') {
-        fs.appendChild(el('label', { cls: 'fill' }, [el('span', { cls: 'sr', text: 'Javobingiz' }), el('input', { type: 'text', name: name, autocomplete: 'off', spellcheck: 'false', placeholder: 'Javobni yozing', maxlength: '200' })]));
+        fs.appendChild(el('label', { cls: 'fill' }, [el('span', { cls: 'sr', text: 'Javobingiz' }), el('input', { type: 'text', name: name, autocomplete: 'off', spellcheck: 'false', placeholder: 'Javobni yozing', maxlength: '200', value: typeof d === 'string' ? d : null })]));
+      } else if (q.type === 'match') {
+        matchWidget(q, o.opt[q.id], model[q.id] = slotList(d, q.pairs.length, q.pairs.length, true), fs, changed);
+      } else if (q.type === 'sort') {
+        sortWidget(q, o.opt[q.id], model[q.id] = slotList(d, q.items.length, q.cats.length, false), fs, changed);
       } else {
         var multi = q.type === 'mcq' && q.correct.length > 1;
         if (multi) fs.appendChild(el('p', { cls: 'hint muted', text: 'Bir nechta javob to\'g\'ri bo\'lishi mumkin.' }));
         o.opt[q.id].forEach(function (oi) {
-          fs.appendChild(el('label', { cls: 'opt' }, [el('input', { type: multi ? 'checkbox' : 'radio', name: name, value: String(oi) }), el('span', { text: q.options[oi] })]));
+          fs.appendChild(el('label', { cls: 'opt' }, [el('input', { type: multi ? 'checkbox' : 'radio', name: name, value: String(oi), checked: Array.isArray(d) && d.indexOf(oi) >= 0 }), el('span', { text: q.options[oi] })]));
         });
       }
       form.appendChild(fs);
     });
-    var msg = el('p', { cls: 'q-msg', role: 'status', 'aria-live': 'polite' }), confirmEmpty = false;
-    var submit = el('button', { type: 'submit', cls: 'btn primary', 'data-act': 'submit' }, [el('span', { text: 'Javoblarni yuborish' })]);
     form.appendChild(el('div', { cls: 'q-foot' }, [msg, submit]));
-    form.addEventListener('change', function () { confirmEmpty = false; submit.firstChild.textContent = 'Javoblarni yuborish'; msg.textContent = ''; });
+    form.addEventListener('change', changed);
+    form.addEventListener('input', changed);
     form.addEventListener('submit', function (e) {
       e.preventDefault();
-      var answers = collect(b, form), empty = answers.filter(function (a, i) { var q = b.questions[i]; return q.type === 'fill' ? !norm(a) : !a.length; }).length;
+      var answers = collect(b, form, model), empty = answers.filter(function (a, i) { return blank(b.questions[i], a); }).length;
       if (empty && !confirmEmpty) {
-        confirmEmpty = true; msg.textContent = empty + " ta savol javobsiz qoldi. Baribir yuborilsinmi?"; submit.firstChild.textContent = 'Baribir yuborish'; return;
+        confirmEmpty = true; msg.textContent = empty + " ta savol javobsiz yoki chala qoldi. Baribir yuborilsinmi?"; submit.firstChild.textContent = 'Baribir yuborish'; return;
       }
       finishAttempt(b, answers, box);
     });
     box.appendChild(form);
-    var first = form.querySelector('input'); if (first) first.focus({ preventScroll: true });
+    var first = form.querySelector('input,.m-slot,.s-card'); if (first) first.focus({ preventScroll: true });
   }
-  function collect(b, form) {
+  function collect(b, form, model) {
     return b.questions.map(function (q) {
       var name = b.id + '-' + q.id;
+      if (q.type === 'match' || q.type === 'sort') return (model[q.id] || []).slice();
       if (q.type === 'fill') { var i = form.querySelector('input[name="' + name + '"]'); return i ? i.value.slice(0, 200) : ''; }
       return Array.prototype.filter.call(form.querySelectorAll('input[name="' + name + '"]'), function (x) { return x.checked; }).map(function (x) { return +x.value; });
     });
@@ -1133,6 +1489,16 @@
         // har to'g'ri variant — alohida correct_responses.n (SCORM 2004'da «[,]» bitta javob ichidagi qismlarni ajratadi, muqobillarni emas)
         var alts = q.answers.map(function (x) { return str(x).replace(/\[[,.:]\]/g, ' '); }).filter(Boolean).slice(0, 10);
         it.c12 = alts; it.c04 = alts.map(function (x) { return '{case_matters=false}' + x; }); it.cX = alts;
+      } else if (q.type === 'match' || q.type === 'sort') {
+        // «matching»: manba — chap band (l1…) / kartochka (i1…), nishon — o'ng band (r1…) / toifa (c1…).
+        // SCORM 1.2: bir belgili identifikatorlar «1.b,2.a»; SCORM 2004 va xAPI: «l1[.]r2[,]l2[.]r1»
+        var isM = q.type === 'match', sp = isM ? 'l' : 'i', tp = isM ? 'r' : 'c', mine = [], corr = [];
+        (isM ? q.pairs : q.items).forEach(function (x, k) { corr.push([k, isM ? k : x.c]); if (arr(a)[k] >= 0) mine.push([k, a[k]]); });
+        var f12 = function (l) { return l.map(function (p) { return id36(p[0] + 1) + '.' + letter(p[1]); }).join(','); };
+        var f04 = function (l) { return l.map(function (p) { return sp + (p[0] + 1) + '[.]' + tp + (p[1] + 1); }).join('[,]'); };
+        it.type = 'matching'; it.r12 = f12(mine); it.c12 = [f12(corr)]; it.r04 = it.rX = f04(mine); it.c04 = it.cX = [f04(corr)];
+        it.source = (isM ? q.pairs : q.items).map(function (x, k) { return { id: sp + (k + 1), text: isM ? x.left : x.text }; });
+        it.target = (isM ? q.pairs : q.cats).map(function (x, k) { return { id: tp + (k + 1), text: isM ? x.right : x }; });
       } else if (q.type === 'tf') {
         var tv = a.length ? isTrue(q, a[0]) : null, cv = isTrue(q, q.correct[0]);
         it.type = 'true-false'; it.r12 = tv == null ? '' : tv ? 't' : 'f'; it.r04 = it.rX = tv == null ? '' : String(tv);
@@ -1144,12 +1510,21 @@
       tracker.interaction(it);
     });
     var pct = Math.round(right / b.questions.length * 100), passed = pct >= passPct(b);
-    st.n++; st.s = pct; st.b = st.b == null ? pct : Math.max(st.b, pct); st.p = passed ? 1 : 0; delete st.ip;
+    st.n++; st.s = pct; st.b = st.b == null ? pct : Math.max(st.b, pct); st.p = passed ? 1 : 0; delete st.ip; delete st.d;
     st.a = answers.map(function (a, i) { return b.questions[i].type === 'fill' ? str(a).slice(0, 60) : a; });
     if (tracker.quizResult) tracker.quizResult(b, { pct: pct, passed: passed });
     report(true);
     emit(passed ? 'passed' : 'failed', null, { block: b.id });
     quizResult(b, box, true);
+  }
+  function pairList(q, a, truth) {   // match/sort izohi: «manba → nishon» qatorlari (truth — to'g'ri javob ro'yxati)
+    var isM = q.type === 'match';
+    return el('ul', { cls: 'fb-pairs' }, (isM ? q.pairs : q.items).map(function (x, k) {
+      var t = truth ? (isM ? k : x.c) : arr(a)[k], good = truth || (isM ? pairOk(q, k, t) : t === x.c);
+      var name = t >= 0 ? (isM ? (q.pairs[t] || {}).right : q.cats[t]) : null;
+      return el('li', { cls: good ? 'ok' : 'no' }, [el('span', { text: isM ? x.left : x.text }), el('span', { cls: 'arw', 'aria-hidden': 'true', text: '→' }), el('strong', { text: name || '—' }),
+        truth ? null : el('span', { cls: 'sr', text: good ? " (to'g'ri)" : " (noto'g'ri)" })]);
+    }));
   }
   function quizResult(b, box, fresh) {
     var st = qs(b), passed = !!st.p, left = b.attempts ? b.attempts - st.n : Infinity;
@@ -1158,12 +1533,16 @@
     b.questions.forEach(function (q, i) {
       var a = hasA ? st.a[i] : null, ok = a != null && grade(q, a); if (ok) right++;
       if (!fbOn) return;
-      var yours = a == null ? '—' : q.type === 'fill' ? (str(a) || '—') : (arr(a).length ? arr(a).map(function (x) { return q.options[x]; }).join('; ') : '—');
-      var corr = q.type === 'fill' ? q.answers[0] : q.correct.map(function (x) { return q.options[x]; }).join('; ');
+      var paired = q.type === 'match' || q.type === 'sort', yours, corr;
+      if (paired) { yours = a == null ? '—' : pairList(q, a, false); corr = pairList(q, null, true); }
+      else {
+        yours = el('strong', { text: a == null ? '—' : q.type === 'fill' ? (str(a) || '—') : (arr(a).length ? arr(a).map(function (x) { return q.options[x]; }).join('; ') : '—') });
+        corr = el('strong', { text: q.type === 'fill' ? q.answers[0] : q.correct.map(function (x) { return q.options[x]; }).join('; ') });
+      }
       list.appendChild(el('li', { cls: 'fb ' + (ok ? 'ok' : 'no'), 'data-qid': q.id }, [
         el('div', { cls: 'fb-h' }, [icon(ok ? 'check' : 'x'), el('span', { cls: 'sr', text: ok ? "To'g'ri: " : "Noto'g'ri: " }), el('span', { text: q.stem })]),
-        el('div', { cls: 'fb-a' }, ['Sizning javobingiz: ', el('strong', { text: yours })]),
-        ok ? null : el('div', { cls: 'fb-a' }, ["To'g'ri javob: ", el('strong', { text: corr })]),
+        el('div', { cls: 'fb-a' }, ['Sizning javobingiz: ', yours]),
+        ok ? null : el('div', { cls: 'fb-a fb-c' }, ["To'g'ri javob: ", corr]),
         q.explanation ? el('div', { cls: 'fb-e', text: q.explanation }) : null
       ]));
     });
@@ -1176,7 +1555,7 @@
     box.appendChild(head);
     if (fbOn) box.appendChild(list);
     var acts = el('div', { cls: 'q-foot' });
-    if (!passed && left > 0) acts.appendChild(el('button', { type: 'button', cls: 'btn primary', 'data-act': 'retry', onclick: function () { startAttempt(b, box); } }, [el('span', { text: 'Qayta urinish' + (isFinite(left) ? ' (qoldi: ' + left + ')' : '') })]));
+    if (!passed && left > 0) acts.appendChild(el('button', { type: 'button', cls: 'btn primary kc', 'data-act': 'retry', onclick: function () { startAttempt(b, box); } }, [el('span', { text: 'Qayta urinish' + (isFinite(left) ? ' (qoldi: ' + left + ')' : '') })]));
     else if (!passed) acts.appendChild(el('p', { cls: 'alert bad', text: 'Urinishlar tugagan.' }));
     if (acts.childNodes.length) box.appendChild(acts);
     if (fresh) { head.focus({ preventScroll: false }); announce((passed ? "Test topshirildi. " : "Test topshirilmadi. ") + 'Natija ' + st.s + '%'); }
@@ -1198,6 +1577,7 @@
   function exit() {
     if (finished || !tracker) return;
     finished = true;
+    cleanup();
     save(false);
     tracker.finish(Date.now() - t0, status());
   }
@@ -1209,7 +1589,7 @@
       lmsMastery = info.mastery;
       var st = decodeState(info.state);
       if (st && st.h === S.h) {
-        S = st; S.q = S.q && typeof S.q === 'object' ? S.q : {}; S.r = S.r && typeof S.r === 'object' ? S.r : {};
+        S = st; S.q = S.q && typeof S.q === 'object' ? S.q : {}; S.r = S.r && typeof S.r === 'object' ? S.r : {}; S.m = S.m && typeof S.m === 'object' ? S.m : {};
         str(S.v).split('').forEach(function (c, i) { if (c === '1' && STEPS[i]) visited[STEPS[i].key] = 1; });
       }
       var start = -1, loc = str(info.location);
@@ -1230,7 +1610,7 @@
     }).catch(function (e) { note('init xato: ' + (e && e.message)); });
   }
   NS.debug = { encodeState: encodeState, norm: norm, assetUrl: assetUrl, sanitize: function (h) { var d = el('div'); d.appendChild(sanitize(h)); return d.innerHTML; },
-    status: function () { return status(); }, state: function () { return S; }, time12: time12, iso8601: iso8601,
+    status: function () { return status(); }, state: function () { return S; }, watched: function (id) { return S.m && S.m[id] ? watched(S.m[id]) : 0; }, time12: time12, iso8601: iso8601,
     steps: function () { return STEPS.map(function (s) { return { key: s.key, type: blockOf(s).type, block: blockOf(s).id }; }); }, step: function () { return cur; } };
   NS.exit = exit;
   start();

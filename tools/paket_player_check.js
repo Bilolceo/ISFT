@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 /* ISFT o'quv paket pleyeri — muvofiqlik sinovi (SCORM 1.2, SCORM 2004 4-nashr, xAPI, NEXTID/mustaqil rejim, ko'rish rejimi,
- * kontrakt v2: qadamlar rejimi, bo'limlar, rasm lightbox, galereya, mulohaza bloki, postMessage).
+ * kontrakt v2: qadamlar rejimi, bo'limlar, rasm lightbox, galereya, mulohaza bloki, postMessage;
+ * kontrakt v3: muqova, fayl-video (track, tezlik, joy/ko'rilgan ulush), slayd izohi/audio, match/sort savollari (klaviatura, bosish, sudrash,
+ * «matching» interaction), kartochkalar, topshiriq).
  *
  * Ishga tushirish:
  *   PW=/path/to/node_modules/playwright-core CHROME=/path/to/chrome OUT=/tmp/paket node tools/paket_player_check.js
@@ -19,8 +21,19 @@ const OUT = process.env.OUT || path.join(require('os').tmpdir(), 'isft_paket_pla
 const CONTENT = JSON.parse(fs.readFileSync(path.join(FIX, 'content.json'), 'utf8'));
 const QUIZ = CONTENT.blocks.find(b => b.type === 'quiz'), REFLECT = CONTENT.blocks.find(b => b.type === 'reflect');
 const TEXT = CONTENT.blocks.find(b => b.type === 'text'), SLIDES = CONTENT.blocks.find(b => b.type === 'slides');
-const KNOWN = ['plan', 'text', 'slides', 'video', 'file', 'quiz', 'section', 'refs', 'keypoints', 'reflect'];
-const NBLOCKS = CONTENT.blocks.filter(b => KNOWN.includes(b.type)).length;   // noma'lum «hotspot» hisobga olinmaydi
+const KNOWN = ['plan', 'text', 'slides', 'video', 'file', 'quiz', 'section', 'refs', 'keypoints', 'reflect', 'flashcards', 'assignment'];
+const NBLOCKS = CONTENT.blocks.filter(b => KNOWN.includes(b.type)).length;   // noma'lum «hotspot» hisobga olinmaydi; muqova qadami — blok emas
+const MATCH = QUIZ.questions.find(q => q.type === 'match'), SORT = QUIZ.questions.find(q => q.type === 'sort'), FILLQ = QUIZ.questions.find(q => q.type === 'fill');
+const VFILE = CONTENT.blocks.find(b => b.type === 'video' && b.provider === 'file'), FLASH = CONTENT.blocks.find(b => b.type === 'flashcards'), ASSIGN = CONTENT.blocks.find(b => b.type === 'assignment');
+const SORT_ITEMS = SORT.categories.flatMap((c, ci) => c.items.map(t => ({ text: t, c: ci })));
+// kutilgan «matching» javoblari: to'g'ri — i→i, noto'g'ri — i→i+1 (aylanma); saralash: to'g'ri toifa / keyingi toifa
+const letter = i => 'abcdefghijklmnopqrstuvwxyz'[i], id36 = i => '0123456789abcdefghijklmnopqrstuvwxyz'[i];
+const EXP = {
+  m12: right => MATCH.pairs.map((_, i) => id36(i + 1) + '.' + letter(right ? i : (i + 1) % MATCH.pairs.length)).join(','),
+  m04: right => MATCH.pairs.map((_, i) => 'l' + (i + 1) + '[.]r' + ((right ? i : (i + 1) % MATCH.pairs.length) + 1)).join('[,]'),
+  s12: right => SORT_ITEMS.map((it, k) => id36(k + 1) + '.' + letter(right ? it.c : (it.c + 1) % SORT.categories.length)).join(','),
+  s04: right => SORT_ITEMS.map((it, k) => 'i' + (k + 1) + '[.]c' + ((right ? it.c : (it.c + 1) % SORT.categories.length) + 1)).join('[,]')
+};
 fs.mkdirSync(OUT, { recursive: true });
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -68,6 +81,8 @@ function lmsRuntime() {
           const it = s.inter[n] || {}; if (val.length > 255) return '405';
           if (it.type === 'choice' && val !== '' && !/^[0-9a-z](,[0-9a-z])*$/.test(val)) return '405';
           if (it.type === 'true-false' && val !== '' && !/^[01tf]$/.test(val)) return '405';
+          if (it.type === 'matching' && val !== '' && !/^[0-9a-z]\.[0-9a-z](,[0-9a-z]\.[0-9a-z])*$/.test(val)) return '405';   // {manba}.{nishon} juftlari, vergul bilan; bir belgili identifikatorlar
+          if (it.type === 'matching' && m[3] != null && val === '') return '405';
         }
         if (n === s.inter.length) s.inter.push({});
         s.inter[n][m[2]] = val; return '0';
@@ -139,6 +154,8 @@ function lmsRuntime() {
         if (m[2] === 'learner_response' || m[3] != null) {
           if (it.type === 'true-false' && !/^(true|false)$/.test(val)) return '406';
           if (it.type === 'choice' && val !== '' && !/^[^\[\],\s]+(\[,\][^\[\],\s]+)*$/.test(val)) return '406';
+          if (it.type === 'matching' && val !== '' && !/^[A-Za-z0-9_-]+\[\.\][A-Za-z0-9_-]+(\[,\][A-Za-z0-9_-]+\[\.\][A-Za-z0-9_-]+)*$/.test(val)) return '406';   // source[.]target[,]source[.]target
+          if (it.type === 'matching' && m[3] != null && val === '') return '406';
           if (it.type === 'fill-in' && m[3] != null && !/^(\{case_matters=(true|false)\})?(\{order_matters=(true|false)\})?/.test(val)) return '406';
         }
         it[m[2]] = val; return '0';
@@ -203,8 +220,8 @@ const LMS_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>Mock L
 <body><header>Mock LMS</header><iframe id="sco" name="sco" title="SCO"></iframe><script>(${lmsRuntime.toString()})();</script></body></html>`;
 
 // ---------------------------------------------------------------- serverlar
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png',
-  '.pdf': 'application/pdf', '.woff2': 'font/woff2', '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation' };
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg',
+  '.mp4': 'video/mp4', '.vtt': 'text/vtt; charset=utf-8', '.wav': 'audio/wav', '.pdf': 'application/pdf', '.woff2': 'font/woff2', '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation' };
 const PKG = '/courses/12/5/pkg/';
 const served = [];
 function serveFile(res, file) {
@@ -288,11 +305,29 @@ async function stepIndex(fr, type, nth) { return fr.evaluate(([t, n]) => +[...do
 async function doneCount(fr) { return fr.evaluate(() => document.querySelectorAll('.nav-i.done').length); }
 async function currentType(fr) { return fr.evaluate(() => { const c = document.querySelector('.nav-i[aria-current]'); return c && c.dataset.type; }); }
 const curStep = fr => fr.evaluate(() => window.ISFTPaket.debug.step());
-async function answerQuiz(fr, right) {
+// match: har chap katakka javob (kb — faqat klaviatura: fokus + Enter/Space; aks holda bosish). Avval to'ldirilgan kataklar bo'shatiladi.
+async function answerMatch(fr, q, right, kb) {
+  const sel = `fieldset[data-qid="${q.id}"]`, n = q.pairs.length;
+  const act = async (s, key) => { if (kb) await fr.press(s, key || 'Enter'); else await fr.click(s); };
+  for (const l of await fr.evaluate(s => [...document.querySelectorAll(s + ' .m-slot.filled')].map(e => e.dataset.l), sel)) { await act(`${sel} .m-slot[data-l="${l}"]`); await act(`${sel} .m-slot[data-l="${l}"]`); }
+  for (let i = 0; i < n; i++) { await act(`${sel} .m-slot[data-l="${i}"]`); await act(`${sel} .m-tile[data-r="${right ? i : (i + 1) % n}"]`, ' '); }
+}
+// sort: kartochka → toifa (kb: Enter kartochkada, Space toifa sarlavhasida)
+async function answerSort(fr, q, right, kb) {
+  const sel = `fieldset[data-qid="${q.id}"]`;
+  for (let k = 0; k < SORT_ITEMS.length; k++) {
+    const c = right ? SORT_ITEMS[k].c : (SORT_ITEMS[k].c + 1) % q.categories.length;
+    if (kb) { await fr.press(`${sel} .s-card[data-k="${k}"]`, 'Enter'); await fr.press(`${sel} .s-drop[data-c="${c}"]`, ' '); }
+    else { await fr.click(`${sel} .s-card[data-k="${k}"]`); await fr.click(`${sel} .s-drop[data-c="${c}"]`); }
+  }
+}
+async function answerQuiz(fr, right, kb) {
   await fr.waitForSelector('form.qform');
   for (const q of QUIZ.questions) {
     const sel = `fieldset[data-qid="${q.id}"]`;
-    if (q.type === 'fill') {
+    if (q.type === 'match') await answerMatch(fr, q, right, kb);
+    else if (q.type === 'sort') await answerSort(fr, q, right, kb);
+    else if (q.type === 'fill') {
       await fr.fill(sel + ' input', right ? '  O‘SADI ' : 'bilmayman');   // apostrof varianti + katta harf + bo'shliq
     } else {
       const corr = q.correct, n = (q.options || ['', '']).length;
@@ -307,12 +342,19 @@ async function answerReflect(fr, k) {
   await fr.click(`.choice[data-k="${k}"]`); await sleep(150);
   return fr.evaluate(() => ({ fb: (document.querySelector('.scn-fb') || {}).textContent, pressed: [...document.querySelectorAll('.choice')].map(b => b.getAttribute('aria-pressed')).join() }));
 }
+// skrinshot uchun yarim to'ldirilgan match/sort holati
+async function demoFill(p) {
+  const M = `fieldset[data-qid="${MATCH.id}"]`, S = `fieldset[data-qid="${SORT.id}"]`;
+  for (const [a, b] of [[`${M} .m-slot[data-l="0"]`, `${M} .m-tile[data-r="0"]`], [`${M} .m-tile[data-r="2"]`, `${M} .m-slot[data-l="1"]`], [`${S} .s-card[data-k="0"]`, `${S} .s-drop[data-c="0"]`], [`${S} .s-card[data-k="4"]`, `${S} .s-drop[data-c="0"]`], [`${S} .s-card[data-k="3"]`, `${S} .s-drop[data-c="1"]`]]) { await p.click(a); await p.click(b); }
+  await p.click(`${M} .m-slot[data-l="3"]`); await p.click(`${S} .s-card[data-k="1"]`); await p.mouse.move(2, 2); await sleep(300);
+}
 const SHOT = async (p, name, full) => { await p.screenshot({ path: path.join(OUT, name + '.png'), fullPage: !!full }); };
 
 // ---------------------------------------------------------------- umumiy UI tekshiruvlari (iframe yoki sahifa)
 async function visitAllContent(fr, page, shotPrefix) {
-  const n = await navN(fr), info = await fr.evaluate(() => ({ steps: window.ISFTPaket.debug.steps().length, blocks: new Set([...document.querySelectorAll('.nav-i')].map(b => b.dataset.block)).size }));
-  ok(n === info.steps && info.blocks === NBLOCKS, `Navigatsiyada ${n} qadam, ${info.blocks} blok (kutilgan ${NBLOCKS}; noma'lum «hotspot» e'tiborsiz)`);
+  const n = await navN(fr), info = await fr.evaluate(() => ({ steps: window.ISFTPaket.debug.steps().length, cover: document.querySelectorAll('.nav-i[data-type="cover"]').length,
+    blocks: new Set([...document.querySelectorAll('.nav-i:not([data-type="cover"])')].map(b => b.dataset.block)).size }));
+  ok(n === info.steps && info.blocks === NBLOCKS, `Navigatsiyada ${n} qadam (muqova: ${info.cover}), ${info.blocks} blok (kutilgan ${NBLOCKS}; noma'lum «hotspot» e'tiborsiz)`);
   for (let i = 0; i < n; i++) {
     const t = await fr.evaluate(i => document.querySelector('.nav-i[data-i="' + i + '"]').dataset.type, i);
     if (t === 'quiz') continue;
@@ -427,7 +469,16 @@ async function runScorm(br, base, kind) {
   await clickStep(fr(), qi);
   await fr().click('[data-act="start"]');
   const ord1 = await fr().evaluate(() => [...document.querySelectorAll('fieldset.q')].map(f => f.dataset.qid).join());
-  await answerQuiz(fr(), false);
+  {   // tugallanmagan javoblar (qoralama) suspend_data'ga yoziladi: match — [o'ng indeks | -1], sort — [toifa | -1]
+    await fr().fill(`fieldset[data-qid="${FILLQ.id}"] input`, 'qoralama');
+    await fr().click(`fieldset[data-qid="${MATCH.id}"] .m-slot[data-l="1"]`); await fr().click(`fieldset[data-qid="${MATCH.id}"] .m-tile[data-r="3"]`);
+    await fr().click(`fieldset[data-qid="${SORT.id}"] .s-card[data-k="4"]`); await fr().click(`fieldset[data-qid="${SORT.id}"] .s-drop[data-c="0"]`);
+    await sleep(600);
+    const sd = (await S(0)).values['cmi.suspend_data'], d = (JSON.parse(sd).q[QUIZ.id] || {}).d || [], qi2 = t => QUIZ.questions.findIndex(q => q.type === t);
+    ok(JSON.stringify(d[qi2('match')]) === '[-1,3,-1,-1]' && JSON.stringify(d[qi2('sort')]) === '[-1,-1,-1,-1,0,-1]' && d[qi2('fill')] === 'qoralama' && sd.length <= (is12 ? 4096 : 64000),
+      `Tugallanmagan javoblar holatda (qoralama: match ${JSON.stringify(d[qi2('match')])}, sort ${JSON.stringify(d[qi2('sort')])}; ${sd.length} belgi)`);
+  }
+  await answerQuiz(fr(), false, is12);   // SCORM 1.2 — match/sort faqat klaviatura bilan, 2004 — bosish bilan
   s0 = await S(0);
   const st0 = is12 ? s0.values['cmi.core.lesson_status'] : s0.values['cmi.success_status'] + '/' + s0.values['cmi.completion_status'];
   ok(is12 ? st0 === 'failed' : st0 === 'failed/incomplete', `Noto'g'ri javoblar → ${st0}`);
@@ -437,6 +488,18 @@ async function runScorm(br, base, kind) {
     `interactions: ${s0.inter.length} ta (id, type, javob, result, vaqt)`);
   const types = s0.inter.map(i => i.type + ':' + (is12 ? i.student_response : i.learner_response)).join(' | ');
   ok(/choice/.test(types) && /true-false:(f|false)/.test(types) && /fill-in:bilmayman/.test(types), 'interaction turlari va javob formati: ' + types);
+  {   // match va sort → «matching» interaction (LMS sintaksis tekshiruvidan o'tgan): javob va to'g'ri javob namunasi
+    const mi = s0.inter.find(i => i.id === QUIZ.id + '_' + MATCH.id) || {}, si = s0.inter.find(i => i.id === QUIZ.id + '_' + SORT.id) || {}, rk = is12 ? 'student_response' : 'learner_response';
+    ok(mi.type === 'matching' && mi[rk] === (is12 ? EXP.m12(false) : EXP.m04(false)) && mi['correct_responses.0.pattern'] === (is12 ? EXP.m12(true) : EXP.m04(true)) && mi.result === (is12 ? 'wrong' : 'incorrect'),
+      `match (${is12 ? 'klaviatura' : 'bosish'} bilan, noto'g'ri): type=matching, javob «${mi[rk]}», namuna «${mi['correct_responses.0.pattern']}», result=${mi.result}`);
+    ok(si.type === 'matching' && si[rk] === (is12 ? EXP.s12(false) : EXP.s04(false)) && si['correct_responses.0.pattern'] === (is12 ? EXP.s12(true) : EXP.s04(true)) && si.result === (is12 ? 'wrong' : 'incorrect'),
+      `sort (${is12 ? 'klaviatura' : 'bosish'} bilan, noto'g'ri): type=matching (manba — kartochka, nishon — toifa), javob «${si[rk]}», result=${si.result}`);
+    const fbp = await fr().evaluate(([m, s]) => { const f = id => document.querySelector('.fb[data-qid="' + id + '"]'); return [m, s].map(id => f(id) && { no: f(id).classList.contains('no'), mine: f(id).querySelectorAll('.fb-a:not(.fb-c) .fb-pairs li.no').length, corr: [...f(id).querySelectorAll('.fb-c .fb-pairs li')].map(li => li.textContent.replace(/\s*→\s*/, '→')) }); }, [MATCH.id, SORT.id]);
+    ok(fbp[0] && fbp[0].no && fbp[0].mine === MATCH.pairs.length && JSON.stringify(fbp[0].corr) === JSON.stringify(MATCH.pairs.map(p => p.left + '→' + p.right)), `match izohi: sizning juftliklaringiz (${fbp[0] && fbp[0].mine} ta xato) va to'g'ri juftliklar ko'rsatildi`);
+    ok(fbp[1] && fbp[1].no && fbp[1].mine === SORT_ITEMS.length && JSON.stringify(fbp[1].corr) === JSON.stringify(SORT_ITEMS.map(it => it.text + '→' + SORT.categories[it.c].title)), "sort izohi: har kartochkaning to'g'ri toifasi ko'rsatildi");
+    const sdA = JSON.parse(s0.values['cmi.suspend_data']).q[QUIZ.id];
+    ok(Array.isArray(sdA.a) && sdA.a.length === QUIZ.questions.length && !sdA.d && s0.values['cmi.suspend_data'].length <= (is12 ? 4096 : 64000), `Barcha savol turlari javoblari bilan suspend_data ${s0.values['cmi.suspend_data'].length} belgi (qoralama tozalandi)`);
+  }
   const fb = await fr().evaluate(() => ({ n: document.querySelectorAll('.fb.no').length, live: document.querySelector('.score[aria-live]') !== null, retry: !!document.querySelector('[data-act="retry"]'), expl: document.querySelectorAll('.fb-e').length }));
   ok(fb.n === QUIZ.questions.length && fb.live && fb.retry && fb.expl >= 3, `Fikr-mulohaza: har savol noto'g'ri deb belgilandi + izoh, aria-live, «Qayta urinish» (${JSON.stringify(fb)})`);
   if (is12) await SHOT(page, 's12_quiz_failed', true);
@@ -461,7 +524,7 @@ async function runScorm(br, base, kind) {
   // qayta urinish — to'g'ri
   await fr().click('[data-act="retry"]');
   const ord2 = await fr().evaluate(() => [...document.querySelectorAll('fieldset.q')].map(f => f.dataset.qid).join());
-  await answerQuiz(fr(), true);
+  await answerQuiz(fr(), true, !is12);   // SCORM 2004 — match/sort faqat klaviatura bilan
   s1 = await S(1);
   ok(is12 ? s1.values['cmi.core.lesson_status'] === 'passed' : s1.values['cmi.success_status'] === 'passed' && s1.values['cmi.completion_status'] === 'completed',
     `To'g'ri javoblar → ${is12 ? s1.values['cmi.core.lesson_status'] : s1.values['cmi.success_status'] + '/' + s1.values['cmi.completion_status']}`);
@@ -474,7 +537,10 @@ async function runScorm(br, base, kind) {
     const want = fq.answers.map(a => is12 ? a : '{case_matters=false}' + a);
     ok(JSON.stringify(pats) === JSON.stringify(want), `fill-in: har muqobil javob alohida pattern (${pats.join(' | ')})`);
     const ch = s1.inter.filter(i => i.type !== 'fill-in');
-    ok(ch.every(i => i['correct_responses.0.pattern'] && !('correct_responses.1.pattern' in i)), 'choice/true-false: bitta correct_responses.0.pattern');
+    ok(ch.every(i => i['correct_responses.0.pattern'] && !('correct_responses.1.pattern' in i)), 'choice/true-false/matching: bitta correct_responses.0.pattern');
+    const mi = s1.inter.find(i => i.id === QUIZ.id + '_' + MATCH.id) || {}, si = s1.inter.find(i => i.id === QUIZ.id + '_' + SORT.id) || {}, rk = is12 ? 'student_response' : 'learner_response';
+    ok(mi.type === 'matching' && mi[rk] === (is12 ? EXP.m12(true) : EXP.m04(true)) && mi.result === 'correct' && si.type === 'matching' && si[rk] === (is12 ? EXP.s12(true) : EXP.s04(true)) && si.result === 'correct',
+      `match/sort (${is12 ? 'bosish' : 'klaviatura'} bilan, to'g'ri): «${mi[rk]}» · «${si[rk]}» → correct`);
   }
   ok((await fr().evaluate(() => document.querySelector('.chip').textContent)).startsWith("O'tdi") && (await doneCount(fr())) === N, 'UI: «O\'tdi» va barcha qadamlar ✓');
   ok(ord1 !== '' && ord2 !== '' && QUIZ.questions.every(q => ord2.split(',').includes(q.id)), `Aralashtirish: urinish tartiblari (${ord1} | ${ord2})`);
@@ -589,7 +655,18 @@ async function runXapi(br, base, lrsBase) {
   const fq = QUIZ.questions.find(q => q.type === 'fill'), fAns = ans.filter(s => s.object.definition.interactionType === 'fill-in');
   ok(fAns.length >= 1 && fAns.every(s => JSON.stringify(s.object.definition.correctResponsesPattern) === JSON.stringify(fq.answers)),
     'fill-in: correctResponsesPattern — har muqobil javob alohida element (' + (fAns[0] ? JSON.stringify(fAns[0].object.definition.correctResponsesPattern) : '-') + ')');
-  ok(ans.filter(s => s.object.definition.interactionType !== 'fill-in').every(s => s.object.definition.correctResponsesPattern.length === 1), 'choice/true-false: bitta correctResponsesPattern');
+  ok(ans.filter(s => s.object.definition.interactionType !== 'fill-in').every(s => s.object.definition.correctResponsesPattern.length === 1), 'choice/true-false/matching: bitta correctResponsesPattern');
+  {
+    const byQ = id => ans.filter(s => s.object.id === actId + '/block/' + QUIZ.id + '/q/' + id), mm = byQ(MATCH.id), ss = byQ(SORT.id);
+    const defOk = (s, src, tgt, sp, tp) => { const d = s.object.definition; return d.interactionType === 'matching' && JSON.stringify(d.source.map(x => x.id)) === JSON.stringify(src.map((_, i) => sp + (i + 1)))
+      && JSON.stringify(d.source.map(x => x.description.uz)) === JSON.stringify(src) && JSON.stringify(d.target.map(x => x.id)) === JSON.stringify(tgt.map((_, i) => tp + (i + 1))) && JSON.stringify(d.target.map(x => x.description.uz)) === JSON.stringify(tgt) && !d.choices; };
+    ok(mm.length === 2 && mm.every(s => defOk(s, MATCH.pairs.map(p => p.left), MATCH.pairs.map(p => p.right), 'l', 'r') && s.object.definition.correctResponsesPattern[0] === EXP.m04(true))
+       && mm[0].result.response === EXP.m04(false) && mm[0].result.success === false && mm[1].result.response === EXP.m04(true) && mm[1].result.success === true,
+      `match → xAPI «matching»: source/target massivlari, correctResponsesPattern, javob «${mm[0] && mm[0].result.response}» → «${mm[1] && mm[1].result.response}»`);
+    ok(ss.length === 2 && ss.every(s => defOk(s, SORT_ITEMS.map(i => i.text), SORT.categories.map(c => c.title), 'i', 'c') && s.object.definition.correctResponsesPattern[0] === EXP.s04(true))
+       && ss[0].result.response === EXP.s04(false) && ss[0].result.success === false && ss[1].result.response === EXP.s04(true) && ss[1].result.success === true,
+      `sort → xAPI «matching» (source — kartochkalar, target — toifalar): «${ss[1] && ss[1].result.response}»`);
+  }
   const resp = st.filter(s => s.verb.id === 'http://adlnet.gov/expapi/verbs/responded');
   ok(resp.length === 1 && resp[0].object.id === actId + '/block/' + REFLECT.id && resp[0].result.response === 'a' && !('success' in resp[0].result) && !resp[0].result.score
      && resp[0].object.definition.interactionType === 'choice' && resp[0].object.definition.choices.length === REFLECT.options.length && !resp[0].object.definition.correctResponsesPattern,
@@ -650,8 +727,15 @@ async function runBadUrls(br, base) {
       if (b.type === 'file') b.href = 'java\tscript:window.__xss=5';
       if (b.type === 'slides') { b.pdf = ' java\nscript:window.__xss=6'; b.file = '\x01javascript:window.__xss=7'; b.slides[1].image = 'java\tscript:window.__xss=10'; }
       if (b.type === 'refs') b.items.push({ text: 'Yomon', url: 'javascript:window.__xss=11' });
+      if (b.type === 'slides') { b.slides[0].caption = '<img src=x onerror="window.__xss=22">izoh'; b.slides[0].audio = 'https://evil.example/a.mp3'; b.slides[2].audio = 'java\tscript:window.__xss=23'; }
+      if (b.type === 'video' && b.provider === 'file') { b.poster = 'data:image/svg+xml;base64,PHN2ZyBvbmxvYWQ9YWxlcnQoMSk+'; b.captions.push({ lang: '"><script>', label: 'x', src: 'assets/../x.vtt' }); }
+      if (b.type === 'flashcards') { b.cards[0].front = 'Old <script>window.__xss=13</script>'; b.cards[0].back = '<img src=x onerror="window.__xss=14">orqa'; }
+      if (b.type === 'assignment') { b.avatar = 'java\tscript:window.__xss=18'; b.text = '<script>window.__xss=15</script>Matn'; b.questions[0] = '<img src=x onerror="window.__xss=19">savol'; }
+      if (b.type === 'quiz') { b.questions.find(q => q.type === 'match').pairs[0].left = '<b onmouseover="window.__xss=16">chap</b>'; b.questions.find(q => q.type === 'sort').categories[0].title = '<svg onload="window.__xss=17">toifa'; }
     });
+    c.blocks.push({ id: 'bv', type: 'video', title: 'Tashqi fayl', provider: 'file', src: 'https://evil.example/v.mp4' });
     c.brand.logo = 'java\tscript:window.__xss=8';
+    c.cover = { image: 'java\tscript:window.__xss=20', author: '<img src=x onerror="window.__xss=21">muallif' };
   });
   await page.goto(base + PKG + 'index.html'); await waitReady(page);
   await clickStep(page, await stepIndex(page, 'file'));
@@ -664,6 +748,33 @@ async function runBadUrls(br, base) {
   ok(f.links.length === 0 && f.msg === 'Fayl topilmadi.', `Fayl bloki: «java\\tscript:» href zararsizlantirildi (${f.msg})`);
   ok(sl.length === 0 && th === 0, 'Taqdimot PDF/yuklab olish havolalari, slayd rasmi va logotip: boshqaruv belgili javascript: manzillar olib tashlandi (' + sl.join(',') + ')');
   ok(rl === 0, "Adabiyotlar: javascript: url havolaga aylanmadi");
+  {   // kontrakt v3 maydonlari: matn — faqat matn (HTML emas), manzillar — faqat nisbiy assets/
+    const bad = () => page.evaluate(() => document.querySelectorAll('#main img[src="x"], #main script, #main svg[onload], #main [onmouseover], #main [onerror]').length);
+    let n = 0; const texts = {};
+    await clickStep(page, 0);
+    texts.cover = await page.evaluate(() => ({ bg: !!document.querySelector('.hero-bg'), img: document.querySelector('.hero').classList.contains('has-img'), au: document.querySelector('.hero-au').textContent })); n += await bad();
+    await clickStep(page, await stepIndex(page, 'video', 1));
+    texts.video = await page.evaluate(() => { const v = document.querySelector('.video.file video'); return { poster: v.getAttribute('poster'), tracks: [...v.querySelectorAll('track')].map(t => t.getAttribute('src')).join() }; }); n += await bad();
+    await clickStep(page, await stepIndex(page, 'video', 2));
+    texts.ext = await page.evaluate(() => ({ v: !!document.querySelector('#main video'), msg: (document.querySelector('.t-video .muted') || {}).textContent }));
+    await clickStep(page, await stepIndex(page, 'slides'));
+    texts.slides = await page.evaluate(() => ({ cap: document.querySelector('.s-cap').textContent, aud: document.querySelectorAll('.s-aud audio').length })); n += await bad();
+    await page.focus('.deck'); await page.press('.deck', 'ArrowRight'); await page.press('.deck', 'ArrowRight');
+    texts.slides.aud3 = await page.evaluate(() => document.querySelectorAll('.s-aud audio').length);
+    await clickStep(page, await stepIndex(page, 'flashcards'));
+    texts.fc = await page.evaluate(() => document.querySelector('.fc[data-k="0"]').textContent); n += await bad();
+    await clickStep(page, await stepIndex(page, 'assignment'));
+    texts.asg = await page.evaluate(() => ({ t: document.querySelector('.asg-q blockquote').textContent, q: document.querySelector('.asg-list li').textContent, img: !!document.querySelector('.asg img'), svg: !!document.querySelector('.asg-av svg') })); n += await bad();
+    await clickStep(page, await stepIndex(page, 'quiz')); await page.click('[data-act="start"]');
+    texts.q = await page.evaluate(() => ({ l: document.querySelector('.m-row .m-left').textContent, c: document.querySelector('.s-drop[data-c="0"] span').textContent })); n += await bad();
+    ok(!texts.cover.bg && !texts.cover.img && texts.cover.au === '<img src=x onerror="window.__xss=21">muallif', 'Muqova: xavfli rasm manzili tashlandi (gradient fon), muallif — oddiy matn');
+    ok(texts.video.poster === null && texts.video.tracks === 'assets/video/dars.uz.vtt' && !texts.ext.v && texts.ext.msg === 'Video fayli topilmadi.',
+      `Fayl-video: data: poster va tashqi/«..»/javascript: subtitrlar tashlandi (${texts.video.tracks}); tashqi src → «${texts.ext.msg}»`);
+    ok(texts.slides.cap === '<img src=x onerror="window.__xss=22">izoh' && texts.slides.aud === 0 && texts.slides.aud3 === 0, 'Slayd izohi — oddiy matn; tashqi/javascript: audio manzillari tashlandi');
+    ok(/^Old <script>window\.__xss=13<\/script>/.test(texts.fc) && /<img src=x onerror=/.test(texts.fc) && texts.asg.t === '<script>window.__xss=15</script>Matn' && /^1?<img src=x/.test(texts.asg.q) && !texts.asg.img && texts.asg.svg,
+      'Kartochkalar va topshiriq: HTML satrlari matn sifatida; xavfli avatar o\'rniga chizilgan personaj');
+    ok(texts.q.l === '<b onmouseover="window.__xss=16">chap</b>' && texts.q.c === '<svg onload="window.__xss=17">toifa' && n === 0, `match/sort: bandlar va toifalar — oddiy matn; kontentdan element yaratilmadi (${n})`);
+  }
   const d = await page.evaluate(() => { const a = window.ISFTPaket.debug.assetUrl; return [a('java\tscript:x'), a('/etc/passwd'), a('assets/../x'), a('a\\b'), a('assets/files/ok_1.pdf'), a('assets/slides/s%201.png')]; });
   ok(JSON.stringify(d) === JSON.stringify([null, null, null, null, 'assets/files/ok_1.pdf', 'assets/slides/s%201.png']), 'assetUrl: oq ro\'yxat (' + JSON.stringify(d) + ')');
   const si = await page.evaluate(() => window.ISFTPaket.debug.sanitize('<img src="logo.png"><img src=" assets/img/a.png"><img src="ASSETS/x.png"><figure><img src="assets/img/ok.png"><figcaption>c</figcaption></figure>'));
@@ -686,7 +797,13 @@ async function runSteps(br, base) {
   ok(ui.rail && !ui.toc && ui.next === 'Keyingi qadam' && ui.restart, "O'ngda raqamli qadamlar, mundarija yo'q, «Keyingi qadam» va «Boshidan boshlash» tugmalari");
   ok(textKeys.length === 3 && textKeys.join() === [1, 2, 3].map(i => TEXT.id + '.' + i).join(), `Uzun matn h2 bo'yicha qadamlarga bo'lindi (${textKeys.join(', ')}); jami ${N} qadam`);
   ok(ui.mode === 'standalone' && !ui.banner, "xAPI paket LMS'siz (parametrsiz) — jim mustaqil rejim, banner yo'q");
-  ok((await curStep(page)) === 0 && (await currentType(page)) === 'section', '1-qadam — bo\'lim ajratgichi');
+  const cv = await page.evaluate(() => { const h = document.querySelector('.card.t-cover .hero'), q = s => h && h.querySelector(s); return h && { h1: (q('h1.hero-t') || {}).textContent, bg: q('img.hero-bg') && q('img.hero-bg').getAttribute('src'), alt: q('img.hero-bg') && q('img.hero-bg').getAttribute('alt'),
+    au: (q('.hero-au') || {}).textContent, logo: q('.hero-brand img') && q('.hero-brand img').getAttribute('src'), go: (q('[data-act="begin"]') || {}).textContent, head: !!document.querySelector('.t-cover .bh'), lab: document.querySelector('.card.t-cover').getAttribute('aria-labelledby') === (q('h1') || {}).id }; });
+  ok((await curStep(page)) === 0 && (await currentType(page)) === 'cover' && cv && cv.h1 === 'L1-1-dars: ' + CONTENT.lesson.title && cv.bg === CONTENT.cover.image && cv.alt === '' && cv.au === CONTENT.cover.author && cv.logo === CONTENT.brand.logo && cv.go === 'Boshlash' && !cv.head && cv.lab,
+    `1-qadam — muqova: rasm, logotip, «${cv && cv.h1}», muallif «${cv && cv.au}», «Boshlash»`);
+  await page.click('[data-act="begin"]'); await sleep(150);
+  ok((await curStep(page)) === 1 && (await currentType(page)) === 'section' && (await page.evaluate(() => document.activeElement.id)) === 'main', "«Boshlash» → 2-qadam (bo'lim ajratgichi), fokus asosiy mazmunda");
+  await clickStep(page, 0);
   await page.click('.pager .btn.primary'); await sleep(150);
   const a1 = await curStep(page), anim = await page.evaluate(() => /in-r/.test(document.querySelector('.card').className));
   await page.click('.pager .btn.ghost'); await sleep(150);
@@ -731,6 +848,235 @@ async function runSteps(br, base) {
   await RM.page.click('.pager .btn.primary'); await sleep(100);
   ok(!(await RM.page.evaluate(() => /in-[rl]/.test(document.querySelector('.card').className))), "prefers-reduced-motion: o'tish animatsiyasi yo'q");
   await RM.ctx.close();
+}
+
+// ---------------------------------------------------------------- kontrakt v3: muqova, fayl-video, slayd izohi/audio, kartochkalar, topshiriq, match/sort (sudrash, qoralama)
+async function runV3(br, base) {
+  section('Kontrakt v3 bloklari');
+  const T = await newCtx(br, { viewport: { width: 1366, height: 900 } }, 'v3'), page = T.page;
+  await patchContent(T.ctx, c => { c.tracking.mode = 'xapi'; c.id += '-v3'; });
+  await page.goto(base + '/lms.html');
+  const url = base + PKG + 'index.html', KEY = 'isft-paket:' + CONTENT_ID + '-v3';
+  const open = async () => { await page.evaluate(u => window.launch('none', u), url); await sleep(250); const f = page.frame({ name: 'sco' }); await waitReady(f); return f; };
+  const stored = fr => fr.evaluate(k => JSON.parse(localStorage.getItem(k) || '{}'), KEY);
+  let fr = await open();
+  await SHOT(page, 'v3_cover');
+
+  // ---- fayl-video
+  await clickStep(fr, await stepIndex(fr, 'video', 1)); await sleep(200);
+  const v0 = await fr.evaluate(() => { const v = document.querySelector('.video.file video'); return v && { controls: v.controls, inline: v.hasAttribute('playsinline'), pre: v.getAttribute('preload'), src: v.getAttribute('src'), poster: v.getAttribute('poster'), label: v.getAttribute('aria-label'),
+    tracks: [...v.querySelectorAll('track')].map(t => [t.kind, t.srclang, t.label, t.getAttribute('src')].join('|')), rates: [...document.querySelectorAll('.v-speed button')].map(b => b.dataset.rate + ':' + b.getAttribute('aria-pressed')).join(),
+    grp: document.querySelector('.v-speed').getAttribute('role') + '/' + document.querySelector('.v-speed').getAttribute('aria-label'), pct: document.querySelector('.v-pct').textContent, yt: !!document.querySelector('#main iframe') }; });
+  ok(v0 && v0.controls && v0.inline && v0.pre === 'metadata' && v0.src === VFILE.src && v0.poster === VFILE.poster && v0.label === VFILE.title && !v0.yt,
+    `Fayl-video: <video controls playsinline preload="metadata"> src=${v0 && v0.src}, poster, aria-label`);
+  ok(v0 && v0.tracks.length === 1 && v0.tracks[0] === "subtitles|uz|O'zbekcha|assets/video/dars.uz.vtt", `Subtitr: bitta <track kind="subtitles"> (tashqi va javascript: manzillar tashlandi): ${v0 && v0.tracks.join(' ; ')}`);
+  ok(v0 && v0.rates === '0.75:false,1:true,1.25:false,1.5:false,2:false' && v0.grp === 'group/Ijro tezligi' && v0.pct === "Ko'rildi: 0%", `Tezlik menyusi (${v0 && v0.rates}), «${v0 && v0.pct}»`);
+  await fr.press('.v-speed [data-rate="1.5"]', 'Enter');
+  const r15 = await fr.evaluate(() => ({ r: document.querySelector('video').playbackRate, p: document.querySelector('.v-speed [data-rate="1.5"]').getAttribute('aria-pressed'), one: document.querySelector('.v-speed [data-rate="1"]').getAttribute('aria-pressed') }));
+  ok(r15.r === 1.5 && r15.p === 'true' && r15.one === 'false', `Tezlik 1.5× (klaviatura): playbackRate=${r15.r}, aria-pressed`);
+  // HTMLMediaElement xususiyatlari almashtiriladi (o'rinbosar .mp4 dekodlanmaydi) — holat mantig'i hodisalar orqali tekshiriladi
+  const stub = f => f.evaluate(() => {
+    const v = document.querySelector('video'); let t = 0; window.__set = [];
+    const def = (k, get, set) => Object.defineProperty(v, k, { configurable: true, get, set });
+    def('duration', () => 100); def('paused', () => false); def('seeking', () => false); def('ended', () => false);
+    def('currentTime', () => t, x => { t = x; window.__set.push(x); });
+    window.__play = (a, b) => { for (let x = a; x <= b; x++) { t = x; v.dispatchEvent(new Event('timeupdate')); } };
+    window.__ev = n => v.dispatchEvent(new Event(n));
+  });
+  const vst = f => f.evaluate(id => ({ m: (window.ISFTPaket.debug.state().m || {})[id], w: window.ISFTPaket.debug.watched(id), pct: (document.querySelector('.v-pct') || {}).textContent }), VFILE.id);
+  await stub(fr);
+  await fr.evaluate(() => window.__play(0, 12)); await sleep(650);
+  const p1 = await vst(fr), l1 = ((await stored(fr)).m || {})[VFILE.id];
+  ok(p1.m.t === 12 && p1.w === 15 && p1.pct === "Ko'rildi: 15%" && l1 && l1.t === 12, `Ijro 0→12 s: joy ${p1.m.t} s, ko'rildi ${p1.w}%; ~10 s da holat saqlandi (localStorage t=${l1 && l1.t})`);
+  await fr.evaluate(() => { window.__ev('seeking'); window.__play(50, 51); window.__ev('pause'); }); await sleep(650);
+  const p2 = await vst(fr), l2 = ((await stored(fr)).m || {})[VFILE.id];
+  ok(p2.w === 20 && p2.m.t === 51 && l2 && l2.t === 51, `Oldinga sakrash (seek) ko'rilgan ulushga qo'shilmaydi (${p2.w}%), pauzada joy saqlandi (t=${l2 && l2.t})`);
+  ok(!(await page.evaluate(() => window.LMS.msgs.some(m => m.video))), "90% dan kam — postMessage'da video maydoni yo'q");
+  fr = await open(); await sleep(150);
+  await stub(fr); await fr.evaluate(() => window.__ev('loadedmetadata'));
+  const p3 = await fr.evaluate(() => ({ set: window.__set.join(), type: document.querySelector('.nav-i[aria-current]').dataset.type, pct: document.querySelector('.v-pct').textContent }));
+  ok(p3.type === 'video' && p3.set === '51' && p3.pct === "Ko'rildi: 20%", `Qayta ochilganda video o'sha joydan davom etadi (currentTime=${p3.set}), «${p3.pct}»`);
+  await fr.evaluate(() => { window.__ev('seeking'); window.__play(0, 100); window.__ev('ended'); }); await sleep(200);
+  const p4 = await vst(fr), vm = (await page.evaluate(() => window.LMS.msgs)).filter(m => m.video);
+  ok(p4.w === 100 && p4.m.t === 0 && (await fr.evaluate(() => document.querySelector('.v-pct').classList.contains('good'))), `To'liq ko'rildi: ${p4.w}%, tugaganda joy 0 ga qaytadi`);
+  ok(vm.length === 1 && vm[0].event === 'progress' && vm[0].video.block === VFILE.id && vm[0].video.watched >= 90 && vm[0].source === 'isft-paket', `postMessage progress: video:{block:"${vm[0] && vm[0].video.block}", watched:${vm[0] && vm[0].video.watched}} (≥ 90% da bir marta)`);
+  await clickStep(fr, 1); await clickStep(fr, await stepIndex(fr, 'video', 1));
+  ok((await page.evaluate(() => window.LMS.msgs.filter(m => m.video).length)) === 1 && (await fr.evaluate(() => document.querySelector('.nav-i[data-type="video"].done') !== null)), "Blok ochilganda «ko'rildi» ✓; video xabari takrorlanmaydi");
+  await SHOT(page, 'v3_video_file');
+  // video fokusida ← → qadamni almashtirmaydi
+  const vs = await curStep(fr); await fr.focus('video'); await fr.press('video', 'ArrowRight'); await sleep(60);
+  ok((await curStep(fr)) === vs, 'Video fokusida ← → qadamni almashtirmaydi (pleyerning o\'z tugmalari)');
+  ok((await fr.evaluate(() => document.querySelector('.video.file video').hasAttribute('crossorigin'))) === false,
+    'Oddiy (same-origin, http) xizmatda <video> crossorigin atributisiz — CORS so\'rovi yuborilmaydi');
+
+  // ---- slayd izohi va audio
+  await clickStep(fr, await stepIndex(fr, 'slides'));
+  const sl0 = await fr.evaluate(() => ({ cap: document.querySelector('.s-cap').hidden, aud: document.querySelector('.s-aud').hidden }));
+  await fr.click('.nav-a.r'); await sleep(80);
+  const sl1 = await fr.evaluate(() => { const a = document.querySelector('.s-aud audio'); window.__paused = 0; if (a) a.pause = () => { window.__paused++; };
+    return { cap: document.querySelector('.s-cap').textContent, vis: !document.querySelector('.s-cap').hidden, a: a && { c: a.controls, src: a.getAttribute('src'), pre: a.getAttribute('preload'), l: a.getAttribute('aria-label') } }; });
+  ok(sl0.cap && sl0.aud && sl1.vis && sl1.cap === SLIDES.slides[1].caption && sl1.a && sl1.a.c && sl1.a.src === SLIDES.slides[1].audio && sl1.a.pre === 'none' && /audio/.test(sl1.a.l),
+    `Slayd izohi rasm ostida («${sl1.cap.slice(0, 28)}…») va <audio controls> (${sl1.a && sl1.a.src}); izohsiz slaydda yashirin`);
+  await SHOT(page, 'v3_slide_caption_audio');
+  await fr.click('.nav-a.r'); await sleep(80);
+  const sl2 = await fr.evaluate(() => ({ p: window.__paused, a: document.querySelectorAll('.s-aud audio').length, cap: document.querySelector('.s-cap').hidden }));
+  ok(sl2.p === 1 && sl2.a === 0 && sl2.cap, 'Slayddan chiqilganda audio to\'xtatiladi va olib tashlanadi');
+  await fr.click('.nav-a.l'); await sleep(80);
+  await fr.evaluate(() => { window.__paused = 0; document.querySelector('.s-aud audio').pause = () => { window.__paused++; }; });
+  await fr.click('.pager .btn.primary'); await sleep(120);
+  ok((await fr.evaluate(() => window.__paused)) === 1, 'Qadamdan chiqilganda ham audio to\'xtatiladi');
+
+  // ---- kartochkalar
+  await clickStep(fr, await stepIndex(fr, 'flashcards'));
+  const NC = FLASH.cards.filter(c => c.front && c.back).length;
+  const f0 = await fr.evaluate(() => ({ n: document.querySelectorAll('.fc-grid .fc').length, tag: document.querySelector('.fc').tagName, pr: [...document.querySelectorAll('.fc')].map(b => b.getAttribute('aria-pressed')).join(),
+    front: document.querySelector('.fc[data-k="0"] .fc-f .fc-x').textContent, bh: document.querySelector('.fc[data-k="0"] .fc-b').getAttribute('aria-hidden'), done: document.querySelector('.nav-i[data-type="flashcards"]').classList.contains('done') }));
+  ok(f0.n === NC && f0.tag === 'BUTTON' && f0.pr === Array(NC).fill('false').join() && f0.front === FLASH.cards[0].front && f0.bh === 'true' && f0.done, `Kartochkalar: ${f0.n} ta tugma (bo'sh kartochka tashlandi), aria-pressed=false, ochilganda «ko'rildi»`);
+  await fr.click('.fc[data-k="0"]'); await sleep(650);
+  const f1 = await fr.evaluate(() => { const b = document.querySelector('.fc[data-k="0"]'); return { pr: b.getAttribute('aria-pressed'), bh: b.querySelector('.fc-b').getAttribute('aria-hidden'), fh: b.querySelector('.fc-f').getAttribute('aria-hidden'), back: b.querySelector('.fc-b .fc-x').textContent, tr: getComputedStyle(b.querySelector('.fc-in')).transform }; });
+  ok(f1.pr === 'true' && f1.bh === 'false' && f1.fh === 'true' && f1.back === FLASH.cards[0].back && f1.tr !== 'none', `Bosilganda aylanadi: aria-pressed=true, orqa tomon ochiq («${f1.back.slice(0, 30)}…»)`);
+  await fr.press('.fc[data-k="0"]', 'Enter'); await fr.press('.fc[data-k="1"]', ' '); await sleep(100);
+  {   // kartochka fokusida ← → / PageDown qadamni almashtirmaydi
+    const fs0 = await curStep(fr); await fr.focus('.fc[data-k="1"]');
+    for (const k of ['ArrowRight', 'ArrowLeft', 'PageDown']) { await fr.press('.fc[data-k="1"]', k); await sleep(50); }
+    ok((await curStep(fr)) === fs0 && (await currentType(fr)) === 'flashcards', 'Kartochka fokusida ← → / PageDown qadamni almashtirmaydi');
+  }
+  const f2 = await fr.evaluate(() => [...document.querySelectorAll('.fc')].map(b => b.getAttribute('aria-pressed')).join());
+  ok(f2 === ['false', 'true'].concat(Array(NC - 2).fill('false')).join() && (await curStep(fr)) === (await stepIndex(fr, 'flashcards')), `Klaviatura: Enter qaytaradi, Space aylantiradi (${f2})`);
+  await sleep(600); await SHOT(page, 'v3_flashcards');
+
+  // ---- topshiriq
+  await clickStep(fr, await stepIndex(fr, 'assignment'));
+  const as = await fr.evaluate(() => ({ q: document.querySelector('.asg-q blockquote p').textContent, au: document.querySelector('.asg-q figcaption').textContent, svg: !!document.querySelector('.asg-q .asg-av svg'), img: !!document.querySelector('.asg-q img'),
+    li: [...document.querySelectorAll('ol.asg-list li')].map(li => li.lastChild.textContent), note: document.querySelector('.asg-note').textContent, role: document.querySelector('.asg-note').getAttribute('role'), done: document.querySelector('.nav-i[data-type="assignment"]').classList.contains('done') }));
+  ok(as.q === ASSIGN.text && as.au === ASSIGN.author && as.svg && !as.img, `Topshiriq: iqtibos «${as.q.slice(0, 40)}…» — ${as.au}, chizilgan personaj (avatar berilmagan)`);
+  ok(JSON.stringify(as.li) === JSON.stringify(ASSIGN.questions) && as.note === "Javobni LMS'dagi «Vazifa yuklash» orqali yuboring" && as.role === 'note' && as.done, `Topshiriq: ${as.li.length} ta raqamli savol, eslatma «${as.note}»; baholanmaydi`);
+  await SHOT(page, 'v3_assignment');
+  const stA = await fr.evaluate(() => window.ISFTPaket.debug.status());
+  ok(stA.score === null && stA.success === 'unknown', 'Kartochkalar va topshiriq natijaga ta\'sir qilmaydi (ball yo\'q)');
+
+  // ---- match / sort: sudrash (sichqoncha), bosish, almashtirish, bo'shatish
+  const qi = await stepIndex(fr, 'quiz');
+  await clickStep(fr, qi); await fr.click('[data-act="start"]'); await fr.waitForSelector('form.qform');
+  const M = `fieldset[data-qid="${MATCH.id}"]`, S = `fieldset[data-qid="${SORT.id}"]`;
+  const mState = () => fr.evaluate(s => ({ slots: [...document.querySelectorAll(s + ' .m-slot')].map(e => e.dataset.r || '-').join(), bank: [...document.querySelectorAll(s + ' .m-tile')].filter(e => !e.hidden).map(e => e.dataset.r).sort().join(),
+    sel: [...document.querySelectorAll(s + ' [aria-pressed="true"]')].map(e => e.className.split(' ')[0] + (e.dataset.l || e.dataset.r)).join(), ghost: document.querySelectorAll('.drag-ghost').length }), M);
+  const sState = () => fr.evaluate(s => ({ deck: [...document.querySelectorAll(s + ' .s-deck .s-card')].map(e => e.dataset.k).sort().join(''), cats: [...document.querySelectorAll(s + ' .s-cat')].map(c => [...c.querySelectorAll('.s-card')].map(e => e.dataset.k).sort().join('')).join('|'),
+    n: [...document.querySelectorAll(s + ' .s-n')].map(e => e.textContent).join() }), S);
+  const a11y = await fr.evaluate(([m, s]) => ({ slot: document.querySelector(m + ' .m-slot').tagName + ':' + document.querySelector(m + ' .m-slot[data-l="0"]').getAttribute('aria-label'), tile: document.querySelector(m + ' .m-tile').tagName, bank: document.querySelector(m + ' .m-bank').getAttribute('role'),
+    card: document.querySelector(s + ' .s-card').tagName, drop: document.querySelector(s + ' .s-drop').tagName + ':' + document.querySelector(s + ' .s-drop[data-c="0"]').getAttribute('aria-label'), hints: document.querySelectorAll(m + ' .hint, ' + s + ' .hint').length,
+    order: [...document.querySelectorAll(m + ' .m-tile')].map(e => e.dataset.r).join(), sub: getComputedStyle(document.querySelector('[data-act="submit"]')).backgroundColor }), [M, S]);
+  ok(a11y.slot === `BUTTON:«${MATCH.pairs[0].left}» uchun javob: bo'sh` && a11y.tile === 'BUTTON' && a11y.bank === 'group' && a11y.card === 'BUTTON' && a11y.drop === `BUTTON:«${SORT.categories[0].title}» toifasiga qo'yish` && a11y.hints === 2,
+    `match/sort: kataklar, javoblar, kartochkalar va toifalar — tugmalar (aria-label «${a11y.slot.slice(7)}»), yo'riqnoma matni`);
+  ok(a11y.order !== MATCH.pairs.map((_, i) => i).join() && a11y.sub === 'rgb(46, 140, 86)', `O'ng bandlar aralashtirilgan (${a11y.order}); «Javoblarni yuborish» — yashil (${a11y.sub})`);
+  await fr.dragAndDrop(`${M} .m-tile[data-r="2"]`, `${M} .m-slot[data-l="0"]`); await sleep(80);
+  const d1 = await mState();
+  await fr.dragAndDrop(`${M} .m-slot[data-l="0"]`, `${M} .m-slot[data-l="2"]`); await sleep(80);
+  const d2 = await mState();
+  await fr.dragAndDrop(`${M} .m-tile[data-r="0"]`, `${M} .m-slot[data-l="2"]`); await sleep(80);
+  const d3 = await mState();
+  ok(d1.slots === '2,-,-,-' && d1.bank === '0,1,3' && d2.slots === '-,-,2,-' && d3.slots === '-,-,0,-' && d3.bank === '1,2,3' && d3.ghost === 0, `match sudrash: javob → katak (${d1.slots}), katak → katak (${d2.slots}), band katakka yangi javob — eskisi qaytadi (${d3.slots}; bankda ${d3.bank})`);
+  await fr.dragAndDrop(`${M} .m-slot[data-l="2"]`, `${M} .m-bank`); await sleep(80);
+  const d4 = await mState();
+  ok(d4.slots === '-,-,-,-' && d4.bank === '0,1,2,3' && d4.sel === '', `match sudrash: katakdan bankka qaytarish (${d4.slots}); sudrashdan keyin tasodifiy tanlov yo'q`);
+  // bosish: javob → katak, katak ↔ katak almashtirish, qayta bosish — bo'shatish
+  await fr.click(`${M} .m-tile[data-r="1"]`); const t1 = await mState(); await fr.click(`${M} .m-slot[data-l="0"]`);
+  await fr.click(`${M} .m-slot[data-l="1"]`); await fr.click(`${M} .m-tile[data-r="0"]`);
+  const t2 = await mState(), foc = await fr.evaluate(() => document.activeElement.className + ':' + document.activeElement.dataset.l);
+  await fr.click(`${M} .m-slot[data-l="0"]`); await fr.click(`${M} .m-slot[data-l="1"]`);
+  const t3 = await mState();
+  await fr.click(`${M} .m-slot[data-l="1"]`); await fr.click(`${M} .m-slot[data-l="1"]`);
+  const t4 = await mState();
+  ok(t1.sel === 'm-tile1' && t2.slots === '1,0,-,-' && /^m-slot:2$/.test(foc) && t3.slots === '0,1,-,-' && t4.slots === '0,-,-,-' && t4.bank === '1,2,3',
+    `match bosish: javob→katak va katak→javob (${t2.slots}; fokus keyingi bo'sh katakda), almashtirish (${t3.slots}), qayta bosish — bo'shatish (${t4.slots})`);
+  const lbl = await fr.evaluate(m => document.querySelector(m + ' .m-slot[data-l="0"]').getAttribute('aria-label') + ' / ' + document.querySelector('[aria-live].sr').textContent, M);
+  ok(lbl.startsWith(`«${MATCH.pairs[0].left}» uchun javob: «${MATCH.pairs[0].right}»`), `match: katak aria-label yangilanadi, o'zgarish aria-live orqali e'lon qilinadi (${lbl.slice(0, 70)}…)`);
+  {   // global ← → / PageUp / PageDown: test ichida (moslashtirish, saralash, variantlar, «yuborish») qadam almashmaydi
+    const q0 = await curStep(fr), res = [];
+    const mcq = `fieldset[data-qid="${QUIZ.questions.find(q => q.type === 'mcq').id}"] input`;
+    for (const [sel, key] of [[`${M} .m-tile[data-r="1"]`, 'ArrowRight'], [`${M} .m-tile[data-r="1"]`, 'PageDown'], [`${M} .m-slot[data-l="1"]`, 'ArrowLeft'], [`${S} .s-card[data-k="1"]`, 'ArrowRight'],
+      [`${S} .s-drop[data-c="0"]`, 'PageUp'], [mcq, 'PageDown'], ['[data-act="submit"]', 'ArrowRight']]) {
+      await fr.focus(sel); await fr.press(sel, key); await sleep(50);
+      res.push((await curStep(fr)) === q0 && (await fr.evaluate(() => !!document.querySelector('form.qform'))));
+    }
+    ok(res.every(Boolean) && (await currentType(fr)) === 'quiz', `Test ichida fokus (match javobi/katagi, sort kartochkasi/toifasi, variant, «yuborish») — ← → / PageUp / PageDown qadamni almashtirmaydi (${res.map(x => x ? 1 : 0).join('')})`);
+    const m1 = await mState();
+    ok(m1.slots === '0,-,-,-', `…va vidjet holati o'zgarmaydi (${m1.slots})`);
+  }
+  await fr.dragAndDrop(`${S} .s-card[data-k="0"]`, `${S} .s-cat[data-c="1"] .s-list`); await sleep(80);
+  const e1 = await sState();
+  await fr.dragAndDrop(`${S} .s-card[data-k="0"]`, `${S} .s-cat[data-c="0"] .s-drop`); await sleep(80);
+  const e2 = await sState();
+  await fr.dragAndDrop(`${S} .s-card[data-k="0"]`, `${S} .s-deck`); await sleep(80);
+  const e3 = await sState();
+  ok(e1.cats === '|0' && e1.deck === '12345' && e1.n === '0,1' && e2.cats === '0|' && e3.cats === '|' && e3.deck === '012345', `sort sudrash: kartochka → toifa (${e1.cats}), toifadan toifaga (${e2.cats}), qaytarish (${e3.deck}); hisoblagichlar ${e1.n}`);
+  await fr.click(`${S} .s-card[data-k="2"]`); await fr.click(`${S} .s-cat[data-c="1"]`, { position: { x: 20, y: 110 } });
+  await fr.press(`${S} .s-card[data-k="2"]`, 'Delete');
+  const e4 = await sState();
+  await fr.press(`${S} .s-card[data-k="5"]`, 'Enter'); await fr.press(`${S} .s-drop[data-c="1"]`, 'Enter');
+  const e5 = await sState(), foc2 = await fr.evaluate(() => document.activeElement.className);
+  ok(e4.deck === '012345' && e5.cats === '|5' && foc2 === 's-card', `sort: toifa maydonini bosish, Delete — qaytarish, klaviatura (Enter → Enter) — «${e5.cats}», fokus keyingi kartochkada`);
+  await SHOT(page, 'v3_quiz_match_sort', true);
+
+  // ---- tugallanmagan javoblar: qayta ochilganda tiklanadi
+  await fr.fill(`fieldset[data-qid="${FILLQ.id}"] input`, 'qoralama javob');
+  await fr.check(`fieldset[data-qid="${QUIZ.questions[0].id}"] input[value="1"]`);
+  const ordA = await fr.evaluate(() => [...document.querySelectorAll('fieldset.q')].map(f => f.dataset.qid).join() + '/' + [...document.querySelectorAll('.m-tile')].map(e => e.dataset.r).join());
+  await sleep(650);
+  fr = await open(); await sleep(150);
+  const rs = await fr.evaluate(([m, s, f, q0]) => ({ type: document.querySelector('.nav-i[aria-current]').dataset.type, form: !!document.querySelector('form.qform'),
+    ord: [...document.querySelectorAll('fieldset.q')].map(f => f.dataset.qid).join() + '/' + [...document.querySelectorAll('.m-tile')].map(e => e.dataset.r).join(),
+    slots: [...document.querySelectorAll(m + ' .m-slot')].map(e => e.dataset.r || '-').join(), cats: [...document.querySelectorAll(s + ' .s-cat')].map(c => [...c.querySelectorAll('.s-card')].map(e => e.dataset.k).join('')).join('|'),
+    fill: document.querySelector('fieldset[data-qid="' + f + '"] input').value, mcq: [...document.querySelectorAll('fieldset[data-qid="' + q0 + '"] input')].filter(i => i.checked).map(i => i.value).join() }), [M, S, FILLQ.id, QUIZ.questions[0].id]);
+  ok(rs.type === 'quiz' && rs.form && rs.ord === ordA, 'Tugallanmagan urinish: qayta ochilganda o\'sha savol va javob tartibi');
+  ok(rs.slots === '0,-,-,-' && rs.cats === '|5' && rs.fill === 'qoralama javob' && rs.mcq === '1', `Tugallanmagan javoblar tiklandi (match ${rs.slots}; sort ${rs.cats}; matn «${rs.fill}»; tanlov ${rs.mcq})`);
+  // chala javob → tasdiq so'raladi → o'tmadi; qayta urinish (to'g'ri) → o'tdi
+  await fr.click('[data-act="submit"]'); await sleep(100);
+  const warn = await fr.evaluate(() => document.querySelector('.q-msg').textContent + ' | ' + document.querySelector('[data-act="submit"]').textContent);
+  await fr.click('[data-act="submit"]'); await sleep(250);
+  const r0 = await fr.evaluate(([m, s]) => ({ st: window.ISFTPaket.debug.status(), bad: document.querySelector('.score.bad') !== null, m: [...document.querySelectorAll('.fb[data-qid="' + m + '"] .fb-a:not(.fb-c) .fb-pairs li')].map(li => li.className).join(),
+    sEmpty: [...document.querySelectorAll('.fb[data-qid="' + s + '"] .fb-a:not(.fb-c) .fb-pairs li strong')].filter(x => x.textContent === '—').length, d: window.ISFTPaket.debug.state().q }), [M.match(/"(.+)"/)[1], S.match(/"(.+)"/)[1]]);
+  ok(/javobsiz yoki chala/.test(warn) && /Baribir yuborish/.test(warn) && r0.bad && r0.st.success === 'failed', `Chala javoblar: «${warn.split(' | ')[0]}» → tasdiqdan keyin «o'tmadi»`);
+  ok(r0.m === 'ok,no,no,no' && r0.sEmpty === SORT_ITEMS.length - 1 && !r0.d[QUIZ.id].d && !r0.d[QUIZ.id].ip, `Izoh: match juftliklari alohida belgilangan (${r0.m}), joylanmagan kartochkalar «—»; qoralama tozalandi`);
+  await SHOT(page, 'v3_quiz_failed', true);
+  await fr.click('[data-act="retry"]'); await answerQuiz(fr, true); await sleep(200);
+  const r1 = await fr.evaluate(() => ({ st: window.ISFTPaket.debug.status(), ok: document.querySelectorAll('.fb.ok').length, pairs: document.querySelectorAll('.fb-pairs li.no').length }));
+  const ev = (await page.evaluate(() => window.LMS.msgs)).filter(m => /passed|failed/.test(m.event)).map(m => m.event + ':' + m.score.raw).join();
+  ok(r1.st.success === 'passed' && r1.st.score === 100 && r1.ok === QUIZ.questions.length && r1.pairs === 0 && /^failed:\d+,passed:100$/.test(ev), `Qayta urinish (to'g'ri) → o'tdi 100% (postMessage: ${ev})`);
+  await SHOT(page, 'v3_quiz_passed', true);
+  ok(T.errs.length === 0, "Konsol xatolari yo'q" + (T.errs.length ? ': ' + T.errs.slice(0, 3).join(' | ') : ''));
+  ok(T.foreign.length === 0, "Tashqi tarmoq so'rovlari yo'q" + (T.foreign.length ? ': ' + T.foreign.slice(0, 3).join(' ') : ''));
+  await T.ctx.close();
+
+  // muqova maydoni yo'q → avvalgi xulq (birinchi qadam — bo'lim); rasmsiz muqova — brend gradienti
+  const N0 = await newCtx(br, {}, 'nocover');
+  await patchContent(N0.ctx, c => { delete c.cover; c.id += '-nc'; c.tracking.mode = 'none'; });
+  await N0.page.goto(base + PKG + 'index.html'); await waitReady(N0.page);
+  const nc = await N0.page.evaluate(() => ({ t: window.ISFTPaket.debug.steps()[0].type, cov: document.querySelectorAll('.nav-i[data-type="cover"], .hero').length, n: new Set(window.ISFTPaket.debug.steps().map(s => s.block)).size }));
+  ok(nc.t === 'section' && nc.cov === 0 && nc.n === NBLOCKS, `cover maydoni yo'q → muqovasiz, birinchi qadam — bo'lim (${nc.n} blok)`);
+  await N0.ctx.close();
+  const N1 = await newCtx(br, { reducedMotion: 'reduce' }, 'coverplain');
+  await patchContent(N1.ctx, c => { c.cover = { image: null }; c.id += '-cp'; c.tracking.mode = 'none'; c.lesson = { code: 'A1', kind: 'amaliy', no: 1, title: 'Excel bilan ishlash' }; });
+  await N1.page.goto(base + PKG + 'index.html'); await waitReady(N1.page);
+  const cp = await N1.page.evaluate(() => ({ bg: !!document.querySelector('.hero-bg'), h1: document.querySelector('.hero-t').textContent, au: document.querySelector('.hero-au').textContent, grad: /gradient/.test(getComputedStyle(document.querySelector('.hero')).backgroundImage) }));
+  ok(!cp.bg && cp.grad && cp.h1 === "A1 — Amaliy mashg'ulot: Excel bilan ishlash" && cp.au === CONTENT.course.teacher, `Rasmsiz muqova: brend gradienti, «${cp.h1}», muallif — kurs o'qituvchisi (${cp.au})`);
+  await SHOT(N1.page, 'v3_cover_plain');
+  // reduced-motion: kartochka aylanmaydi — tomonlar almashtiriladi
+  await clickStep(N1.page, await stepIndex(N1.page, 'flashcards')); await N1.page.click('.fc[data-k="0"]'); await sleep(100);
+  const rm = await N1.page.evaluate(() => { const b = document.querySelector('.fc[data-k="0"]'), cs = e => getComputedStyle(b.querySelector(e)); return { tr: cs('.fc-in').transform, f: cs('.fc-f').visibility, bk: cs('.fc-b').visibility, btr: cs('.fc-b').transform }; });
+  ok(rm.tr === 'none' && rm.f === 'hidden' && rm.bk === 'visible' && rm.btr === 'none', `prefers-reduced-motion: kartochka aylanmasdan almashadi (transform: ${rm.tr})`);
+  ok(N1.errs.length === 0, "Konsol xatolari yo'q");
+  await N1.ctx.close();
+  for (const [au, want, tag] of [['', null, "bo'sh satr — muallifsiz (course.teacher'ga qaytmaydi)"], [null, CONTENT.course.teacher, 'null — kurs o\'qituvchisi'], ['  Aliyev V.  ', 'Aliyev V.', 'berilgan muallif']]) {
+    const N2 = await newCtx(br, {}, 'coverauthor');
+    await patchContent(N2.ctx, c => { c.cover = { image: null, author: au }; c.id += '-ca'; c.tracking.mode = 'none'; });
+    await N2.page.goto(base + PKG + 'index.html'); await waitReady(N2.page);
+    const ca = await N2.page.evaluate(() => { window.dispatchEvent(new Event('beforeprint'));
+      return { au: (document.querySelector('.hero-au') || { textContent: null }).textContent, pr: (document.querySelector('.print-all .p-cover') || {}).textContent }; });
+    ok(ca.au === want && typeof ca.pr === 'string' && ca.pr.includes(CONTENT.course.teacher) === (want === CONTENT.course.teacher) && (!want || ca.pr.includes(want)),
+      `Muqova muallifi: ${tag} (muqova: ${JSON.stringify(ca.au)}; chop etish: «${ca.pr}»)`);
+    await N2.ctx.close();
+  }
 }
 
 // ---------------------------------------------------------------- NEXTID.LMS: iframe, API ham, launch parametrlari ham yo'q
@@ -827,6 +1173,9 @@ async function runScrollLayout(br, base) {
   await page.goto(base + PKG + 'index.html?preview=1'); await waitReady(page);
   const u = await page.evaluate(() => ({ toc: !!document.querySelector('nav.toc .toc-i'), rail: !!document.querySelector('.rail'), n: document.querySelectorAll('.nav-i').length }));
   ok(u.toc && !u.rail && u.n === NBLOCKS, `layout yo'q → chapda mundarija, har blok — bitta sahifa (${u.n})`);
+  const hr = await page.evaluate(() => { const h = document.querySelector('#main > .hero'); return h && { t: h.querySelector('p.hero-t').textContent, h1: document.querySelectorAll('#main h1').length, go: !!h.querySelector('[data-act="begin"]'), step: !!document.querySelector('.nav-i[data-type="cover"]') }; });
+  await clickStep(page, 1);
+  ok(hr && hr.t === 'L1-1-dars: ' + CONTENT.lesson.title && hr.h1 === 1 && !hr.go && !hr.step && !(await page.$('#main > .hero')), 'Scroll rejimi: muqova birinchi sahifa ustida sarlavha sifatida (alohida qadam emas, «Boshlash» yo\'q)');
   ok(!!(await page.$('.banner')), '?preview=1 → banner');
   await clickStep(page, await stepIndex(page, 'text'));
   ok((await page.evaluate(() => document.querySelectorAll('.prose h2').length)) === 3, "Matn bo'linmaydi (3 ta h2 bitta sahifada)");
@@ -850,9 +1199,11 @@ async function runVisual(br, base) {
   const over = [];
   for (let i = 0; i < n; i++) {
     const t = await page.evaluate(i => document.querySelector('.nav-i[data-i="' + i + '"]').dataset.type, i);
-    await sleep(320);
+    if (t === 'flashcards') await page.click('.fc[data-k="1"]');
+    if (t === 'slides') await page.click('.nav-a.r');
+    await sleep(t === 'flashcards' ? 700 : 320);
     if (await ov()) over.push(i);
-    await SHOT(page, `mob_${pad2(i)}_${t}`);
+    await SHOT(page, `mob_${pad2(i)}_${t}`, t === 'cover' || t === 'flashcards' || t === 'assignment' || (t === 'video' && i > 2));
     if (i < n - 1) { await page.click('.pager .btn.primary'); await sleep(100); }
   }
   ok(over.length === 0, `390px: hech bir qadamda gorizontal toshish yo'q (keng jadval ham) (${over.join(',')})`);
@@ -861,7 +1212,19 @@ async function runVisual(br, base) {
   const pg = await page.evaluate(() => { const p = document.querySelector('.pager'); const r = p.getBoundingClientRect(); return { pos: getComputedStyle(p).position, bottom: Math.round(r.bottom), vh: innerHeight }; });
   ok(pg.pos === 'sticky' && pg.bottom <= pg.vh, `Mobil: pastki panel (sticky) — oldingi / «3 / N qadam» / Keyingi qadam (${pg.bottom}/${pg.vh})`);
   await clickStep(page, await stepIndex(page, 'quiz'));
-  await page.click('[data-act="start"]'); await answerQuiz(page, true);
+  await page.click('[data-act="start"]');
+  // match/sort bosh barmoq bilan: yarim to'ldirilgan holat (skrinshot), nishon o'lchamlari ≥ 44px, toshish yo'q
+  const Mq = `fieldset[data-qid="${MATCH.id}"]`, Sq = `fieldset[data-qid="${SORT.id}"]`;
+  await page.tap(`${Mq} .m-slot[data-l="0"]`); await page.tap(`${Mq} .m-tile[data-r="0"]`); await page.tap(`${Mq} .m-tile[data-r="2"]`); await page.tap(`${Mq} .m-slot[data-l="1"]`); await page.tap(`${Mq} .m-slot[data-l="3"]`);
+  await page.tap(`${Sq} .s-card[data-k="0"]`); await page.tap(`${Sq} .s-drop[data-c="0"]`); await page.tap(`${Sq} .s-card[data-k="4"]`); await page.tap(`${Sq} .s-drop[data-c="0"]`);
+  await page.tap(`${Sq} .s-card[data-k="3"]`); await page.tap(`${Sq} .s-drop[data-c="1"]`); await page.tap(`${Sq} .s-card[data-k="1"]`); await sleep(300);
+  const tp = await page.evaluate(([m, s]) => ({ slots: [...document.querySelectorAll(m + ' .m-slot')].map(e => e.dataset.r || '-').join(), cats: [...document.querySelectorAll(s + ' .s-cat')].map(c => [...c.querySelectorAll('.s-card')].map(e => e.dataset.k).join('')).join('|'),
+    sel: document.querySelector(s + ' .s-card[data-k="1"]').getAttribute('aria-pressed'), min: Math.min(...[...document.querySelectorAll('.m-slot,.m-tile:not([hidden]),.s-card,.s-drop')].map(e => Math.round(e.getBoundingClientRect().height))),
+    wide: [...document.querySelectorAll('.m-row,.m-bank,.s-deck,.s-cats')].every(e => e.getBoundingClientRect().right <= innerWidth), cols: getComputedStyle(document.querySelector('.s-cats')).gridTemplateColumns.split(' ').length }), [Mq, Sq]);
+  ok(tp.slots === '0,2,-,-' && tp.cats === '04|3' && tp.sel === 'true', `390px sensor: match (${tp.slots}) va sort (${tp.cats}) bosib tanlash bilan ishlaydi`);
+  ok(tp.min >= 44 && tp.wide && !(await ov()), `390px: match/sort nishonlari ≥ 44px (eng kichigi ${tp.min}px), ${tp.cols} ustunli toifalar, gorizontal toshish yo'q`);
+  await SHOT(page, 'mob_quiz_form', true);
+  await answerQuiz(page, true);
   ok(!(await ov()), '390px: test natijasi sahifasida toshish yo\'q');
   await SHOT(page, 'mob_quiz_result', true);
   // qadamlar tortmasi (hisoblagich tugmasi)
@@ -895,6 +1258,19 @@ async function runVisual(br, base) {
   const fr = T2.page.frames()[1];
   ok(fr && (await fr.evaluate(() => window.ISFTPaket && window.ISFTPaket.ready)), 'localStorage mavjud bo\'lmagan muhitda (sandbox) ham ishlaydi');
   ok(T2.errs.length === 0, 'Sandbox: konsol xatolari yo\'q' + (T2.errs.length ? ': ' + T2.errs.slice(0, 2).join(' | ') : ''));
+  {   // <video crossorigin>: faqat sandboxed ko'rishda (opaque origin + http); file:// da — yo'q
+    const vAttr = f => f.evaluate(() => { let v = null; for (const n of document.querySelectorAll('.nav-i[data-type="video"]')) { n.click(); v = document.querySelector('.video.file video'); if (v) break; }
+      return { co: v ? v.getAttribute('crossorigin') : 'video yo\'q', origin: String(window.origin), proto: location.protocol, tracks: v ? v.querySelectorAll('track').length : 0 }; });
+    const a1 = await vAttr(fr);
+    ok(a1.origin === 'null' && a1.proto === 'http:' && a1.co === 'anonymous' && a1.tracks > 0, `Sandboxed ko'rish (origin «${a1.origin}», ${a1.proto}): <video crossorigin="anonymous"> — <track> yuklanishi uchun`);
+    const dir = path.join(OUT, 'filepkg'); fs.rmSync(dir, { recursive: true, force: true });
+    fs.cpSync(FIX, dir, { recursive: true }); fs.cpSync(PLAYER, dir, { recursive: true });
+    const T3 = await newCtx(br, {}, 'fileurl');
+    await T3.page.goto(require('url').pathToFileURL(path.join(dir, 'index.html')).href); await waitReady(T3.page);
+    const a2 = await vAttr(T3.page);
+    ok(a2.proto === 'file:' && a2.co === null && a2.tracks > 0, `file:// (origin «${a2.origin}»): <video> crossorigin atributisiz (${JSON.stringify(a2.co)})`);
+    await T3.ctx.close();
+  }
   await T2.ctx.close();
 
   section("Ish stoli · qorong'i rejim · klaviatura");
@@ -904,8 +1280,11 @@ async function runVisual(br, base) {
   const bq = await dp.evaluate(() => { const ti = document.querySelectorAll('.nav-i[data-type="text"]')[1]; ti.click(); const b = document.querySelector('.prose blockquote'); return b && getComputedStyle(b).backgroundColor; });
   ok(bq && !/rgb\(2[0-9]{2}, 2[0-9]{2}, 2[0-9]{2}\)/.test(bq), `Qorong'i rejimda iqtibos foni to'q (${bq})`);
   const dn = await navN(dp);
-  for (let i = 0; i < dn; i++) { await clickStep(dp, i); await sleep(320); await SHOT(dp, `dark_${pad2(i)}_${await currentType(dp)}`); }
-  await clickStep(dp, await stepIndex(dp, 'quiz')); await dp.click('[data-act="start"]'); await answerQuiz(dp, false); await SHOT(dp, 'dark_quiz_failed', true);
+  for (let i = 0; i < dn; i++) { await clickStep(dp, i); const t = await currentType(dp); if (t === 'flashcards') await dp.click('.fc[data-k="1"]'); if (t === 'slides') await dp.click('.nav-a.r'); await sleep(t === 'flashcards' ? 700 : 320); await SHOT(dp, `dark_${pad2(i)}_${t}`); }
+  await clickStep(dp, await stepIndex(dp, 'quiz')); await dp.click('[data-act="start"]'); await demoFill(dp); await SHOT(dp, 'dark_quiz_form', true);
+  const dk = await dp.evaluate(() => { const bg = s => getComputedStyle(document.querySelector(s)).backgroundColor; return [bg('.m-slot.filled'), bg('.m-bank'), bg('.s-cat'), bg('.s-card[aria-pressed="false"]')]; });
+  ok(dk.every(c => { const m = c.match(/\d+/g).map(Number); return m[0] + m[1] + m[2] < 330; }), `Qorong'i rejim: match/sort fonlari to'q (${dk.join(' ; ')})`);
+  await answerQuiz(dp, false); await SHOT(dp, 'dark_quiz_failed', true);
   // klaviatura: Tab bilan skip-havola, landmarklar
   await dp.reload(); await waitReady(dp);
   await dp.keyboard.press('Tab');
@@ -921,16 +1300,19 @@ async function runVisual(br, base) {
   const L = await newCtx(br, { viewport: { width: 1366, height: 900 } }, 'light'), lp = L.page;
   await lp.goto(base + PKG + 'index.html'); await waitReady(lp);
   const ln = await navN(lp);
-  for (let i = 0; i < ln; i++) { await clickStep(lp, i); await sleep(320); await SHOT(lp, `desk_${pad2(i)}_${await currentType(lp)}`); }
+  for (let i = 0; i < ln; i++) { await clickStep(lp, i); const t = await currentType(lp); if (t === 'flashcards') await lp.click('.fc[data-k="1"]'); if (t === 'slides') await lp.click('.nav-a.r'); await sleep(t === 'flashcards' ? 700 : 320); await SHOT(lp, `desk_${pad2(i)}_${t}`); }
   ok(!(await lp.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1)), '1366px: gorizontal toshish yo\'q');
   await clickStep(lp, await stepIndex(lp, 'text')); await lp.click('.prose .zoom'); await sleep(200); await SHOT(lp, 'desk_lightbox'); await lp.keyboard.press('Escape');
   await answerReflect(lp, 1); await SHOT(lp, 'desk_reflect_answered');
-  await clickStep(lp, await stepIndex(lp, 'quiz')); await lp.click('[data-act="start"]'); await SHOT(lp, 'desk_quiz_form', true);
+  await clickStep(lp, await stepIndex(lp, 'quiz')); await lp.click('[data-act="start"]'); await demoFill(lp); await SHOT(lp, 'desk_quiz_form', true);
   await lp.emulateMedia({ media: 'print' }); await sleep(200);
   const pr = await lp.evaluate(() => { const p = document.querySelector('.print-all'); return { top: getComputedStyle(document.querySelector('.top')).display, wrap: getComputedStyle(document.querySelector('.wrap')).display,
-    shown: p && getComputedStyle(p).display, sec: p ? p.querySelectorAll('.p-sec').length : 0, h2: p ? p.querySelectorAll('.prose h2').length : 0, fig: p ? p.querySelectorAll('figure figcaption').length : 0, sl: p ? p.querySelectorAll('.p-sl').length : 0, ids: p ? p.querySelectorAll('[id]').length : -1 }; });
+    shown: p && getComputedStyle(p).display, vid: p ? p.querySelectorAll('.p-video img').length : 0, vt: p ? [...p.querySelectorAll('.p-blk.t-video p')].map(x => x.textContent).join(' | ') : '', fc: p ? p.querySelectorAll('.p-fc dt').length : 0,
+    asg: p ? p.querySelectorAll('.p-blk.t-assignment ol li').length : 0, cap: p ? p.querySelectorAll('.p-sl figcaption').length : 0, sec: p ? p.querySelectorAll('.p-sec').length : 0, h2: p ? p.querySelectorAll('.prose h2').length : 0, fig: p ? p.querySelectorAll('.prose figure figcaption').length : 0, sl: p ? p.querySelectorAll('.p-sl').length : 0, ids: p ? p.querySelectorAll('[id]').length : -1 }; });
   ok(pr.top === 'none' && pr.wrap === 'none' && pr.shown === 'block', 'Chop etish: sarlavha/navigatsiya yashirinadi, barcha qadamlar ketma-ket');
-  ok(pr.sec === 3 && pr.h2 === 3 && pr.fig === 2 && pr.sl === SLIDES.slides.length && pr.ids === 0, `Chop etish mazmuni: ${pr.sec} bo'lim, ${pr.h2} h2, ${pr.fig} rasm izohi, ${pr.sl} slayd (takroriy id yo'q)`);
+  ok(pr.sec === 4 && pr.h2 === 3 && pr.fig === 2 && pr.sl === SLIDES.slides.length + 1 && pr.ids === 0, `Chop etish mazmuni: ${pr.sec} bo'lim, ${pr.h2} h2, ${pr.fig} rasm izohi, ${pr.sl - 1} slayd (takroriy id yo'q)`);
+  ok(pr.vid === 1 && pr.vt.includes(VFILE.title) && pr.fc === FLASH.cards.filter(c => c.front && c.back).length && pr.asg === ASSIGN.questions.length && pr.cap === SLIDES.slides.filter(s => s.caption).length,
+    `Chop etish (v3): fayl-video — poster + nom, ${pr.fc} kartochka (old/orqa), ${pr.asg} topshiriq savoli, ${pr.cap} slayd izohi`);
   await SHOT(lp, 'print_all', true);
   ok(L.errs.length === 0, 'Konsol xatolari yo\'q' + (L.errs.length ? ': ' + L.errs.slice(0, 3).join(' | ') : ''));
   await L.ctx.close();
@@ -950,6 +1332,7 @@ async function runVisual(br, base) {
     await run('xapi_va', () => runXapiViewAll(br, base, lrsBase));
     await run('bad', () => runBadUrls(br, base));
     await run('steps', () => runSteps(br, base));
+    await run('v3', () => runV3(br, base));
     await run('nextid', () => runNextid(br, base));
     await run('noapi', () => runScormNoApi(br, base));
     await run('scroll', () => runScrollLayout(br, base));

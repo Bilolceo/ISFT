@@ -1,10 +1,11 @@
-"""Namuna paket (kontrakt v2) generatori: content.json/content.js va kichik PNG rasmlar (PIL).
+"""Namuna paket (kontrakt v3) generatori: content.json/content.js, kichik PNG/JPEG rasmlar (PIL), muqova, fayl-video uchun
+o'rinbosar .mp4 (haqiqiy video emas — brauzer sinovlari element/track/holat mantig'ini tekshiradi), .vtt subtitr va qisqa WAV audio.
 
     .venv/bin/python tests/fixtures/paket_sample/make_fixture.py
 
 Natija deterministik (rasm va JSON bir xil kirishda bir xil). Hujum satrlari (XSS) ataylab qo'shilgan — pleyer ularni zararsizlantirishi kerak.
 """
-import json
+import json, math, struct, wave
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
@@ -26,6 +27,65 @@ def font(size, bold=False):
 def png(path, im):
     path.parent.mkdir(parents=True, exist_ok=True)
     im.convert("P", palette=Image.ADAPTIVE, colors=32).save(path, optimize=True)
+
+
+def jpg(path, im):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    im.convert("RGB").save(path, "JPEG", quality=78, optimize=True)
+
+
+def cover(w=1600, h=900):
+    """Muqova: tonggi osmon, bino silueti va grafik chiziqlari (sun'iy rasm — real surat emas)."""
+    im = Image.new("RGB", (w, h)); d = ImageDraw.Draw(im)
+    for y in range(h):
+        t = y / h
+        d.line([(0, y), (w, y)], fill=(int(28 + 150 * t), int(52 + 110 * t), int(96 + 70 * t)))
+    d.ellipse([w - 420, 120, w - 220, 320], fill=(255, 226, 170))
+    for i, (x, bw, bh) in enumerate([(80, 220, 420), (330, 160, 560), (520, 300, 360), (860, 200, 620), (1090, 260, 440), (1380, 180, 520)]):
+        col = (36 + i * 6, 44 + i * 5, 66 + i * 4)
+        d.rectangle([x, h - bh, x + bw, h], fill=col)
+        for wy in range(h - bh + 30, h - 30, 56):
+            for wx in range(x + 22, x + bw - 30, 48):
+                d.rectangle([wx, wy, wx + 22, wy + 30], fill=(250, 214, 140) if (wx // 48 + wy // 56 + i) % 3 else (70, 84, 112))
+    pts = [(0, 700), (200, 640), (420, 660), (640, 520), (860, 560), (1100, 380), (1340, 420), (1600, 240)]
+    d.line(pts, fill=GREEN, width=10)
+    for x, y in pts[1:-1]:
+        d.ellipse([x - 12, y - 12, x + 12, y + 12], fill="white", outline=GREEN, width=5)
+    return im.resize((1200, 675), Image.LANCZOS)
+
+
+def poster(w=1280, h=720):
+    im = Image.new("RGB", (w, h), (24, 26, 33)); d = ImageDraw.Draw(im)
+    d.rectangle([0, 0, w, 14], fill=BRAND)
+    d.text((80, 250), "Videodars", fill=(190, 196, 208), font=font(40))
+    d.text((80, 310), "Talab va taklif nazariyasi", fill="white", font=font(68, True))
+    d.text((80, 410), "A. Karimov · Iqtisodiyot kafedrasi", fill=(190, 196, 208), font=font(34))
+    cx, cy = w - 230, h // 2
+    d.ellipse([cx - 90, cy - 90, cx + 90, cy + 90], fill=BRAND)
+    d.polygon([(cx - 28, cy - 44), (cx - 28, cy + 44), (cx + 50, cy)], fill="white")
+    return im
+
+
+def wav(path, secs=0.4, rate=8000, hz=440):
+    """Qisqa sinus ohang (8 bit mono) — slayd audio izohi uchun o'rinbosar."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    n = int(secs * rate)
+    with wave.open(str(path), "wb") as f:
+        f.setnchannels(1); f.setsampwidth(1); f.setframerate(rate)
+        f.writeframes(bytes(int(128 + 60 * math.sin(2 * math.pi * hz * i / rate) * min(1, i / 400, (n - i) / 400)) for i in range(n)))
+
+
+# O'rinbosar .mp4: faqat «ftyp» + bo'sh «mdat» qutilari (dekodlanmaydi; pleyer xato xabarini ko'rsatadi, sinovlar hodisalarni o'zi yuboradi)
+MP4_STUB = struct.pack(">I4s4sI4s4s", 24, b"ftyp", b"isom", 0x200, b"isom", b"mp41") + struct.pack(">I4s", 16, b"mdat") + b"\0" * 8
+
+VTT = """WEBVTT
+
+00:00:00.000 --> 00:00:04.000
+Assalomu alaykum! Bugungi mavzu — talab va taklif nazariyasi.
+
+00:00:04.000 --> 00:00:09.000
+Narx oshsa, talab miqdori kamayadi, taklif miqdori esa ortadi.
+"""
 
 
 def chart_supply_demand(w=880, h=520):
@@ -79,6 +139,9 @@ def slide(n, title, lines, w=1280, h=720):
     return im
 
 
+SLIDE_CAPTIONS = {1: "Talab egri chizig'i pastga qarab yo'nalgan — narx va miqdor teskari bog'langan.", 3: "E nuqtasida bozor «tozalanadi»: talab miqdori taklif miqdoriga teng."}
+SLIDE_AUDIO = {1: "assets/audio/s2.wav"}
+
 SLIDES = [
     ("Talab va taklif nazariyasi", ["Mikroiqtisodiyot · L1", "3-kurs, Iqtisodiyot yo'nalishi"], "Mavzuga kirish."),
     ("Talab qonuni", ["Narx oshsa — talab miqdori kamayadi", "Daromad effekti", "O'rinbosarlik effekti", "Giffen tovarlari — istisno"], "D — talab egri chizig'i."),
@@ -121,37 +184,60 @@ TEXT = (
     "<h3>Elastiklik haqida qisqacha</h3>\n<p>Talabning narx bo'yicha elastikligi: E<sub>d</sub> = %ΔQ / %ΔP.</p>"
 )
 
+def _slide(i, t, b, n):
+    d = {"title": t, "bullets": b, "notes": n, "image": f"assets/slides/s{i + 1}.png"}
+    if i in SLIDE_CAPTIONS:
+        d["caption"] = SLIDE_CAPTIONS[i]
+    if i in SLIDE_AUDIO:
+        d["audio"] = SLIDE_AUDIO[i]
+    return d
+
+
 CONTENT = {
     "v": 1, "id": "isft-12-5-v4", "title": "Talab va taklif nazariyasi", "lang": "uz", "layout": "steps",
     "lesson": {"code": "L1", "kind": "maruza", "no": 1, "title": "Talab va taklif nazariyasi"},
     "course": {"subject": "Mikroiqtisodiyot", "direction": "Iqtisodiyot", "course": 3, "kafedra": "Iqtisodiyot kafedrasi", "teacher": "A. Karimov"},
     "topic": {"no": 5, "title": "Talab va taklif nazariyasi"},
     "brand": {"name": "ISFT", "full": "International School of Finance and Technology", "color": "#8B0033", "logo": "assets/logo.png"},
+    "cover": {"image": "assets/cover.jpg", "author": "A. Karimov, i.f.n., dotsent"},
     "built": "2026-11-11T10:00:00+05:00",
     "blocks": [
         {"id": "b1", "type": "section", "title": "VIDEODARS"},
         {"id": "b2", "type": "video", "title": "Videodars", "provider": "youtube", "video_id": "dQw4w9WgXcQ",
          "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "start": 15},
-        {"id": "b3", "type": "section", "title": "MA'RUZA MATNI"},
-        {"id": "b4", "type": "plan", "title": "Reja", "heading": "1-MAVZU: TALAB VA TAKLIF NAZARIYASI",
+        {"id": "b3", "type": "video", "title": "Videodars (yuklangan fayl)", "provider": "file", "src": "assets/video/dars.mp4",
+         "poster": "assets/video/dars.jpg", "captions": [
+             {"lang": "uz", "label": "O'zbekcha", "src": "assets/video/dars.uz.vtt"},
+             {"lang": "en", "label": "Tashqi (rad etiladi)", "src": "https://evil.example/x.vtt"},
+             {"lang": "ru", "label": "Xavfli (rad etiladi)", "src": "java\tscript:window.__xss=12"}]},
+        {"id": "b4", "type": "section", "title": "MA'RUZA MATNI"},
+        {"id": "b5", "type": "plan", "title": "Reja", "heading": "1-MAVZU: TALAB VA TAKLIF NAZARIYASI",
          "items": ["Talab tushunchasi", "Taklif tushunchasi", "Bozor muvozanati", "Mustaqil ish uchun savollar"]},
-        {"id": "b5", "type": "text", "title": "Ma'ruza matni", "html": TEXT},
-        {"id": "b6", "type": "keypoints", "title": "Asosiy xulosalar", "items": [
+        {"id": "b6", "type": "text", "title": "Ma'ruza matni", "html": TEXT},
+        {"id": "b7", "type": "keypoints", "title": "Asosiy xulosalar", "items": [
             "Narx oshsa, talab miqdori kamayadi — taklif miqdori esa ortadi.",
             "Muvozanat narxida talab va taklif miqdorlari teng bo'ladi.",
             "Narx shifti taqchillikka, narx tagi ortiqcha taklifga olib keladi."]},
-        {"id": "b7", "type": "refs", "title": "Foydalanilgan adabiyotlar ro'yxati", "items": [
+        {"id": "b8", "type": "refs", "title": "Foydalanilgan adabiyotlar ro'yxati", "items": [
             "Mankiw N. G. Principles of Economics. 9th ed. — Cengage, 2020.",
             "Shodmonov Sh., G'afurov U. Iqtisodiyot nazariyasi. — T.: Iqtisod-moliya, 2019.",
             "ISFT elektron kutubxonasi: https://isft.uz/kutubxona.",
             "Xavfli havola sinovi: javascript:alert(1)",
             {"text": "Khan Academy — Microeconomics", "url": "https://www.khanacademy.org/economics-finance-domain/microeconomics"}]},
-        {"id": "b8", "type": "section", "title": "DARS TAQDIMOTI"},
-        {"id": "b9", "type": "slides", "title": "Taqdimot", "display": "images", "file": "assets/taqdimot.pptx", "pdf": "assets/taqdimot.pdf",
-         "slides": [{"title": t, "bullets": b, "notes": n, "image": f"assets/slides/s{i + 1}.png"} for i, (t, b, n) in enumerate(SLIDES)]},
-        {"id": "b10", "type": "file", "title": "Uslubiy qo'llanma (PDF)", "href": "assets/qollanma.pdf", "size": 1234},
+        {"id": "b9", "type": "section", "title": "DARS TAQDIMOTI"},
+        {"id": "b10", "type": "slides", "title": "Taqdimot", "display": "images", "file": "assets/taqdimot.pptx", "pdf": "assets/taqdimot.pdf",
+         "slides": [_slide(i, t, b, n) for i, (t, b, n) in enumerate(SLIDES)]},
+        {"id": "b11", "type": "file", "title": "Uslubiy qo'llanma (PDF)", "href": "assets/qollanma.pdf", "size": 1234},
         {"id": "b99", "type": "hotspot", "title": "Noma'lum blok — e'tiborsiz qoldiriladi"},
-        {"id": "b11", "type": "quiz", "title": "Test", "pass_pct": 60, "shuffle": True, "attempts": 3, "show_feedback": True, "questions": [
+        {"id": "b12", "type": "section", "title": "MASHQ VA TOPSHIRIQLAR"},
+        {"id": "b13", "type": "flashcards", "title": "Asosiy tushunchalar", "cards": [
+            {"front": "Talab", "back": "Iste'molchilar ma'lum narxda sotib olishga tayyor va qodir bo'lgan tovar miqdori."},
+            {"front": "Taklif", "back": "Ishlab chiqaruvchilar ma'lum narxda bozorga chiqarishga tayyor bo'lgan tovar miqdori."},
+            {"front": "Muvozanat narxi", "back": "Talab va taklif miqdorlari teng bo'ladigan narx."},
+            {"front": "Taqchillik", "back": "Narx muvozanatdan past bo'lganda talabning taklifdan oshib ketishi."},
+            {"front": "Elastiklik", "back": "Miqdorning narx o'zgarishiga sezgirligi."},
+            {"front": "", "back": "Bo'sh old tomon — tashlanadi"}]},
+        {"id": "b14", "type": "quiz", "title": "Bilimni tekshirish", "pass_pct": 60, "shuffle": True, "attempts": 3, "show_feedback": True, "questions": [
             {"id": "q101", "type": "mcq", "stem": "Talab qonuniga ko'ra narx oshsa, talab miqdori qanday o'zgaradi?",
              "options": ["Kamayadi", "Ortadi", "O'zgarmaydi", "Avval ortadi, keyin kamayadi"], "correct": [0],
              "explanation": "Boshqa sharoitlar o'zgarmaganda narx va talab miqdori teskari bog'langan."},
@@ -163,8 +249,24 @@ CONTENT = {
             {"id": "q104", "type": "fill", "stem": "Normal tovar uchun daromad oshganda talab ... (bir so'z bilan yozing)",
              "answers": ["o'sadi", "ortadi", "oshadi"], "explanation": "Normal tovarlarda daromad va talab to'g'ri bog'langan."},
             {"id": "q105", "type": "mcq", "stem": "Narx shifti (maksimal narx) muvozanat narxidan past belgilansa nima yuzaga keladi?",
-             "options": ["Taqchillik", "Ortiqcha taklif", "Muvozanat"], "correct": [0]}]},
-        {"id": "b12", "type": "reflect", "title": "O'z-o'zini baholash", "question": "Darsni to'liq o'zlashtirdingizmi?", "options": [
+             "options": ["Taqchillik", "Ortiqcha taklif", "Muvozanat"], "correct": [0]},
+            {"id": "q106", "type": "match", "stem": "Tushunchalarni ta'riflari bilan moslashtiring.", "pairs": [
+                {"left": "Talab qonuni", "right": "Narx oshsa, sotib olinadigan miqdor kamayadi"},
+                {"left": "Taklif qonuni", "right": "Narx oshsa, sotuvga chiqariladigan miqdor ortadi"},
+                {"left": "Muvozanat", "right": "Talab miqdori = taklif miqdori"},
+                {"left": "Narx tagi", "right": "Ortiqcha taklifga olib keladi"}],
+             "explanation": "Har bir qonun narx va miqdor o'rtasidagi bog'liqlik yo'nalishini bildiradi."},
+            {"id": "q107", "type": "sort", "stem": "Omillarni tegishli guruhga ajrating.", "categories": [
+                {"title": "Talab omillari", "items": ["Iste'molchi daromadi", "Did va afzalliklar", "O'rinbosar tovar narxi"]},
+                {"title": "Taklif omillari", "items": ["Ishlab chiqarish texnologiyasi", "Resurslar narxi", "Ishlab chiqaruvchiga soliq"]}],
+             "explanation": "Talab omillari xaridor qaroriga, taklif omillari ishlab chiqaruvchi xarajatlariga ta'sir qiladi."}]},
+        {"id": "b15", "type": "assignment", "title": "Topshiriq",
+         "text": "Quyidagi topshiriqni bajarib PDF shaklda LMS platformasiga joylang", "author": "Sizning professor-o'qituvchingiz", "avatar": None,
+         "questions": [
+             "Talab va taklif egri chiziqlarini chizing va muvozanat nuqtasini belgilang.",
+             "O'zbekiston bozoridan narx shifti qo'llanilgan bitta misol keltiring va oqibatlarini tahlil qiling.",
+             "Elastik va noelastik talabga ega uchtadan tovarni sanab, sababini izohlang."]},
+        {"id": "b16", "type": "reflect", "title": "O'z-o'zini baholash", "question": "Darsni to'liq o'zlashtirdingizmi?", "options": [
             {"text": "Ha, albatta", "feedback": "Ajoyib! Bilimingizni mustahkamlash uchun keyingi mavzuga o'ting."},
             {"text": "Yo'q, to'liq o'zlashtirmadim", "feedback": "Hechqisi yo'q. Ma'ruza matni va taqdimotni qayta ko'rib chiqing, savollarni o'qituvchiga yozing."}]},
     ],
@@ -176,6 +278,11 @@ if __name__ == "__main__":
     png(FX / "assets/img/fig2.png", chart_bars())
     for i, (t, b, _) in enumerate(SLIDES):
         png(FX / f"assets/slides/s{i + 1}.png", slide(i + 1, t, b))
+    jpg(FX / "assets/cover.jpg", cover())
+    jpg(FX / "assets/video/dars.jpg", poster())
+    (FX / "assets/video/dars.mp4").write_bytes(MP4_STUB)
+    (FX / "assets/video/dars.uz.vtt").write_text(VTT, encoding="utf-8")
+    wav(FX / "assets/audio/s2.wav")
     (FX / "content.json").write_text(json.dumps(CONTENT, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
     (FX / "content.js").write_text("window.PAKET = " + json.dumps(CONTENT, ensure_ascii=False) + ";\n", encoding="utf-8")
     print("ok")

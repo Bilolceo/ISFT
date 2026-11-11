@@ -6,6 +6,8 @@
                        AI asosiy xulosalar), sozlamalar, yig'ish, ko'rish (pleyer), yuklab olish, tasdiqlash / qaytarish (bo'lim); kurs paketi.
      Avtomatik joylash: YouTube havolalar ro'yxati → L1..Ln (yoki «A3: havola»); tayyor darslarni ommaviy yig'ish.
      Sozlamalar:       standart paket turi, yakunlash, kafedra shabloni (bo'lim sarlavhalari, layout, o'z-o'zini baholash); NEXTID / Moodle yo'riqnomasi.
+     Rise 360 (v3):    muqova (rasm + muallif), video fayl (.mp4/.webm) + subtitr (.vtt/.srt) + poster, slayd izohi va audiosi, mashqlar
+                       (moslashtirish, saralash, kartochkalar — oddiy formalar; «AI: mashqlar» qoralamasi), topshiriq (o'qituvchi rasmi + savollar).
    Ruxsat va ko'lam serverda. Global: renderPaket().  app.js yordamchilari: $, esc, fmt, toast, locked, errCard, showLogin, ico, ME.
    ===================================================================== */
 const PK = {meta: null, tab: null, cid: 0, topic: 1, cov: {q: "", department_id: 0, only: "", offset: 0}};
@@ -65,10 +67,10 @@ function pkModal(title, html, onOk, okText = "Saqlash", wide = false) {
   setTimeout(() => bg.querySelector("textarea,input,select,button")?.focus(), 30);
   return bg;
 }
-async function pkUpload(url, file, extra = "") {
-  const M = PK.meta;
-  if (file.size > M.limits.asset_mb * 1048576) { toast(`Fayl ${M.limits.asset_mb} MB dan katta`); return null; }
-  toast("Yuklanmoqda…");
+async function pkUpload(url, file, extra = "", mb = 0) {
+  const M = PK.meta, lim = mb || M.limits.asset_mb;
+  if (file.size > lim * 1048576) { toast(`Fayl ${lim} MB dan katta`); return null; }
+  toast(file.size > 20 * 1048576 ? `Yuklanmoqda… (${pkSize(file.size)} — biroz kuting)` : "Yuklanmoqda…");
   return pkApi(`${url}?name=${encodeURIComponent(file.name)}${extra}`, file);
 }
 const PK_KORD = ["maruza", "amaliy", "seminar", "laboratoriya", "mustaqil"];
@@ -78,6 +80,8 @@ const pkNextidHelp = () => `<ol class="pk-steps">
     <li>my.isft.uz (NEXTID.LMS) → fan → <b>Articulate</b> yorlig'i → yangi dars qo'shish.</li>
     <li>Dars nomini NEXTID uslubida yozing — kod paketdagi bilan bir xil bo'lsin: «L1-1-dars: MAVZU NOMI» (ma'ruza), «A1- AMALIY MASHG'ULOT: NOM» (amaliy).</li>
     <li>Zip faylni <b>ochmasdan</b> yuklang (ildizida <span class="pk-mono">index.html</span> va <span class="pk-mono">tincan.xml</span>). Saqlang va darsni ochib tekshiring.</li>
+    <li>Video: YouTube havola yoki <b>video fayl</b> (.mp4 / .webm, subtitr .vtt / .srt bilan). Fayl paket ichida ketadi — zip hajmi oshadi (NEXTID'ning yuklash chegarasini tekshiring); katta video uchun YouTube havolasi qulayroq.</li>
+    <li>«MASHQ VA TOPSHIRIQLAR»: kartochkalar, test (Test bank savollari + moslashtirish / saralash) va topshiriq paket ichida. Topshiriq javobini talaba PDF qilib NEXTID'ning o'ziga yuklaydi (paket fayl qabul qilmaydi).</li>
     <li>Taqdimot aniq ko'rinishi uchun PowerPoint'da <b>«Fayl → Saqlash → PDF»</b> qiling va PDF'ni ham yuklang (.pptx dan <b>keyin</b> — eng oxirgi yuklangan taqdimot ishlatiladi) — har bir sahifa rasm sifatida ko'rsatiladi (.pptx yuklab olish uchun qoladi).</li></ol>
   <p class="pk-note">NEXTID darsni iframe'da launch parametrlarisiz ochadi: pleyer «mustaqil» rejimda ishlaydi, jarayon/natijani ota oynaga <span class="pk-mono">postMessage</span> bilan yuboradi; «Ko'rish rejimi» banneri chiqmaydi.</p>`;
 const pkPrevUrl = id => `/api/paket/packages/${id}/preview/index.html?preview=1`;   /* ?preview=1 — pleyer «Ko'rish rejimi» bannerini ko'rsatadi */
@@ -152,7 +156,8 @@ async function pkCoverage(box) {
       ${pkKpi("Tasdiq kutilmoqda", fmt(t.waiting), "bo'lim ko'rib chiqadi", t.waiting ? "info" : "")}
       ${pkKpi("Manbasi to'liq mavzular", fmt(t.full), "matn, taqdimot, video va test bor")}
       ${pkKpi("Ma'ruza matni / taqdimot", `${fmt(t.text)} / ${fmt(t.slides)}`, "mavzular")}
-      ${pkKpi("Video / test", `${fmt(t.video)} / ${fmt(t.quiz)}`, "yaroqli havola · tasdiqlangan savollar")}
+      ${pkKpi("Video / test", `${fmt(t.video)} / ${fmt(t.quiz)}`, "havola yoki fayl · savollar yoki mashqlar")}
+      ${pkKpi("Mashqli darslar", fmt(t.exercises || 0), "moslashtirish, saralash, kartochkalar")}
     </div>
     <div class="card pk-card"><h3>Kafedralar</h3><p class="muted">Paketi yig'ilgan mavzular ulushi · eng ortda turganlari yuqorida${M.caps.view ? " · kafedra nomini bosing — kurslar ro'yxati filtrlanadi" : ""}</p>
       ${pkTable([["Kafedra", r => M.caps.view ? `<button type="button" class="pk-link" data-dep="${r.department_id}">${esc(r.name)}</button>` : esc(r.name)],
@@ -218,6 +223,13 @@ async function pkCourse(el) {
       <p class="pk-note">Har qatorda bitta dars: «L1-1-dars: MAVZU NOMI», «A1- AMALIY MASHG'ULOT: NOM», «A2- Amaliy: NOM», «S1 …», «Lab1 …», «MT1 …». Mavzuga bog'lash (ixtiyoriy): oxirida «(3-mavzu)».</p>
       <label class="pk-sr" for="pkLt">Darslar ro'yxati</label><textarea id="pkLt" class="pk-ta" placeholder="L1-1-dars: AXBOROT TEXNOLOGIYALARI&#10;A1- AMALIY MASHG'ULOT: Excel bilan ishlash (1-mavzu)&#10;A2- Amaliy: Word hujjatlari"></textarea>
       <div class="pk-acts"><button type="button" class="btn sm" id="pkLc">Tekshirish</button><button type="button" class="btn sm primary" id="pkLs">Saqlash</button></div><div id="pkLr"></div></details>` : ""}
+    ${d.can.write ? `<details class="pk-det" style="margin-top:12px"><summary><b>Muqova va o'qituvchi rasmi</b><span class="muted">kursning barcha darslari uchun${d.media.muqova ? " · muqova bor" : ""}${d.media.avatar ? " · rasm bor" : ""}</span></summary>
+      <div class="pk-media">${[["muqova", "Kurs muqovasi", "cover", "Dars muqovasidagi fon rasmi (≤ 1920 px). Darsga alohida muqova yuklanmasa shu, bo'lmasa bo'lim standarti ishlatiladi."],
+                               ["avatar", "O'qituvchi rasmi", "avatar", "«Topshiriq» blokidagi rasm. Yuklanmasa pleyer o'zi belgi chizadi."]].map(([k, l, u, h]) => `<div>
+        ${d.media[k] ? `<img class="pk-thumb ${k}" src="/api/paket/assets/${d.media[k]}" alt="${esc(l)}">` : `<div class="pk-thumb ${k} none">yo'q</div>`}
+        <div><b>${esc(l)}</b><p class="pk-note" style="margin:2px 0 6px">${esc(h)}</p><div class="pk-acts tight" style="justify-content:flex-start">
+          <label class="btn sm pk-file">${ico("upload", 15)} Rasm (.png, .jpg)<input type="file" accept=".png,.jpg,.jpeg" hidden data-cm="${u}"></label>
+          ${d.media[k] ? `<button type="button" class="btn sm ghost" data-cdel="${d.media[k]}">Olib tashlash</button>` : ""}</div></div></div>`).join("")}</div></details>` : ""}
     ${d.can.write ? `<details class="pk-det" style="margin-top:12px"><summary><b>Kurs paketi</b><span class="muted">bitta manifestda barcha darslar (har biri alohida SCO)${last ? ` · oxirgisi v${last.version}, ${pkD(last.built_at)}` : ""}</span></summary>
       <div class="pk-form"><label>Turi<select id="pkKm">${["xapi", "scorm12", "scorm2004"].map(m => `<option value="${m}">${esc(M.modes[m])}</option>`).join("")}</select></label>
         <label class="cb"><input type="checkbox" id="pkKa"> Faqat tasdiqlangan darslar</label>
@@ -238,6 +250,10 @@ async function pkCourse(el) {
   el.querySelector("#pkLc")?.addEventListener("click", () => lrun(false));
   el.querySelector("#pkLs")?.addEventListener("click", () => lrun(true));
   el.querySelectorAll(".pk-topic").forEach(b => b.onclick = () => { PK.topic = +b.dataset.no; pkCourse(el); });
+  el.querySelectorAll("[data-cm]").forEach(i => i.onchange = async () => { const f = i.files[0]; if (!f) return;
+    const r = await pkUpload(`/api/paket/courses/${PK.cid}/${i.dataset.cm}`, f); if (r) { toast("Rasm saqlandi"); pkCourse(el); } });
+  el.querySelectorAll("[data-cdel]").forEach(b => b.onclick = async () => { if (!confirm("Rasm olib tashlansinmi?")) return;
+    const r = await pkApi(`/api/paket/assets/${b.dataset.cdel}/delete`, {}); if (r) { toast("Olib tashlandi"); pkCourse(el); } });
   el.querySelector("#pkKb")?.addEventListener("click", async e => {
     const btn = e.currentTarget; btn.disabled = true;   /* await'dan keyin e.currentTarget = null — havola oldindan saqlanadi */
     try {
@@ -253,7 +269,10 @@ async function pkTopicPanel(el) {
   const d = await pkApi(base), R = d.ready, can = d.can, S = d.settings;
   const reload = () => pkCourse($("#pkCv"));
   const li = (ok, title, desc, extra = "") => `<li class="${ok ? "ok" : "no"}">${ico(ok ? "checkc" : "alert", 18)}<b>${esc(title)}</b><div class="d">${desc}</div>${extra}</li>`;
-  const tx = R.text, sl = R.slides, vd = R.video, qz = R.quiz, L = d.lesson, KP = d.keypoints;
+  const tx = R.text, sl = R.slides, vd = R.video, qz = R.quiz, L = d.lesson, KP = d.keypoints, cv = R.cover, xr = R.exercises, ag = R.assignment, EX = d.exercises;
+  const vLink = vd.url && !vd.error ? `${vd.video_id ? `YouTube · <span class="pk-mono">${esc(vd.video_id)}</span>` : "Tashqi havola"} · ${vd.link_src === "paket" ? "shu yerda kiritilgan" : "kontent monitoringidan"}${vd.demo ? " · namuna" : ""}` : "";
+  const vFile = vd.file ? `Video fayl · ${esc(vd.file.name)} <small style="display:inline">(${esc(vd.file.kind)}, ${pkSize(vd.file.size)})</small> · subtitr: ${vd.captions.length ? vd.captions.map(x => esc(x.lang)).join(", ") : "yo'q"}${vd.poster ? " · poster bor" : ""}` : "";
+  const exN = x => x.kind === "match" ? `${x.pairs.length} juft` : x.kind === "sort" ? `${x.categories.length} toifa, ${x.categories.reduce((a, c) => a + c.items.length, 0)} element` : `${x.cards.length} kartochka`;
   const kpItems = (KP.approved?.items || []), kpDraft = (KP.draft?.items || []);
   const assets = d.assets;
   const aList = kinds => assets.filter(a => kinds.includes(a.purpose));
@@ -263,10 +282,19 @@ async function pkTopicPanel(el) {
         ${can.write && L.custom && !L.default ? `<button type="button" class="btn sm ghost" id="pkLd">Darsni o'chirish</button>` : ""}</div>
       <p class="muted">${esc(L.kind_label)}${L.topic ? ` · ${L.topic}-mavzuga bog'langan` : ""} · tayyorgarlik — paket «tayyor» bo'lishi uchun sozlamada yoqilgan bloklarning manbasi kerak</p>
       <ul class="pk-check">
-        ${li(vd.ok, "Video", vd.ok ? `${vd.provider === "youtube" ? `YouTube · <span class="pk-mono">${esc(vd.video_id)}</span>` : "Tashqi havola"} · ${vd.src === "paket" ? "shu yerda kiritilgan" : "kontent monitoringidan"}${vd.demo ? " · namuna" : ""}` :
-          vd.error ? `<span class="pk-bad">${esc(vd.error)}</span> · <span class="pk-mono">${esc(vd.url || "")}</span>` : "Yo'q — YouTube havolasini kiriting",
-          can.write ? `<form class="pk-inline" id="pkVf"><label class="pk-sr" for="pkVu">YouTube havola</label><input type="url" id="pkVu" placeholder="https://youtu.be/…" value="${esc(vd.src === "paket" ? vd.url || "" : "")}"><button class="btn sm">Saqlash</button></form>` : "")}
-        ${li(tx.ok, "Ma'ruza matni", tx.ok ? `${esc(tx.name)} · ${fmt(tx.chars)} belgi · ${tx.src === "paket" ? "shu yerda yuklangan" : "Test bankdan"}${tx.demo ? " · namuna" : ""}` : `Yo'q — Word (.docx: rasmlar va jadvallar bilan) / .pdf / .txt yuklang${L.kind === "maruza" ? " yoki Test bankdagi mavzu matni ishlatiladi" : ""}`,
+        ${li(cv.ok, "Muqova", cv.ok ? `${cv.image ? `fon rasmi — ${{dars: "shu dars uchun yuklangan", kurs: "kurs muqovasi", standart: "bo'lim standarti"}[cv.src]}` : "rasmsiz (brend rangi)"} · logotip · «${esc(L.code)}: ${esc(d.topic.title)}» · muallif: ${cv.author ? esc(cv.author) : "—"}${cv.custom ? " (tahrirlangan)" : ""}` : "O'chirilgan (sozlamada yoqish mumkin)",
+          can.write ? `<div class="pk-acts">${cv.image ? `<img class="pk-thumb muqova" src="/api/paket/assets/${cv.image}" alt="Muqova">` : ""}
+            <label class="btn sm pk-file">${ico("upload", 15)} Dars muqovasi (.png, .jpg)<input type="file" accept=".png,.jpg,.jpeg" hidden id="pkCf"></label>
+            ${cv.src === "dars" ? `<button type="button" class="btn sm ghost" data-del="${cv.image}">Dars muqovasini olib tashlash</button>` : ""}</div>
+            <form class="pk-inline" id="pkCa"><label class="pk-sr" for="pkCu">Muallif</label><input type="text" id="pkCu" maxlength="120" placeholder="Muallif (F.I.Sh.)" value="${esc(cv.author || "")}"><button class="btn sm">Saqlash</button>${cv.custom ? `<button type="button" class="btn sm ghost" id="pkCr">Standart</button>` : ""}</form>` : "")}
+        ${li(vd.ok, "Video", vd.ok ? `${vd.provider === "file" ? vFile : vLink}${vd.both ? `<br><span class="muted">Ikkalasi ham bor (${vd.provider === "file" ? vLink : vFile}) — paketga «${esc(M.video_sources[S.video_source])}» kiradi (o'zgartirish: Paket → Video manbasi)</span>` : ""}` :
+          vd.error ? `<span class="pk-bad">${esc(vd.error)}</span> · <span class="pk-mono">${esc(vd.url || "")}</span>` : "Yo'q — YouTube havolasini kiriting yoki video fayl (.mp4, .webm) yuklang",
+          can.write ? `<form class="pk-inline" id="pkVf"><label class="pk-sr" for="pkVu">YouTube havola</label><input type="url" id="pkVu" placeholder="https://youtu.be/…" value="${esc(vd.link_src === "paket" ? vd.url || "" : "")}"><button class="btn sm">Saqlash</button></form>
+            <div class="pk-acts"><label class="btn sm pk-file">${ico("upload", 15)} Video fayl (.mp4, .webm ≤ ${M.limits.video_mb} MB)<input type="file" accept=".mp4,.webm,video/mp4,video/webm" hidden id="pkVm"></label>
+              ${vd.file ? `<label class="btn sm ghost pk-file">${ico("upload", 15)} Poster (rasm)<input type="file" accept=".png,.jpg,.jpeg" hidden id="pkVp"></label>
+              <select id="pkVl" aria-label="Subtitr tili" class="pk-sel">${Object.entries(M.sub_langs).map(([k, l]) => `<option value="${k}">${esc(l)}</option>`).join("")}</select>
+              <label class="btn sm ghost pk-file">${ico("upload", 15)} Subtitr (.vtt, .srt)<input type="file" accept=".vtt,.srt,text/vtt" hidden id="pkVs"></label>` : ""}</div>` : "")}
+        ${li(tx.ok, "Ma'ruza matni", tx.ok ? `${esc(tx.name)} · ${fmt(tx.chars)} belgi · ${tx.src === "paket" ? "shu yerda yuklangan" : "Test bankdan"}${tx.demo ? " · namuna" : ""}${tx.only_assignment ? " · matn faqat topshiriqlar ro'yxatidan iborat — «Topshiriq» blokiga o'tdi (alohida matn bloki chiqmaydi)" : ""}` : `Yo'q — Word (.docx: rasmlar va jadvallar bilan) / .pdf / .txt yuklang${L.kind === "maruza" ? " yoki Test bankdagi mavzu matni ishlatiladi" : ""}`,
           can.write ? `<div class="pk-acts"><label class="btn sm pk-file">${ico("upload", 15)} Fayl (.docx, .pdf, .txt)<input type="file" accept=".docx,.pdf,.txt" hidden id="pkTf"></label><button type="button" class="btn sm ghost" id="pkTt">Matn joylashtirish</button></div>` : "")}
         ${li(R.plan.ok, "Reja", R.plan.ok ? `«${esc(R.plan.heading)}» · ${R.plan.n} band · ${R.plan.explicit ? "matndagi «Reja» bo'limidan" : "sarlavhalardan"}` : "Matnda «Reja:» bo'limi yoki sarlavhalar topilmadi — reja bloki bo'lmaydi")}
         ${li(R.images.ok, "Rasmlar va jadvallar", `${R.images.n} ta rasm matnda${R.images.tables ? ` · ${R.images.tables} ta jadval` : ""}${R.images.manual ? ` · ${R.images.manual} ta qo'lda yuklangan` : ""} — Word'dagi rasmlar izohi («1.1-rasm. …») bilan o'z joyida`,
@@ -276,16 +304,27 @@ async function pkTopicPanel(el) {
           can.write ? `<div class="pk-acts">${M.ai ? `<button type="button" class="btn sm ghost" id="pkKpAi" ${tx.ok ? "" : "disabled"}>AI: asosiy xulosalar</button>` : ""}<button type="button" class="btn sm ghost" id="pkKpEd">Tahrirlash</button></div>` : "")}
         ${li(sl.ok, "Taqdimot", sl.ok ? `${{pptx: "PowerPoint (.pptx)", deck: `«Taqdimot» modulidan: ${esc(sl.deck_title || "")}`, images: "slayd rasmlari", pdf: "PDF sahifalari (rasm)"}[sl.src] || ""} · ${sl.n} slayd${sl.images ? `, ${sl.images} rasm` : ""} · ${sl.display === "images" ? "galereya (rasmlar)" : "matnli slaydlar"}${sl.file ? " · .pptx yuklab olinadi" : ""}` : "Yo'q — PDF (aniq ko'rinish, tavsiya), .pptx yoki slayd rasmlarini (.png, .jpg) yuklang",
           can.write ? `<div class="pk-acts"><label class="btn sm pk-file">${ico("upload", 15)} .pdf / .pptx / rasm<input type="file" accept=".pptx,.pdf,.png,.jpg,.jpeg" multiple hidden id="pkSf"></label>
+            ${sl.n ? `<button type="button" class="btn sm ghost" id="pkSe">Slayd izohlari va audio${sl.captions || sl.audio ? ` (${sl.captions} izoh, ${sl.audio} audio)` : ""}</button>` : ""}
             ${d.decks.length ? `<select id="pkDk" aria-label="Taqdimot modulidan" style="height:32px;border-radius:10px;max-width:100%"><option value="0">«Taqdimot» modulidan…</option>${d.decks.map(x => `<option value="${x.id}" ${x.id === sl.deck_id ? "selected" : ""}>${esc(x.title || "Taqdimot #" + x.id)}${x.slides ? ` (${x.slides} slayd)` : ""}</option>`).join("")}</select>` : ""}</div>` : "")}
-        ${li(qz.ok, "Test", qz.ok ? `Test bankda ${qz.approved} ta tasdiqlangan savol · paketga ${qz.used} ta` : L.kind === "maruza" ? "Test bankda bu mavzu bo'yicha tasdiqlangan savol yo'q" : "Test bank — ma'ruza mavzulari bo'yicha (bu darsda test yo'q)",
+        ${li(qz.ok, "Test", qz.ok ? `Test bankda ${qz.approved} ta tasdiqlangan savol · paketga ${qz.used} ta${qz.exercises ? ` + ${qz.exercises} ta mashq (moslashtirish / saralash)` : ""}` : L.kind === "maruza" ? "Test bankda bu mavzu bo'yicha tasdiqlangan savol yo'q — mashq (moslashtirish / saralash) qo'shsangiz ham test bloki bo'ladi" : "Test bank — ma'ruza mavzulari bo'yicha; bu darsda mashq (moslashtirish / saralash) qo'shsangiz test bloki bo'ladi",
           typeof renderTestbank === "function" && can.write && L.kind === "maruza" ? `<div class="pk-acts"><button type="button" class="btn sm ghost" id="pkTb">${ico("checkc", 15)} Test bankda ochish</button></div>` : "")}
+        ${li(xr.ok, "Mashqlar", `${xr.ok ? `${xr.match} ta moslashtirish · ${xr.sort} ta saralash (test ichida, baholanadi) · ${xr.flashcards} ta kartochkalar to'plami (baholanmaydi)` : "Ixtiyoriy — moslashtirish, saralash, kartochkalar: qo'lda yoki AI yordamida matndan"}${xr.draft ? ` · <b>${xr.draft} ta qoralama</b> — tahrirlab saqlang (qoralama paketga kirmaydi)` : ""}`,
+          `${EX.length ? `<ul class="pk-exl">${EX.map(x => `<li><span>${pkChip(x.kind_label, x.status === "qoralama" ? "warn" : "info")} ${esc(x.title)} <small>${exN(x)}${x.status === "qoralama" ? " · qoralama" + (x.ai ? " (AI)" : "") : ""}</small></span>
+              ${can.write ? `<span class="pk-acts tight"><button type="button" class="btn sm ghost" data-exe="${x.id}">Tahrirlash</button><button type="button" class="btn sm ghost" data-exd="${x.id}" aria-label="O'chirish">${ico("x", 15)}</button></span>` : ""}</li>`).join("")}</ul>` : ""}
+           ${can.write ? `<div class="pk-acts">${Object.entries(M.ex_kinds).map(([k, l]) => `<button type="button" class="btn sm ghost" data-exn="${k}">+ ${esc(l)}</button>`).join("")}
+              ${M.ai ? `<button type="button" class="btn sm ghost" id="pkExAi" ${tx.ok ? "" : "disabled"}>AI: mashqlar</button>` : ""}</div>` : ""}`)}
+        ${li(ag.ok, "Topshiriq", ag.ok ? `${ag.n} ta savol — ${ag.manual ? "qo'lda kiritilgan" : "ma'ruza matnidagi «Savollar» bo'limidan (matndan olib, shu blokka ko'chirildi)"} · «${esc(ag.text)}» — ${esc(ag.author)} · o'qituvchi rasmi: ${ag.avatar ? "bor" : "yo'q (pleyer belgi chizadi)"}` :
+            ag.manual ? "Savollar ro'yxati bo'sh — topshiriq bloki bo'lmaydi" : "Matnda «Savollar» / «Nazorat savollari» / «Topshiriqlar» bo'limi topilmadi — savollarni qo'lda kiriting",
+          (ag.warnings || []).map(w => `<div class="pk-warnbox" role="note" style="margin:8px 0 0">${ico("alert", 14)} ${esc(w)}</div>`).join("") +
+          (can.write ? `<div class="pk-acts"><button type="button" class="btn sm ghost" id="pkAe">Savollarni tahrirlash</button></div>` : ""))}
         ${li(R.reflect.ok, "O'z-o'zini baholash", R.reflect.ok ? `«${esc(R.reflect.question)}» — baholanmaydi (shablon sozlamasidan)` : "O'chirilgan (sozlamada yoqish mumkin)")}
       </ul>
-      ${aList(["matn", "taqdimot", "slayd", "fayl", "rasm"]).length ? `<h4>Yuklangan fayllar</h4>${pkTable([["Fayl", a => a.purpose === "rasm" ? `${esc(a.caption || a.name)} <small>matnga qo'yish: <span class="pk-mono">${esc(a.marker)}</span> · ${pkSize(a.size)}</small>` : aRow(a)],
-         ["Turi", a => esc({matn: "Ma'ruza matni", taqdimot: "Taqdimot", slayd: "Slayd rasmi", fayl: "Qo'shimcha", rasm: "Rasm (matn uchun)"}[a.purpose] || a.purpose)],
+      ${assets.length ? `<h4>Yuklangan fayllar</h4>${pkTable([["Fayl", a => a.purpose === "rasm" ? `${esc(a.caption || a.name)} <small>matnga qo'yish: <span class="pk-mono">${esc(a.marker)}</span> · ${pkSize(a.size)}</small>` : aRow(a) + (a.caption ? `<small>${esc(a.caption)}</small>` : "")],
+         ["Turi", a => esc({matn: "Ma'ruza matni", taqdimot: "Taqdimot", slayd: "Slayd rasmi", fayl: "Qo'shimcha", rasm: "Rasm (matn uchun)", video: "Video fayl", subs: "Subtitr (WebVTT)",
+                            poster: "Video posteri", muqova: "Dars muqovasi", audio: "Slayd audiosi"}[a.purpose] || a.purpose)],
          ["", a => `<a class="btn sm ghost" href="/api/paket/assets/${a.id}">${ico("download", 15)}</a>${can.write ? ` <button type="button" class="btn sm ghost" data-del="${a.id}" aria-label="O'chirish">${ico("x", 15)}</button>` : ""}`]], assets)}` : ""}
       ${can.write ? `<div class="pk-acts"><label class="btn sm ghost pk-file">${ico("upload", 15)} Qo'shimcha fayl (.pdf, .docx, .xlsx…)<input type="file" accept=".pdf,.docx,.pptx,.xlsx,.png,.jpg,.jpeg" hidden id="pkFf"></label></div>` : ""}
-      <p class="pk-note">Bitta fayl ≤ ${M.limits.asset_mb} MB · paket ≤ ${M.limits.package_mb} MB · video YouTube'da qoladi (paketga faqat havola kiradi)</p>
+      <p class="pk-note">Bitta fayl ≤ ${M.limits.asset_mb} MB · video fayl ≤ ${M.limits.video_mb} MB · slayd audiosi ≤ ${M.limits.audio_mb} MB · paket ≤ ${M.limits.package_mb} MB (video fayl bilan ≤ ${M.limits.package_video_mb} MB) · YouTube videosi YouTube'da qoladi (paketga faqat havola kiradi)</p>
     </div>
     <div class="card pk-card"><h3>Paket</h3><p class="muted">Qadamlar: ${d.blocks.map(b => b.type === "section" ? `<b>${esc(b.title)}</b>` : esc(b.title)).join(" → ") || "—"}</p>
       <p class="pk-note" style="margin-top:0">Fayl nomi: <span class="pk-mono">${esc(d.file_name)}</span> — NEXTID'da «${esc(L.code)}» darsiga yuklang</p>
@@ -293,6 +332,7 @@ async function pkTopicPanel(el) {
         <label>Ko'rinish<select name="layout" ${can.write ? "" : "disabled"}>${Object.entries(M.layouts).map(([k, l]) => `<option value="${k}" ${k === S.layout ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
         <label>Turi (LMS)<select name="mode" ${can.write ? "" : "disabled"}>${Object.entries(M.modes).map(([k, l]) => `<option value="${k}" ${k === S.mode ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
         <label>Yakunlash<select name="completion" ${can.write ? "" : "disabled"}>${Object.entries(M.completion).map(([k, l]) => `<option value="${k}" ${k === S.completion ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
+        <label>Video manbasi (ikkalasi bo'lsa)<select name="video_source" ${can.write ? "" : "disabled"}>${Object.entries(M.video_sources).map(([k, l]) => `<option value="${k}" ${k === S.video_source ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
         <label>O'tish foizi<input type="number" name="mastery" min="0" max="100" value="${S.mastery}" ${can.write ? "" : "disabled"}></label>
         <label>Savollar soni (0 — hammasi)<input type="number" name="quiz_n" min="0" max="200" value="${S.quiz_n}" ${can.write ? "" : "disabled"}></label>
         <label>Urinishlar (0 — cheksiz)<input type="number" name="attempts" min="0" max="20" value="${S.attempts}" ${can.write ? "" : "disabled"}></label>
@@ -322,9 +362,10 @@ async function pkTopicPanel(el) {
         ${kpItems.length ? `<h4>Asosiy xulosalar</h4><ul class="pk-plan">${kpItems.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
         ${d.refs.length ? `<h4>Foydalanilgan adabiyotlar</h4><ol class="pk-plan">${d.refs.map(x => `<li>${esc(x)}</li>`).join("")}</ol>` : ""}</details>
       <details class="card pk-card pk-det" ${sl.ok ? "open" : ""}><summary><h3>Slaydlar</h3><span class="muted">${d.slides.length} ta</span></summary>
-        ${d.slides.length ? `<div class="pk-slides">${d.slides.map((s, i) => `<div class="pk-slide"><b>${i + 1}. ${esc(s.title || "Slayd")}</b>${s.bullets.length ? `<ul>${s.bullets.slice(0, 4).map(b => `<li>${esc(b)}</li>`).join("")}</ul>` : ""}<small>${s.image ? "rasm · " : ""}${s.notes ? "izoh" : ""}</small></div>`).join("")}</div>` :
+        ${d.slides.length ? `<div class="pk-slides">${d.slides.map((s, i) => `<div class="pk-slide"><b>${i + 1}. ${esc(s.title || "Slayd")}</b>${s.bullets.length ? `<ul>${s.bullets.slice(0, 4).map(b => `<li>${esc(b)}</li>`).join("")}</ul>` : ""}<small>${s.image ? "rasm · " : ""}${s.notes ? "ma'ruzachi izohi · " : ""}${s.audio ? "audio · " : ""}${s.caption ? esc(s.caption) : ""}</small></div>`).join("")}</div>` :
           `<div class="pk-empty">${sl.pdf ? "PDF taqdimot — pleyerda sahifalab ko'rsatiladi" : "Slayd yo'q"}</div>`}
-        ${d.quiz_preview.length ? `<h4>Test (${d.quiz_preview.length} ta savol)</h4><ol class="pk-plan">${d.quiz_preview.slice(0, 10).map(q => `<li>${esc(q.stem)}</li>`).join("")}</ol>${d.quiz_preview.length > 10 ? `<p class="pk-note">… yana ${d.quiz_preview.length - 10} ta</p>` : ""}` : ""}
+        ${ag.ok ? `<h4>Topshiriq (${ag.n} ta savol)</h4><p class="pk-note" style="margin:0">«${esc(ag.text)}» — ${esc(ag.author)}</p><ol class="pk-plan">${ag.items.map(x => `<li>${esc(x)}</li>`).join("")}</ol>` : ""}
+        ${d.quiz_preview.length ? `<h4>Test (${d.quiz_preview.length} ta savol)</h4><ol class="pk-plan">${d.quiz_preview.slice(0, 10).map(q => `<li>${esc(q.stem)}${q.type === "match" || q.type === "sort" ? ` <small style="display:inline">(${q.type === "match" ? "moslashtirish" : "saralash"})</small>` : ""}</li>`).join("")}</ol>${d.quiz_preview.length > 10 ? `<p class="pk-note">… yana ${d.quiz_preview.length - 10} ta</p>` : ""}` : ""}
       </details></div>`;
   const tf = el.querySelector("#pkTf");
   if (tf) tf.onchange = async () => { const f = tf.files[0]; if (!f) return; const r = await pkUpload(`${base}/text`, f); if (r) { toast(`Matn saqlandi: ${fmt(r.chars)} belgi, reja: ${r.plan.length} band${r.images ? `, ${r.images} rasm` : ""}${r.tables ? `, ${r.tables} jadval` : ""}${r.refs ? `, ${r.refs} adabiyot` : ""}`); reload(); } };
@@ -380,6 +421,56 @@ async function pkTopicPanel(el) {
     if (r) { toast(r.url ? `Video saqlandi${r.video?.video_id ? ": " + r.video.video_id : ""}` : "Video olib tashlandi"); reload(); }
   });
   el.querySelector("#pkTb")?.addEventListener("click", () => { if (typeof TB === "object") { TB.cid = PK.cid; TB.topic = PK.topic; } go("testbank", {tab: "mavzu"}); });
+  /* --- Rise 360: muqova, video fayl / subtitr / poster, slayd izohi va audiosi, mashqlar, topshiriq --- */
+  const upTo = (sel, url, msg, extra, mb) => { const i = el.querySelector(sel); if (i) i.onchange = async () => { const f = i.files[0]; if (!f) return;
+    const r = await pkUpload(url, f, extra ? extra() : "", mb); i.value = ""; if (r) { toast(typeof msg === "function" ? msg(r) : msg); reload(); } }; };
+  upTo("#pkCf", `${base}/cover`, "Muqova saqlandi");
+  upTo("#pkVm", `${base}/video/file`, r => `Video fayl saqlandi (${pkSize(r.size)})`, null, M.limits.video_mb);
+  upTo("#pkVp", `${base}/video/poster`, "Poster saqlandi");
+  upTo("#pkVs", `${base}/video/captions`, r => `Subtitr saqlandi: ${r.cues} yozuv${r.converted ? " (.srt → WebVTT)" : ""}`, () => `&lang=${encodeURIComponent(el.querySelector("#pkVl").value)}`, M.limits.subs_mb);
+  el.querySelector("#pkCa")?.addEventListener("submit", async e => { e.preventDefault();
+    const r = await pkApi(`${base}/cover/meta`, {author: el.querySelector("#pkCu").value.trim()}); if (r) { toast("Muallif saqlandi"); pkTopicPanel(el); } });
+  el.querySelector("#pkCr")?.addEventListener("click", async () => { const r = await pkApi(`${base}/cover/meta`, {author: null}); if (r) { toast("Standart muallif (kurs o'qituvchisi)"); pkTopicPanel(el); } });
+  el.querySelector("#pkSe")?.addEventListener("click", () => {
+    // audio yuklash/olib tashlash oynani qayta chizadi — yozilgan, hali saqlanmagan izohlar yo'qolmasin: qiymatlar yangi oynaga ko'chiriladi (PK.capDraft)
+    const draft = PK.capDraft && PK.capDraft.base === base ? PK.capDraft.caps : null; PK.capDraft = null;
+    const capVal = (n, saved) => draft && draft[n] != null ? draft[n] : saved;
+    const bg = pkModal(`${L.code}: slayd izohlari va audio`, `<p class="pk-note" style="margin-top:0">Izoh slayd ostida ko'rinadi; audio (.mp3, .m4a, .ogg, .wav ≤ ${M.limits.audio_mb} MB) — slayd bilan birga tinglanadi. Izohlar «Izohlarni saqlash» bilan, audio darhol saqlanadi (audio yuklanganda yozilgan izohlar oynada qoladi). Taqdimot almashtirilsa, izoh va audio slayd tartib raqami bo'yicha qoladi.</p>
+      <div class="pk-srows">${d.slides.map((s, i) => { const a = d.slide_audio[i + 1]; return `<div class="pk-srow"><b>${i + 1}</b><div><small>${esc(s.title || "Slayd " + (i + 1))}</small>
+        <input type="text" maxlength="300" data-cap="${i + 1}" value="${esc(capVal(i + 1, s.caption))}" placeholder="Izoh (ixtiyoriy)" aria-label="${i + 1}-slayd izohi">
+        <span class="pk-acts tight" style="justify-content:flex-start">${a ? `<small>${ico("checkc", 13)} ${esc(a.name)}</small><button type="button" class="btn sm ghost" data-adel="${a.id}">Audioni olib tashlash</button>` : ""}
+          <label class="btn sm ghost pk-file">${ico("upload", 15)} Audio<input type="file" accept=".mp3,.m4a,.ogg,.wav,audio/*" hidden data-aud="${i + 1}"></label></span></div></div>`; }).join("")}</div>`, async m => {
+      const captions = {}; m.querySelectorAll("[data-cap]").forEach(i => { captions[i.dataset.cap] = i.value.trim(); });
+      const r = await pkApi(`${base}/slides/meta`, {captions}); if (r) { toast(`Izohlar saqlandi: ${Object.keys(r.captions).length} ta`); pkTopicPanel(el); return true; }
+    }, "Izohlarni saqlash", true);
+    const typed = () => { const o = {}; bg.querySelectorAll("[data-cap]").forEach(i => { o[i.dataset.cap] = i.value; }); return o; };
+    const dirty = () => d.slides.some((s, i) => (typed()[i + 1] ?? "").trim() !== (s.caption || ""));
+    const reopen = async () => { const caps = typed(); bg.remove(); await pkTopicPanel(el); PK.capDraft = {base, caps}; el.querySelector("#pkSe")?.click(); PK.capDraft = null; };
+    bg.querySelectorAll("[data-aud]").forEach(i => i.onchange = async () => { const f = i.files[0]; if (!f) return;
+      const r = await pkUpload(`${base}/slides/${i.dataset.aud}/audio`, f, "", M.limits.audio_mb); if (r) { toast(`${i.dataset.aud}-slaydga audio saqlandi${dirty() ? " — izohlar hali saqlanmagan" : ""}`); await reopen(); } });
+    bg.querySelectorAll("[data-adel]").forEach(b => b.onclick = async () => { const r = await pkApi(`/api/paket/assets/${b.dataset.adel}/delete`, {}); if (r) { toast(`Audio olib tashlandi${dirty() ? " — izohlar hali saqlanmagan" : ""}`); await reopen(); } });
+  });
+  el.querySelector("#pkAe")?.addEventListener("click", () => {
+    const bg = pkModal(`${L.code}: topshiriq savollari`, `<label>Har qatorda bitta savol yoki topshiriq (ko'pi bilan ${ag.max || 60} ta)<textarea id="pkAq" rows="10">${esc(ag.items.join("\n"))}</textarea></label>
+      <p class="pk-note">${ag.manual ? "Hozir: qo'lda kiritilgan ro'yxat." : `Hozir: avtomatik — ma'ruza matnidagi «Savollar» / «Nazorat savollari» / «Topshiriqlar» bo'limidan (${ag.found} ta).`} Blok matni («${esc(ag.text)}») va imzo — Sozlamalarda; o'qituvchi rasmi — kurs kartasida.
+        ${ag.manual ? `<button type="button" class="btn sm ghost" data-aauto>Matndan olish (avtomatik)</button>` : ""}</p>`, async m => {
+      const r = await pkApi(`${base}/assignment`, {questions: m.querySelector("#pkAq").value.split("\n").map(x => x.trim()).filter(Boolean)});
+      if (r) { toast(`Topshiriq savollari saqlandi: ${r.questions.length} ta`); pkTopicPanel(el); return true; }
+    }, "Saqlash", true);
+    bg.querySelector("[data-aauto]")?.addEventListener("click", async () => { const r = await pkApi(`${base}/assignment`, {questions: null}); if (r) { toast("Savollar matndan olinadi"); bg.remove(); pkTopicPanel(el); } });
+  });
+  el.querySelectorAll("[data-exn]").forEach(b => b.onclick = () => pkExEdit(base, {kind: b.dataset.exn}, L, () => pkTopicPanel(el)));
+  el.querySelectorAll("[data-exe]").forEach(b => b.onclick = () => pkExEdit(base, EX.find(x => x.id === +b.dataset.exe), L, () => pkTopicPanel(el)));
+  el.querySelectorAll("[data-exd]").forEach(b => b.onclick = async () => { if (!confirm("Mashq o'chirilsinmi?")) return;
+    const r = await pkApi(`/api/paket/exercises/${b.dataset.exd}/delete`, {}); if (r) { toast("O'chirildi"); pkTopicPanel(el); } });
+  el.querySelector("#pkExAi")?.addEventListener("click", async e => {
+    const btn = e.currentTarget, sort = confirm("Saralash mashqi ham tayyorlansinmi?\n(OK — moslashtirish + kartochkalar + saralash; Bekor qilish — saralashsiz)");
+    btn.disabled = true; toast("AI matnni o'qiyapti… (faqat dars matni yuboriladi)");
+    try {
+      const r = await pkApi(`${base}/exercises/ai`, {sort});
+      if (r) { toast(`AI: ${r.exercises.length} ta mashq qoralamasi${r.dropped ? ` · matnga asoslanmagan ${r.dropped} ta band tashlandi` : ""} — tahrirlab saqlang`); pkTopicPanel(el); }
+    } finally { if (btn.isConnected) btn.disabled = false; }
+  });
   el.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
     if (!confirm("Fayl o'chirilsinmi?")) return;
     const r = await pkApi(`/api/paket/assets/${b.dataset.del}/delete`, {}); if (r) { toast("O'chirildi"); reload(); }
@@ -388,7 +479,7 @@ async function pkTopicPanel(el) {
     e.preventDefault(); if (!can.write) return;
     const f = e.currentTarget, blocks = {};
     Object.keys(M.blocks).forEach(k => blocks[k] = f.elements["b_" + k].checked);
-    const r = await pkApi(`${base}/settings`, {layout: f.elements.layout.value, mode: f.elements.mode.value, completion: f.elements.completion.value, mastery: +f.elements.mastery.value,
+    const r = await pkApi(`${base}/settings`, {layout: f.elements.layout.value, mode: f.elements.mode.value, completion: f.elements.completion.value, mastery: +f.elements.mastery.value, video_source: f.elements.video_source.value,
       quiz_n: +f.elements.quiz_n.value, attempts: +f.elements.attempts.value, shuffle: f.elements.shuffle.checked, show_feedback: f.elements.show_feedback.checked, blocks});
     if (r) { toast("Sozlama saqlandi"); pkTopicPanel(el); }
   });
@@ -405,6 +496,40 @@ async function pkTopicPanel(el) {
     const r = await pkApi(`/api/paket/packages/${b.dataset.rej}/action`, {action: "reject", note: m.querySelector("#pkRn").value.trim()});
     if (r) { toast("Qaytarildi"); reload(); return true; }
   }, "Qaytarish"));
+}
+
+/* ---------- Mashq muharriri (oddiy formalar): moslashtirish — juftlar; saralash — toifalar va elementlar; kartochkalar — old/orqa ---------- */
+function pkExEdit(base, x, L, done) {
+  const k = x.kind, lab = PK.meta.ex_kinds[k], val = v => esc(v || "");
+  const pair = (a, b, pa, pb, n) => `<div class="pk-row2"><input type="text" data-a maxlength="200" value="${val(a)}" placeholder="${pa}" aria-label="${n}: ${pa}"><input type="text" data-b maxlength="500" value="${val(b)}" placeholder="${pb}" aria-label="${n}: ${pb}"></div>`;
+  const rows = k === "match" ? Array.from({length: 8}, (_, i) => x.pairs?.[i] || {}) : k === "flashcards" ? [...(x.cards || []), ...Array.from({length: Math.max(3, 6 - (x.cards || []).length)}, () => ({}))].slice(0, 40) : [];
+  const body = k === "match" ? `<label>Topshiriq matni<input type="text" id="pkXs" maxlength="300" value="${val(x.title)}" placeholder="Mos juftlarni toping"></label>
+      <p class="pk-note" style="margin:0 0 6px">2–8 juft: chapda atama, o'ngda ta'rifi. Bo'sh qatorlar hisobga olinmaydi; qiymatlar takrorlanmasin. Pleyer o'ng tomonni aralashtirib beradi.</p>
+      <div id="pkXr">${rows.map((p, i) => pair(p.left, p.right, "Atama", "Ta'rifi / mos qiymat", i + 1)).join("")}</div>`
+    : k === "sort" ? `<label>Topshiriq matni<input type="text" id="pkXs" maxlength="300" value="${val(x.title)}" placeholder="Elementlarni toifalarga ajrating"></label>
+      <p class="pk-note" style="margin:0 0 6px">2–4 toifa, har birida 1–8 element (har qatorda bitta). Element faqat bitta toifada bo'lsin. Pleyer elementlarni aralashtirib, kartochka sifatida beradi.</p>
+      <div class="pk-cats">${[0, 1, 2, 3].map(i => { const c = x.categories?.[i] || {}; return `<div class="pk-cat"><input type="text" data-ct maxlength="80" value="${val(c.title)}" placeholder="${i + 1}-toifa nomi${i > 1 ? " (ixtiyoriy)" : ""}" aria-label="${i + 1}-toifa nomi">
+        <textarea data-ci rows="5" placeholder="Elementlar — har qatorda bitta" aria-label="${i + 1}-toifa elementlari">${val((c.items || []).join("\n"))}</textarea></div>`; }).join("")}</div>`
+    : `<label>Sarlavha<input type="text" id="pkXs" maxlength="80" value="${val(x.title)}" placeholder="Kartochkalar"></label>
+      <p class="pk-note" style="margin:0 0 6px">1–40 kartochka: old tomonda atama yoki savol, orqada javob. Bo'sh qatorlar hisobga olinmaydi. Baholanmaydi.</p>
+      <div id="pkXr">${rows.map((c, i) => pair(c.front, c.back, "Old tomon", "Orqa tomon", i + 1)).join("")}</div>
+      <div class="pk-acts"><button type="button" class="btn sm ghost" id="pkXm">+ Yana 3 qator</button></div>`;
+  const quotes = (x.quotes || []).filter(q => q.quote).map(q => `<li>${esc(q.text)}<small>«${esc(q.quote)}»</small></li>`).join("");
+  const bg = pkModal(`${L.code}: ${lab}${x.id ? "" : " (yangi)"}`, `${x.status === "qoralama" ? `<p class="pk-warnbox">${ico("info", 15)}<span>${x.ai ? "AI qoralamasi" : "Qoralama"} — tekshirib, kerak bo'lsa tahrirlang. «Saqlash» bosilgach paketga kiradi.</span></p>` : ""}${body}
+    ${k !== "flashcards" ? `<label style="margin-top:10px">Izoh (javobdan keyin ko'rsatiladi, ixtiyoriy)<input type="text" id="pkXe" maxlength="500" value="${val(x.explanation)}"></label>` : ""}
+    ${quotes ? `<details class="pk-det"><summary>AI — matndagi iqtiboslar</summary><ol class="pk-plan">${quotes}</ol></details>` : ""}`, async m => {
+    const b = {kind: k, status: "faol", explanation: m.querySelector("#pkXe")?.value.trim() || ""};
+    b[k === "flashcards" ? "title" : "stem"] = m.querySelector("#pkXs").value.trim();
+    const two = () => [...m.querySelectorAll(".pk-row2")].map(r => [r.querySelector("[data-a]").value.trim(), r.querySelector("[data-b]").value.trim()]).filter(r => r[0] || r[1]);
+    if (k === "match") b.pairs = two().map(([left, right]) => ({left, right}));
+    else if (k === "flashcards") b.cards = two().map(([front, back]) => ({front, back}));
+    else b.categories = [...m.querySelectorAll(".pk-cat")].map(c => ({title: c.querySelector("[data-ct]").value.trim(), items: c.querySelector("[data-ci]").value.split("\n").map(v => v.trim()).filter(Boolean)})).filter(c => c.title || c.items.length);
+    const r = await pkApi(x.id ? `/api/paket/exercises/${x.id}` : `${base}/exercises`, b);
+    if (r) { toast(`${lab} saqlandi — paketga kiradi`); done(); return true; }
+  }, "Saqlash", true);
+  bg.querySelector("#pkXm")?.addEventListener("click", () => { const box = bg.querySelector("#pkXr"), n = box.children.length;
+    if (n >= 40) { toast("Ko'pi bilan 40 ta kartochka"); return; }
+    box.insertAdjacentHTML("beforeend", Array.from({length: Math.min(3, 40 - n)}, (_, i) => pair("", "", "Old tomon", "Orqa tomon", n + i + 1)).join("")); });
 }
 
 /* ---------- Avtomatik joylash ---------- */
@@ -468,14 +593,24 @@ async function pkSettings(box) {
       <fieldset class="pk-fs"><legend>Bloklar</legend><div class="pk-checks">${Object.entries(M.blocks).map(([k, l]) => `<label><input type="checkbox" name="b_${k}" ${S.blocks[k] ? "checked" : ""} ${ed ? "" : "disabled"}> ${esc(l)}</label>`).join("")}</div></fieldset>
       <fieldset class="pk-fs"><legend>Kafedra shabloni</legend><div class="pk-form">
         <label>Ko'rinish<select name="layout" ${ed ? "" : "disabled"}>${Object.entries(M.layouts).map(([k, l]) => `<option value="${k}" ${k === S.layout ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
-        ${Object.entries({video: "Video bo'limi", text: "Matn bo'limi", slides: "Taqdimot bo'limi"}).map(([k, l]) => `<label>${esc(l)} sarlavhasi<input type="text" name="s_${k}" maxlength="80" value="${esc(S.sections[k])}" ${ed ? "" : "disabled"}></label>`).join("")}
+        <label>Video manbasi (fayl va havola ikkalasi bo'lsa)<select name="video_source" ${ed ? "" : "disabled"}>${Object.entries(M.video_sources).map(([k, l]) => `<option value="${k}" ${k === S.video_source ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
+        ${Object.entries({video: "Video bo'limi", text: "Matn bo'limi", slides: "Taqdimot bo'limi", practice: "Mashq va topshiriq bo'limi"}).map(([k, l]) => `<label>${esc(l)} sarlavhasi<input type="text" name="s_${k}" maxlength="80" value="${esc(S.sections[k])}" ${ed ? "" : "disabled"}></label>`).join("")}
       </div></fieldset>
       <fieldset class="pk-fs"><legend>O'z-o'zini baholash (baholanmaydi)</legend><div class="pk-form">
         <label class="pk-wide">Savol<input type="text" name="r_q" maxlength="300" value="${esc(S.reflect.question)}" ${ed ? "" : "disabled"}></label>
         ${[0, 1].map(i => `<label>${i + 1}-javob<input type="text" name="r_t${i}" maxlength="120" value="${esc(S.reflect.options[i]?.text || "")}" ${ed ? "" : "disabled"}></label>
           <label>${i + 1}-javobga izoh<input type="text" name="r_f${i}" maxlength="500" value="${esc(S.reflect.options[i]?.feedback || "")}" ${ed ? "" : "disabled"}></label>`).join("")}
       </div><p class="pk-note">Yoqish/o'chirish — «Bloklar»da («O'z-o'zini baholash»). Mavzu bo'yicha alohida o'zgartirish mumkin.</p></fieldset>
-      ${ed ? `<div class="pk-acts"><button class="btn sm primary">Saqlash</button></div>` : `<p class="pk-note">O'zgartirish — Masofaviy ta'lim bo'limida.</p>`}</form></div>
+      <fieldset class="pk-fs"><legend>Topshiriq bloki (o'qituvchi rasmi + matn + savollar)</legend><div class="pk-form">
+        <label>Sarlavha<input type="text" name="a_title" maxlength="80" value="${esc(S.assignment.title)}" ${ed ? "" : "disabled"}></label>
+        <label>Imzo<input type="text" name="a_author" maxlength="120" value="${esc(S.assignment.author)}" ${ed ? "" : "disabled"}></label>
+        <label class="pk-wide">Matn<input type="text" name="a_text" maxlength="400" value="${esc(S.assignment.text)}" ${ed ? "" : "disabled"}></label>
+      </div><p class="pk-note">Savollar — ma'ruza matnidagi «Savollar» / «Nazorat savollari» / «Topshiriqlar» / «Mustaqil ish topshiriqlari» bo'limidan avtomatik olinadi (matndan shu blokka ko'chadi) yoki dars panelida qo'lda kiritiladi. O'qituvchi rasmi — kurs kartasida.</p></fieldset>
+      ${ed ? `<div class="pk-acts"><button class="btn sm primary">Saqlash</button></div>` : `<p class="pk-note">O'zgartirish — Masofaviy ta'lim bo'limida.</p>`}</form>
+      <h4>Standart muqova (bo'lim)</h4><div class="pk-media"><div>${M.default_cover ? `<img class="pk-thumb muqova" src="/api/paket/assets/${M.default_cover}" alt="Standart muqova">` : `<div class="pk-thumb muqova none">yo'q</div>`}
+        <div><p class="pk-note" style="margin:0 0 6px">Dars muqovasi: fon rasmi + ISFT logotipi + «L1-1-dars: MAVZU» + muallif. Rasm ustuvorligi: dars → kurs → shu standart; hech biri bo'lmasa — brend rangi. Rasm ≤ 1920 px JPEG'ga keltiriladi.</p>
+        ${ed ? `<div class="pk-acts tight" style="justify-content:flex-start"><label class="btn sm pk-file">${ico("upload", 15)} Rasm (.png, .jpg)<input type="file" accept=".png,.jpg,.jpeg" hidden id="pkDc"></label>
+          ${M.default_cover ? `<button type="button" class="btn sm ghost" id="pkDx">Olib tashlash</button>` : ""}</div>` : ""}</div></div></div></div>
     <div class="card pk-card"><h3>LMS'ga yuklash</h3>
       <h4>NEXTID.LMS (my.isft.uz) — «Articulate» yorlig'i</h4>${pkNextidHelp()}
       <h4>Moodle va boshqa LMS (SCORM 1.2 — eng universal)</h4>
@@ -485,15 +620,22 @@ async function pkSettings(box) {
       <h4>SCORM 2004</h4><p class="pk-note">Moodle SCORM 2004 ni qisman qo'llaydi; LMS aniq 2004 talab qilsa ishlating, aks holda 1.2 ni tanlang.</p>
       <h4>xAPI (Tin Can)</h4><p class="pk-note">NEXTID uchun standart. Boshqa LMS'da LRS (Learning Record Store) yoki plagin kerak; launch parametrlari bo'lsa natija LRS'ga yuboriladi.</p>
       <h4>Kurs paketi</h4><p class="pk-note">Mavzular → «Kurs paketi»: bitta zip'da barcha darslar (har biri alohida SCO, o'z papkasida: t01, a01, …).</p>
-      <h4>Cheklovlar</h4><p class="pk-note">Fayl ≤ ${M.limits.asset_mb} MB, paket ≤ ${M.limits.package_mb} MB. Video YouTube'da qoladi (paketga havola kiradi). Eski .ppt qabul qilinmaydi — .pptx qilib saqlang.</p></div></div>`;
+      <h4>Cheklovlar</h4><p class="pk-note">Fayl ≤ ${M.limits.asset_mb} MB, video fayl ≤ ${M.limits.video_mb} MB (.mp4 / .webm), slayd audiosi ≤ ${M.limits.audio_mb} MB, paket ≤ ${M.limits.package_mb} MB (video fayl bilan ≤ ${M.limits.package_video_mb} MB). YouTube videosi YouTube'da qoladi (paketga havola kiradi). Eski .ppt qabul qilinmaydi — .pptx qilib saqlang.</p>
+      <h4>Articulate Rise 360 bilan farqi</h4><p class="pk-note">Avtomatik: muqova, video (fayl yoki YouTube), ma'ruza matni Word'dan (reja, rasm, jadval, adabiyotlar), taqdimot galereyasi (izoh va audio bilan), kartochkalar, test + moslashtirish / saralash, topshiriq, o'z-o'zini baholash. Yo'q: bloklarni sichqoncha bilan erkin joylashtirish muharriri (tartib — kafedra shabloni), AI subtitr va AI ovoz (nutq xizmati kerak) — subtitr va audio tayyor fayl sifatida yuklanadi.</p></div></div>`;
+  const reMeta = async () => { PK.meta = await pkApi("/api/paket/meta"); pkSettings(box); };
+  const dc = box.querySelector("#pkDc");
+  if (dc) dc.onchange = async () => { const f = dc.files[0]; if (!f) return; const r = await pkUpload("/api/paket/settings/cover", f); if (r) { toast("Standart muqova saqlandi"); reMeta(); } };
+  box.querySelector("#pkDx")?.addEventListener("click", async () => { if (!confirm("Standart muqova olib tashlansinmi?")) return;
+    const r = await pkApi(`/api/paket/assets/${M.default_cover}/delete`, {}); if (r) { toast("Olib tashlandi"); reMeta(); } });
   box.querySelector("#pkDf").onsubmit = async e => {
     e.preventDefault(); if (!ed) return;
     const f = e.currentTarget, blocks = {};
     Object.keys(M.blocks).forEach(k => blocks[k] = f.elements["b_" + k].checked);
-    const sections = {video: f.elements.s_video.value.trim(), text: f.elements.s_text.value.trim(), slides: f.elements.s_slides.value.trim()};
+    const sections = {video: f.elements.s_video.value.trim(), text: f.elements.s_text.value.trim(), slides: f.elements.s_slides.value.trim(), practice: f.elements.s_practice.value.trim()};
+    const assignment = {title: f.elements.a_title.value.trim(), text: f.elements.a_text.value.trim(), author: f.elements.a_author.value.trim()};
     const reflect = {question: f.elements.r_q.value.trim(), options: [0, 1].map(i => ({text: f.elements["r_t" + i].value.trim(), feedback: f.elements["r_f" + i].value.trim()}))};
     const r = await pkApi("/api/paket/settings", {mode: f.elements.mode.value, completion: f.elements.completion.value, mastery: +f.elements.mastery.value, layout: f.elements.layout.value,
-      quiz_n: +f.elements.quiz_n.value, attempts: +f.elements.attempts.value, shuffle: f.elements.shuffle.checked, show_feedback: f.elements.show_feedback.checked, blocks, sections, reflect});
+      quiz_n: +f.elements.quiz_n.value, attempts: +f.elements.attempts.value, shuffle: f.elements.shuffle.checked, show_feedback: f.elements.show_feedback.checked, blocks, sections, reflect, assignment, video_source: f.elements.video_source.value});
     if (r) { toast("Saqlandi"); PK.meta.defaults = r.defaults; }
   };
 }

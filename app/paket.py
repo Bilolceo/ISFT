@@ -23,13 +23,19 @@ NEXTID (kontrakt v2): institut LMS'i — NEXTID.LMS (my.isft.uz), «Articulate»
   standart tur xAPI; kafedra shabloni: section → video → section → reja (heading) → matn (Word rasmlari/jadvallari) → keypoints → refs →
   section → slides (PDF → rasmlar, pypdfium2) → test → reflect; AI asosiy xulosalar (claude_client.call_json, iqtibos bilan tekshiriladi).
 
+Rise 360 (kontrakt v3 — qo'shimcha, v = 1): bo'lim darsni Articulate Rise 360'da qo'lda qanday yig'ishi asosida —
+  muqova (rasm + logotip + «L1-1-dars: …» + muallif), video FAYL (.mp4/.webm — diskka oqim bilan, zipda ZIP_STORED) + subtitrlar (.vtt/.srt → WebVTT)
+  + poster, slayd izohi va audio, bo'lim «MASHQ VA TOPSHIRIQLAR»: kartochkalar → test (Test bank savollari + moslashtirish / saralash mashqlari,
+  pk_exercises) → topshiriq (o'qituvchi rasmi + matn + ma'ruzadagi «Savollar» / «Nazorat savollari» ro'yxati); AI: mashqlar (iqtibos bilan tekshiriladi).
+  Ko'rish (preview) — media uchun HTTP Range (206), fayl xotiraga to'liq o'qilmaydi.
+
 Ruxsat (modul jadvali, har bir so'rov audit jurnalida — rbac.PAKET):
   masofaviy, masofaviy_xodim — barcha kurslar: manba, yig'ish, tasdiqlash / qaytarish, umumiy sozlamalar;
   oqituvchi — o'z kurslari: manba yuklash, yig'ish, ko'rish, yuklab olish;  kafedra — o'z kafedrasi kurslari: ko'rish, yuklab olish;
   rektor, prorektor_oquv — faqat jamlangan qamrov.
 """
 from __future__ import annotations
-import datetime as dt, hashlib, hmac, html, io, json, os, random, re, secrets, shutil, threading, time, unicodedata, zipfile
+import contextlib, datetime as dt, hashlib, hmac, html, io, json, os, random, re, secrets, shutil, struct, threading, time, unicodedata, zipfile
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urlsplit, parse_qs, quote
@@ -37,7 +43,7 @@ from xml.sax.saxutils import escape as _xesc, quoteattr as _xattr
 import xml.etree.ElementTree as ET
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import Response, FileResponse, RedirectResponse
+from fastapi.responses import Response, FileResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from . import clock, db, rbac
 from .rbac import Ctx, AccessDenied
@@ -63,16 +69,20 @@ STORE: Path | None = None                                        # None → <DAT
 MODES = {"xapi": "xAPI (Tin Can) — NEXTID", "scorm12": "SCORM 1.2", "scorm2004": "SCORM 2004 (4-nashr)", "none": "Oddiy HTML (LMS'siz)"}
 COMPLETION = {"view_all": "Barcha bloklar ko'rilganda", "quiz_pass": "Test topshirilganda", "view_and_quiz": "Ko'rilganda va test topshirilganda"}
 STATUS = {"qoralama": "Qoralama", "tayyor": "Tayyor (tasdiq kutilmoqda)", "tasdiqlandi": "Tasdiqlandi"}
-BLOCKS = {"sections": "Bo'lim sarlavhalari", "video": "Videodars", "plan": "Reja", "text": "Ma'ruza matni", "keypoints": "Asosiy xulosalar",
-          "refs": "Foydalanilgan adabiyotlar", "slides": "Taqdimot", "files": "Qo'shimcha fayllar", "quiz": "Test", "reflect": "O'z-o'zini baholash"}
+BLOCKS = {"cover": "Muqova", "sections": "Bo'lim sarlavhalari", "video": "Videodars", "plan": "Reja", "text": "Ma'ruza matni", "keypoints": "Asosiy xulosalar",
+          "refs": "Foydalanilgan adabiyotlar", "slides": "Taqdimot", "files": "Qo'shimcha fayllar", "flashcards": "Kartochkalar",
+          "quiz": "Test (savollar va mashqlar)", "assignment": "Topshiriq", "reflect": "O'z-o'zini baholash"}
 REQUIRED = ("text", "slides", "video", "quiz")    # «tayyor» bo'lishi uchun (sozlamada yoqilganlari)
 LAYOUTS = {"steps": "Qadamlar (Articulate Rise kabi)", "scroll": "Bitta sahifa (aylantirish)"}
-SECTIONS = {"video": "VIDEODARS", "text": "MA'RUZA MATNI", "slides": "DARS TAQDIMOTI"}   # kafedra shabloni — bo'lim sarlavhalari
+SECTIONS = {"video": "VIDEODARS", "text": "MA'RUZA MATNI", "slides": "DARS TAQDIMOTI", "practice": "MASHQ VA TOPSHIRIQLAR"}   # kafedra shabloni — bo'lim sarlavhalari
 REFLECT = {"title": "O'z-o'zini baholash", "question": "Darsni to'liq o'zlashtirdingizmi?",
            "options": [{"text": "Ha, albatta", "feedback": "Ajoyib! Keyingi darsga o'tishingiz mumkin."},
                        {"text": "Yo'q, to'liq o'zlashtirmadim", "feedback": "Ma'ruza matni va videodarsni qayta ko'rib chiqing."}]}
+ASSIGNMENT = {"title": "Topshiriq", "text": "Quyidagi topshiriqni bajarib PDF shaklda LMS platformasiga joylang", "author": "Sizning professor-o'qituvchingiz"}
+VIDEO_SOURCES = {"file": "Yuklangan video fayl", "youtube": "YouTube havola"}    # ikkalasi ham bo'lsa qaysi biri paketga kiradi
 DEFAULTS = {"mode": "xapi", "completion": "view_and_quiz", "mastery": 60, "quiz_n": 0, "shuffle": True, "attempts": 0,
-            "show_feedback": True, "blocks": {k: True for k in BLOCKS}, "layout": "steps", "sections": dict(SECTIONS), "reflect": REFLECT}
+            "show_feedback": True, "blocks": {k: True for k in BLOCKS}, "layout": "steps", "sections": dict(SECTIONS), "reflect": REFLECT,
+            "assignment": dict(ASSIGNMENT), "video_source": "file"}
 _OLD_DEFAULTS = {"mode": "scorm12", "completion": "view_and_quiz", "mastery": 60, "quiz_n": 0, "shuffle": True, "attempts": 0, "show_feedback": True}
 
 # Darslar (NEXTID «Articulate» yorlig'i: «L1-1-dars: …», «A1- AMALIY MASHG'ULOT: …»). Ichki kalit (pk_*.topic_no ustuni) = asos + raqam:
@@ -83,7 +93,16 @@ KINDS = {"maruza": ("L", 0, "Ma'ruza", "Ma'ruzalar"), "amaliy": ("A", 1000, "Ama
 MAX_LESSON_NO = 999
 
 MAX_ASSET = 50 * 1024 * 1024       # bitta fayl
-MAX_PACKAGE = 200 * 1024 * 1024    # tayyor paket
+MAX_PACKAGE = 200 * 1024 * 1024    # tayyor paket (video faylsiz)
+MAX_AUDIO = 20 * 1024 * 1024       # slayd audiosi
+MAX_AUDIO_TOTAL = 150 * 1024 * 1024  # bitta darsdagi barcha slayd audiolari
+MAX_SUBS = 2 * 1024 * 1024         # subtitr fayli (.vtt / .srt)
+MAX_CUES = 5000
+COVER_MAX_PX = 1920
+VIDEO_KINDS = ("mp4", "webm")
+AUDIO_KINDS = ("mp3", "m4a", "ogg", "wav")
+SUB_LANGS = {"uz": "O'zbekcha", "ru": "Ruscha", "en": "Inglizcha", "kk": "Qoraqalpoqcha", "tj": "Tojikcha"}
+MAX_EXERCISES = 30                 # bitta darsdagi mashqlar
 MAX_TEXT_CHARS = 200_000
 MAX_SLIDES = 200
 KEEP_VERSIONS = 3
@@ -118,8 +137,19 @@ CREATE TABLE IF NOT EXISTS pk_lessons(course_id INT, lkey INT, kind TEXT, no INT
 CREATE TABLE IF NOT EXISTS pk_ai(id INTEGER PRIMARY KEY, course_id INT, topic_no INT, user_id INT, day TEXT, ts TEXT, kind TEXT, model TEXT,
   ok INT, ms INT, err TEXT, in_tok INT, out_tok INT, n_got INT, n_dropped INT);
 CREATE INDEX IF NOT EXISTS ix_pk_ai ON pk_ai(user_id, day);
+CREATE TABLE IF NOT EXISTS pk_exercises(id INTEGER PRIMARY KEY, course_id INT, topic_no INT, kind TEXT, title TEXT, data TEXT, explanation TEXT DEFAULT '',
+  status TEXT DEFAULT 'faol', src TEXT DEFAULT '', pos INT DEFAULT 0, user_id INT, user_name TEXT, ts TEXT, updated_at TEXT, deleted INT DEFAULT 0);
+CREATE INDEX IF NOT EXISTS ix_pk_ex ON pk_exercises(course_id, topic_no, deleted);
 """
 
+
+def _env_mb(name: str, default: int) -> int:
+    try: return max(1, int(os.getenv(name, str(default)))) * 1024 * 1024
+    except ValueError: return default * 1024 * 1024
+def video_max() -> int: return _env_mb("ISFT_CORE_PK_VIDEO_MB", 200)        # video fayl (oqim bilan diskka yoziladi)
+def package_max(video: bool = False) -> int:
+    """Paket chegarasi: video fayl kirgan paket — ISFT_CORE_PK_PACKAGE_MB (standart 500), aks holda MAX_PACKAGE (200 MB)."""
+    return max(MAX_PACKAGE, _env_mb("ISFT_CORE_PK_PACKAGE_MB", 500)) if video else MAX_PACKAGE
 
 def _now(): return clock.now().replace(microsecond=0).isoformat(timespec="seconds")
 def _short(name): return (name or "").split(":", 1)[1].strip() if ":" in (name or "") else (name or "")
@@ -140,24 +170,43 @@ def init(con):
         con.commit()
     except Exception as e:
         print("paket.init:", e); return
+    try: sweep_tmp()
+    except Exception as e: print("paket.sweep_tmp:", repr(e))
     if not db.one(con, "SELECT 1 x FROM users"): return
     try:
         seed(con)
     except Exception as e:      # demo ma'lumot ilovani to'xtatmasin
         print("paket seed:", repr(e))
 
+TMP_MAX_AGE = 6 * 3600      # uzilgan yuklash / yig'ishdan qolgan vaqtinchalik fayllar shundan eski bo'lsa o'chiriladi
+
+def sweep_tmp(max_age: int = TMP_MAX_AGE, now: float | None = None) -> int:
+    """Eskirgan vaqtinchalik fayllar: <store>/tmp/up_*.part (uzilgan yuklash) va <store>/packages/**/build_*.tmp, *.zip.tmp (uzilgan yig'ish) —
+    max_age soniyadan eski bo'lsa o'chiriladi (init() da; jarayon o'chib qolganda qolgan fayllar diskni to'ldirmasin). → o'chirilganlar soni."""
+    root, now, n = store(), time.time() if now is None else now, 0
+    found = list((root / "tmp").glob("up_*.part")) if (root / "tmp").is_dir() else []
+    if (root / "packages").is_dir():
+        found += [p for pat in ("build_*.tmp", "*.zip.tmp") for p in (root / "packages").rglob(pat)]
+    for p in found:
+        try:
+            if p.is_file() and now - p.stat().st_mtime > max_age: p.unlink(); n += 1
+        except OSError: pass
+    return n
+
 def _cols(con, table: str) -> set:
     return {r[1] for r in con.execute(f"PRAGMA table_info({table})").fetchall()}
 
 def migrate(con) -> dict:
     """Darslar modeli (NEXTID) — idempotent: necha marta chaqirilsa ham natija bir xil.
-      1) pk_lessons, pk_ai jadvallari (SCHEMA); pk_topics.keypoints, pk_packages.lesson ustunlari (yo'q bo'lsa);
+      1) pk_lessons, pk_ai, pk_exercises jadvallari (SCHEMA); pk_topics.keypoints / extra, pk_packages.lesson ustunlari (yo'q bo'lsa);
       2) mavjud mavzu paketlari — L darslar: pk_packages.lesson = 'L<N>' (kurs paketi — 'kurs'), faqat bo'sh qatorlarda;
       3) standart sozlama hech o'zgartirilmagan bo'lsa (eski DEFAULTS bilan bir xil) — paket turi xAPI (NEXTID), bir marta (pk_meta.nextid_v1)."""
     con.executescript(SCHEMA)
     out = {"columns": [], "packages": 0, "defaults": False}
     if "keypoints" not in _cols(con, "pk_topics"):
         con.execute("ALTER TABLE pk_topics ADD COLUMN keypoints TEXT"); out["columns"].append("pk_topics.keypoints")
+    if "extra" not in _cols(con, "pk_topics"):       # muqova muallifi, topshiriq savollari (qo'lda), slayd izohlari — JSON
+        con.execute("ALTER TABLE pk_topics ADD COLUMN extra TEXT"); out["columns"].append("pk_topics.extra")
     if "lesson" not in _cols(con, "pk_packages"):
         con.execute("ALTER TABLE pk_packages ADD COLUMN lesson TEXT"); out["columns"].append("pk_packages.lesson")
     out["packages"] = con.execute("""UPDATE pk_packages SET lesson = CASE WHEN topic_no=0 THEN 'kurs' ELSE 'L' || topic_no END
@@ -197,6 +246,11 @@ def _clean_settings(s: dict, base: dict) -> dict:
         for k in BLOCKS:
             if k in s["blocks"]: out["blocks"][k] = bool(s["blocks"][k])
     if s.get("layout") in LAYOUTS: out["layout"] = s["layout"]
+    if s.get("video_source") in VIDEO_SOURCES: out["video_source"] = s["video_source"]
+    if isinstance(s.get("assignment"), dict):
+        for k, n in (("title", 80), ("text", 400), ("author", 120)):
+            v = re.sub(r"\s+", " ", str(s["assignment"].get(k) or "")).strip()[:n]
+            if v: out["assignment"][k] = v
     if isinstance(s.get("sections"), dict):
         for k in SECTIONS:
             v = re.sub(r"\s+", " ", str(s["sections"].get(k) or "")).strip()[:80]
@@ -508,6 +562,11 @@ _REFS_RX = re.compile(r"^(?:#{1,6}\s*)?(?:\d{1,2}[.)]?\s+)?((?:foydalanilgan|aso
                       r"(?:adabiyotlar|manbalar)(?:\s+va\s+manbalar)?(?:\s+ro'yxati)?|adabiyotlar(?:\s+ro'yxati)?|литература|"
                       r"(?:список\s+)?(?:использованной\s+|рекомендуемой\s+)?литературы|фойдаланилган\s+адабиётлар(?:\s+рўйхати)?)\s*[:.]?\s*(.*)$", re.I)
 _TITLE_RX = re.compile(r"^\d+\s*[-–]?\s*(mavzu|ma'ruza)\b", re.I)
+# «Savollar» / «Nazorat savollari» / «Topshiriqlar» / «Mustaqil ish topshiriqlari» … — ro'yxati matndan olinib, «Topshiriq» blokiga o'tadi
+_ASSIGN_RX = re.compile(r"^(?:#{1,6}\s*)?(?:\d{1,2}[.)]\s*)?(nazorat\s+savollari\s+va\s+topshiriqlar(?:i)?|nazorat\s+(?:savollari|uchun\s+savollar)|"
+                        r"(?:takrorlash|muhokama|mustahkamlash|o'z-o'zini\s+tekshirish)\s+uchun\s+savollar|savol(?:lar)?\s+va\s+topshiriqlar|"
+                        r"mustaqil\s+(?:ish(?:lash)?|ta'lim)\s+(?:uchun\s+)?topshiriqlar(?:i)?|savollar|topshiriqlar|"
+                        r"контрольные\s+вопросы|вопросы(?:\s+и\s+задания)?|задания|назорат\s+саволлари|саволлар|топшириқлар)\s*[:.]?\s*(.*)$", re.I)
 _END_P = (".", "!", "?", "…", ":", ";", "»", '"', "”", ")")
 
 def _inline(t: str) -> str:
@@ -560,17 +619,95 @@ def _tokens(text: str) -> list[tuple]:
             nums = re.findall(r"(?:^|\s)(\d{1,2})[.)]\s", " " + rest)
             plan, plan_last, plan_n, gap, pkind = True, int(nums[-1]) if nums else 0, (len(nums) or (1 if rest else 0)), False, ("list" if nums else None)
             continue
-        m = _MD_RX.match(line)
-        if m: out.append(("h", m.group(2).strip(), min(3, len(m.group(1))))); continue
-        m = _BUL_RX.match(line)
-        if m: out.append(("ul", m.group(1).strip())); continue
-        m = _OLN_RX.match(line)
-        if m: out.append(("num", m.group(2).strip(), m.group(1).count(".") + 1)); continue
-        m = _OL1_RX.match(line)
-        if m: out.append(("ol1" if line[len(m.group(1))] == "." else "ol", m.group(2).strip(), int(m.group(1)))); continue
-        if _is_caps(line): out.append(("h", line, 1)); continue
-        out.append(("t", line))
+        ma = None if in_plan else _ASSIGN_RX.match(line)      # («assign», qolgan qism, oddiy token) — structure_text(assign=False) oddiy tokenga qaytaradi
+        if ma and len(line) <= 1500 and (not ma.group(2) or re.match(r"^(?:\d{1,2}[.)]|[-•*–])\s", ma.group(2))):
+            out.append(("assign", ma.group(2).strip(), _line_tok(line))); continue
+        out.append(_line_tok(line))
     return out
+
+def _line_tok(line: str) -> tuple:
+    m = _MD_RX.match(line)
+    if m: return ("h", m.group(2).strip(), min(3, len(m.group(1))))
+    m = _BUL_RX.match(line)
+    if m: return ("ul", m.group(1).strip())
+    m = _OLN_RX.match(line)
+    if m: return ("num", m.group(2).strip(), m.group(1).count(".") + 1)
+    m = _OL1_RX.match(line)
+    if m: return ("ol1" if line[len(m.group(1))] == "." else "ol", m.group(2).strip(), int(m.group(1)))
+    if _is_caps(line): return ("h", line, 1)
+    return ("t", line)
+
+def _q_item(t: str) -> str:
+    return re.sub(r"^\s*(?:\d{1,3}[.)]|[-•*–—▪●◦►])\s+", "", t.strip()).strip()
+
+ASSIGN_MAX = 60             # topshiriq savollari (matndan olingan yoki qo'lda)
+ASSIGN_ITEM_MAX = 500       # bitta savol uzunligi
+
+def _assign_split(toks: list) -> tuple[list, list, dict]:
+    """Matndagi barcha «Savollar» / «Topshiriqlar» bo'limlari (hujjat tartibida) → (qolgan tokenlar, savollar — ko'pi bilan ASSIGN_MAX ta, ogohlantirish).
+    Hech narsa jimgina tashlanmaydi: chegaradan ortiq yoki juda uzun banddan boshlab ro'yxat matnda qoladi — ogohlantirish {"over": n, "long": n}."""
+    out, warn = [], {}
+    while (r := _assign_one(toks, ASSIGN_MAX - len(out))) is not None:
+        toks = r[0]; out += r[1]
+        for k, v in r[2].items(): warn[k] = warn.get(k, 0) + v
+    return toks, out, warn
+
+def _assign_one(toks: list, budget: int = ASSIGN_MAX) -> tuple[list, list, dict] | None:
+    """Birinchi «Savollar» / «Nazorat savollari» / «Topshiriqlar» … sarlavhasi va undan keyingi ro'yxat → (qolgan tokenlar, savollar, ogohlantirish).
+    Ro'yxat — faqat KETMA-KET bandlar: raqamli/belgili bandlar (bo'sh qatorsiz kelgan, tinish belgisi bilan tugamagan banddan keyingi qator — davomi)
+    yoki «?» bilan tugaydigan oddiy qatorlar. Bandlar orasida bitta bo'sh qator — faqat keyingi qator raqamlashni davom ettirsa («3.» dan keyin «4.»);
+    bo'sh qatordan keyingi «1.2. …» (bo'lim raqami), belgili band, yangi raqamlash yoki oddiy paragraf — ro'yxat tugadi (ma'ruza matni davom etadi).
+    Sarlavhadan keyin bo'sh qator bilan boshlangan raqamli ro'yxat «1.» dan boshlanishi kerak. Tugaydi: sarlavha, reja, adabiyotlar, rasm/jadval,
+    ma'lum bo'lim. Ketma-ket ikkinchi shunday bo'lim («Topshiriqlar») — ro'yxat davom etadi. Savol topilmasa — sarlavha oddiy tokenga qaytadi (matnda
+    qoladi). budget dan ortiq yoki ASSIGN_ITEM_MAX dan uzun band — o'sha banddan boshlab hammasi matnda qoladi (kesilmaydi, tashlanmaydi). Bo'lim yo'q — None."""
+    i = next((k for k, t in enumerate(toks) if t[0] == "assign"), None)
+    if i is None: return None
+    items, numbered, blanks, fresh, last_no, j = [], False, 0, True, None, i      # items: [matn, token indeksi | None — sarlavha qatoridagi band]
+    def inline(rest):
+        nonlocal numbered, last_no
+        if not rest: return
+        many = bool(re.search(r"\d[.)]\s", rest))
+        got = [_q_item(x) for x in re.split(r"\s*(?:^|\s)\d{1,2}[.)]\s+", " " + rest) if _q_item(x)] if many else [_q_item(rest)]
+        items.extend([x, None] for x in got if x)
+        numbered = True; last_no = len(got) if many else None
+    while j < len(toks):
+        t = toks[j]
+        if t[0] == "blank": blanks += 1; j += 1; continue
+        if t[0] == "assign":
+            if j > i and not items: break
+            inline(t[1]); blanks = 0; fresh = not t[1]; j += 1; continue
+        if t[0] in ("plan", "img", "tbl", "refs", "h"): break
+        line = t[1]
+        if t[0] == "t" and _refs_stop(line): break
+        if t[0] in ("ul", "ol", "ol1", "num"):
+            no = t[2] if t[0] in ("ol", "ol1") else None
+            if blanks:
+                if t[0] == "num": break                                          # «1.2. Keyingi bo'lim» — bo'lim sarlavhasi
+                if fresh:
+                    if no is not None and no != 1: break                         # sarlavhadan keyin «5. Xulosa» — boshqa bo'lim
+                elif blanks > 1 or no is None or last_no is None or no != last_no + 1: break
+            items.append([line.strip(), j]); numbered = True; last_no = no
+        elif numbered:
+            if blanks or not items or items[-1][0].endswith(_END_P): break
+            items[-1][0] = (items[-1][0] + " " + line).strip()
+        elif line.endswith("?") and len(line) <= ASSIGN_ITEM_MAX:
+            if blanks > 1 and not fresh: break
+            items.append([_q_item(line), j])
+        else: break
+        blanks = 0; fresh = False; j += 1
+    items = [x for x in items if x[0]]
+    keep, warn, cut = [], {}, None
+    for k, (text, _) in enumerate(items):
+        if len(text) > ASSIGN_ITEM_MAX: warn["long"] = 1; cut = k; break
+        if len(keep) >= budget: warn["over"] = len(items) - k; cut = k; break
+        keep.append(text)
+    restore = toks[:i] + [toks[i][2]] + toks[i + 1:]
+    if cut is not None:
+        at = items[cut][1]
+        if at is None or not keep: return restore, [], warn               # sarlavha qatoridagi band yoki birinchi bandning o'zi — bo'lim butunicha matnda qoladi
+        return toks[:i] + toks[at:], keep, warn
+    if not keep: return restore, [], warn
+    return toks[:i] + toks[j:], keep, warn
 
 def _ref_item(t: str) -> str:
     t = re.sub(r"^\s*(?:\d{1,3}[.)]?|[-•*–—▪●◦►])\s+", "", t.strip())
@@ -640,11 +777,13 @@ def _table_html(rows: list) -> str:
     return ("<table>" + (f"<thead><tr>{''.join(f'<th>{_inline(c)}</th>' for c in head)}</tr></thead>" if head else "") +
             "<tbody>" + "".join("<tr>" + "".join(f"<td>{_inline(c)}</td>" for c in r) + "</tr>" for r in body) + "</tbody></table>")
 
-def structure_text(text: str, topic_title: str = "", media: dict | None = None) -> dict:
-    """Matn (oddiy, «# sarlavha / - band» belgili yoki docx'dan) → {"plan", "html", "explicit_plan", "refs", "images"}.
+def structure_text(text: str, topic_title: str = "", media: dict | None = None, assign: bool = False) -> dict:
+    """Matn (oddiy, «# sarlavha / - band» belgili yoki docx'dan) → {"plan", "html", "explicit_plan", "refs", "images", "questions", "q_warn"}.
     media — {"images": {fayl: {"caption", "alt"}}, "tables": {"N": [[katak, …], …]}}: «[RASM:fayl]» → <figure>, «[JADVAL:N]» → <table>.
-    «Foydalanilgan adabiyotlar» bo'limi matndan olinib, alohida «refs» ro'yxati bo'ladi."""
-    toks, refs = _refs_split(_tokens(text))
+    «Foydalanilgan adabiyotlar» bo'limi matndan olinib, alohida «refs» ro'yxati bo'ladi. assign=True — «Savollar» / «Nazorat savollari» /
+    «Topshiriqlar» bo'limi ro'yxati ham matndan olinadi («questions» — «Topshiriq» bloki uchun); aks holda matnda qoladi (questions = [])."""
+    toks, questions, q_warn = _assign_split(_tokens(text)) if assign else (_tokens(text), [], {})
+    toks, refs = _refs_split([t[2] if t[0] == "assign" else t for t in toks])
     nonblank = [i for i, t in enumerate(toks) if t[0] != "blank"]
     def nb(i, step):
         j = i + step
@@ -758,7 +897,7 @@ def structure_text(text: str, topic_title: str = "", media: dict | None = None) 
         top = [h for l, h in headings if l == 1 and h]
         plan = top if len(top) >= 2 else [h for l, h in headings if l <= 2 and h]
         if len(plan) < 2: plan = []
-    return {"plan": plan[:20], "html": sanitize("".join(parts)), "explicit_plan": explicit, "refs": refs, "images": used_imgs}
+    return {"plan": plan[:20], "html": sanitize("".join(parts)), "explicit_plan": explicit, "refs": refs, "images": used_imgs, "questions": questions, "q_warn": q_warn}
 
 
 # =============================================================================================
@@ -1390,9 +1529,403 @@ def upload_file(c: Ctx, cid: int, no: int, raw: bytes, name: str) -> dict:
     rbac.audit(_con, c, "paket: qo'shimcha fayl", RES, True, f"kurs #{cid} · {lesson_code(no)} · {name[:60]}")
     return {"ok": True, "id": aid, "kind": kind}
 
+# =============================================================================================
+# Rise 360: video fayl (oqim bilan), subtitrlar (.vtt / .srt → WebVTT), poster, muqova, o'qituvchi rasmi, slayd izohi va audiosi
+# =============================================================================================
+def sniff_media(head: bytes) -> str | None:
+    """Birinchi baytlar bo'yicha: mp4 / webm (video), mp3 / m4a / ogg / wav (audio); boshqasi — None. Kengaytmaga ishonilmaydi."""
+    if len(head) >= 12 and head[4:8] == b"ftyp":
+        return "m4a" if head[8:12] in (b"M4A ", b"M4B ", b"M4P ") else "mp4"
+    if head[:4] == b"\x1a\x45\xdf\xa3": return "webm" if b"webm" in head[:64] else None     # Matroska (.mkv) — brauzerda ochilmaydi, qabul qilinmaydi
+    if head[:4] == b"OggS": return "ogg"
+    if head[:4] == b"RIFF" and head[8:12] == b"WAVE": return "wav"
+    if head[:3] == b"ID3" or (len(head) >= 2 and head[0] == 0xFF and head[1] & 0xE6 == 0xE2): return "mp3"   # MPEG audio, Layer III kadri
+    return None
+
+async def _stream_upload(request, limit: int, kinds: tuple, what: str) -> dict:
+    """Katta fayl (video): tana oqim bilan vaqtinchalik faylga yoziladi — xotiraga yig'ilmaydi. Hajm yo'l-yo'lakay sanaladi (chegaradan oshsa
+    darhol 413, Content-Length'siz/yolg'on bo'lsa ham), sha256 ham; turi birinchi 64 baytdan aniqlanadi (noto'g'ri — 415, qolgan tana o'qilmaydi).
+    Xatoda vaqtinchalik fayl o'chiriladi. → {"path", "size", "sha256", "kind"}"""
+    _len_guard(request, limit)
+    d = store() / "tmp"; d.mkdir(parents=True, exist_ok=True)
+    tmp = d / f"up_{secrets.token_hex(8)}.part"
+    h, size, kind, head = hashlib.sha256(), 0, None, b""
+    def check():
+        k = sniff_media(head)
+        if k not in kinds: raise HTTPException(415, what)
+        return k
+    try:
+        with open(tmp, "wb") as f:
+            async for chunk in request.stream():
+                if not chunk: continue
+                size += len(chunk)
+                if size > limit: raise HTTPException(413, f"Fayl hajmi {limit // (1024 * 1024)} MB dan oshmasin")
+                if kind is None:
+                    head += chunk[:64 - len(head)]
+                    if len(head) >= 64: kind = check()
+                h.update(chunk); f.write(chunk)
+        if not size: raise HTTPException(400, "Fayl bo'sh")
+        if kind is None: kind = check()
+    except BaseException:
+        tmp.unlink(missing_ok=True); raise
+    return {"path": tmp, "size": size, "sha256": h.hexdigest(), "kind": kind}
+
+def _save_asset_file(c: Ctx | None, cid: int, no: int, purpose: str, kind: str, name: str, tmp: Path, size: int, sha: str, meta: dict) -> int:
+    """_save_asset ning oqimli varianti: diskdagi tayyor fayl o'z joyiga ko'chiriladi (os.replace — o'sha diskda, nusxalanmaydi)."""
+    d = _asset_dir(cid, no); d.mkdir(parents=True, exist_ok=True)
+    with _lock:
+        aid = _con.execute("""INSERT INTO pk_assets(course_id,topic_no,purpose,kind,name,path,size,sha256,meta,user_id,user_name,ts,src)
+                              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'')""",
+                           (cid, no, purpose, kind, name[:160], "", size, sha, json.dumps(meta, ensure_ascii=False),
+                            c.user["id"] if c else None, c.user["full_name"] if c else "Tizim", _now())).lastrowid
+        fn = f"{aid}_{_ascii(Path(name).stem, 40)}.{kind}"
+        os.replace(tmp, d / fn)
+        _con.execute("UPDATE pk_assets SET path=? WHERE id=?", (str(Path("assets") / str(cid) / str(no) / fn), aid))
+        _con.commit()
+    return aid
+
+def _replace_assets(cid: int, no: int, purpose: str, keep: int, match=None) -> int:
+    """Yangi fayl yuklanganda shu joydagi (kurs, dars, maqsad) eskilari «almashtirildi» (deleted=2) va fayli diskdan o'chiriladi — video
+    200 MB gacha bo'lishi mumkin; yig'ilgan paketlar o'z zipida to'liq. match(meta) — faqat mos keladiganlari (subtitr tili, slayd raqami)."""
+    n = 0
+    with _lock:
+        for a in db.rows(_con, "SELECT * FROM pk_assets WHERE course_id=? AND topic_no=? AND purpose=? AND deleted=0 AND id<>?", (cid, no, purpose, keep)):
+            if match and not match(json.loads(a["meta"] or "{}")): continue
+            _con.execute("UPDATE pk_assets SET deleted=2 WHERE id=?", (a["id"],)); n += 1
+            try: _apath(a).unlink(missing_ok=True)
+            except OSError: pass
+        _con.commit()
+    return n
+
+def upload_video(c: Ctx, cid: int, no: int, up: dict, name: str) -> dict:
+    """Video fayl (.mp4 / .webm) — _stream_upload natijasi (diskda). Darsda bitta video fayl: yangisi eskisini almashtiradi."""
+    try:
+        co = _course(c, cid, write=True); l = _check_topic(co, no)
+        aid = _save_asset_file(c, cid, no, "video", up["kind"], name, up["path"], up["size"], up["sha256"], {})
+    finally:
+        Path(up["path"]).unlink(missing_ok=True)
+    _replace_assets(cid, no, "video", aid)
+    with _lock: _log(c, cid, no, "video fayl yuklandi", f"{name[:80]} · {up['kind']} · {up['size'] // (1024 * 1024)} MB"); _con.commit()
+    rbac.audit(_con, c, "paket: video fayl yuklandi", RES, True, f"kurs #{cid} · {l['code']} · {name[:60]} · {up['size']} bayt")
+    return {"ok": True, "id": aid, "kind": up["kind"], "size": up["size"]}
+
+# --- subtitrlar: .vtt / .srt → me'yorlangan WebVTT -------------------------------------------------------------------
+_TS_RX = re.compile(r"^\s*(?:(\d{1,3}):)?(\d{1,2}):(\d{2})[.,](\d{1,3})\s*-->\s*(?:(\d{1,3}):)?(\d{1,2}):(\d{2})[.,](\d{1,3})(?:\s.*)?$")
+
+def decode_text(raw: bytes) -> str:
+    """UTF-8 (BOM bilan ham) → UTF-16 (BOM bo'yicha) → cp1251 (zaxira: eski Windows'da saqlangan kirill subtitrlar)."""
+    if raw[:3] == b"\xef\xbb\xbf": return raw[3:].decode("utf-8", "replace")
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"): return raw.decode("utf-16", "replace")
+    try: return raw.decode("utf-8")
+    except UnicodeDecodeError: return raw.decode("cp1251", "replace")
+
+def _vtt_ts(ms: int) -> str: return f"{ms // 3600000:02d}:{ms // 60000 % 60:02d}:{ms // 1000 % 60:02d}.{ms % 1000:03d}"
+
+_VTT_TAG_RX = re.compile(r"</?[A-Za-z][^<>]*>|<\d{1,3}:\d{2}(?::\d{2})?[.,]\d{1,3}>")      # haqiqiy teg yoki vaqt tegi (<00:00:01.000>)
+_VTT_KEEP_RX = re.compile(r"</?[ibu]>")
+
+def _cue_text(l: str) -> str:
+    """Subtitr matni qatori: SRT {\\an8} belgilari va teglar olib tashlanadi (<i> <b> <u> qoladi); teg bo'lmagan «<» / «>» — &lt; / &gt;."""
+    l = _VTT_TAG_RX.sub(lambda m: m.group(0) if _VTT_KEEP_RX.fullmatch(m.group(0)) else "", re.sub(r"\{\\[^}]*\}", "", l)).replace("-->", "→")
+    l = "".join(x if _VTT_KEEP_RX.fullmatch(x) else x.replace("<", "&lt;").replace(">", "&gt;") for x in re.split(r"(</?[ibu]>)", l))
+    return re.sub(r"\s+", " ", l).strip()[:500]
+
+def to_vtt(raw: bytes) -> dict:
+    """Subtitr (.vtt yoki .srt; UTF-8 / UTF-16 / cp1251) → {"vtt": me'yorlangan WebVTT, "cues": n, "src": "vtt"|"srt", "end": oxirgi vaqt (ms)}.
+    Har yozuv tekshiriladi: vaqt qatori («00:00:01,000 --> 00:00:04,000», soatsiz ham), daqiqa/soniya < 60, tugash > boshlanish; xatoda
+    HTTPException(400) qator raqami bilan. SRT raqamlari, VTT sarlavhasi / NOTE / STYLE / REGION bloklari va sozlamalari (align: …) tashlanadi;
+    matnda faqat <i> <b> <u> qoladi; yozuvlar boshlanish vaqti bo'yicha tartiblanadi.
+    VTT sarlavhasi qat'iy o'qiladi: «WEBVTT» qatori (ixtiyoriy nom bilan: «WEBVTT - Dars») + sarlavha qatorlari — birinchi bo'sh qator YOKI birinchi
+    vaqt qatorigacha; sarlavhadan keyin bo'sh qatorsiz kelgan birinchi yozuv ham olinadi. Teglar: faqat haqiqiy WebVTT/HTML teglari (`<v Ali>`,
+    `<c.sariq>`, `<font …>`, `<00:00:01.000>`) olib tashlanadi; matndagi yolg'iz «<» / «>» («a < b») saqlanadi (`&lt;` / `&gt;` qilib yoziladi)."""
+    lines = decode_text(raw).replace("\x00", "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    is_vtt = bool(re.match(r"^WEBVTT(?:[ \t].*)?$", lines[0].lstrip("﻿").rstrip())) if lines else False
+    bad = lambda ln, msg: HTTPException(400, f"Subtitr fayli, {ln}-qator: {msg}")
+    cues, i = [], 0
+    if is_vtt:
+        i = 1
+        while i < len(lines) and lines[i].strip() and "-->" not in lines[i]: i += 1
+    while i < len(lines):
+        if not lines[i].strip(): i += 1; continue
+        j = i
+        while j < len(lines) and lines[j].strip(): j += 1
+        block, at, i = lines[i:j], i + 1, j
+        if is_vtt and re.match(r"^(NOTE|STYLE|REGION)\b", block[0].strip()): continue
+        k = next((x for x, l in enumerate(block[:2]) if "-->" in l), None)
+        if k is None:
+            if len(block) == 1 and block[0].strip().isdigit(): continue
+            raise bad(at, "vaqt qatori topilmadi (kutilgan: «00:00:01,000 --> 00:00:04,000»)")
+        m = _TS_RX.match(block[k])
+        if not m: raise bad(at + k, "vaqt formati noto'g'ri (kutilgan: «00:00:01,000 --> 00:00:04,000»)")
+        g = m.groups()
+        if any(int(g[x]) > 59 for x in (1, 2, 5, 6)): raise bad(at + k, "daqiqa va soniya 59 dan oshmasin")
+        ms = lambda h_, m_, s_, f_: ((int(h_ or 0) * 60 + int(m_)) * 60 + int(s_)) * 1000 + int(f_.ljust(3, "0"))
+        a, b = ms(*g[:4]), ms(*g[4:])
+        if b <= a: raise bad(at + k, "tugash vaqti boshlanish vaqtidan keyin bo'lishi kerak")
+        txt = []
+        for l in block[k + 1:]:
+            l = _cue_text(l)
+            if l: txt.append(l)
+        if txt: cues.append((a, b, txt[:6]))
+    if not cues: raise HTTPException(400, "Subtitr faylida birorta ham yozuv topilmadi (.vtt yoki .srt bo'lishi kerak)")
+    if len(cues) > MAX_CUES: raise HTTPException(400, f"Subtitr faylida juda ko'p yozuv ({len(cues)} > {MAX_CUES})")
+    cues.sort(key=lambda x: x[0])
+    vtt = "WEBVTT\n\n" + "\n\n".join(f"{_vtt_ts(a)} --> {_vtt_ts(b)}\n" + "\n".join(t) for a, b, t in cues) + "\n"
+    return {"vtt": vtt, "cues": len(cues), "src": "vtt" if is_vtt else "srt", "end": max(b for _, b, _ in cues)}
+
+def upload_subs(c: Ctx, cid: int, no: int, raw: bytes, name: str, lang: str = "uz", label: str = "") -> dict:
+    """Subtitr (.vtt / .srt) → WebVTT (pk_assets, purpose='subs', meta: lang, label, cues). Har til uchun bitta: yangisi eskisini almashtiradi."""
+    co = _course(c, cid, write=True); l = _check_topic(co, no)
+    if not raw: raise HTTPException(400, "Fayl bo'sh")
+    if len(raw) > MAX_SUBS: raise HTTPException(413, f"Subtitr fayli {MAX_SUBS // (1024 * 1024)} MB dan oshmasin")
+    lang = (lang or "uz").strip().lower()
+    if not re.fullmatch(r"[a-z]{2,3}", lang): raise HTTPException(400, "Til kodi noto'g'ri (masalan: uz, ru, en)")
+    label = re.sub(r"\s+", " ", label or "").strip()[:40] or SUB_LANGS.get(lang, lang.upper())
+    try:
+        r = to_vtt(raw)
+    except HTTPException as e:
+        rbac.audit(_con, c, "paket: subtitr rad etildi", RES, False, f"kurs #{cid} · {l['code']} · {name[:60]} · {e.detail}"[:300])
+        raise
+    aid = _save_asset(c, cid, no, "subs", "vtt", name, r["vtt"].encode("utf-8"), {"lang": lang, "label": label, "cues": r["cues"], "from": r["src"]})
+    _replace_assets(cid, no, "subs", aid, lambda m: m.get("lang") == lang)
+    with _lock: _log(c, cid, no, "subtitr yuklandi", f"{name[:80]} · {lang} · {r['cues']} yozuv"); _con.commit()
+    rbac.audit(_con, c, "paket: subtitr yuklandi", RES, True, f"kurs #{cid} · {l['code']} · {name[:60]} · {lang}")
+    return {"ok": True, "id": aid, "lang": lang, "label": label, "cues": r["cues"], "converted": r["src"] == "srt"}
+
+def _jpeg(raw: bytes, max_px: int) -> bytes:
+    """Rasm (.png / .jpg) → JPEG ≤ max_px, metama'lumotsiz (shaffof fon — oq). Mavjud himoyalar: tur baytlardan, o'lcham dekodlashdan oldin."""
+    from PIL import Image
+    _read_upload_guard(raw)
+    if _sniff_asset(raw) not in ("png", "jpg"): raise HTTPException(415, "Rasm: .png yoki .jpg")
+    try:
+        im = Image.open(io.BytesIO(raw)); big = _too_big(*im.size)
+    except Image.DecompressionBombError:
+        big = True
+    except Exception:
+        raise HTTPException(415, "Rasmni o'qib bo'lmadi")
+    if big: raise HTTPException(413, f"Rasm o'lchami juda katta — {IMG_MAX_PIXELS // 1_000_000} megapikseldan oshmasin")
+    try: im.load()
+    except Exception: raise HTTPException(415, "Rasmni o'qib bo'lmadi")
+    if min(im.size) < 32: raise HTTPException(415, "Rasm juda kichik")
+    if im.mode in ("RGBA", "LA", "P"):
+        im = im.convert("RGBA"); bg = Image.new("RGB", im.size, "white"); bg.paste(im, mask=im.split()[-1]); im = bg
+    else:
+        im = im.convert("RGB")
+    if max(im.size) > max_px: im.thumbnail((max_px, max_px))
+    bio = io.BytesIO(); im.save(bio, "JPEG", quality=86)
+    return bio.getvalue()
+
+IMAGE_SLOTS = {"muqova": (COVER_MAX_PX, "muqova"), "poster": (COVER_MAX_PX, "video posteri"), "avatar": (512, "o'qituvchi rasmi")}
+
+def upload_slot_image(c: Ctx, purpose: str, cid: int, no: int, raw: bytes, name: str) -> dict:
+    """Bitta o'rinli rasm (yangisi eskisini almashtiradi) → JPEG: muqova — dars (cid, no) / kurs (cid, 0) / bo'lim standarti (0, 0);
+    video posteri — dars; o'qituvchi rasmi (topshiriq bloki uchun) — kurs (cid, 0)."""
+    px, what = IMAGE_SLOTS[purpose]
+    if cid:
+        co = _course(c, cid, write=True)
+        code = _check_topic(co, no)["code"] if no else "kurs"
+    else:
+        if c.role.key not in DEPT: raise AccessDenied("⛔ Standart muqova — faqat Masofaviy ta'lim bo'limi. So'rov audit jurnaliga yozildi.")
+        code = "standart"
+    data = _jpeg(raw, px)
+    aid = _save_asset(c, cid, no, purpose, "jpg", name, data, {"orig": name[:160]})
+    _replace_assets(cid, no, purpose, aid)
+    with _lock: _log(c, cid or None, no or None, f"{what} yuklandi", name[:80]); _con.commit()
+    rbac.audit(_con, c, f"paket: {what} yuklandi", RES, True, f"kurs #{cid} · {code} · {name[:60]}")
+    return {"ok": True, "id": aid, "size": len(data)}
+
+def upload_slide_audio(c: Ctx, cid: int, no: int, n: int, raw: bytes, name: str) -> dict:
+    """Slayd audiosi (.mp3 / .m4a / .ogg / .wav — baytlardan aniqlanadi, ≤ 20 MB). Har slaydga bitta: yangisi eskisini almashtiradi."""
+    co = _course(c, cid, write=True); l = _check_topic(co, no)
+    if not 1 <= int(n) <= MAX_SLIDES: raise HTTPException(400, "Slayd raqami noto'g'ri")
+    if not raw: raise HTTPException(400, "Fayl bo'sh")
+    if len(raw) > MAX_AUDIO: raise HTTPException(413, f"Audio fayl {MAX_AUDIO // (1024 * 1024)} MB dan oshmasin")
+    kind = sniff_media(raw[:64])
+    if kind == "mp4": kind = "m4a"            # ISO BMFF (isom/mp42) — audio sifatida .m4a
+    if kind not in AUDIO_KINDS: raise HTTPException(415, "Audio: .mp3, .m4a, .ogg yoki .wav")
+    others = sum(int(a["size"] or 0) for k_, a in _slide_audio(cid, no).items() if k_ != int(n))     # shu slaydning eski audiosi almashtiriladi — hisobga kirmaydi
+    if others + len(raw) > MAX_AUDIO_TOTAL:
+        raise HTTPException(413, f"Bitta darsdagi slayd audiolari jami {MAX_AUDIO_TOTAL // (1024 * 1024)} MB dan oshmasin "
+                                 f"(hozir {others // (1024 * 1024)} MB + bu fayl {max(1, len(raw) // (1024 * 1024))} MB) — audioni siqing yoki qisqartiring")
+    aid = _save_asset(c, cid, no, "audio", kind, name, raw, {"slide": int(n)})
+    _replace_assets(cid, no, "audio", aid, lambda m: m.get("slide") == int(n))
+    with _lock: _log(c, cid, no, "slayd audiosi yuklandi", f"{n}-slayd · {name[:80]}"); _con.commit()
+    rbac.audit(_con, c, "paket: slayd audiosi yuklandi", RES, True, f"kurs #{cid} · {l['code']} · {n}-slayd · {kind}")
+    return {"ok": True, "id": aid, "kind": kind, "slide": int(n)}
+
+def topic_extra(cid: int, no: int) -> dict:
+    """pk_topics.extra (JSON): author — muqova muallifi (qo'lda), questions — topshiriq savollari (qo'lda), slides — {"N": slayd izohi}."""
+    try: return json.loads(_topic_row(cid, no).get("extra") or "{}") or {}
+    except ValueError: return {}
+
+def _set_extra(c: Ctx, cid: int, no: int, upd: dict, action: str, note: str = "") -> dict:
+    with _lock:
+        ex = {k: v for k, v in {**topic_extra(cid, no), **upd}.items() if v is not None}
+        _con.execute("""INSERT INTO pk_topics(course_id,topic_no,extra,updated_at) VALUES(?,?,?,?)
+                        ON CONFLICT(course_id,topic_no) DO UPDATE SET extra=excluded.extra, updated_at=excluded.updated_at""",
+                     (cid, no, json.dumps(ex, ensure_ascii=False), _now()))
+        _log(c, cid, no, action, note); _con.commit()
+    return ex
+
+def set_cover_meta(c: Ctx, cid: int, no: int, author: str | None) -> dict:
+    """Muqovadagi muallif: None — standart (kurs o'qituvchisining F.I.Sh.); matn — qo'lda (bo'sh satr — muallifsiz)."""
+    co = _course(c, cid, write=True); _check_topic(co, no)
+    a = None if author is None else re.sub(r"\s+", " ", author).strip()[:120]
+    ex = _set_extra(c, cid, no, {"author": a}, "muqova muallifi", a if a is not None else "standart")
+    return {"ok": True, "author": ex.get("author", _short(co.get("teacher") or "")), "custom": "author" in ex}
+
+def set_assignment(c: Ctx, cid: int, no: int, questions: list | None) -> dict:
+    """Topshiriq savollari: None — avtomatik (ma'ruza matnidagi «Savollar» bo'limidan); ro'yxat — qo'lda (bo'sh — topshiriq bloki bo'lmaydi)."""
+    co = _course(c, cid, write=True); _check_topic(co, no)
+    qs = None
+    if questions is not None:
+        qs = []
+        for x in questions:
+            t = _q_item(re.sub(r"\s+", " ", str(x or "")))
+            if len(t) > ASSIGN_ITEM_MAX: raise HTTPException(400, f"Savol {ASSIGN_ITEM_MAX} belgidan oshmasin ({len(qs) + 1}-qator)")
+            if t and t not in qs: qs.append(t)
+        if len(qs) > ASSIGN_MAX: raise HTTPException(400, f"Ko'pi bilan {ASSIGN_MAX} ta savol")
+    _set_extra(c, cid, no, {"questions": qs}, "topshiriq savollari", "avtomatik (matndan)" if qs is None else f"qo'lda · {len(qs)} ta")
+    return {"ok": True, "questions": qs, "manual": qs is not None}
+
+def set_slide_captions(c: Ctx, cid: int, no: int, captions: dict) -> dict:
+    """Slayd izohlari {"N": matn} (N — slayd tartib raqami, 1 dan; bo'sh matn — izoh olib tashlanadi)."""
+    co = _course(c, cid, write=True); _check_topic(co, no)
+    out = {}
+    for k, v in (captions or {}).items():
+        try: n = int(k)
+        except (TypeError, ValueError): raise HTTPException(400, "Slayd raqami noto'g'ri")
+        if not 1 <= n <= MAX_SLIDES: raise HTTPException(400, "Slayd raqami noto'g'ri")
+        t = re.sub(r"\s+", " ", str(v or "")).strip()[:300]
+        if t: out[str(n)] = t
+    _set_extra(c, cid, no, {"slides": out or None}, "slayd izohlari", f"{len(out)} ta")
+    return {"ok": True, "captions": out}
+
+def _slide_audio(cid: int, no: int) -> dict:
+    """{slayd raqami: asset} — har slayd uchun oxirgi yuklangan audio (diskda borlari)."""
+    out = {}
+    for a in db.rows(_con, "SELECT * FROM pk_assets WHERE course_id=? AND topic_no=? AND purpose='audio' AND deleted=0 ORDER BY id", (cid, no)):
+        n = json.loads(a["meta"] or "{}").get("slide")
+        if n and _apath(a).is_file(): out[int(n)] = a
+    return out
+
+def _cover_source(cid: int, no: int) -> tuple[dict, str] | None:
+    """Muqova rasmi: darsniki > kursniki > bo'lim standarti (Sozlamalar)."""
+    for c_, n_, src in ((cid, no, "dars"), (cid, 0, "kurs"), (0, 0, "standart")):
+        a = _latest_asset(c_, n_, "muqova")
+        if a: return a, src
+    return None
+
+
+# =============================================================================================
+# Mashqlar (dars bo'yicha, o'qituvchiniki): moslashtirish, saralash — test blokiga; kartochkalar — alohida blok
+# =============================================================================================
+EX_KINDS = {"match": "Moslashtirish", "sort": "Saralash", "flashcards": "Kartochkalar"}
+EX_STEMS = {"match": "Mos juftlarni toping", "sort": "Elementlarni toifalarga ajrating", "flashcards": "Kartochkalar"}
+
+def _ws(v, n: int) -> str: return re.sub(r"\s+", " ", str(v if v is not None else "")).strip()[:n]
+
+def clean_exercise(kind: str, d: dict) -> dict:
+    """Mashqni tekshirish va me'yorlash → {"title", "data", "explanation"}; xato — HTTPException(400).
+    match: 2–8 juft, chap va o'ng tomonlar takrorlanmaydi; sort: 2–4 toifa, har birida 1–8 element, elementlar (barcha toifalarda) va toifa
+    nomlari takrorlanmaydi; flashcards: 1–40 kartochka (old/orqa bo'sh emas). Uzunliklar: savol/sarlavha ≤ 300, juft tomoni ≤ 200,
+    toifa ≤ 80, element ≤ 120, kartochka old ≤ 200 / orqa ≤ 500, izoh ≤ 500. Bo'sh qatorlar tashlanadi."""
+    if kind not in EX_KINDS: raise HTTPException(400, "Mashq turi noma'lum (match, sort, flashcards)")
+    d = d if isinstance(d, dict) else {}
+    lst = lambda v: v if isinstance(v, list) else []
+    title = _ws(d.get("stem") or d.get("title"), 300) or EX_STEMS[kind]
+    key = lambda t: t.translate(_APOS).casefold()
+    if kind == "match":
+        pairs = [{"left": _ws(p.get("left"), 200), "right": _ws(p.get("right"), 200)} for p in lst(d.get("pairs")) if isinstance(p, dict)]
+        pairs = [p for p in pairs if p["left"] or p["right"]]
+        if any(not p["left"] or not p["right"] for p in pairs): raise HTTPException(400, "Moslashtirish: har juftning ikkala tomoni to'ldirilishi kerak")
+        if not 2 <= len(pairs) <= 8: raise HTTPException(400, "Moslashtirish: 2 tadan 8 tagacha juft bo'lishi kerak")
+        if len({key(p["left"]) for p in pairs}) != len(pairs): raise HTTPException(400, "Moslashtirish: chap tomondagi qiymatlar takrorlanmasin")
+        if len({key(p["right"]) for p in pairs}) != len(pairs): raise HTTPException(400, "Moslashtirish: o'ng tomondagi qiymatlar takrorlanmasin")
+        data = {"pairs": pairs}
+    elif kind == "sort":
+        cats = []
+        for ct in lst(d.get("categories")):
+            if not isinstance(ct, dict): continue
+            t, items = _ws(ct.get("title"), 80), [x for x in (_ws(i, 120) for i in lst(ct.get("items"))) if x]
+            if not t and not items: continue
+            if not t: raise HTTPException(400, "Saralash: toifa nomi bo'sh")
+            if not 1 <= len(items) <= 8: raise HTTPException(400, f"Saralash: «{t}» toifasida 1 tadan 8 tagacha element bo'lishi kerak")
+            cats.append({"title": t, "items": items})
+        if not 2 <= len(cats) <= 4: raise HTTPException(400, "Saralash: 2 tadan 4 tagacha toifa bo'lishi kerak")
+        if len({key(x["title"]) for x in cats}) != len(cats): raise HTTPException(400, "Saralash: toifa nomlari takrorlanmasin")
+        allx = [key(i) for x in cats for i in x["items"]]
+        if len(set(allx)) != len(allx): raise HTTPException(400, "Saralash: elementlar takrorlanmasin (har bir element faqat bitta toifada)")
+        data = {"categories": cats}
+    else:
+        title = _ws(d.get("title") or d.get("stem"), 80) or EX_STEMS[kind]
+        cards = [{"front": _ws(x.get("front"), 200), "back": _ws(x.get("back"), 500)} for x in lst(d.get("cards")) if isinstance(x, dict)]
+        cards = [x for x in cards if x["front"] or x["back"]]
+        if any(not x["front"] or not x["back"] for x in cards): raise HTTPException(400, "Kartochkalar: old va orqa tomon to'ldirilishi kerak")
+        if not 1 <= len(cards) <= 40: raise HTTPException(400, "Kartochkalar: 1 tadan 40 tagacha kartochka bo'lishi kerak")
+        data = {"cards": cards}
+    return {"title": title, "data": data, "explanation": _ws(d.get("explanation"), 500)}
+
+def ex_row(r: dict) -> dict:
+    d = json.loads(r["data"] or "{}")
+    return {"id": r["id"], "kind": r["kind"], "kind_label": EX_KINDS.get(r["kind"], r["kind"]), "title": r["title"] or "", "explanation": r["explanation"] or "",
+            "status": r["status"], "ai": r["src"] == "ai", "by": _short(r["user_name"]), "updated_at": r["updated_at"] or r["ts"],
+            **{k: d.get(k) or [] for k in ({"match": ("pairs",), "sort": ("categories",), "flashcards": ("cards",)}[r["kind"]])}, "quotes": d.get("quotes") or []}
+
+def exercises(cid: int, no: int, active_only: bool = False) -> list[dict]:
+    rows = db.rows(_con, "SELECT * FROM pk_exercises WHERE course_id=? AND topic_no=? AND deleted=0 ORDER BY pos, id", (cid, no))
+    return [r for r in rows if r["status"] == "faol"] if active_only else rows
+
+def _ex_status(v) -> str: return "qoralama" if v == "qoralama" else "faol"
+
+def save_exercise(c: Ctx, cid: int, no: int, kind: str, body: dict, eid: int | None = None) -> dict:
+    """Mashq qo'shish (eid=None) yoki tahrirlash. status: «faol» (paketga kiradi — standart) / «qoralama» (AI qoralamasi — tahrirlab «faol» qilinadi)."""
+    if eid is not None:
+        r = db.one(_con, "SELECT * FROM pk_exercises WHERE id=? AND deleted=0", (int(eid),))
+        if not r: raise HTTPException(404, "Mashq topilmadi")
+        cid, no, kind = r["course_id"], r["topic_no"], r["kind"]
+    co = _course(c, cid, write=True); l = _check_topic(co, no)
+    x = clean_exercise(kind, body)
+    st = _ex_status(body.get("status") if isinstance(body, dict) else None)
+    with _lock:
+        if eid is None:
+            if db.one(_con, "SELECT COUNT(*) n FROM pk_exercises WHERE course_id=? AND topic_no=? AND deleted=0", (cid, no))["n"] >= MAX_EXERCISES:
+                raise HTTPException(400, f"Bitta darsda ko'pi bilan {MAX_EXERCISES} ta mashq")
+            pos = (db.one(_con, "SELECT COALESCE(MAX(pos),0) p FROM pk_exercises WHERE course_id=? AND topic_no=?", (cid, no))["p"] or 0) + 1
+            eid = _con.execute("""INSERT INTO pk_exercises(course_id,topic_no,kind,title,data,explanation,status,src,pos,user_id,user_name,ts,updated_at)
+                                  VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""", (cid, no, kind, x["title"], json.dumps(x["data"], ensure_ascii=False), x["explanation"],
+                                                                         st, "", pos, c.user["id"], c.user["full_name"], _now(), _now())).lastrowid
+            _log(c, cid, no, "mashq qo'shildi", f"{EX_KINDS[kind]} · {x['title'][:80]}")
+        else:
+            _con.execute("UPDATE pk_exercises SET title=?, data=?, explanation=?, status=?, updated_at=? WHERE id=?",
+                         (x["title"], json.dumps(x["data"], ensure_ascii=False), x["explanation"], st, _now(), eid))
+            _log(c, cid, no, "mashq tahrirlandi", f"{EX_KINDS[kind]} · {x['title'][:80]}")
+        _con.commit()
+    rbac.audit(_con, c, "paket: mashq saqlandi", RES, True, f"kurs #{cid} · {l['code']} · {kind} #{eid}")
+    return {"ok": True, "exercise": ex_row(db.one(_con, "SELECT * FROM pk_exercises WHERE id=?", (eid,)))}
+
+def delete_exercise(c: Ctx, eid: int) -> dict:
+    r = db.one(_con, "SELECT * FROM pk_exercises WHERE id=? AND deleted=0", (int(eid),))
+    if not r: raise HTTPException(404, "Mashq topilmadi")
+    _course(c, r["course_id"], write=True)
+    with _lock:
+        _con.execute("UPDATE pk_exercises SET deleted=1, updated_at=? WHERE id=?", (_now(), r["id"]))
+        _log(c, r["course_id"], r["topic_no"], "mashq o'chirildi", f"{EX_KINDS.get(r['kind'], r['kind'])} · {(r['title'] or '')[:80]}"); _con.commit()
+    return {"ok": True}
+
+def exercise_list(c: Ctx, cid: int, no: int) -> dict:
+    co = _course(c, cid); _check_topic(co, no)
+    return {"exercises": [ex_row(r) for r in exercises(cid, no)], "kinds": EX_KINDS, "max": MAX_EXERCISES}
+
+
 def _asset(c: Ctx, aid: int, write=False) -> tuple[dict, dict]:
     a = db.one(_con, "SELECT * FROM pk_assets WHERE id=? AND deleted=0", (int(aid),))
     if not a: raise HTTPException(404, "Fayl topilmadi")
+    if not a["course_id"]:        # bo'lim standarti (standart muqova) — kursga bog'lanmagan: ko'rish — hamma (WORK), o'zgartirish — bo'lim
+        if write and c.role.key not in DEPT:
+            rbac.audit(_con, c, "paket: standart faylni o'zgartirish rad etildi", RES, False, f"#{aid}")
+            raise AccessDenied("⛔ Standart muqova — faqat Masofaviy ta'lim bo'limi. So'rov audit jurnaliga yozildi.")
+        return a, {}
     return a, _course(c, a["course_id"], write)
 
 def delete_asset(c: Ctx, aid: int) -> dict:
@@ -1564,9 +2097,11 @@ def _pdf_slides(pdf: dict) -> list[str]:
     return [fn for fn in (m.get("images") or []) if (d / fn).is_file()]
 
 def gather(cid: int, no: int, co: dict | None = None, settings: dict | None = None, les: dict | None = None) -> dict:
-    """Dars manbalari → {"content" (built/id/v dan tashqari), "files": {zip yo'li: Path|bytes}, "ready": {...}, "settings", "lesson"}.
-    Bloklar tartibi (kafedra shabloni): bo'lim «VIDEODARS» → video → bo'lim «MA'RUZA MATNI» → reja (sarlavha bilan) → matn → asosiy xulosalar
-    → adabiyotlar → bo'lim «DARS TAQDIMOTI» → taqdimot → qo'shimcha fayllar → test → o'z-o'zini baholash. Manbasi yo'q blok (va bo'limi) tushadi."""
+    """Dars manbalari → {"content" (built/id/v dan tashqari), "files": {zip yo'li: Path|bytes|BigFile}, "ready": {...}, "settings", "lesson"}.
+    Bloklar tartibi (kafedra shabloni, kontrakt v3): [muqova — content.cover] → bo'lim «VIDEODARS» → video (fayl yoki YouTube) → bo'lim «MA'RUZA MATNI»
+    → reja (sarlavha bilan) → matn → asosiy xulosalar → adabiyotlar → bo'lim «DARS TAQDIMOTI» → taqdimot (slayd izohi/audiosi) → qo'shimcha fayllar →
+    bo'lim «MASHQ VA TOPSHIRIQLAR» → kartochkalar → test (Test bank + moslashtirish/saralash) → topshiriq → o'z-o'zini baholash.
+    Manbasi yo'q blok (va bo'sh guruhning bo'limi) tushadi."""
     co = co or db.one(_con, "SELECT c.*, d.name dept, t.full_name teacher FROM dl_courses c LEFT JOIN departments d ON d.id=c.department_id "
                             "LEFT JOIN teachers t ON t.id=c.teacher_id WHERE c.id=?", (cid,))
     if not co: raise HTTPException(404, "Kurs topilmadi")
@@ -1581,13 +2116,21 @@ def gather(cid: int, no: int, co: dict | None = None, settings: dict | None = No
     limgs = _lesson_images(cid, no)
     media = {"images": {fn: {"caption": ((ts or {}).get("images") or {}).get(fn, {}).get("caption") or v["caption"]} for fn, v in limgs.items()},
              "tables": (ts or {}).get("tables") or {}}
-    stx = structure_text(ts["text"], title, media) if ts else {"plan": [], "html": "", "explicit_plan": False, "refs": [], "images": []}
+    ex = topic_extra(cid, no)
+    # «Savollar» bo'limi matndan FAQAT topshiriq blokida aynan o'sha (matndan olingan) ro'yxat ko'rsatilganda olinadi: qo'lda ro'yxat saqlangan
+    # (bo'sh ham — «topshiriq bloki yo'q») yoki blok o'chirilgan bo'lsa — savollar ma'ruza matnida qoladi (hech narsa yo'qolmaydi)
+    q_manual = isinstance(ex.get("questions"), list)
+    q_extract = bool(on.get("assignment")) and not q_manual
+    stx = (structure_text(ts["text"], title, media, assign=q_extract) if ts else
+           {"plan": [], "html": "", "explicit_plan": False, "refs": [], "images": [], "questions": [], "q_warn": {}})
+    q_found, q_warn = (stx["questions"], stx["q_warn"]) if q_extract or not ts else _assign_split(_tokens(ts["text"]))[1:]
     html_text = stx["html"]
     used = list(stx["images"])
     extra_figs = [fn for fn, v in limgs.items() if v["src"] == "manual" and fn not in used]   # qo'lda yuklangan, matnda havolasi yo'q — matn oxirida
     if extra_figs and (html_text or not ts):
         html_text += sanitize("".join(_fig_html(fn, media) for fn in extra_figs)); used += extra_figs
-    ready["text"] = {"ok": bool(ts and stx["html"]), "src": ts["src"] if ts else None, "name": ts["name"] if ts else None,
+    # matn manbasi faqat topshiriqlar ro'yxatidan iborat bo'lsa (amaliy mashg'ulot) — ro'yxat topshiriq blokiga o'tadi, matn bloki chiqmaydi: «matn bor»
+    ready["text"] = {"ok": bool(ts and (stx["html"] or stx["questions"])), "only_assignment": bool(ts and not stx["html"] and stx["questions"]), "src": ts["src"] if ts else None, "name": ts["name"] if ts else None,
                      "chars": ts["chars"] if ts else 0, "ts": ts["ts"] if ts else None, "by": ts["by"] if ts else None, "demo": bool(ts and ts["demo"])}
     ready["plan"] = {"ok": bool(stx["plan"]), "n": len(stx["plan"]), "explicit": stx["explicit_plan"], "items": stx["plan"], "heading": _lesson_heading(les)}
     ready["images"] = {"ok": bool(used), "n": len(used), "uploaded": len(limgs), "manual": sum(1 for v in limgs.values() if v["src"] == "manual"),
@@ -1640,6 +2183,11 @@ def gather(cid: int, no: int, co: dict | None = None, settings: dict | None = No
             slides.append({"title": "", "bullets": [], "notes": "", "image": pth})
         if imgs: ssrc = "images"
     if not ssrc and pdf: ssrc = "pdf"
+    caps, auds = ex.get("slides") or {}, _slide_audio(cid, no)     # slayd izohi va audiosi (Rise «karusel»i kabi) — slayd tartib raqami bo'yicha
+    for i, s_ in enumerate(slides, 1):
+        if caps.get(str(i)): s_["caption"] = caps[str(i)]
+        if i in auds:
+            s_["audio"] = f"assets/audio/s{i}.{auds[i]['kind']}"; files[s_["audio"]] = _apath(auds[i])
     display = "images" if slides and all(x["image"] for x in slides) else "text"
     sb = {"type": "slides", "title": "Taqdimot", "display": display, "slides": slides, "file": None, "pdf": None}
     if file_path: sb["file"] = "assets/taqdimot.pptx"; files["assets/taqdimot.pptx"] = file_path
@@ -1647,14 +2195,26 @@ def gather(cid: int, no: int, co: dict | None = None, settings: dict | None = No
     has_slides = bool(slides or sb["file"] or sb["pdf"])
     ready["slides"] = {"ok": has_slides, "src": ssrc, "n": len(slides), "file": bool(sb["file"]), "pdf": bool(sb["pdf"]), "display": display,
                        "images": sum(1 for x in slides if x["image"]), "deck_id": tr.get("deck_id"), "deck_title": deck["title"] if deck else None,
-                       "pdf_pages": json.loads(pdf["meta"] or "{}").get("pages") if pdf else None}
+                       "pdf_pages": json.loads(pdf["meta"] or "{}").get("pages") if pdf else None,
+                       "captions": sum(1 for x in slides if x.get("caption")), "audio": sum(1 for x in slides if x.get("audio"))}
     if not (on["slides"] and has_slides):
-        for k in [k for k in files if k.startswith("assets/slides/") or k in ("assets/taqdimot.pptx", "assets/taqdimot.pdf")]: files.pop(k)
+        for k in [k for k in files if k.startswith(("assets/slides/", "assets/audio/")) or k in ("assets/taqdimot.pptx", "assets/taqdimot.pdf")]: files.pop(k)
     # video
+    # video: yuklangan fayl (.mp4/.webm, subtitr va poster bilan) yoki havola (YouTube); ikkalasi ham bo'lsa — sozlama (video_source, standart: fayl)
     v = _video_source(cid, no, les)
-    ready["video"] = {"ok": bool(v and v["ok"]), "src": v["src"] if v else None, "url": (v.get("url") or v.get("raw")) if v else None,
-                      "provider": v.get("provider") if v else None, "video_id": v.get("video_id") if v else None,
-                      "error": v.get("error") if v and not v["ok"] else None, "demo": bool(v and v.get("demo"))}
+    vf = _latest_asset(cid, no, "video", VIDEO_KINDS)
+    use_file = bool(vf) and not (st.get("video_source") == "youtube" and v and v["ok"] and v["provider"] == "youtube")
+    subs = {}
+    for a in db.rows(_con, "SELECT * FROM pk_assets WHERE course_id=? AND topic_no=? AND purpose='subs' AND deleted=0 ORDER BY id", (cid, no)):
+        if _apath(a).is_file(): m_ = json.loads(a["meta"] or "{}"); subs[m_.get("lang") or "uz"] = (a, m_)
+    subs = [subs[k] for k in sorted(subs, key=lambda k: (k != "uz", k))]
+    poster = _latest_asset(cid, no, "poster")
+    ready["video"] = {"ok": bool(vf or (v and v["ok"])), "src": "fayl" if use_file else v["src"] if v else None, "url": (v.get("url") or v.get("raw")) if v else None,
+                      "provider": "file" if use_file else v.get("provider") if v else None, "video_id": v.get("video_id") if v else None,
+                      "error": v.get("error") if v and not v["ok"] else None, "demo": bool(v and v.get("demo")), "link_src": v["src"] if v else None,
+                      "file": {"id": vf["id"], "name": vf["name"], "kind": vf["kind"], "size": vf["size"]} if vf else None,
+                      "captions": [{"id": a["id"], "lang": m_.get("lang"), "label": m_.get("label"), "cues": m_.get("cues")} for a, m_ in subs],
+                      "poster": poster["id"] if poster else None, "both": bool(vf and v and v["ok"])}
     # qo'shimcha fayllar (+ asl ma'ruza fayli)
     extra = db.rows(_con, "SELECT * FROM pk_assets WHERE course_id=? AND topic_no=? AND purpose='fayl' AND deleted=0 ORDER BY id", (cid, no))
     extra = [a for a in extra if _apath(a).is_file()]
@@ -1671,7 +2231,26 @@ def gather(cid: int, no: int, co: dict | None = None, settings: dict | None = No
     # test
     rows = _quiz_rows(cid, no, les)
     picked = _pick_questions(rows, st["quiz_n"], cid, no)
-    ready["quiz"] = {"ok": bool(rows), "approved": len(rows), "used": len(picked)}
+    exs = exercises(cid, no)
+    act = [r for r in exs if r["status"] == "faol"]
+    fl, ms = [r for r in act if r["kind"] == "flashcards"], [r for r in act if r["kind"] in ("match", "sort")]
+    ready["exercises"] = {"ok": bool(act), "n": len(act), "draft": len(exs) - len(act), **{k: sum(1 for r in act if r["kind"] == k) for k in EX_KINDS}}
+    ready["quiz"] = {"ok": bool(rows or ms), "approved": len(rows), "used": len(picked), "exercises": len(ms)}
+    # topshiriq: savollar — qo'lda kiritilgan (extra.questions) yoki ma'ruza matnidagi «Savollar» bo'limidan; shablon matni — sozlamadan
+    asg = st["assignment"]
+    aq = [str(x) for x in ex["questions"]] if q_manual else list(stx["questions"])
+    avatar = _latest_asset(cid, 0, "avatar")
+    warn = []
+    if not q_extract: q_warn = {}                                          # ogohlantirish — faqat matndan olingan ro'yxat ishlatilganda
+    if q_warn.get("over"): warn.append(f"Matndagi «Savollar» ro'yxatida {ASSIGN_MAX} tadan ko'p band bor: ortiqcha {q_warn['over']} tasi topshiriqqa olinmadi — ma'ruza matnida qoldi")
+    if q_warn.get("long"): warn.append(f"Matndagi «Savollar» ro'yxatida {ASSIGN_ITEM_MAX} belgidan uzun band bor: shu banddan boshlab ro'yxat topshiriqqa olinmadi — ma'ruza matnida qoldi")
+    ready["assignment"] = {"ok": bool(aq), "n": len(aq), "src": None if not aq else "manual" if q_manual else "matn",
+                           "manual": q_manual, "found": len(q_found), "items": aq, "avatar": avatar["id"] if avatar else None,
+                           "text": asg["text"], "author": asg["author"], "warnings": warn, "max": ASSIGN_MAX}
+    # muqova: rasm (dars > kurs > bo'lim standarti) + muallif (standart — kurs o'qituvchisi; dars bo'yicha tahrirlanadi)
+    cov = _cover_source(cid, no)
+    author = str(ex["author"]) if "author" in ex else _short(co.get("teacher") or "")
+    ready["cover"] = {"ok": bool(on.get("cover")), "image": cov[0]["id"] if cov else None, "src": cov[1] if cov else None, "author": author, "custom": "author" in ex}
     rf = st["reflect"]
     ready["reflect"] = {"ok": bool(on.get("reflect")), "question": rf["question"]}
     # bloklar — shablon tartibida
@@ -1681,7 +2260,16 @@ def gather(cid: int, no: int, co: dict | None = None, settings: dict | None = No
         if on.get("sections"): blocks.append({"type": "section", "title": sec[key]})
         blocks.extend(group)
     vg = []
-    if on["video"] and v and v["ok"]:
+    if on["video"] and use_file:
+        vn = f"assets/video/video.{vf['kind']}"
+        files[vn] = BigFile(_apath(vf), vf["sha256"], int(vf["size"] or 0))
+        vb = {"type": "video", "title": "Videodars", "provider": "file", "src": vn, "poster": None, "captions": []}
+        if poster: vb["poster"] = "assets/video/video.jpg"; files[vb["poster"]] = _apath(poster)
+        for a, m_ in subs:
+            sn = f"assets/video/video.{m_.get('lang') or 'uz'}.vtt"; files[sn] = _apath(a)
+            vb["captions"].append({"lang": m_.get("lang") or "uz", "label": m_.get("label") or SUB_LANGS.get(m_.get("lang"), "Subtitr"), "src": sn})
+        vg.append(vb)
+    elif on["video"] and v and v["ok"]:
         if v["provider"] == "youtube":
             vg.append({"type": "video", "title": "Videodars", "provider": "youtube", "video_id": v["video_id"], "url": v["url"], "start": v["start"]})
         else:
@@ -1700,7 +2288,10 @@ def gather(cid: int, no: int, co: dict | None = None, settings: dict | None = No
     section("slides", [sb] if on["slides"] and has_slides else [])
     if on["files"]:
         for b_, nm, pth in fblocks: blocks.append(b_); files[nm] = pth
-    if on["quiz"] and picked:
+    pg = []                                                   # «MASHQ VA TOPSHIRIQLAR»: kartochkalar → test → topshiriq
+    if on.get("flashcards"):
+        for r in fl: pg.append({"type": "flashcards", "title": r["title"] or EX_STEMS["flashcards"], "cards": json.loads(r["data"] or "{}").get("cards") or []})
+    if on["quiz"] and (picked or ms):
         qs = []
         for r in picked:
             opts = json.loads(r["options"] or "[]"); corr = json.loads(r["correct"] or "[]"); ans = json.loads(r["answers"] or "[]")
@@ -1709,8 +2300,17 @@ def gather(cid: int, no: int, co: dict | None = None, settings: dict | None = No
             qs.append({"id": f"q{r['id']}", "type": r["qtype"] if r["qtype"] in ("mcq", "tf", "fill") else "mcq", "stem": r["stem"] or "",
                        "options": opts if r["qtype"] != "fill" else [], "correct": [int(x) for x in corr] if r["qtype"] != "fill" else [],
                        "answers": ans if r["qtype"] == "fill" else [], "explanation": r["explanation"] or ""})
-        blocks.append({"type": "quiz", "title": "Test", "pass_pct": st["mastery"], "shuffle": st["shuffle"], "attempts": st["attempts"],
-                       "show_feedback": st["show_feedback"], "questions": qs})
+        for r in ms:                                          # mashqlar — Test bank savollaridan keyin; baholanadi (hammasi to'g'ri = 1, aks holda 0)
+            d_ = json.loads(r["data"] or "{}")
+            qs.append({"id": f"x{r['id']}", "type": r["kind"], "stem": r["title"] or EX_STEMS[r["kind"]],
+                       **({"pairs": d_.get("pairs") or []} if r["kind"] == "match" else {"categories": d_.get("categories") or []}), "explanation": r["explanation"] or ""})
+        pg.append({"type": "quiz", "title": "Test", "pass_pct": st["mastery"], "shuffle": st["shuffle"], "attempts": st["attempts"],
+                   "show_feedback": st["show_feedback"], "questions": qs})
+    if on.get("assignment") and aq:
+        ab = {"type": "assignment", "title": asg["title"], "text": asg["text"], "author": asg["author"], "avatar": None, "questions": aq}
+        if avatar: ab["avatar"] = "assets/img/avatar.jpg"; files[ab["avatar"]] = _apath(avatar)
+        pg.append(ab)
+    section("practice", pg)
     content_blocks = [b_ for b_ in blocks if b_["type"] != "section"]
     if on.get("reflect") and content_blocks:
         blocks.append({"type": "reflect", "title": rf["title"], "question": rf["question"], "options": [dict(o) for o in rf["options"]]})
@@ -1723,9 +2323,11 @@ def gather(cid: int, no: int, co: dict | None = None, settings: dict | None = No
                           "kafedra": co.get("dept") or "", "teacher": _short(co.get("teacher") or "")},
                "topic": {"no": int(les["no"]), "title": title},
                "lesson": {"code": les["code"], "kind": les["kind"], "no": int(les["no"]), "title": title},
+               **({"cover": {"image": "assets/cover.jpg" if cov else None, "author": author}} if on.get("cover") else {}),
                "brand": {"name": "ISFT", "full": _brand_full(), "color": BRAND_COLOR, "logo": "assets/logo.png"},
                "blocks": blocks,
                "tracking": {"mode": st["mode"], "completion": completion, "mastery": st["mastery"], "activity_id": activity}}
+    if on.get("cover") and cov: files["assets/cover.jpg"] = _apath(cov[0])
     logo = _logo_path()
     if logo: files["assets/logo.png"] = logo
     else: content["brand"]["logo"] = None
@@ -1733,7 +2335,7 @@ def gather(cid: int, no: int, co: dict | None = None, settings: dict | None = No
     ready["complete"] = all(ready[k]["ok"] for k in req)
     ready["missing"] = [k for k in req if not ready[k]["ok"]]
     ready["blocks"] = len(blocks)
-    ready["buildable"] = any(b_["type"] in ("text", "slides", "video", "file") for b_ in blocks)
+    ready["buildable"] = any(b_["type"] in ("text", "slides", "video", "file", "assignment", "quiz", "flashcards") for b_ in blocks)
     return {"content": content, "files": files, "ready": ready, "settings": st, "course": co, "lesson": les}
 
 def _brand_full() -> str:
@@ -1852,19 +2454,80 @@ def manifest_tincan(acts: list[dict]) -> str:
 </tincan>
 """
 
-_STORED_EXT = (".png", ".jpg", ".jpeg", ".gif", ".pptx", ".docx", ".xlsx", ".pdf", ".zip", ".woff", ".woff2", ".mp4", ".webp")
+# Siqilmaydigan (ZIP_STORED) turlar: allaqachon siqilgan; video/audio — qayta siqilmaydi va ko'rishda (preview) HTTP Range bilan zip ichidan o'qiladi
+_STORED_EXT = (".png", ".jpg", ".jpeg", ".gif", ".pptx", ".docx", ".xlsx", ".pdf", ".zip", ".woff", ".woff2", ".mp4", ".webp", ".webm", ".mp3", ".m4a", ".ogg", ".wav")
+STREAM_FROM = 8 * 1024 * 1024       # kurs paketida shundan katta (siqilmagan) ichki fayl xotiraga o'qilmaydi — oqim bilan ko'chiriladi
 
-def zip_bytes(entries: dict[str, bytes]) -> bytes:
-    """Deterministik zip: tartiblangan yozuvlar, qotirilgan vaqt va atributlar."""
-    bio = io.BytesIO()
-    with zipfile.ZipFile(bio, "w") as z:
+class BigFile:
+    """Katta manba fayl (video): paketga diskdan oqim bilan yoziladi; sha256 — yuklashda hisoblangani (barmoq izi uchun qayta o'qilmaydi)."""
+    __slots__ = ("path", "sha256", "size")
+    def __init__(self, path, sha256: str, size: int): self.path, self.sha256, self.size = Path(path), sha256, int(size)
+
+class ZipMember:
+    """Boshqa zip ichidagi (siqilmagan) katta fayl — kurs paketiga oqim bilan ko'chiriladi."""
+    __slots__ = ("zip", "name", "size")
+    def __init__(self, zip_path, name: str, size: int): self.zip, self.name, self.size = Path(zip_path), name, int(size)
+
+@contextlib.contextmanager
+def _entry_open(v):
+    if isinstance(v, ZipMember):
+        with zipfile.ZipFile(v.zip) as z, z.open(v.name) as f: yield f
+    else:
+        with open(v.path if isinstance(v, BigFile) else v, "rb") as f: yield f
+
+def _entry_size(v) -> int:
+    return len(v) if isinstance(v, (bytes, bytearray)) else v.size if isinstance(v, (BigFile, ZipMember)) else Path(v).stat().st_size
+
+def zip_write(entries: dict, out) -> None:
+    """Deterministik zip → out (fayl obyekti): tartiblangan yozuvlar, qotirilgan vaqt va atributlar. Qiymat — baytlar yoki diskdagi fayl
+    (Path / BigFile / ZipMember): ular 1 MB bo'laklar bilan ko'chiriladi — xotiraga to'liq o'qilmaydi."""
+    with zipfile.ZipFile(out, "w") as z:
         for name in sorted(entries):
+            v = entries[name]
             zi = zipfile.ZipInfo(name, date_time=FIXED_TS)
             zi.create_system = 3
             zi.external_attr = 0o100644 << 16
             zi.compress_type = zipfile.ZIP_STORED if name.lower().endswith(_STORED_EXT) else zipfile.ZIP_DEFLATED
-            z.writestr(zi, entries[name], compresslevel=6 if zi.compress_type == zipfile.ZIP_DEFLATED else None)
+            lvl = 6 if zi.compress_type == zipfile.ZIP_DEFLATED else None
+            if isinstance(v, (bytes, bytearray)):
+                z.writestr(zi, v, compresslevel=lvl)
+            else:
+                zi.file_size = _entry_size(v); zi._compresslevel = lvl
+                with _entry_open(v) as src, z.open(zi, "w") as dst: shutil.copyfileobj(src, dst, 1024 * 1024)
+
+def zip_bytes(entries: dict) -> bytes:
+    """Deterministik zip (xotirada) — kichik paketlar va testlar uchun; paket yig'ish — _emit (diskka, xotirada nusxasiz)."""
+    bio = io.BytesIO(); zip_write(entries, bio)
     return bio.getvalue()
+
+def _has_video(names) -> bool:
+    return any(re.search(r"(?:^|/)assets/video/[^/]+\.(?:mp4|webm)$", n) for n in names)
+
+def _size_guard(entries: dict) -> None:
+    """Paket chegarasi zip YOZILISHIDAN OLDIN tekshiriladi (fayllar o'qilmaydi — faqat hajmi): siqilmay yoziladigan (ZIP_STORED) yozuvlar zipda
+    aynan o'z hajmini egallaydi, shuning uchun ularning yig'indisi chegaradan oshsa paket ham oshadi — 413. Chegara validate_zip bilan bir xil:
+    video fayl kirgan paket — package_max(True), aks holda 200 MB. (Siqiladigan yozuvlar hisobga olinmaydi — yakuniy hajmni validate_zip tekshiradi.)"""
+    video = _has_video(entries)
+    lim = package_max(video)
+    total = sum(_entry_size(v) for n, v in entries.items() if n.lower().endswith(_STORED_EXT))
+    if total > lim:
+        raise HTTPException(413, f"Paket hajmi {lim // (1024 * 1024)} MB dan oshadi (fayllar jami {total // (1024 * 1024)} MB) — " +
+                                 ("videoni kichraytiring yoki YouTube havolasidan foydalaning" if video else "taqdimot, audio yoki qo'shimcha fayllarni kamaytiring"))
+
+def _emit(entries: dict, d: Path) -> Path:
+    """Zip → d katalogidagi vaqtinchalik fayl (Path): oqim bilan yoziladi, xotirada to'liq nusxa (BytesIO + getvalue) hosil bo'lmaydi; keyin
+    _store_package uni o'z nomiga ko'chiradi (os.replace — o'sha diskda). Hajm — yozishdan oldin (_size_guard, 413)."""
+    _size_guard(entries)
+    d.mkdir(parents=True, exist_ok=True)
+    tmp = d / f"build_{secrets.token_hex(6)}.tmp"
+    try:
+        with open(tmp, "wb") as f: zip_write(entries, f)
+    except BaseException:
+        tmp.unlink(missing_ok=True); raise
+    return tmp
+
+def _drop(data) -> None:
+    if isinstance(data, Path): data.unlink(missing_ok=True)
 
 def player_files(player_dir: Path | None = None) -> dict[str, bytes]:
     pd = Path(player_dir or PLAYER_DIR)
@@ -1878,16 +2541,16 @@ def player_files(player_dir: Path | None = None) -> dict[str, bytes]:
         out[rel] = p.read_bytes()
     return out
 
-def _read(v) -> bytes: return v if isinstance(v, (bytes, bytearray)) else Path(v).read_bytes()
-
 def _sco_mastery(content: dict):
     t = content.get("tracking") or {}
     return t.get("mastery") if t.get("completion") in ("quiz_pass", "view_and_quiz") and any(b.get("type") == "quiz" for b in content.get("blocks") or []) else None
 
-def build_zip(content: dict, files: dict, mode: str, player_dir: Path | None = None) -> bytes:
-    """Bitta mavzu paketi (bayt). Bir xil kirish → bir xil sha256."""
+def build_zip(content: dict, files: dict, mode: str, player_dir: Path | None = None, out_dir: Path | None = None):
+    """Bitta mavzu paketi. Bir xil kirish → bir xil sha256. Manba fayllar (Path / BigFile) xotiraga o'qilmaydi — zipga diskdan oqim bilan
+    ko'chiriladi. out_dir berilsa — zip shu katalogdagi vaqtinchalik faylga yoziladi va Path qaytadi (hajm oldindan tekshiriladi — 413);
+    aks holda bayt (xotirada — testlar va kichik paketlar uchun)."""
     entries = dict(player_files(player_dir))
-    for k, v in files.items(): entries[k] = _read(v)
+    entries.update(files)
     content = json.loads(json.dumps(content))
     content.setdefault("tracking", {})["mode"] = mode
     entries["content.js"] = content_js(content)
@@ -1903,7 +2566,7 @@ def build_zip(content: dict, files: dict, mode: str, player_dir: Path | None = N
                                                  "description": f"{c.get('subject', '')} · {(content.get('lesson') or {}).get('code') or str((content.get('topic') or {}).get('no', '')) + '-mavzu'}",
                                                  "launch": "index.html"}]).encode("utf-8")
     elif mode != "none": raise HTTPException(400, "Paket turi noma'lum")
-    return zip_bytes(entries)
+    return _emit(entries, out_dir) if out_dir is not None else zip_bytes(entries)
 
 
 # =============================================================================================
@@ -1915,7 +2578,8 @@ _ADL12 = "http://www.adlnet.org/xsd/adlcp_rootv1p2"
 _ADL04 = "http://www.adlnet.org/xsd/adlcp_v1p3"
 _TC = "http://projecttincan.com/tincan.xsd"
 _EXT_SCRIPT_OK = re.compile(r"^https://(www\.)?(youtube\.com|youtube-nocookie\.com)/", re.I)
-BLOCK_TYPES = {"section", "plan", "text", "keypoints", "refs", "slides", "video", "file", "quiz", "reflect"}
+BLOCK_TYPES = {"section", "plan", "text", "keypoints", "refs", "slides", "video", "file", "quiz", "reflect", "flashcards", "assignment"}
+_strs = lambda v, lo=1: isinstance(v, list) and len(v) >= lo and all(isinstance(x, str) and x.strip() for x in v)
 _IMG_SRC_RX = re.compile(r"<img\b[^>]*\ssrc=\"([^\"]*)\"", re.I)
 
 def _bad_path(n: str) -> bool:
@@ -1934,6 +2598,9 @@ def _check_content(raw: bytes, base: str, names: set, errors: list, where: str) 
         if k not in c: errors.append(f"{where}: «{k}» yo'q")
     refs = []
     if (c.get("brand") or {}).get("logo"): refs.append(c["brand"]["logo"])
+    if c.get("cover") is not None:
+        if not isinstance(c["cover"], dict) or not isinstance(c["cover"].get("author", ""), str): errors.append(f"{where}: cover — {{image, author}} kerak")
+        elif c["cover"].get("image"): refs.append(c["cover"]["image"])
     ids = set()
     for b in c.get("blocks") or []:
         if b.get("type") not in BLOCK_TYPES: errors.append(f"{where}: noma'lum blok turi {b.get('type')!r}")
@@ -1950,20 +2617,47 @@ def _check_content(raw: bytes, base: str, names: set, errors: list, where: str) 
         if b.get("type") == "slides" and b.get("display") not in (None, "images", "text"): errors.append(f"{where}: slides.display noto'g'ri")
         if b.get("type") == "slides":
             refs += [s["image"] for s in b.get("slides") or [] if s.get("image")]
+            refs += [s["audio"] for s in b.get("slides") or [] if s.get("audio")]
             refs += [b[k] for k in ("file", "pdf") if b.get(k)]
         if b.get("type") == "file": refs.append(b.get("href") or "")
         if b.get("type") == "video" and b.get("provider") == "youtube" and not YT_ID.match(b.get("video_id") or ""):
             errors.append(f"{where}: video ID noto'g'ri")
+        if b.get("type") == "video" and b.get("provider") == "file":
+            if not re.fullmatch(r"assets/video/[A-Za-z0-9_\-.]+\.(mp4|webm)", b.get("src") or ""): errors.append(f"{where}: video fayl yo'li noto'g'ri {b.get('src')!r}")
+            refs.append(b.get("src") or "")
+            if b.get("poster"): refs.append(b["poster"])
+            for cp in b.get("captions") or []:
+                if not (isinstance(cp, dict) and re.fullmatch(r"[a-z]{2,3}", str(cp.get("lang") or "")) and str(cp.get("label") or "").strip()
+                        and str(cp.get("src") or "").endswith(".vtt")): errors.append(f"{where}: subtitr — lang, label va .vtt src kerak"); continue
+                refs.append(cp["src"])
+        elif b.get("type") == "video" and b.get("provider") not in ("youtube", "file"): errors.append(f"{where}: video provider noma'lum {b.get('provider')!r}")
+        if b.get("type") == "quiz":
+            for x in b.get("questions") or []:
+                if x.get("type") == "match" and not (isinstance(x.get("pairs"), list) and len(x["pairs"]) >= 2 and
+                                                    all(isinstance(p, dict) and str(p.get("left") or "").strip() and str(p.get("right") or "").strip() for p in x["pairs"])):
+                    errors.append(f"{where}: {x.get('id')} (match) — kamida 2 ta to'liq juft kerak")
+                if x.get("type") == "sort" and not (isinstance(x.get("categories"), list) and len(x["categories"]) >= 2 and
+                                                   all(isinstance(k, dict) and str(k.get("title") or "").strip() and _strs(k.get("items")) for k in x["categories"])):
+                    errors.append(f"{where}: {x.get('id')} (sort) — kamida 2 ta toifa, har birida element kerak")
+        if b.get("type") == "flashcards" and not (isinstance(b.get("cards"), list) and b["cards"] and
+                                                  all(isinstance(k, dict) and str(k.get("front") or "").strip() and str(k.get("back") or "").strip() for k in b["cards"])):
+            errors.append(f"{where}: flashcards bloki — cards (old va orqa tomon) kerak")
+        if b.get("type") == "assignment":
+            if not (_strs(b.get("questions")) and str(b.get("text") or "").strip()): errors.append(f"{where}: assignment bloki — matn va savollar ro'yxati kerak")
+            if b.get("avatar"): refs.append(b["avatar"])
     for r in refs:
         if not r or _bad_path(r) or re.match(r"^[a-z]+:", r, re.I): errors.append(f"{where}: noto'g'ri yo'l {r!r}"); continue
         if base + r not in names: errors.append(f"{where}: fayl yo'q {r}")
     return c
 
-def validate_zip(data: bytes) -> dict:
-    """Paketni tekshirish → {"ok", "errors", "warnings", "mode", "files", "size", "scos"}."""
+def validate_zip(data) -> dict:
+    """Paketni tekshirish → {"ok", "errors", "warnings", "mode", "files", "size", "scos"}. data — baytlar yoki diskdagi zip (Path — katta paket
+    xotiraga o'qilmaydi). Hajm chegarasi: video fayl bor paket — package_max(True) (ISFT_CORE_PK_PACKAGE_MB), aks holda 200 MB."""
     errors, warns, root = [], [], None
-    out = {"ok": False, "errors": errors, "warnings": warns, "mode": None, "files": 0, "size": len(data), "scos": 0}
-    try: z = zipfile.ZipFile(io.BytesIO(data))
+    mem = isinstance(data, (bytes, bytearray))
+    size = len(data) if mem else Path(data).stat().st_size
+    out = {"ok": False, "errors": errors, "warnings": warns, "mode": None, "files": 0, "size": size, "scos": 0}
+    try: z = zipfile.ZipFile(io.BytesIO(data) if mem else Path(data))
     except zipfile.BadZipFile:
         errors.append("Zip fayl emas"); return out
     with z:
@@ -1972,7 +2666,8 @@ def validate_zip(data: bytes) -> dict:
         out["files"] = len(names)
         for n in names:
             if _bad_path(n): errors.append(f"Mutlaq yoki «..» yo'l: {n}")
-        if len(data) > MAX_PACKAGE: errors.append(f"Paket hajmi {MAX_PACKAGE // (1024 * 1024)} MB dan katta")
+        lim = package_max(_has_video(names))
+        if size > lim: errors.append(f"Paket hajmi {lim // (1024 * 1024)} MB dan katta")
         launches = []
         if "imsmanifest.xml" in names:
             try: root = ET.fromstring(z.read("imsmanifest.xml"))
@@ -2071,7 +2766,9 @@ def validate_zip(data: bytes) -> dict:
 def _fingerprint(content: dict, files: dict, mode: str, pf: dict) -> str:
     h = hashlib.sha256()
     h.update(mode.encode()); h.update(json.dumps(content, sort_keys=True, ensure_ascii=False).encode("utf-8"))
-    for k in sorted(files): h.update(k.encode()); h.update(_sha(_read(files[k])).encode())
+    for k in sorted(files):          # manba fayl xotiraga o'qilmaydi: video — yuklashda hisoblangan sha256, boshqalari — oqim bilan (_file_sha)
+        v = files[k]
+        h.update(k.encode()); h.update((v.sha256 if isinstance(v, BigFile) else _sha(v) if isinstance(v, (bytes, bytearray)) else _file_sha(Path(v))).encode())
     for k in sorted(pf): h.update(k.encode()); h.update(_sha(pf[k]).encode())
     return h.hexdigest()
 
@@ -2093,15 +2790,28 @@ def _prune(cid: int, no: int):
         except OSError: pass
         _con.execute("DELETE FROM pk_packages WHERE id=?", (r["id"],))
 
-def _store_package(c: Ctx | None, cid: int, no: int, data: bytes, mode: str, status: str, settings: dict, fp: str, val: dict, ready: dict,
+def _file_sha(p: Path) -> str:
+    h = hashlib.sha256()
+    with open(p, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""): h.update(chunk)
+    return h.hexdigest()
+
+def _store_package(c: Ctx | None, cid: int, no: int, data, mode: str, status: str, settings: dict, fp: str, val: dict, ready: dict,
                    version: int, src="") -> int:
+    """data — baytlar yoki diskdagi tayyor zip (Path, _emit — o'sha katalogda): joyiga ko'chiriladi, sha256 oqim bilan BIR MARTA hisoblanadi.
+    fp=None — barmoq izi sifatida shu sha256 yoziladi (kurs paketi: tayyor zip ikki marta o'qilmaydi)."""
     d = _pkg_dir(cid, no); d.mkdir(parents=True, exist_ok=True)
     fn = f"v{version}_{mode}.zip"
-    tmp = d / (fn + ".tmp"); tmp.write_bytes(data); os.replace(tmp, d / fn)
+    if isinstance(data, Path):
+        size, sha = data.stat().st_size, _file_sha(data); os.replace(data, d / fn)
+    else:
+        size, sha = len(data), _sha(data)
+        tmp = d / (fn + ".tmp"); tmp.write_bytes(data); os.replace(tmp, d / fn)
+    if fp is None: fp = sha
     pid = _con.execute("""INSERT INTO pk_packages(course_id,topic_no,version,mode,status,settings,content_hash,built_at,built_by,built_by_name,file,size,
                           sha256,validation,readiness,src,lesson) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                        (cid, no, version, mode, status, json.dumps(settings), fp, _now(), c.user["id"] if c else None,
-                        c.user["full_name"] if c else "Tizim", str(Path("packages") / str(cid) / str(no) / fn), len(data), _sha(data),
+                        c.user["full_name"] if c else "Tizim", str(Path("packages") / str(cid) / str(no) / fn), size, sha,
                         json.dumps(val, ensure_ascii=False), json.dumps(ready, ensure_ascii=False), src, lesson_code(no) if no else "kurs")).lastrowid
     return pid
 
@@ -2126,7 +2836,7 @@ def build_topic(c: Ctx | None, cid: int, no: int, mode: str | None = None, force
         st = _build_settings(cid, no, mode)
         g = gather(cid, no, co, st, les)
     if not g["ready"]["buildable"]:
-        raise HTTPException(400, "Paket uchun kamida bitta kontent bloki kerak: ma'ruza matni, taqdimot yoki video")
+        raise HTTPException(400, "Paket uchun kamida bitta kontent bloki kerak: ma'ruza matni, taqdimot, video, topshiriq yoki mashq")
     les = g["lesson"]
     pf = player_files()
     fp = _fingerprint(g["content"], g["files"], st["mode"], pf)
@@ -2137,10 +2847,13 @@ def build_topic(c: Ctx | None, cid: int, no: int, mode: str | None = None, force
             return {"ok": True, "unchanged": True, "package": pack_row(same)}
         version = (last["version"] if last else 0) + 1
         content = {"v": 1, "id": f"isft-{int(cid)}-{int(no)}-v{version}", **{k: v for k, v in g["content"].items() if k != "v"}, "built": _now()}
-        content = {k: content[k] for k in ("v", "id", "title", "lang", "layout", "course", "topic", "lesson", "brand", "built", "blocks", "tracking")}
-        data = build_zip(content, g["files"], st["mode"])
-        val = validate_zip(data)
+        content = {k: content[k] for k in ("v", "id", "title", "lang", "layout", "cover", "course", "topic", "lesson", "brand", "built", "blocks", "tracking") if k in content}
+        data = build_zip(content, g["files"], st["mode"], out_dir=_pkg_dir(cid, no))     # video fayl bo'lsa — diskka oqim bilan (Path)
+        try: val = validate_zip(data)
+        except BaseException:
+            _drop(data); raise
         if not val["ok"]:
+            _drop(data)
             _log(c, cid, no, "yig'ish xatosi", "; ".join(val["errors"])[:400]); _con.commit()
             if c: rbac.audit(_con, c, "paket: tekshiruvdan o'tmadi", RES, True, f"kurs #{cid} · {lesson_code(no)} · {val['errors'][:2]}")
             raise HTTPException(422, "Paket tekshiruvdan o'tmadi: " + "; ".join(val["errors"][:3]))
@@ -2150,7 +2863,7 @@ def build_topic(c: Ctx | None, cid: int, no: int, mode: str | None = None, force
         _log(c, cid, no, "yig'ildi", f"v{version} · {MODES[st['mode']]} · {status}", pid)
         _prune(cid, no)
         _con.commit()
-    if c: rbac.audit(_con, c, "paket: yig'ildi", RES, True, f"kurs #{cid} · {lesson_code(no)} · v{version} · {st['mode']} · {len(data)} bayt")
+    if c: rbac.audit(_con, c, "paket: yig'ildi", RES, True, f"kurs #{cid} · {lesson_code(no)} · v{version} · {st['mode']} · {val['size']} bayt")
     return {"ok": True, "unchanged": False, "package": pack_row(db.one(_con, "SELECT * FROM pk_packages WHERE id=?", (pid,))), "validation": val}
 
 def build_course(c: Ctx, cid: int, mode: str = "scorm12", only_approved: bool = False) -> dict:
@@ -2166,9 +2879,11 @@ def build_course(c: Ctx, cid: int, mode: str = "scorm12", only_approved: bool = 
         if not pick or not (store() / pick["file"]).is_file(): continue
         pre = f"t{les['no']:02d}/" if les["kind"] == "maruza" else f"{KINDS[les['kind']][0].lower()}{les['no']:02d}/"
         with zipfile.ZipFile(store() / pick["file"]) as z:
-            for nm in z.namelist():
+            for zi in z.infolist():
+                nm = zi.filename
                 if nm.endswith("/") or nm in ("imsmanifest.xml", "tincan.xml"): continue
-                entries[pre + nm] = z.read(nm)
+                big = zi.compress_type == zipfile.ZIP_STORED and zi.file_size > STREAM_FROM      # video — xotiraga o'qilmaydi
+                entries[pre + nm] = ZipMember(store() / pick["file"], nm, zi.file_size) if big else z.read(nm)
         t = entries[pre + "content.js"].decode("utf-8")
         cj = json.loads(t[len("window.PAKET = "):-1])
         cj["tracking"]["mode"] = mode
@@ -2188,10 +2903,14 @@ def build_course(c: Ctx, cid: int, mode: str = "scorm12", only_approved: bool = 
         if mode == "scorm12": entries["imsmanifest.xml"] = manifest_scorm12(ident, title, scos, names).encode("utf-8")
         elif mode == "scorm2004": entries["imsmanifest.xml"] = manifest_scorm2004(ident, title, scos, names).encode("utf-8")
         else: entries["tincan.xml"] = manifest_tincan(acts).encode("utf-8")
-        data = zip_bytes(entries)
-        val = validate_zip(data)
-        if not val["ok"]: raise HTTPException(500, "Kurs paketi tekshiruvdan o'tmadi: " + "; ".join(val["errors"][:3]))
-        pid = _store_package(c, cid, 0, data, mode, "tayyor", {"mode": mode, "only_approved": only_approved, "topics": used}, _sha(data), val,
+        data = _emit(entries, _pkg_dir(cid, 0))
+        try: val = validate_zip(data)
+        except BaseException:
+            _drop(data); raise
+        if not val["ok"]:
+            _drop(data); raise HTTPException(500, "Kurs paketi tekshiruvdan o'tmadi: " + "; ".join(val["errors"][:3]))
+        pid = _store_package(c, cid, 0, data, mode, "tayyor", {"mode": mode, "only_approved": only_approved, "topics": used},
+                             None, val,
                              {"topics": len(used)}, version)
         _log(c, cid, 0, "kurs paketi", f"v{version} · {mode} · {len(used)} mavzu", pid)
         _prune(cid, 0)
@@ -2248,6 +2967,7 @@ PREVIEW_CSP = ("default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-
 _CT = {"html": "text/html; charset=utf-8", "htm": "text/html; charset=utf-8", "js": "text/javascript; charset=utf-8", "css": "text/css; charset=utf-8",
        "json": "application/json; charset=utf-8", "xml": "application/xml; charset=utf-8", "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
        "gif": "image/gif", "svg": "image/svg+xml", "webp": "image/webp", "ico": "image/x-icon", "pdf": "application/pdf", "woff": "font/woff", "woff2": "font/woff2",
+       "mp4": "video/mp4", "webm": "video/webm", "mp3": "audio/mpeg", "m4a": "audio/mp4", "ogg": "audio/ogg", "wav": "audio/wav", "vtt": "text/vtt; charset=utf-8",
        "txt": "text/plain; charset=utf-8", "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
 
@@ -2297,18 +3017,62 @@ def preview_redirect(c: Ctx, pid: int, path: str, query: str = "") -> Response:
     return RedirectResponse(f"{P}/pv/{preview_token(pid, c.user['id'])}/{quote(path, safe='/')}" + (f"?{q}" if q else ""), 302,
                             headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
 
-def preview_file(c: Ctx, pid: int, path: str) -> Response:
+_MEDIA_EXT = ("mp4", "webm", "mp3", "m4a", "ogg", "wav")
+
+def _stored_span(f: Path, zi: zipfile.ZipInfo) -> tuple[int, int] | None:
+    """Siqilmagan (ZIP_STORED), shifrlanmagan a'zoning zip faylidagi ma'lumot oralig'i (boshlanish ofseti, uzunlik) — lokal sarlavhadan.
+    Shu oraliq to'g'ridan-to'g'ri diskdan o'qiladi (zip ochilmaydi, fayl xotiraga o'qilmaydi). Siqilgan a'zo — None."""
+    if zi.compress_type != zipfile.ZIP_STORED or zi.flag_bits & 0x1: return None
+    with open(f, "rb") as fh:
+        fh.seek(zi.header_offset); h = fh.read(30)
+    if len(h) != 30 or h[:4] != b"PK\x03\x04": return None
+    n, m = struct.unpack("<HH", h[26:30])
+    return zi.header_offset + 30 + n + m, zi.file_size
+
+def parse_range(header: str, size: int) -> tuple[int, int] | None:
+    """HTTP Range: «bytes=a-b», «bytes=a-» yoki «bytes=-n» (oxirgi n bayt) → (boshi, oxiri — ikkalasi ham kiradi).
+    Noto'g'ri yozilgan, bir nechta oraliq yoki qondirib bo'lmaydigan (boshi ≥ hajm, a > b, n = 0) — None (→ 416)."""
+    m = re.fullmatch(r"\s*bytes\s*=\s*(\d{0,18})\s*-\s*(\d{0,18})\s*", header or "")
+    if not m or not (m[1] or m[2]) or size <= 0: return None
+    if not m[1]:
+        n = int(m[2])
+        return (max(0, size - n), size - 1) if n > 0 else None
+    a, b = int(m[1]), min(int(m[2]), size - 1) if m[2] else size - 1
+    return (a, b) if a <= b and a < size else None
+
+def preview_file(c: Ctx, pid: int, path: str, rng: str | None = None) -> Response:
+    """Saqlangan zip ichidagi fayl. Media (video/audio) va boshqa katta siqilmagan a'zolar — diskdan oqim bilan, HTTP Range bilan
+    (206 + Content-Range; noto'g'ri oraliq — 416): video ko'rishda oldinga/orqaga o'tkaziladi, fayl xotiraga to'liq o'qilmaydi."""
     r, _ = _package(c, pid)
     path = _preview_path(c, pid, path)
     f = store() / r["file"]
     if not f.is_file(): raise HTTPException(410, "Paket fayli saqlanmagan (eski versiya o'chirilgan)")
-    with zipfile.ZipFile(f) as z:
-        try: data = z.read(path)
-        except KeyError: raise HTTPException(404, "Paket ichida bunday fayl yo'q")
     ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
-    return Response(data, media_type=_CT.get(ext, "application/octet-stream"),
-                    headers={"Content-Security-Policy": PREVIEW_CSP, "X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=60",
-                             "Referrer-Policy": "no-referrer"})
+    with zipfile.ZipFile(f) as z:
+        try: zi = z.getinfo(path)
+        except KeyError: raise HTTPException(404, "Paket ichida bunday fayl yo'q")
+        span = _stored_span(f, zi) if ext in _MEDIA_EXT or zi.file_size > STREAM_FROM else None
+        data = None if span else z.read(zi)
+    hd = {"Content-Security-Policy": PREVIEW_CSP, "X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=60", "Referrer-Policy": "no-referrer"}
+    if ext in _MEDIA_EXT or ext == "vtt": hd["Access-Control-Allow-Origin"] = "*"    # sandbox («null» origin) ichidagi <video crossorigin> / <track> uchun; yo'l imzolangan
+    ct = _CT.get(ext, "application/octet-stream")
+    if span is None: return Response(data, media_type=ct, headers=hd)
+    off, size = span
+    hd["Accept-Ranges"] = "bytes"
+    a, b, status = 0, size - 1, 200
+    if rng:
+        pr = parse_range(rng, size)
+        if pr is None: return Response(status_code=416, headers={**hd, "Content-Range": f"bytes */{size}"})
+        a, b = pr; status = 206; hd["Content-Range"] = f"bytes {a}-{b}/{size}"
+    hd["Content-Length"] = str(b - a + 1)
+    def body():
+        with open(f, "rb") as fh:
+            fh.seek(off + a); left = b - a + 1
+            while left > 0:
+                chunk = fh.read(min(256 * 1024, left))
+                if not chunk: break
+                left -= len(chunk); yield chunk
+    return StreamingResponse(body(), status_code=status, media_type=ct, headers=hd)
 
 
 # =============================================================================================
@@ -2319,7 +3083,7 @@ def readiness_map() -> dict:
     Zaxira manbalar (Test bank matni/savollari, monitoring videosi) — mavzu bo'yicha; mavzuga bog'langan (topic_ref) darslarga ham o'tadi (gather kabi)."""
     out = {}
     def mark(k, cid, no):
-        out.setdefault((cid, no), {"text": False, "slides": False, "video": False, "quiz": False})[k] = True
+        out.setdefault((cid, no), {"text": False, "slides": False, "video": False, "quiz": False, "exercises": False})[k] = True
     has = lambda t: bool(db.one(_con, "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (t,)))
     tb_text = {(r["course_id"], r["topic_no"]) for r in db.rows(_con, "SELECT DISTINCT course_id, topic_no FROM tb_sources")} if has("tb_sources") else set()
     tb_quiz = ({(r["course_id"], r["topic_no"]) for r in db.rows(_con, "SELECT DISTINCT course_id, topic_no FROM tb_questions WHERE status='tasdiqlandi' AND deleted=0")}
@@ -2348,6 +3112,10 @@ def readiness_map() -> dict:
         if r["deck_id"]: mark("slides", r["course_id"], r["topic_no"])
     for k, u in vids.items():
         if parse_video(u)["ok"]: mark("video", *k)
+    for r in db.rows(_con, "SELECT DISTINCT course_id, topic_no FROM pk_assets WHERE deleted=0 AND purpose='video'"): mark("video", r["course_id"], r["topic_no"])
+    for r in db.rows(_con, "SELECT DISTINCT course_id, topic_no, kind FROM pk_exercises WHERE deleted=0 AND status='faol'"):   # gather kabi: moslashtirish/saralash — test
+        mark("exercises", r["course_id"], r["topic_no"])
+        if r["kind"] in ("match", "sort"): mark("quiz", r["course_id"], r["topic_no"])
     return out
 
 def _pkg_map() -> dict:
@@ -2368,13 +3136,13 @@ def course_rows(c: Ctx) -> list[dict]:
     out = []
     for co in courses:
         keys = lk.get(co["id"]) or list(range(1, int(co["topics"] or 15) + 1))
-        row = {**co, "teacher": _short(co["teacher"]), "built": 0, "approved": 0, "waiting": 0, "text": 0, "slides": 0, "video": 0, "quiz": 0, "full": 0,
+        row = {**co, "teacher": _short(co["teacher"]), "built": 0, "approved": 0, "waiting": 0, "text": 0, "slides": 0, "video": 0, "quiz": 0, "exercises": 0, "full": 0,
                "lessons": len(keys), "by_kind": {}}
         for no in keys:
             kind = split_key(no)[0]
             row["by_kind"][kind] = row["by_kind"].get(kind, 0) + 1
             r = rd.get((co["id"], no)) or {}
-            for k in ("text", "slides", "video", "quiz"): row[k] += bool(r.get(k))
+            for k in ("text", "slides", "video", "quiz", "exercises"): row[k] += bool(r.get(k))
             row["full"] += all(r.get(k) for k in ("text", "slides", "video", "quiz"))
             p_ = pk.get((co["id"], no))
             if p_:
@@ -2389,7 +3157,7 @@ def course_rows(c: Ctx) -> list[dict]:
 def coverage(c: Ctx) -> dict:
     """Qamrov — darslar bo'yicha (L + A/S/Lab/MT). «topics» — darslar soni (eski nom saqlangan), «by_kind» — tur bo'yicha."""
     rows = course_rows(c)
-    F = ("built", "approved", "waiting", "text", "slides", "video", "quiz", "full")
+    F = ("built", "approved", "waiting", "text", "slides", "video", "quiz", "exercises", "full")
     def agg(key, label):
         out = {}
         for r in rows:
@@ -2415,7 +3183,7 @@ def course_view(c: Ctx, cid: int) -> dict:
         no = l["key"]
         r = rd.get((cid, no)) or {}
         p_ = pk.get((cid, no))
-        topics.append({**l, "no": no, "lesson_no": l["no"], **{k: bool(r.get(k)) for k in ("text", "slides", "video", "quiz")},
+        topics.append({**l, "no": no, "lesson_no": l["no"], **{k: bool(r.get(k)) for k in ("text", "slides", "video", "quiz", "exercises")},
                        "last": {"id": p_["last"]["id"], "version": p_["last"]["version"], "status": p_["last"]["status"], "mode": p_["last"]["mode"],
                                 "built_at": p_["last"]["built_at"]} if p_ else None, "approved": bool(p_ and p_["approved"])})
     k = c.role.key
@@ -2424,7 +3192,8 @@ def course_view(c: Ctx, cid: int) -> dict:
     return {"course": {"id": co["id"], "subject": co["subject"], "direction": co["direction"], "course": co["course"], "dept": co["dept"],
                        "teacher": _short(co["teacher"]), "topics": int(co["topics"] or 15), "lessons": len(topics)},
             "topics": topics, "kinds": {k_: {"prefix": v[0], "label": v[2], "plural": v[3]} for k_, v in KINDS.items()},
-            "course_packages": [pack_row(r) for r in cp], "can": {"write": own, "approve": k in DEPT}}
+            "course_packages": [pack_row(r) for r in cp], "can": {"write": own, "approve": k in DEPT},
+            "media": {p_: (a_["id"] if (a_ := _latest_asset(cid, 0, p_)) else None) for p_ in ("muqova", "avatar")}}
 
 def topic_view(c: Ctx, cid: int, no: int) -> dict:
     co = _course(c, cid); les = _check_topic(co, no)
@@ -2432,7 +3201,7 @@ def topic_view(c: Ctx, cid: int, no: int) -> dict:
     g = gather(cid, no, co, st, les)
     ts = _text_source(cid, no, les)
     text_html = next((b["html"] for b in g["content"]["blocks"] if b["type"] == "text" and b["title"] == "Ma'ruza matni"), "")
-    if not text_html and ts: text_html = structure_text(ts["text"], g["content"]["title"])["html"]
+    if not text_html and ts: text_html = structure_text(ts["text"], g["content"]["title"], assign=bool(st["blocks"].get("assignment")) and not g["ready"]["assignment"]["manual"])["html"]
     text_html = text_html.replace('src="assets/img/', f'src="{P}/courses/{int(cid)}/topics/{int(no)}/img/')    # ilovada ko'rish uchun
     assets = db.rows(_con, "SELECT id, purpose, kind, name, size, ts, user_name, src, meta FROM pk_assets WHERE course_id=? AND topic_no=? AND deleted=0 ORDER BY id DESC", (cid, no))
     pk = db.rows(_con, "SELECT * FROM pk_packages WHERE course_id=? AND topic_no=? ORDER BY version DESC", (cid, no))
@@ -2447,12 +3216,17 @@ def topic_view(c: Ctx, cid: int, no: int) -> dict:
         if a["purpose"] == "rasm" and m.get("src") == "docx": continue          # Word ichidagi rasmlar — «Rasmlar» bo'limida soni ko'rsatiladi
         a.update(user_name=_short(a["user_name"]), demo=a["src"] == "demo")
         if a["purpose"] == "rasm": a.update(caption=m.get("caption") or "", marker=f"[RASM:{a['name']}]")
+        if a["purpose"] == "subs": a.update(caption=f"{m.get('label') or ''} ({m.get('lang') or ''}) · {m.get('cues') or 0} yozuv")
+        if a["purpose"] == "audio": a.update(caption=f"{m.get('slide')}-slayd audiosi")
         alist.append(a)
     return {"course": {"id": co["id"], "subject": co["subject"], "direction": co["direction"], "course": co["course"], "topics": int(co["topics"] or 15)},
             "topic": {"no": no, "title": g["content"]["title"]}, "lesson": les, "ready": g["ready"], "settings": st, "override": over,
             "text_html": text_html[:150_000], "plan": g["ready"]["plan"]["items"], "heading": g["ready"]["plan"]["heading"], "refs": g["ready"]["refs"]["items"],
-            "slides": [{"title": s_["title"], "bullets": s_["bullets"][:6], "notes": bool(s_["notes"]), "image": bool(s_["image"])} for s_ in (slides_b or {}).get("slides", [])[:60]],
+            "slides": [{"title": s_["title"], "bullets": s_["bullets"][:6], "notes": bool(s_["notes"]), "image": bool(s_["image"]), "caption": s_.get("caption") or "",
+                        "audio": bool(s_.get("audio"))} for s_ in (slides_b or {}).get("slides", [])[:MAX_SLIDES]],
+            "slide_audio": {str(n_): {"id": a_["id"], "name": a_["name"], "kind": a_["kind"]} for n_, a_ in _slide_audio(cid, no).items()},
             "quiz_preview": [{"type": q_["type"], "stem": q_["stem"]} for q_ in (quiz_b or {}).get("questions", [])[:50]],
+            "exercises": [ex_row(r_) for r_ in exercises(cid, no)],
             "assets": alist, "keypoints": {"draft": kp.get("draft") or None, "approved": kp.get("approved") or None, "ai": CC_has_key()},
             "packages": [pack_row(r) for r in pk], "decks": decks_for(c, co) if own else [],
             "blocks": [{"type": b["type"], "title": b["title"]} for b in g["content"]["blocks"]], "layout": g["content"]["layout"],
@@ -2603,6 +3377,121 @@ def save_keypoints(c: Ctx, cid: int, no: int, items: list, approve: bool, clear:
 
 
 # =============================================================================================
+# AI: mashqlar (moslashtirish juftlari + kartochkalar, ixtiyoriy — saralash) — faqat dars matni yuboriladi; har band matndagi iqtibos bilan tekshiriladi
+# =============================================================================================
+_EXQ = {"type": "string"}
+EX_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["pairs", "cards", "categories"], "properties": {
+    "pairs": {"type": "array", "items": {"type": "object", "additionalProperties": False, "required": ["left", "right", "quote"],
+                                         "properties": {"left": _EXQ, "right": _EXQ, "quote": _EXQ}}},
+    "cards": {"type": "array", "items": {"type": "object", "additionalProperties": False, "required": ["front", "back", "quote"],
+                                         "properties": {"front": _EXQ, "back": _EXQ, "quote": _EXQ}}},
+    "categories": {"type": "array", "items": {"type": "object", "additionalProperties": False, "required": ["title", "items"], "properties": {
+        "title": _EXQ, "items": {"type": "array", "items": {"type": "object", "additionalProperties": False, "required": ["text", "quote"],
+                                                            "properties": {"text": _EXQ, "quote": _EXQ}}}}}}}}
+EX_SYSTEM = ("Siz oliy ta'lim muassasasi uchun ma'ruza matnidan interaktiv mashqlar tayyorlaydigan metodistsiz. Faqat berilgan matnga tayaning — "
+             "matnda yo'q fakt, atama yoki ta'rif qo'shmang. Javob o'zbek tilida (lotin yozuvida).\n"
+             "Qoidalar: 1) pairs — moslashtirish uchun 4–8 juft: left — atama yoki tushuncha (≤ 80 belgi), right — uning matndagi ta'rifi/izohi (≤ 160 belgi); "
+             "chap va o'ng tomonlar takrorlanmasin, har juft bir ma'noli bo'lsin; 2) cards — 6–12 kartochka: front — atama yoki qisqa savol, back — javob (1–2 gap); "
+             "3) categories — faqat so'ralsa: 2–4 toifa, har birida 2–6 qisqa element (har element faqat bitta toifaga tegishli); so'ralmasa — bo'sh ro'yxat; "
+             "4) quote — har juft / kartochka / element asoslangan jumlani matndan AYNAN ko'chiring (o'zgartirmasdan, ≤ 300 belgi).")
+
+def ai_exercises(c: Ctx, cid: int, no: int, sort: bool = False) -> dict:
+    """«AI: mashqlar» — dars matni (faqat matn) → Claude (claude_client.call_json, qat'iy sxema) → moslashtirish juftlari + kartochkalar (+ saralash).
+    Iqtibosi matnda topilmagan band tashlanadi (testbank._quote_in). Natija — QORALAMA mashqlar (pk_exercises.status='qoralama', src='ai'):
+    o'qituvchi tahrirlab saqlamaguncha paketga kirmaydi. Oldingi AI qoralamalari almashtiriladi. Cheklov va model — AI xulosalar bilan bir xil."""
+    from . import claude_client as CC, testbank as TB
+    co = _course(c, cid, write=True); les = _check_topic(co, no)
+    if not CC.has_key():
+        rbac.audit(_con, c, "paket: AI mashqlar — AI ulanmagan", RES, True, f"kurs #{cid} · {les['code']}")
+        raise HTTPException(503, "AI ulanmagan: mashqlar uchun ANTHROPIC_API_KEY sozlanmagan. Administratorga murojaat qiling. "
+                                 "Mashqlarni hozircha qo'lda kiritishingiz mumkin.")
+    ts = _text_source(cid, no, les)
+    if not ts or len(_plain(ts["text"]).strip()) < 200: raise HTTPException(400, "Avval ma'ruza matnini yuklang (kamida 200 belgi)")
+    day = clock.today().isoformat()
+    if db.one(_con, "SELECT COUNT(*) n FROM pk_ai WHERE user_id=? AND day=?", (c.user["id"], day))["n"] >= pk_daily():
+        raise HTTPException(429, f"Kunlik cheklov: bir foydalanuvchi uchun kuniga {pk_daily()} ta AI so'rovi. Ertaga davom ettiring.")
+    # save_exercise bilan bir xil chegara. Oldingi AI qoralamalari almashtiriladi — ular hisobga kirmaydi. To'lgan bo'lsa AI chaqirilmaydi
+    ex_count = lambda: db.one(_con, "SELECT COUNT(*) n FROM pk_exercises WHERE course_id=? AND topic_no=? AND deleted=0 AND NOT (status='qoralama' AND src='ai')", (cid, no))["n"]
+    ex_msg = f"Bitta darsda ko'pi bilan {MAX_EXERCISES} ta mashq: AI qoralamalari uchun joy yo'q. Avval keraksiz mashqlarni o'chiring"
+    ex_need = 3 if sort else 2                                             # AI ko'pi bilan shuncha mashq qaytaradi (moslashtirish + kartochkalar [+ saralash])
+    if ex_count() + ex_need > MAX_EXERCISES:
+        raise HTTPException(400, ex_msg + f" (hozir {ex_count()} ta; kamida {ex_need} ta bo'sh joy kerak)")
+    text = _plain(ts["text"])
+    src_text = text[:KP_MAX_CHARS]
+    prompt = (f"Dars: {les['code']} — {les['title']}\nFan: {co['subject']}\n"
+              f"{'(Matn uzun — faqat boshlang`ich qismi berildi.)' if len(text) > KP_MAX_CHARS else ''}\n\nMA'RUZA MATNI:\n<<<\n{src_text}\n>>>\n\n"
+              f"Shu matn bo'yicha moslashtirish juftlari (pairs) va kartochkalar (cards) tayyorlang. Saralash mashqi (categories): "
+              f"{'kerak' if sort else 'kerak emas — bo`sh ro`yxat qaytaring'}.")
+    t0 = time.time(); err = None; info = {"in": 0, "out": 0, "model": pk_model()}; made, dropped = [], 0
+    grounded = lambda q_: bool(q_) and TB._quote_in(q_, src_text)
+    try:
+        data, info = CC.call_json(model=pk_model(), system=EX_SYSTEM, content=[{"type": "text", "text": prompt}], schema=EX_SCHEMA,
+                                  max_tokens=6000, effort="medium", timeout=180, what="mashqlar")
+        data = data if isinstance(data, dict) else {}
+        key = lambda t: t.translate(_APOS).casefold()
+        pairs, cards, cats, seen_l, seen_r, seen_f, seen_i, seen_c = [], [], [], set(), set(), set(), set(), set()
+        for it in data.get("pairs") or []:
+            it = it if isinstance(it, dict) else {}
+            l_, r_, q_ = _ws(it.get("left"), 200), _ws(it.get("right"), 200), _ws(it.get("quote"), 400)
+            if l_ and r_ and grounded(q_) and key(l_) not in seen_l and key(r_) not in seen_r and len(pairs) < 8:
+                pairs.append({"left": l_, "right": r_, "quote": q_}); seen_l.add(key(l_)); seen_r.add(key(r_))
+            else: dropped += 1
+        for it in data.get("cards") or []:
+            it = it if isinstance(it, dict) else {}
+            f_, b_, q_ = _ws(it.get("front"), 200), _ws(it.get("back"), 500), _ws(it.get("quote"), 400)
+            if f_ and b_ and grounded(q_) and key(f_) not in seen_f and len(cards) < 12: cards.append({"front": f_, "back": b_, "quote": q_}); seen_f.add(key(f_))
+            else: dropped += 1
+        for ct in (data.get("categories") or []) if sort else []:
+            ct = ct if isinstance(ct, dict) else {}
+            t_, items = _ws(ct.get("title"), 80), []
+            for it in ct.get("items") or []:
+                it = it if isinstance(it, dict) else {}
+                x_, q_ = _ws(it.get("text"), 120), _ws(it.get("quote"), 400)
+                if x_ and grounded(q_) and key(x_) not in seen_i and len(items) < 8: items.append({"text": x_, "quote": q_}); seen_i.add(key(x_))
+                else: dropped += 1
+            if t_ and items and key(t_) not in seen_c and len(cats) < 4: cats.append({"title": t_, "items": items}); seen_c.add(key(t_))
+            else: dropped += len(items)
+        if len(pairs) >= 2:
+            made.append(("match", {"pairs": [{"left": p["left"], "right": p["right"]} for p in pairs]},
+                         [{"text": f"{p['left']} — {p['right']}", "quote": p["quote"]} for p in pairs]))
+        else: dropped += len(pairs)
+        if cards:
+            made.append(("flashcards", {"cards": [{"front": x["front"], "back": x["back"]} for x in cards]}, [{"text": x["front"], "quote": x["quote"]} for x in cards]))
+        if len(cats) >= 2:
+            made.append(("sort", {"categories": [{"title": x["title"], "items": [i["text"] for i in x["items"]]} for x in cats]},
+                         [{"text": f"{x['title']}: {i['text']}", "quote": i["quote"]} for x in cats for i in x["items"]]))
+        else: dropped += sum(len(x["items"]) for x in cats)
+        made = [(k, clean_exercise(k, d_), q_) for k, d_, q_ in made]
+        if not made: err = "AI matnga asoslangan mashq qaytarmadi (iqtiboslar matnda topilmadi) — qayta urinib ko'ring yoki qo'lda kiriting"
+    except CC.AIError as e:
+        err = str(e)
+    except Exception as e:
+        err = f"AI javobini qayta ishlab bo'lmadi: {type(e).__name__}"
+    ids, over = [], None
+    with _lock:
+        _con.execute("INSERT INTO pk_ai(course_id,topic_no,user_id,day,ts,kind,model,ok,ms,err,in_tok,out_tok,n_got,n_dropped) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                     (cid, no, c.user["id"], day, _now(), "exercises", info.get("model"), 0 if err else 1, int((time.time() - t0) * 1000), err,
+                      info.get("in", 0), info.get("out", 0), len(made), dropped))
+        if not err and ex_count() + len(made) > MAX_EXERCISES:        # save_exercise bilan bir xil chegara (qulf ostida qayta tekshiriladi); eski qoralamalar joyida qoladi
+            over = ex_msg + f" (mavjud {ex_count()} ta + yangi {len(made)} ta)"
+        if not err and not over:
+            _con.execute("UPDATE pk_exercises SET deleted=1, updated_at=? WHERE course_id=? AND topic_no=? AND status='qoralama' AND src='ai' AND deleted=0", (_now(), cid, no))
+            pos = db.one(_con, "SELECT COALESCE(MAX(pos),0) p FROM pk_exercises WHERE course_id=? AND topic_no=?", (cid, no))["p"] or 0
+            for k, x, quotes in made:
+                pos += 1
+                ids.append(_con.execute("""INSERT INTO pk_exercises(course_id,topic_no,kind,title,data,explanation,status,src,pos,user_id,user_name,ts,updated_at)
+                                           VALUES(?,?,?,?,?,?,'qoralama','ai',?,?,?,?,?)""",
+                                        (cid, no, k, x["title"], json.dumps({**x["data"], "quotes": quotes, "model": info.get("model")}, ensure_ascii=False), "",
+                                         pos, c.user["id"], c.user["full_name"], _now(), _now())).lastrowid)
+            _log(c, cid, no, "AI mashqlar (qoralama)", f"{len(made)} ta mashq · tashlandi {dropped}")
+        _con.commit()
+    rbac.audit(_con, c, "paket: AI mashqlar", RES, True, f"kurs #{cid} · {les['code']} · {len(made)} ta · tashlandi {dropped}{' · xato' if err else ''}")
+    if err: raise HTTPException(502, err)
+    if over: raise HTTPException(400, over)
+    return {"ok": True, "dropped": dropped, "exercises": [ex_row(db.one(_con, "SELECT * FROM pk_exercises WHERE id=?", (i,))) for i in ids]}
+
+
+# =============================================================================================
 # Avtomatik joylash: video havolalar va ommaviy yig'ish
 # =============================================================================================
 def bulk_videos(c: Ctx, cid: int, text: str, apply: bool) -> dict:
@@ -2687,9 +3576,12 @@ def api_meta(request: Request):
                                  OR EXISTS(SELECT 1 FROM pk_assets a WHERE a.course_id=c.id AND a.src='demo' AND a.deleted=0)) LIMIT 1""", sa))
     return {"role": k, "tabs": tabs, "today": clock.today().isoformat(), "demo": demo, "player": player_ok(),
             "modes": MODES, "completion": COMPLETION, "status": STATUS, "blocks": BLOCKS, "required": list(REQUIRED), "defaults": defaults(),
-            "layouts": LAYOUTS, "sections": SECTIONS, "reflect_default": REFLECT,
+            "layouts": LAYOUTS, "sections": SECTIONS, "reflect_default": REFLECT, "assignment_default": ASSIGNMENT, "video_sources": VIDEO_SOURCES,
+            "ex_kinds": EX_KINDS, "sub_langs": SUB_LANGS, "default_cover": (a_["id"] if k in WORK and (a_ := _latest_asset(0, 0, "muqova")) else None),
             "kinds": {k: {"prefix": v[0], "label": v[2], "plural": v[3]} for k, v in KINDS.items()}, "ai": CC_has_key() and k in AUTHORS,
-            "limits": {"asset_mb": MAX_ASSET // (1024 * 1024), "package_mb": MAX_PACKAGE // (1024 * 1024), "keep": KEEP_VERSIONS},
+            "limits": {"asset_mb": MAX_ASSET // (1024 * 1024), "package_mb": MAX_PACKAGE // (1024 * 1024), "keep": KEEP_VERSIONS,
+                       "video_mb": video_max() // (1024 * 1024), "package_video_mb": package_max(True) // (1024 * 1024), "audio_mb": MAX_AUDIO // (1024 * 1024), "audio_total_mb": MAX_AUDIO_TOTAL // (1024 * 1024),
+                       "subs_mb": MAX_SUBS // (1024 * 1024), "exercises": MAX_EXERCISES},
             "caps": {"write": k in AUTHORS, "build": k in AUTHORS, "approve": k in DEPT, "settings": k in DEPT, "view": k in WORK, "download": k in WORK},
             "scope": ("O'z kafedrangiz kurslari (ko'rish va yuklab olish)" if k == KAF else "O'z kurslaringiz" if k == TEACH else
                       "Jamlangan qamrov" if k in LEAD else "Masofaviy ta'lim — barcha kurslar")}
@@ -2725,15 +3617,15 @@ def api_topic(cid: int, no: int, request: Request):
     c = C(request); guard(c, "mavzu", WORK, f"kurs #{cid} · {lesson_code(no)}")
     return topic_view(c, cid, no)
 
-def _len_guard(request: Request):
+def _len_guard(request: Request, limit: int = MAX_ASSET):
     try: n = int(request.headers.get("content-length") or 0)
     except ValueError: n = 0
-    if n > MAX_ASSET: raise HTTPException(413, f"Fayl hajmi {MAX_ASSET // (1024 * 1024)} MB dan oshmasin")
+    if n > limit: raise HTTPException(413, f"Fayl hajmi {limit // (1024 * 1024)} MB dan oshmasin")
 
 async def _read_body(request: Request, limit: int = MAX_ASSET) -> bytes:
     """Yuklangan fayl tanasi — oqim bilan, hisoblagich bilan: Content-Length bo'lmasa (chunked) yoki yolg'on bo'lsa ham
     chegaradan oshgan zahoti 413 (butun tana xotiraga o'qilmaydi)."""
-    _len_guard(request)
+    _len_guard(request, limit)
     buf = bytearray()
     async for chunk in request.stream():
         buf += chunk
@@ -2813,6 +3705,121 @@ def api_keypoints(cid: int, no: int, body: KeypointsIn, request: Request):
     c = C(request); guard(c, "asosiy xulosalar", AUTHORS, f"kurs #{cid} · {lesson_code(no)}")
     return save_keypoints(c, cid, no, body.items, body.approve, body.clear)
 
+# --- Rise 360: video fayl, subtitr, poster, muqova, o'qituvchi rasmi, slayd izohi/audiosi, mashqlar, topshiriq ---------------------------
+@router.post(P + "/courses/{cid}/topics/{no}/video/file")
+async def api_video_file(cid: int, no: int, request: Request, name: str = "video"):
+    """Video fayl (.mp4 / .webm) — tana DISKKA oqim bilan yoziladi (xotiraga yig'ilmaydi). Ruxsat va ko'lam tana o'qilishidan OLDIN tekshiriladi."""
+    c = C(request); guard(c, "video fayl yuklash", AUTHORS, f"kurs #{cid} · {lesson_code(no)} · {name[:60]}")
+    co = _course(c, cid, write=True); _check_topic(co, no)
+    up = await _stream_upload(request, video_max(), VIDEO_KINDS, "Video: .mp4 yoki .webm (fayl turi tarkibidan aniqlanadi)")
+    return await run_in_threadpool(upload_video, c, cid, no, up, name[:160])
+
+@router.post(P + "/courses/{cid}/topics/{no}/video/captions")
+async def api_video_captions(cid: int, no: int, request: Request, name: str = "subtitr", lang: str = "uz", label: str = ""):
+    c = C(request); guard(c, "subtitr yuklash", AUTHORS, f"kurs #{cid} · {lesson_code(no)} · {name[:60]} · {lang[:8]}")
+    raw = await _read_body(request, MAX_SUBS)
+    return await run_in_threadpool(upload_subs, c, cid, no, raw, name[:160], lang[:8], label[:60])
+
+@router.post(P + "/courses/{cid}/topics/{no}/video/poster")
+async def api_video_poster(cid: int, no: int, request: Request, name: str = "poster"):
+    c = C(request); guard(c, "video posteri yuklash", AUTHORS, f"kurs #{cid} · {lesson_code(no)} · {name[:60]}")
+    raw = await _read_body(request)
+    return await run_in_threadpool(upload_slot_image, c, "poster", cid, no, raw, name[:160])
+
+@router.post(P + "/courses/{cid}/topics/{no}/cover")
+async def api_cover_lesson(cid: int, no: int, request: Request, name: str = "muqova"):
+    c = C(request); guard(c, "dars muqovasi yuklash", AUTHORS, f"kurs #{cid} · {lesson_code(no)} · {name[:60]}")
+    raw = await _read_body(request)
+    return await run_in_threadpool(upload_slot_image, c, "muqova", cid, no, raw, name[:160])
+
+class CoverIn(BaseModel):
+    author: str | None = Field(None, max_length=200)
+
+@router.post(P + "/courses/{cid}/topics/{no}/cover/meta")
+def api_cover_meta(cid: int, no: int, body: CoverIn, request: Request):
+    c = C(request); guard(c, "muqova muallifi", AUTHORS, f"kurs #{cid} · {lesson_code(no)}")
+    return set_cover_meta(c, cid, no, body.author)
+
+@router.post(P + "/courses/{cid}/cover")
+async def api_cover_course(cid: int, request: Request, name: str = "muqova"):
+    c = C(request); guard(c, "kurs muqovasi yuklash", AUTHORS, f"kurs #{cid} · {name[:60]}")
+    raw = await _read_body(request)
+    return await run_in_threadpool(upload_slot_image, c, "muqova", cid, 0, raw, name[:160])
+
+@router.post(P + "/courses/{cid}/avatar")
+async def api_avatar(cid: int, request: Request, name: str = "rasm"):
+    c = C(request); guard(c, "o'qituvchi rasmi yuklash", AUTHORS, f"kurs #{cid} · {name[:60]}")
+    raw = await _read_body(request)
+    return await run_in_threadpool(upload_slot_image, c, "avatar", cid, 0, raw, name[:160])
+
+@router.post(P + "/settings/cover")
+async def api_cover_default(request: Request, name: str = "muqova"):
+    c = C(request); guard(c, "standart muqova yuklash", DEPT, name[:60])
+    raw = await _read_body(request)
+    return await run_in_threadpool(upload_slot_image, c, "muqova", 0, 0, raw, name[:160])
+
+@router.post(P + "/courses/{cid}/topics/{no}/slides/{n}/audio")
+async def api_slide_audio(cid: int, no: int, n: int, request: Request, name: str = "audio"):
+    c = C(request); guard(c, "slayd audiosi yuklash", AUTHORS, f"kurs #{cid} · {lesson_code(no)} · {n}-slayd · {name[:60]}")
+    raw = await _read_body(request, MAX_AUDIO)
+    return await run_in_threadpool(upload_slide_audio, c, cid, no, n, raw, name[:160])
+
+class SlideMetaIn(BaseModel):
+    captions: dict = Field(default_factory=dict)
+
+@router.post(P + "/courses/{cid}/topics/{no}/slides/meta")
+def api_slide_meta(cid: int, no: int, body: SlideMetaIn, request: Request):
+    c = C(request); guard(c, "slayd izohlari", AUTHORS, f"kurs #{cid} · {lesson_code(no)}")
+    if len(body.captions) > MAX_SLIDES: raise HTTPException(400, "Juda ko'p slayd")
+    return set_slide_captions(c, cid, no, body.captions)
+
+class AssignIn(BaseModel):
+    questions: list | None = Field(None, max_length=500)
+
+@router.post(P + "/courses/{cid}/topics/{no}/assignment")
+def api_assignment(cid: int, no: int, body: AssignIn, request: Request):
+    c = C(request); guard(c, "topshiriq savollari", AUTHORS, f"kurs #{cid} · {lesson_code(no)}")
+    return set_assignment(c, cid, no, body.questions)
+
+class ExerciseIn(BaseModel):
+    kind: str | None = Field(None, max_length=20)
+    stem: str | None = Field(None, max_length=1000)
+    title: str | None = Field(None, max_length=1000)
+    pairs: list | None = Field(None, max_length=40)
+    categories: list | None = Field(None, max_length=20)
+    cards: list | None = Field(None, max_length=120)
+    explanation: str | None = Field(None, max_length=2000)
+    status: str | None = Field(None, max_length=20)
+
+@router.get(P + "/courses/{cid}/topics/{no}/exercises")
+def api_exercises(cid: int, no: int, request: Request):
+    c = C(request); guard(c, "mashqlar", WORK, f"kurs #{cid} · {lesson_code(no)}")
+    return exercise_list(c, cid, no)
+
+@router.post(P + "/courses/{cid}/topics/{no}/exercises")
+def api_exercise_add(cid: int, no: int, body: ExerciseIn, request: Request):
+    c = C(request); guard(c, "mashq qo'shish", AUTHORS, f"kurs #{cid} · {lesson_code(no)} · {body.kind}")
+    return save_exercise(c, cid, no, body.kind or "", body.model_dump())
+
+class AiExIn(BaseModel):
+    sort: bool = False
+
+@router.post(P + "/courses/{cid}/topics/{no}/exercises/ai")
+async def api_exercises_ai(cid: int, no: int, body: AiExIn, request: Request):
+    c = C(request); guard(c, "AI: mashqlar", AUTHORS, f"kurs #{cid} · {lesson_code(no)}")
+    return await run_in_threadpool(ai_exercises, c, cid, no, body.sort)
+
+@router.post(P + "/exercises/{eid}")
+def api_exercise_save(eid: int, body: ExerciseIn, request: Request):
+    c = C(request); guard(c, "mashqni tahrirlash", AUTHORS, f"#{eid}")
+    return save_exercise(c, 0, 0, "", body.model_dump(), eid)
+
+@router.post(P + "/exercises/{eid}/delete")
+def api_exercise_delete(eid: int, request: Request):
+    c = C(request); guard(c, "mashqni o'chirish", AUTHORS, f"#{eid}")
+    return delete_exercise(c, eid)
+
+
 @router.get(P + "/assets/{aid}")
 def api_asset(aid: int, request: Request):
     c = C(request); guard(c, "manba faylini yuklab olish", WORK, f"#{aid}")
@@ -2847,6 +3854,8 @@ class SettingsIn(BaseModel):
     layout: str | None = None
     sections: dict | None = None
     reflect: dict | None = None
+    assignment: dict | None = None
+    video_source: str | None = None
     mode: str | None = None
     completion: str | None = None
     mastery: int | None = Field(None, ge=0, le=100)
@@ -2924,10 +3933,10 @@ def api_preview(pid: int, path: str, request: Request):
     return preview_redirect(c, pid, path, request.url.query)
 
 @router.get(P + "/pv/{token}/{path:path}")
-def api_preview_signed(token: str, path: str):
-    """Ko'rish fayllari — imzolangan yo'l orqali (cookie'siz; sandbox iframe ichki so'rovlari uchun)."""
+def api_preview_signed(token: str, path: str, request: Request):
+    """Ko'rish fayllari — imzolangan yo'l orqali (cookie'siz; sandbox iframe ichki so'rovlari uchun). Media — HTTP Range bilan."""
     c, pid = preview_ctx(token)
-    return preview_file(c, pid, path)
+    return preview_file(c, pid, path, request.headers.get("range"))
 
 class ActIn(BaseModel):
     action: str
@@ -2942,6 +3951,8 @@ class DefaultsIn(BaseModel):
     layout: str = "steps"
     sections: dict = {}
     reflect: dict = {}
+    assignment: dict = {}
+    video_source: str = "file"
     mode: str
     completion: str
     mastery: int = Field(60, ge=0, le=100)
@@ -2954,7 +3965,8 @@ class DefaultsIn(BaseModel):
 @router.post(P + "/settings")
 def api_settings(body: DefaultsIn, request: Request):
     c = C(request); guard(c, "umumiy sozlamalar", DEPT)
-    if body.mode not in MODES or body.completion not in COMPLETION or body.layout not in LAYOUTS: raise HTTPException(400, "Sozlama qiymati noto'g'ri")
+    if body.mode not in MODES or body.completion not in COMPLETION or body.layout not in LAYOUTS or body.video_source not in VIDEO_SOURCES:
+        raise HTTPException(400, "Sozlama qiymati noto'g'ri")
     s = _clean_settings(body.model_dump(), DEFAULTS)
     with _lock:
         _con.execute("INSERT OR REPLACE INTO pk_meta(k,v) VALUES('defaults', ?)", (json.dumps(s),)); _con.commit()

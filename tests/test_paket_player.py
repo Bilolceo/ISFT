@@ -2,7 +2,8 @@
 
 Ishga tushirish:  .venv/bin/python tests/test_paket_player.py
    (yoki: python tests/run_all.py --only paket_player — server kerak emas, ISFT_TEST_URL e'tiborsiz qoldiriladi)
-Brauzer sinovi (SCORM 1.2 / SCORM 2004 / xAPI / NEXTID-mustaqil / ko'rish rejimi, qadamlar, 390px, qorong'i rejim) faqat PW va CHROME berilganda:
+Brauzer sinovi (SCORM 1.2 / SCORM 2004 / xAPI / NEXTID-mustaqil / ko'rish rejimi, qadamlar, kontrakt v3 bloklari — muqova, fayl-video,
+match/sort, kartochkalar, topshiriq — 390px, qorong'i rejim) faqat PW va CHROME berilganda:
    PW=/path/node_modules/playwright-core CHROME=/path/to/chrome .venv/bin/python tests/test_paket_player.py
    (skrinshotlar: OUT muhit o'zgaruvchisi; tools/paket_player_check.js ga qarang)
 """
@@ -23,7 +24,7 @@ files = [p for p in PL.rglob("*") if p.is_file() and p.name != ".DS_Store"]
 names = {str(p.relative_to(PL)) for p in files}
 ok({"index.html", "player.js", "player.css"} <= names, "index.html, player.js, player.css mavjud")
 size = sum(p.stat().st_size for p in files)
-ok(size < 200 * 1024, f"Pleyer hajmi {size / 1024:.1f} KB < 200 KB (shriftlar bilan)")
+ok(size <= 260 * 1024, f"Pleyer hajmi {size / 1024:.1f} KB ≤ 260 KB (shriftlar bilan)")
 ok(all(p.suffix in {".html", ".js", ".css", ".woff2"} for p in files), "Faqat html/js/css/woff2 fayllar: " + ", ".join(sorted(names)))
 
 html = (PL / "index.html").read_text(encoding="utf-8")
@@ -49,7 +50,7 @@ ok(len(svg_args) >= 2 and all(x.strip() in ("ICONS[name] || ''", "AVATAR") for x
 ok("DOMParser" in js and "noopener" in js, "Kontent HTML DOMParser + oq ro'yxat sanitizeri orqali, havolalar rel=noopener")
 glb = set(re.findall(r"\bW\.([A-Za-z_$][\w$]*)\s*=(?!=)", js))
 ok(glb == {"ISFTPaket"}, f"Global obyekt faqat window.ISFTPaket ({sorted(glb)})")
-ok(js.lstrip().startswith("/*") and "'use strict'" in js[:2000], "IIFE + 'use strict'")
+ok(js.lstrip().startswith("/*") and "'use strict'" in js[:4000], "IIFE + 'use strict'")
 
 print("== 3. Standartlar (kalit elementlar)")
 for k in ["cmi.core.lesson_status", "cmi.core.score.raw", "cmi.core.session_time", "cmi.core.exit", "cmi.suspend_data", "cmi.core.lesson_location",
@@ -64,6 +65,19 @@ ok("Ko'rish rejimi" in js and "natija LMS'ga yuborilmaydi" in js and "localStora
 ok("LMS bilan aloqa topilmadi" in js and "O'qituvchiga xabar bering." in js and "m === 'scorm12' || m === 'scorm2004'" in js,
    "SCORM paketi API'siz — «LMS bilan aloqa topilmadi» ogohlantirishi (xAPI/none — jim)")
 ok("source: 'isft-paket'" in js and "W.parent.postMessage" in js and "W.parent === W" in js, "Ota oynaga postMessage (faqat iframe ichida)")
+for k in ["'matching'", "[.]", "[,]", "source", "target", "id36("]:
+    ok(k in js, f"Matching interaction (match/sort): {k}")
+for k in ["'track'", "kind: 'subtitles'", "playsinline", "preload: 'metadata'", "playbackRate", "loadedmetadata", "timeupdate", "video: { block: b.id, watched: w }"]:
+    ok(k in js, f"Fayl-video: {k}")
+ok(all(k in js for k in ["cover:", "flashcards:", "assignment:", "matchWidget", "sortWidget", "pointerdown", "aria-pressed", "Javobni LMS'dagi «Vazifa yuklash» orqali yuboring"]),
+   "Kontrakt v3 bloklari: muqova, kartochkalar, topshiriq, match/sort vidjetlari")
+ok("crossorigin: 'anonymous'" not in js and "crossorigin: opaqueHttp() ? 'anonymous' : null" in js and "String(W.origin) === 'null' && /^https?:$/.test(W.location.protocol)" in js,
+   "Fayl-video: crossorigin faqat sandboxed ko'rishda (opaque origin + http/https) — file:// va same-origin'da qo'yilmaydi")
+ok("c.cover.author == null ? null" in js and "a != null ? a : str(C.course.teacher)" in js and "cv.author ||" not in js and "C.cover.author ||" not in js,
+   "Muqova: author === '' — muallifsiz; course.teacher'ga faqat null/undefined bo'lsa qaytadi (muqova va chop etish)")
+ok(re.search(r"function typing\(t\) \{[^}]*form\.qform,fieldset\.q,\.m-slot,\.m-tile,\.m-bank,\.s-card,\.s-drop,\.fc-grid,\.fc'", js) is not None,
+   "Global ← → / PageUp / PageDown: test formasi, match/sort vidjetlari va kartochkalar ichida ishlamaydi")
+ok("e.pointerType === 'touch'" in js and "ondragstart" not in js, "Sudrash — faqat sichqoncha/pero uchun qo'shimcha (sensor va klaviaturada bosib tanlash)")
 ok("prefers-color-scheme:dark" in css.replace(" ", "") and "@media print" in css and "prefers-reduced-motion" in css and ":focus-visible" in css,
    "CSS: qorong'i rejim, chop etish, reduced-motion, focus-visible")
 
@@ -74,14 +88,28 @@ ok(cjs.startswith("window.PAKET = ") and cjs.endswith(";"), "content.js = «wind
 ok(json.loads(cjs[len("window.PAKET = "):-1]) == cj, "content.js va content.json bir xil")
 ok(cj.get("v") == 1 and re.match(r"^isft-\d+-\d+-v\d+$", cj["id"]) and cj["tracking"]["mode"] in ("scorm12", "scorm2004", "xapi", "none"), "Kontrakt: v, id, tracking.mode")
 ok(cj.get("layout") == "steps" and cj.get("lesson", {}).get("code") == "L1", "Kontrakt v2: layout=steps, lesson")
+ok(isinstance(cj.get("cover"), dict) and cj["cover"].get("image") == "assets/cover.jpg" and cj["cover"].get("author"), "Kontrakt v3: cover {image, author}")
 types = [b["type"] for b in cj["blocks"]]
-ok({"plan", "text", "slides", "video", "file", "quiz", "section", "refs", "keypoints", "reflect", "hotspot"} <= set(types), f"Barcha blok turlari bor (+ noma'lum tur sinovi uchun): {types}")
+ok({"plan", "text", "slides", "video", "file", "quiz", "section", "refs", "keypoints", "reflect", "flashcards", "assignment", "hotspot"} <= set(types), f"Barcha blok turlari bor (+ noma'lum tur sinovi uchun): {types}")
 ok(any(b["type"] == "plan" and b.get("heading") for b in cj["blocks"]) and any(b["type"] == "slides" and b.get("display") == "images" for b in cj["blocks"]), "plan.heading va slides.display=images")
+vf = next((b for b in cj["blocks"] if b["type"] == "video" and b.get("provider") == "file"), {})
+ok(vf.get("src", "").endswith(".mp4") and vf.get("poster") and any(c.get("src", "").endswith(".vtt") for c in vf.get("captions", []))
+   and any(b["type"] == "video" and b.get("provider") == "youtube" for b in cj["blocks"]), "Kontrakt v3: fayl-video (src, poster, captions) + YouTube video")
+qz = next(b for b in cj["blocks"] if b["type"] == "quiz")
+ok({q["type"] for q in qz["questions"]} == {"mcq", "tf", "fill", "match", "sort"}
+   and all(len(q["pairs"]) >= 2 for q in qz["questions"] if q["type"] == "match")
+   and all(len(q["categories"]) >= 2 for q in qz["questions"] if q["type"] == "sort"), "Kontrakt v3: test — mcq, tf, fill, match (pairs), sort (categories)")
+sl = next(b for b in cj["blocks"] if b["type"] == "slides")["slides"]
+ok(any(x.get("caption") for x in sl) and any(x.get("audio") for x in sl), "Kontrakt v3: slides[].caption va .audio")
+fc = next(b for b in cj["blocks"] if b["type"] == "flashcards"); asg = next(b for b in cj["blocks"] if b["type"] == "assignment")
+ok(len(fc["cards"]) >= 3 and asg.get("text") and asg.get("author") and len(asg.get("questions", [])) >= 2 and "avatar" in asg
+   and any(b["type"] == "section" and b["title"] == "MASHQ VA TOPSHIRIQLAR" for b in cj["blocks"]), "Kontrakt v3: flashcards, assignment, «MASHQ VA TOPSHIRIQLAR» bo'limi")
 txt = next(b["html"] for b in cj["blocks"] if b["type"] == "text")
 ok("<figure>" in txt and "<figcaption>" in txt and 'src="http://evil"' in txt and 'src="data:' in txt and "java\tscript:" in txt, "Matnda figure/figcaption va hujum satrlari (http/data/java\\tscript rasmlar)")
 refs = [cj["brand"]["logo"]] + [s.get("image") for b in cj["blocks"] if b["type"] == "slides" for s in b["slides"]] + \
-       [b.get(k) for b in cj["blocks"] for k in ("file", "pdf", "href")] + re.findall(r'src="(assets/[^"]+)"', txt)
-refs = [r for r in refs if r]
+       [b.get(k) for b in cj["blocks"] for k in ("file", "pdf", "href", "poster", "avatar")] + re.findall(r'src="(assets/[^"]+)"', txt) + \
+       [cj["cover"]["image"], vf.get("src")] + [c["src"] for c in vf.get("captions", [])] + [x.get("audio") for x in sl]
+refs = [r for r in refs if r and r.startswith("assets/")]   # tashqi/xavfli manzillar — ataylab qo'shilgan hujum satrlari
 ok(all((FX / r).is_file() for r in refs), f"Paketdagi barcha asset havolalari mavjud ({len(refs)} ta)")
 
 print("== 5. JS sintaksisi")

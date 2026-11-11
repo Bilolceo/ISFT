@@ -27,6 +27,10 @@
   "color": "#8B0033",
   "logo": "assets/logo.png"
  },
+ "cover": {
+  "image": "assets/cover.jpg",
+  "author": "A. Karimov, i.f.n., dotsent"
+ },
  "built": "2026-11-11T10:00:00+05:00",
  "blocks": [
   {
@@ -45,11 +49,36 @@
   },
   {
    "id": "b3",
+   "type": "video",
+   "title": "Videodars (yuklangan fayl)",
+   "provider": "file",
+   "src": "assets/video/dars.mp4",
+   "poster": "assets/video/dars.jpg",
+   "captions": [
+    {
+     "lang": "uz",
+     "label": "O'zbekcha",
+     "src": "assets/video/dars.uz.vtt"
+    },
+    {
+     "lang": "en",
+     "label": "Tashqi (rad etiladi)",
+     "src": "https://evil.example/x.vtt"
+    },
+    {
+     "lang": "ru",
+     "label": "Xavfli (rad etiladi)",
+     "src": "java\tscript:window.__xss=12"
+    }
+   ]
+  },
+  {
+   "id": "b4",
    "type": "section",
    "title": "MA'RUZA MATNI"
   },
   {
-   "id": "b4",
+   "id": "b5",
    "type": "plan",
    "title": "Reja",
    "heading": "1-MAVZU: TALAB VA TAKLIF NAZARIYASI",
@@ -61,13 +90,13 @@
    ]
   },
   {
-   "id": "b5",
+   "id": "b6",
    "type": "text",
    "title": "Ma'ruza matni",
    "html": "<p>Bozor iqtisodiyotining markazida <strong>talab va taklif</strong> o'zaro ta'siri turadi. Ushbu ma'ruzada asosiy tushunchalar, qonunlar va bozor muvozanati ko'rib chiqiladi.</p>\n<h2>Talab tushunchasi</h2>\n<p>Talab — iste'molchilarning ma'lum narxda va ma'lum vaqtda sotib olishga <strong>tayyor va qodir</strong> bo'lgan tovar miqdori. Talab individual va bozor talabiga bo'linadi; bozor talabi barcha individual talablarning yig'indisidir.</p>\n<p>Talab qonuni: boshqa sharoitlar o'zgarmaganda narx oshsa, talab miqdori <em>kamayadi</em>. Bu bog'liqlik daromad va o'rinbosarlik effektlari bilan izohlanadi.</p>\n<ul><li>individual talab;</li><li>bozor talabi;</li><li>samarali talab.</li></ul>\n<script>window.__xss = 1</script>\n<figure><img src=\"assets/img/fig1.png\" alt=\"Talab va taklif egri chiziqlari\" width=\"880\" height=\"520\"><figcaption>1.1-rasm. Talab (D) va taklif (S) egri chiziqlari, E — muvozanat nuqtasi</figcaption></figure>\n<h2>Taklif tushunchasi</h2>\n<p onclick=\"window.__xss=2\">Taklif — ishlab chiqaruvchilar ma'lum narxda bozorga chiqarishga tayyor bo'lgan tovar miqdori. Taklifga texnologiya, resurslar narxi, soliqlar va kutilmalar ta'sir qiladi.</p>\n<blockquote>Narx oshsa, taklif miqdori ortadi (taklif qonuni).</blockquote>\n<img src=\"https://evil.example/x.png\" onerror=\"window.__xss=3\" alt=\"tashqi rasm\">\n<img src=\"http://evil\" alt=\"http rasm\">\n<img src=\"data:image/svg+xml;base64,PHN2ZyBvbmxvYWQ9YWxlcnQoMSk+\" alt=\"data rasm\">\n<img src=\"java\tscript:window.__xss=9\" alt=\"js rasm\">\n<h3>Taklif omillari</h3>\n<p>Quyidagi jadvalda turli tarmoqlar bo'yicha taklif omillarining ta'siri keltirilgan.</p>\n<table><thead><tr><th>Tarmoq</th><th>Texnologiya darajasi</th><th>Resurslar narxi (so'm)</th><th>Soliq yuki (%)</th><th>Subsidiya</th><th>Kutilayotgan narx</th><th>Ishlab chiqaruvchilar soni</th><th>Taklif o'zgarishi</th></tr></thead>\n<tbody><tr><td>Qishloq xo'jaligi</td><td>O'rta</td><td>1 250 000</td><td>12</td><td>Bor</td><td>Oshadi</td><td>4 820</td><td>+8%</td></tr><tr><td>To'qimachilik</td><td>Yuqori</td><td>2 900 000</td><td>15</td><td>Yo'q</td><td>Barqaror</td><td>1 140</td><td>+3%</td></tr><tr><td>Qurilish materiallari</td><td>O'rta</td><td>4 100 000</td><td>18</td><td>Yo'q</td><td>Kamayadi</td><td>620</td><td>−2%</td></tr></tbody></table>\n<h2>Bozor muvozanati</h2>\n<p>Muvozanat narxi — talab va taklif miqdorlari teng bo'lgan narx. Narx muvozanatdan yuqori bo'lsa ortiqcha taklif, past bo'lsa taqchillik yuzaga keladi. Batafsil: <a href=\"https://isft.uz/kutubxona\">ISFT kutubxonasi</a>,\n<a href=\"javascript:window.__xss=4\">xavfli havola</a>.</p>\n<table><thead><tr><th>Narx (so'm)</th><th>Talab</th><th>Taklif</th></tr></thead>\n<tbody><tr><td>1 000</td><td>120</td><td>40</td></tr><tr><td>2 000</td><td>80</td><td>80</td></tr><tr><td>3 000</td><td>50</td><td>130</td></tr></tbody></table>\n<iframe src=\"https://evil.example/\"></iframe><style>body{display:none}</style>\n<figure><img src=\"assets/img/fig2.png\" alt=\"Elastiklik diagrammasi\"><figcaption>1.2-rasm. Turli tovarlar talabining elastikligi</figcaption></figure>\n<h3>Elastiklik haqida qisqacha</h3>\n<p>Talabning narx bo'yicha elastikligi: E<sub>d</sub> = %ΔQ / %ΔP.</p>"
   },
   {
-   "id": "b6",
+   "id": "b7",
    "type": "keypoints",
    "title": "Asosiy xulosalar",
    "items": [
@@ -77,7 +106,7 @@
    ]
   },
   {
-   "id": "b7",
+   "id": "b8",
    "type": "refs",
    "title": "Foydalanilgan adabiyotlar ro'yxati",
    "items": [
@@ -92,12 +121,12 @@
    ]
   },
   {
-   "id": "b8",
+   "id": "b9",
    "type": "section",
    "title": "DARS TAQDIMOTI"
   },
   {
-   "id": "b9",
+   "id": "b10",
    "type": "slides",
    "title": "Taqdimot",
    "display": "images",
@@ -122,7 +151,9 @@
       "Giffen tovarlari — istisno"
      ],
      "notes": "D — talab egri chizig'i.",
-     "image": "assets/slides/s2.png"
+     "image": "assets/slides/s2.png",
+     "caption": "Talab egri chizig'i pastga qarab yo'nalgan — narx va miqdor teskari bog'langan.",
+     "audio": "assets/audio/s2.wav"
     },
     {
      "title": "Taklif qonuni",
@@ -142,7 +173,8 @@
       "Narx shifti va narx tagi"
      ],
      "notes": "E nuqtasi — muvozanat.",
-     "image": "assets/slides/s4.png"
+     "image": "assets/slides/s4.png",
+     "caption": "E nuqtasida bozor «tozalanadi»: talab miqdori taklif miqdoriga teng."
     },
     {
      "title": "Xulosa",
@@ -157,7 +189,7 @@
    ]
   },
   {
-   "id": "b10",
+   "id": "b11",
    "type": "file",
    "title": "Uslubiy qo'llanma (PDF)",
    "href": "assets/qollanma.pdf",
@@ -169,9 +201,45 @@
    "title": "Noma'lum blok — e'tiborsiz qoldiriladi"
   },
   {
-   "id": "b11",
+   "id": "b12",
+   "type": "section",
+   "title": "MASHQ VA TOPSHIRIQLAR"
+  },
+  {
+   "id": "b13",
+   "type": "flashcards",
+   "title": "Asosiy tushunchalar",
+   "cards": [
+    {
+     "front": "Talab",
+     "back": "Iste'molchilar ma'lum narxda sotib olishga tayyor va qodir bo'lgan tovar miqdori."
+    },
+    {
+     "front": "Taklif",
+     "back": "Ishlab chiqaruvchilar ma'lum narxda bozorga chiqarishga tayyor bo'lgan tovar miqdori."
+    },
+    {
+     "front": "Muvozanat narxi",
+     "back": "Talab va taklif miqdorlari teng bo'ladigan narx."
+    },
+    {
+     "front": "Taqchillik",
+     "back": "Narx muvozanatdan past bo'lganda talabning taklifdan oshib ketishi."
+    },
+    {
+     "front": "Elastiklik",
+     "back": "Miqdorning narx o'zgarishiga sezgirligi."
+    },
+    {
+     "front": "",
+     "back": "Bo'sh old tomon — tashlanadi"
+    }
+   ]
+  },
+  {
+   "id": "b14",
    "type": "quiz",
-   "title": "Test",
+   "title": "Bilimni tekshirish",
    "pass_pct": 60,
    "shuffle": true,
    "attempts": 3,
@@ -244,11 +312,72 @@
      "correct": [
       0
      ]
+    },
+    {
+     "id": "q106",
+     "type": "match",
+     "stem": "Tushunchalarni ta'riflari bilan moslashtiring.",
+     "pairs": [
+      {
+       "left": "Talab qonuni",
+       "right": "Narx oshsa, sotib olinadigan miqdor kamayadi"
+      },
+      {
+       "left": "Taklif qonuni",
+       "right": "Narx oshsa, sotuvga chiqariladigan miqdor ortadi"
+      },
+      {
+       "left": "Muvozanat",
+       "right": "Talab miqdori = taklif miqdori"
+      },
+      {
+       "left": "Narx tagi",
+       "right": "Ortiqcha taklifga olib keladi"
+      }
+     ],
+     "explanation": "Har bir qonun narx va miqdor o'rtasidagi bog'liqlik yo'nalishini bildiradi."
+    },
+    {
+     "id": "q107",
+     "type": "sort",
+     "stem": "Omillarni tegishli guruhga ajrating.",
+     "categories": [
+      {
+       "title": "Talab omillari",
+       "items": [
+        "Iste'molchi daromadi",
+        "Did va afzalliklar",
+        "O'rinbosar tovar narxi"
+       ]
+      },
+      {
+       "title": "Taklif omillari",
+       "items": [
+        "Ishlab chiqarish texnologiyasi",
+        "Resurslar narxi",
+        "Ishlab chiqaruvchiga soliq"
+       ]
+      }
+     ],
+     "explanation": "Talab omillari xaridor qaroriga, taklif omillari ishlab chiqaruvchi xarajatlariga ta'sir qiladi."
     }
    ]
   },
   {
-   "id": "b12",
+   "id": "b15",
+   "type": "assignment",
+   "title": "Topshiriq",
+   "text": "Quyidagi topshiriqni bajarib PDF shaklda LMS platformasiga joylang",
+   "author": "Sizning professor-o'qituvchingiz",
+   "avatar": null,
+   "questions": [
+    "Talab va taklif egri chiziqlarini chizing va muvozanat nuqtasini belgilang.",
+    "O'zbekiston bozoridan narx shifti qo'llanilgan bitta misol keltiring va oqibatlarini tahlil qiling.",
+    "Elastik va noelastik talabga ega uchtadan tovarni sanab, sababini izohlang."
+   ]
+  },
+  {
+   "id": "b16",
    "type": "reflect",
    "title": "O'z-o'zini baholash",
    "question": "Darsni to'liq o'zlashtirdingizmi?",

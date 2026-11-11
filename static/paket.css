@@ -138,3 +138,23 @@
 .pk-html{min-width:0}.pk-html table{display:block;max-width:100%;overflow-x:auto}
 .pk-form .pk-wide{grid-column:1/-1}
 .pk-plan small{display:block;color:var(--muted);font-size:11.5px}
+/* Rise 360 (v3): muqova / o'qituvchi rasmi, mashqlar ro'yxati va muharriri, slayd izohi/audiosi */
+.pk-thumb{display:block;flex:0 0 auto;border-radius:10px;border:1px solid var(--line);background:var(--surface-2);object-fit:cover}
+.pk-thumb.muqova{width:112px;height:63px}.pk-thumb.avatar{width:56px;height:56px;border-radius:50%}
+.pk-thumb.none{display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:11.5px}
+.pk-media{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:12px}
+.pk-media>div{display:flex;gap:10px;align-items:flex-start;min-width:0}.pk-media>div>div:last-child{min-width:0;flex:1 1 auto}
+.pk-sel{height:32px;border-radius:10px;border:1px solid var(--line-2);background:var(--surface);color:var(--ink);font:inherit;font-size:13px;padding:0 8px;max-width:100%}
+.pk-exl{list-style:none;margin:6px 0 0;padding:0;grid-column:2;display:flex;flex-direction:column;gap:4px;min-width:0}
+.pk-exl li{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;justify-content:space-between;padding:6px 8px;border-radius:10px;background:var(--surface);border:1px solid var(--line);font-size:13px;min-width:0}
+.pk-exl li>span:first-child{min-width:0;overflow-wrap:anywhere;flex:1 1 200px}.pk-exl small{color:var(--muted);font-size:12px}
+.pk-row2{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,3fr);gap:6px;margin-bottom:6px}
+.pk-row2 input,.pk-cat input,.pk-srow input[type=text],.pk-modal label>input[type=text]{height:36px;padding:0 10px;border:1px solid var(--line-2);border-radius:10px;background:var(--surface);color:var(--ink);font:inherit;font-size:13.5px;min-width:0;width:100%;box-sizing:border-box}
+.pk-cats{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,210px),1fr));gap:8px}
+.pk-cat{display:flex;flex-direction:column;gap:6px;min-width:0}.pk-modal .pk-cat textarea{min-height:110px}
+.pk-srows{display:flex;flex-direction:column;gap:8px;max-height:60vh;overflow-y:auto}
+.pk-srow{display:grid;grid-template-columns:28px minmax(0,1fr);gap:8px;padding:8px 10px;border-radius:12px;background:var(--surface-2)}
+.pk-srow>b{font-variant-numeric:tabular-nums;color:var(--muted)}.pk-srow>div{display:flex;flex-direction:column;gap:5px;min-width:0}
+.pk-srow small{color:var(--muted);font-size:12px;overflow-wrap:anywhere}
+.pk-modal .pk-warnbox{margin:0 0 10px}
+@media (max-width:600px){.pk-row2{grid-template-columns:minmax(0,1fr)}.pk-row2 input:last-child{margin-bottom:4px}}
