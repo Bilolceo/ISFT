@@ -74,11 +74,12 @@ async function renderTestbank(tab) {
   const M = TB.meta;
   TB.tab = tab && M.tabs.includes(tab) ? tab : (TB.tab && M.tabs.includes(TB.tab) ? TB.tab : M.tabs[0]);
   v.innerHTML = `<div class="tb-head"><div><h2>Test bank</h2><span class="muted">${esc(M.scope)} · mavzu testlari va oraliq nazorat banklari</span></div>
-      <div class="tb-acts tight">${M.ai.on ? tbChip("AI: " + (M.ai.model || "Claude"), "info") : tbChip("AI ulanmagan — savollar qo'lda", "warn")}</div></div>
+      <div class="tb-acts tight">${typeof renderPaket === "function" && !document.querySelector('#nav a[data-v="paket"]')?.classList.contains("hidden") ? `<button type="button" class="btn sm ghost" data-pk>${ico("package", 15)} Kontent paketlari</button>` : ""}${M.ai.on ? tbChip("AI: " + (M.ai.model || "Claude"), "info") : tbChip("AI ulanmagan — savollar qo'lda", "warn")}</div></div>
     ${M.demo ? `<div class="tb-demo">${ico("info", 15)}<span><b>Namuna.</b> «Mikroiqtisodiyot» va bitta o'qituvchi kursidagi savollar va ma'ruza matnlari — sun'iy (demo). Haqiqiy testlar mavzu matni yuklanib, AI yoki qo'lda tuziladi.</span></div>` : ""}
     <div class="tb-tabs" role="tablist">${M.tabs.map(t => `<button type="button" role="tab" aria-selected="${t === TB.tab}" class="${t === TB.tab ? "on" : ""}" data-t="${t}">${esc(TB_TABS[t])}</button>`).join("")}</div>
     <div id="tbBox"><div class="tb-empty">Yuklanmoqda…</div></div>`;
   v.querySelectorAll(".tb-tabs [data-t]").forEach(b => b.onclick = () => renderTestbank(b.dataset.t));
+  v.querySelector("[data-pk]")?.addEventListener("click", () => go("paket"));   /* Kontent paketlari (paket.js) */
   const box = $("#tbBox");
   try {
     await ({qamrov: tbCoverage, mavzu: tbTopics, bank: tbBank, sozlama: tbSettings})[TB.tab](box);

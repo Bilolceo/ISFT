@@ -29,7 +29,7 @@
   const GROUPS = [["tez", "Tezkor", "pin2"], ["ish", "Ish stoli", "dashboard"], ["talaba", "Talabalar va o'quv", "cap"], ["ilm", "Ilm va xalqaro", "flask"],
                   ["moliya", "Moliya va xodimlar", "money"], ["kampus", "Kampus", "wrench"], ["hujjat", "Hujjatlar", "folder"], ["tizim", "Tizim", "gear"]];
   const VG = {panel: "ish", mywork: "ish", chat: "ish", agents: "ish", tasks: "ish",
-              ops: "talaba", flows: "talaba", masofaviy: "talaba", testbank: "talaba", reyting: "talaba", syllabus: "talaba", amaliyot: "talaba", taqdimot: "talaba", tekshiruv: "talaba",
+              ops: "talaba", flows: "talaba", masofaviy: "talaba", testbank: "talaba", paket: "talaba", reyting: "talaba", syllabus: "talaba", amaliyot: "talaba", taqdimot: "talaba", tekshiruv: "talaba",
               ilmiy: "ilm", xalqaro: "ilm", moliya: "moliya", kadrlar: "moliya", staffabs: "moliya",
               yoshlar: "kampus", service: "kampus", spaces: "kampus", cams: "kampus",
               kiruvchi: "hujjat", qabul: "talaba", rejalar: "ish", portal: "hujjat", documents: "hujjat", orders: "hujjat", reports: "hujjat", docs: "hujjat", rbac: "tizim", audit: "tizim", accounts: "tizim"};

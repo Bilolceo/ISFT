@@ -1,0 +1,191 @@
+{
+ "v": 1,
+ "id": "isft-12-5-v3",
+ "title": "Talab va taklif nazariyasi",
+ "lang": "uz",
+ "course": {
+  "subject": "Mikroiqtisodiyot",
+  "direction": "Iqtisodiyot",
+  "course": 3,
+  "kafedra": "Iqtisodiyot kafedrasi",
+  "teacher": "A. Karimov"
+ },
+ "topic": {
+  "no": 5,
+  "title": "Talab va taklif nazariyasi"
+ },
+ "brand": {
+  "name": "ISFT",
+  "full": "International School of Finance and Technology",
+  "color": "#8B0033",
+  "logo": "assets/logo.png"
+ },
+ "built": "2026-11-11T10:00:00+05:00",
+ "blocks": [
+  {
+   "id": "b1",
+   "type": "plan",
+   "title": "Reja",
+   "items": [
+    "Talab tushunchasi",
+    "Taklif tushunchasi",
+    "Bozor muvozanati",
+    "Mustaqil ish uchun savollar"
+   ]
+  },
+  {
+   "id": "b2",
+   "type": "text",
+   "title": "Ma'ruza matni",
+   "html": "<h2>Talab tushunchasi</h2>\n<p>Talab — iste'molchilarning ma'lum narxda va ma'lum vaqtda sotib olishga <strong>tayyor va qodir</strong> bo'lgan tovar miqdori.</p>\n<p>Talab qonuni: boshqa sharoitlar o'zgarmaganda narx oshsa, talab miqdori <em>kamayadi</em>.</p>\n<ul><li>individual talab;</li><li>bozor talabi;</li><li>samarali talab.</li></ul>\n<script>window.__xss = 1</script>\n<h2>Taklif tushunchasi</h2>\n<p onclick=\"window.__xss=2\">Taklif — ishlab chiqaruvchilar ma'lum narxda bozorga chiqarishga tayyor bo'lgan tovar miqdori.</p>\n<blockquote>Narx oshsa, taklif miqdori ortadi (taklif qonuni).</blockquote>\n<img src=\"https://evil.example/x.png\" onerror=\"window.__xss=3\" alt=\"tashqi rasm\">\n<img src=\"assets/slides/s2.png\" alt=\"Talab va taklif grafigi\">\n<h2>Bozor muvozanati</h2>\n<p>Muvozanat narxi — talab va taklif miqdorlari teng bo'lgan narx. Batafsil: <a href=\"https://isft.uz/kutubxona\">ISFT kutubxonasi</a>,\n<a href=\"javascript:window.__xss=4\">xavfli havola</a>.</p>\n<table><thead><tr><th>Narx (so'm)</th><th>Talab</th><th>Taklif</th></tr></thead>\n<tbody><tr><td>1 000</td><td>120</td><td>40</td></tr><tr><td>2 000</td><td>80</td><td>80</td></tr><tr><td>3 000</td><td>50</td><td>130</td></tr></tbody></table>\n<iframe src=\"https://evil.example/\"></iframe><style>body{display:none}</style>\n<h3>Elastiklik haqida qisqacha</h3>\n<p>Talabning narx bo'yicha elastikligi: E<sub>d</sub> = %ΔQ / %ΔP.</p>"
+  },
+  {
+   "id": "b3",
+   "type": "slides",
+   "title": "Taqdimot",
+   "file": "assets/taqdimot.pptx",
+   "pdf": "assets/taqdimot.pdf",
+   "slides": [
+    {
+     "title": "Talab va taklif nazariyasi",
+     "bullets": [
+      "Mikroiqtisodiyot, 5-mavzu",
+      "3-kurs, Iqtisodiyot yo'nalishi"
+     ],
+     "notes": "Mavzuga kirish.",
+     "image": null
+    },
+    {
+     "title": "Muvozanat grafigi",
+     "bullets": [],
+     "notes": "D — talab, S — taklif egri chiziqlari.",
+     "image": "assets/slides/s2.png"
+    },
+    {
+     "title": "Talab qonuni",
+     "bullets": [
+      "Narx oshsa — talab miqdori kamayadi",
+      "Daromad effekti",
+      "O'rinbosarlik effekti",
+      "Giffen tovarlari — istisno"
+     ],
+     "notes": "",
+     "image": null
+    },
+    {
+     "title": "Xulosa",
+     "bullets": [
+      "Muvozanat narxi bozorni tozalaydi",
+      "Davlat aralashuvi: narx shifti va narx tagi"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "b4",
+   "type": "video",
+   "title": "Videodars",
+   "provider": "youtube",
+   "video_id": "dQw4w9WgXcQ",
+   "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+   "start": 15
+  },
+  {
+   "id": "b5",
+   "type": "file",
+   "title": "Uslubiy qo'llanma (PDF)",
+   "href": "assets/qollanma.pdf",
+   "size": 1234
+  },
+  {
+   "id": "b9",
+   "type": "hotspot",
+   "title": "Noma'lum blok — e'tiborsiz qoldiriladi"
+  },
+  {
+   "id": "b6",
+   "type": "quiz",
+   "title": "Test",
+   "pass_pct": 60,
+   "shuffle": true,
+   "attempts": 3,
+   "show_feedback": true,
+   "questions": [
+    {
+     "id": "q101",
+     "type": "mcq",
+     "stem": "Talab qonuniga ko'ra narx oshsa, talab miqdori qanday o'zgaradi?",
+     "options": [
+      "Kamayadi",
+      "Ortadi",
+      "O'zgarmaydi",
+      "Avval ortadi, keyin kamayadi"
+     ],
+     "correct": [
+      0
+     ],
+     "explanation": "Boshqa sharoitlar o'zgarmaganda narx va talab miqdori teskari bog'langan."
+    },
+    {
+     "id": "q102",
+     "type": "mcq",
+     "stem": "Quyidagilardan qaysilari talab omillari hisoblanadi? (bir nechtasini tanlang)",
+     "options": [
+      "Iste'molchi daromadi",
+      "Ishlab chiqarish texnologiyasi",
+      "O'rinbosar tovar narxi",
+      "Soliq stavkasi ishlab chiqaruvchiga"
+     ],
+     "correct": [
+      0,
+      2
+     ],
+     "explanation": "Texnologiya va ishlab chiqaruvchiga soliq — taklif omillari."
+    },
+    {
+     "id": "q103",
+     "type": "tf",
+     "stem": "Muvozanat narxida talab miqdori taklif miqdoriga teng bo'ladi.",
+     "options": [
+      "To'g'ri",
+      "Noto'g'ri"
+     ],
+     "correct": [
+      0
+     ],
+     "explanation": ""
+    },
+    {
+     "id": "q104",
+     "type": "fill",
+     "stem": "Normal tovar uchun daromad oshganda talab ... (bir so'z bilan yozing)",
+     "answers": [
+      "o'sadi",
+      "ortadi",
+      "oshadi"
+     ],
+     "explanation": "Normal tovarlarda daromad va talab to'g'ri bog'langan."
+    },
+    {
+     "id": "q105",
+     "type": "mcq",
+     "stem": "Narx shifti (maksimal narx) muvozanat narxidan past belgilansa nima yuzaga keladi?",
+     "options": [
+      "Taqchillik",
+      "Ortiqcha taklif",
+      "Muvozanat"
+     ],
+     "correct": [
+      0
+     ]
+    }
+   ]
+  }
+ ],
+ "tracking": {
+  "mode": "scorm12",
+  "completion": "view_and_quiz",
+  "mastery": 60,
+  "activity_id": "https://isft.uz/xapi/paket/12/5"
+ }
+}

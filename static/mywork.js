@@ -36,6 +36,7 @@ const MW_SRC = {
   amaliyot: {label: "Amaliyot", icon: "pin"},
   masofaviy: {label: "Masofaviy ta'lim", icon: "monitor"},
   testbank: {label: "Test bank", icon: "checkc"},
+  paket: {label: "Kontent paketlari", icon: "folder"},
   harakat: {label: "Talaba harakati", icon: "cap"},
   tekshiruv: {label: "Ishlar", icon: "check"},
   talaba: {label: "Talaba so'rovlari", icon: "user"},

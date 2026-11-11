@@ -47,6 +47,8 @@ DISTANCE = "distance"            # masofaviy ta'lim: LMS faolligi, kontent monit
 LABELS[DISTANCE] = "Masofaviy ta'lim: talabalar faolligi va o'quv kontenti monitoringi"
 TESTBANK = "testbank"             # test bank: mavzu testlari, AI generatsiya, sifat nazorati, oraliq banklari va eksport (app/testbank.py) — kirish moduldagi jadval bo'yicha
 LABELS[TESTBANK] = "Test bank: mavzu testlari va oraliq nazorat banklari"
+PAKET = "paket"                   # kontent paketlari: mavzu manbalari → SCORM 1.2 / SCORM 2004 / xAPI paket, tasdiq, qamrov (app/paket.py) — kirish moduldagi jadval bo'yicha
+LABELS[PAKET] = "Kontent paketlari: SCORM / xAPI paket yig'ish"
 
 @dataclass(frozen=True)
 class Role:

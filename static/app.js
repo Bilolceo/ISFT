@@ -106,6 +106,7 @@ const ICONS = {
 ICONS.trophy = '<path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/>';
 ICONS.inbox = '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>';
 ICONS.users = '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>';
+ICONS.package = '<path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="m7.5 4.27 9 5.15"/>';   /* paket.js: Kontent paketlari */
 const ico = (n, sz = 18) => `<svg class="i" viewBox="0 0 24 24" width="${sz}" height="${sz}" aria-hidden="true">${ICONS[n] || ""}</svg>`;
 function hydrateIcons(root = document) {
   root.querySelectorAll("[data-ico]").forEach(el => { if (!el.dataset.done) { el.innerHTML = ico(el.dataset.ico); el.dataset.done = 1; } });
@@ -219,6 +220,7 @@ async function boot() {
   document.querySelector('#nav a[data-v="amaliyot"]')?.classList.toggle("hidden", !["amaliyot", "kafedra", "oqituvchi", "tyutor", "talabalar", "registrator_xodim", "sirtqi", "rektor", "prorektor_oquv"].includes(ME.role_key));   /* amaliyot.js: Amaliyot (ruxsat — app/amaliyot.py mode) */
   document.querySelector('#nav a[data-v="masofaviy"]')?.classList.toggle("hidden", !["masofaviy", "masofaviy_xodim", "rektor", "prorektor_oquv", "kafedra", "oqituvchi"].includes(ME.role_key));   /* masofaviy.js: Masofaviy ta'lim (ruxsat — app/masofaviy.py) */
   document.querySelector('#nav a[data-v="testbank"]')?.classList.toggle("hidden", !["masofaviy", "masofaviy_xodim", "rektor", "prorektor_oquv", "kafedra", "oqituvchi"].includes(ME.role_key));   /* testbank.js: Test bank — mavzu testlari va oraliq banklari (ruxsat — app/testbank.py) */
+  document.querySelector('#nav a[data-v="paket"]')?.classList.toggle("hidden", !["masofaviy", "masofaviy_xodim", "rektor", "prorektor_oquv", "kafedra", "oqituvchi"].includes(ME.role_key));   /* paket.js: Kontent paketlari — SCORM / xAPI (ruxsat — app/paket.py) */
   if (typeof camsNav === "function") camsNav();   /* cams.js: navbat zonasi mas'ullari (qabul, kassa) o'z navbatini ko'radi */
   /* lavozimga keraksiz bandlar (UX tahlili): ruxsat matritsasi — faqat AT boshlig'i va rektor (qolganlar — profilda «Sizning ruxsatlaringiz»);
      Tarjima va shartnoma — hujjat bilan ishlaydiganlarga; Auditoriyalar — xo'jalik, akademik, AT; Registrator — talaba kartasidagi bo'limlar menyuda emas */

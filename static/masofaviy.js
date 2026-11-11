@@ -87,12 +87,13 @@ async function renderMasofaviy(tab) {
   DL.tab = tab && M.tabs.includes(tab) ? tab : (DL.tab && M.tabs.includes(DL.tab) ? DL.tab : M.tabs[0]);
   const demo = M.source === "demo";
   v.innerHTML = `<div class="dl-head"><div><h2>Masofaviy ta'lim</h2><span class="muted">${esc(M.scope)} · ${dlD(M.today)}</span></div>
-      <div class="dl-acts">${typeof renderTestbank === "function" && !document.querySelector('#nav a[data-v="testbank"]')?.classList.contains("hidden") ? `<button type="button" class="btn sm ghost" data-tb>${ico("checkc", 15)} Test bank</button>` : ""}${M.caps.report ? `<a class="btn sm" href="/api/masofaviy/report.docx">${ico("report", 15)} Hisobot (.docx)</a>` : ""}</div></div>
+      <div class="dl-acts">${typeof renderTestbank === "function" && !document.querySelector('#nav a[data-v="testbank"]')?.classList.contains("hidden") ? `<button type="button" class="btn sm ghost" data-tb>${ico("checkc", 15)} Test bank</button>` : ""}${typeof renderPaket === "function" && !document.querySelector('#nav a[data-v="paket"]')?.classList.contains("hidden") ? `<button type="button" class="btn sm ghost" data-pk>${ico("package", 15)} Kontent paketlari</button>` : ""}${M.caps.report ? `<a class="btn sm" href="/api/masofaviy/report.docx">${ico("report", 15)} Hisobot (.docx)</a>` : ""}</div></div>
     ${demo ? `<div class="dl-demo">${ico("info", 15)}<span><b>Namuna ma'lumot.</b> LMS faolligi va kontent holati — demo. Haqiqiy LMS va videokonferensiya eksportini «Import» bo'limidan yuklang yoki API ulanadi.</span></div>` : ""}
     <div class="dl-tabs" role="tablist">${M.tabs.map(t => `<button type="button" role="tab" aria-selected="${t === DL.tab}" class="${t === DL.tab ? "on" : ""}" data-t="${t}">${esc(DL_TABS[t])}</button>`).join("")}</div>
     <div id="dlBox"><div class="dl-empty">Yuklanmoqda…</div></div>`;
   v.querySelectorAll(".dl-tabs [data-t]").forEach(b => b.onclick = () => { DL.tab = b.dataset.t; renderMasofaviy(DL.tab); });
   v.querySelector("[data-tb]")?.addEventListener("click", () => go("testbank"));   /* Test bank — mavzu testlari va oraliq banklari (testbank.js) */
+  v.querySelector("[data-pk]")?.addEventListener("click", () => go("paket"));   /* Kontent paketlari — SCORM / xAPI (paket.js) */
   const box = $("#dlBox");
   try {
     await ({umumiy: dlOverview, talabalar: dlStudents, kontent: dlContent, xavf: dlRisk, hafta: dlWeek, import: dlImport})[DL.tab](box);

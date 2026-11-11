@@ -185,7 +185,8 @@ ADAPTERS = [("devon", _simple("devon", "devon")), ("qabul", _simple("qabul", "qa
             ("it_req", _simple("it_requests", "it_req")),
             ("moliya", moliya), ("kadrlar", kadrlar), ("ilmiy", ilmiy), ("xalqaro", xalqaro), ("yoshlar", yoshlar),
             ("amaliyot", amaliyot), ("harakat", harakat), ("tekshiruv", tekshiruv), ("talaba", talaba),
-            ("masofaviy", _simple("masofaviy", "masofaviy")), ("testbank", _simple("testbank", "testbank"))]
+            ("masofaviy", _simple("masofaviy", "masofaviy")), ("testbank", _simple("testbank", "testbank")),
+            ("paket", _simple("paket", "paket"))]
 
 # =============================================================================================
 # «Bugun» — lavozimning o'z sohasidagi 2–4 ko'rsatkichi (bosh sahifa). Institut ko'rsatkichlari — faqat rektor va kengash.
