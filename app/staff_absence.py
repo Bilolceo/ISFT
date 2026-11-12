@@ -56,12 +56,13 @@ CREATE TABLE IF NOT EXISTS staff_subs(id INTEGER PRIMARY KEY, absence_id INT, sc
   assigned_by INT, assigned_by_name TEXT, assigned_at TEXT, UNIQUE(absence_id, sched_id, date));
 CREATE INDEX IF NOT EXISTS ix_ssubs_t ON staff_subs(sub_teacher_id, date);
 CREATE TABLE IF NOT EXISTS staffabs_meta(k TEXT PRIMARY KEY, v TEXT);
+CREATE TABLE IF NOT EXISTS user_staff(user_id INTEGER PRIMARY KEY, staff_id INT, teacher_id INT, locked INT DEFAULT 0, linked_at TEXT, how TEXT);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_user_staff_s ON user_staff(staff_id) WHERE staff_id IS NOT NULL;
 """
 
 def _now(): return clock.now().replace(microsecond=0).isoformat(timespec="seconds")
 def _today() -> dt.date: return clock.today()
 def _d(s) -> dt.date: return dt.date.fromisoformat(str(s)[:10])
-def _dmy(s) -> str: return _d(s).strftime("%d.%m.%Y") if s else ""
 def _short(n): return (n or "").split(":", 1)[-1].strip()
 def _brief(n):
     if ":" not in (n or ""): return n or ""        # shaxssiz bo'lim akkaunti ("Kadrlar bo'limi")
@@ -101,15 +102,75 @@ def mode(c: Ctx) -> str:
     if r == "kafedra" and c.user.get("department_id"): return "kaf"
     return "own"
 
+def agent_tool(con, ctx: Ctx, quiet=False) -> dict:
+    """ISFT Core suhbati uchun (ai.TOOLS «staffabs»): bugungi yo'qliklar SONI turlar bo'yicha va shtat soni bo'limlar kesimida.
+    Faqat jamlangan sonlar (rbac.HR_STATS: rektor, Kadrlar) — ism-sharif, sabab, asos hujjat va shaxsiy ish chiqmaydi."""
+    if quiet:
+        if not ctx.can(rbac.HR_STATS): raise AccessDenied(rbac.HR_STATS)
+    else:
+        rbac.require(con, ctx, rbac.HR_STATS, "xodimlar yo'qligi (jamlangan)")
+    td = _today().isoformat()
+    kinds = {r["kind"]: r["n"] for r in db.rows(con, """SELECT kind, COUNT(DISTINCT COALESCE('t' || teacher_id, 's' || staff_id, full_name)) n
+        FROM staff_absences WHERE status='faol' AND start<=? AND end>=? GROUP BY kind""", (td, td))}
+    total = sum(kinds.values())
+    try:
+        by_unit = db.rows(con, """SELECT unit, COUNT(*) n FROM staff WHERE id NOT IN (SELECT staff_id FROM hr_files WHERE status='boshatilgan')
+                                  GROUP BY unit ORDER BY n DESC""")
+    except Exception:
+        by_unit = db.rows(con, "SELECT unit, COUNT(*) n FROM staff GROUP BY unit ORDER BY n DESC")
+    staff_n = sum(u["n"] for u in by_unit)
+    leave = kinds.get("mehnat", 0) + kinds.get("oquv", 0)
+    parts = [f"{KINDS[k].lower()} — {n}" for k, n in sorted(kinds.items(), key=lambda x: -x[1]) if k in KINDS]
+    text = (f"Bugun ({_dmy(td)}) {total} nafar xodim ishda yo'q: {', '.join(parts)}. Shundan ta'tilda (mehnat va o'quv ta'tili) — {leave} nafar."
+            if total else f"Bugun ({_dmy(td)}) ta'tilda, kasallik varaqasida yoki xizmat safarida bo'lgan xodim qayd etilmagan.")
+    text += f" Jami shtat — {staff_n} nafar. Ism-shariflar va asos hujjatlar Kadrlar bo'limida («Xodimlar ta'tili»)."
+    return {"date": td, "absent": total, "on_leave": leave, "by_kind": [{"kind": k, "name": KINDS.get(k, k), "n": n} for k, n in kinds.items()],
+            "staff": staff_n, "by_unit": by_unit, "text": text}
+
+# Akkaunt ↔ xodim bog'lanishi — BARQAROR ID bo'yicha (user_staff), ism tengligi bo'yicha emas. Ism faqat BIRINCHI bog'lashda va faqat
+# bir qiymatli bo'lsa ishlatiladi: shu ismli aynan bitta xodim (staff) / o'qituvchi, shu ismli aynan bitta faol akkaunt, va u yozuv boshqa
+# akkauntga bog'lanmagan. Aks holda «o'z» yozuvlari yo'q (ikki adash xodim bir-birining kasallik varaqasini ko'rmaydi). Bog'langach ism
+# o'zgarsa ham bog'lanish saqlanadi; bog'lanmagan akkaunt nomi o'zgartirilsa (accounts.py → lock_user_link) — ism bo'yicha bog'lash yopiladi.
+def _same_name_users(con, name: str) -> int:
+    return sum(1 for u in db.rows(con, "SELECT full_name FROM users WHERE COALESCE(active,1)!=0 AND full_name LIKE ?", (f"%{name}",))
+               if ":" in (u["full_name"] or "") and _short(u["full_name"]) == name)
+
+def user_link(con, user: dict) -> dict:
+    """{staff_id, teacher_id} — foydalanuvchining o'z xodim/o'qituvchi yozuvi (yo'q bo'lsa None). kadrlar._own_staff_id ham shundan oladi."""
+    uid = user.get("id")
+    try: row = db.one(con, "SELECT * FROM user_staff WHERE user_id=?", (uid,))
+    except Exception: con.executescript(SCHEMA); row = None
+    tid = user.get("teacher_id") or (row or {}).get("teacher_id")
+    if row and (row["staff_id"] or row["locked"]):
+        return {"staff_id": row["staff_id"], "teacher_id": tid}
+    full = user.get("full_name") or ""
+    name = _short(full) if ":" in full else ""          # bo'lim akkaunti (shaxs ismi yo'q) — bog'lanmaydi
+    sid = None
+    if name and _same_name_users(con, name) == 1:
+        st = db.rows(con, "SELECT id FROM staff WHERE full_name=?", (name,))
+        if len(st) == 1 and not db.one(con, "SELECT 1 x FROM user_staff WHERE staff_id=?", (st[0]["id"],)): sid = st[0]["id"]
+        if not tid:
+            t = db.rows(con, "SELECT id FROM teachers WHERE full_name=?", (name,))
+            if len(t) == 1 and not db.one(con, "SELECT 1 x FROM users WHERE teacher_id=? UNION SELECT 1 FROM user_staff WHERE teacher_id=?", (t[0]["id"],) * 2):
+                tid = t[0]["id"]
+    if sid or (tid and not user.get("teacher_id")):
+        con.execute("""INSERT INTO user_staff(user_id,staff_id,teacher_id,linked_at,how) VALUES(?,?,?,?,'ism (bir qiymatli)')
+                       ON CONFLICT(user_id) DO UPDATE SET staff_id=COALESCE(excluded.staff_id, staff_id), teacher_id=COALESCE(excluded.teacher_id, teacher_id),
+                       linked_at=excluded.linked_at""", (uid, sid, None if user.get("teacher_id") else tid, _now()))
+        con.commit()
+    return {"staff_id": sid, "teacher_id": tid}
+
+def lock_user_link(con, uid: int) -> None:
+    """Akkaunt nomi o'zgartirilganda (accounts.py): hali bog'lanmagan akkaunt yangi ism bo'yicha boshqa xodimga bog'lanib qolmasin."""
+    try:
+        if not db.one(con, "SELECT 1 x FROM sqlite_master WHERE name='user_staff'"): con.executescript(SCHEMA)
+        con.execute("INSERT INTO user_staff(user_id,locked,linked_at,how) VALUES(?,1,?,'nom o''zgartirilgan') ON CONFLICT(user_id) DO UPDATE SET locked=1", (uid, _now()))
+    except Exception as e: print("staff_absence.lock_user_link:", e)
+
 def _own_ids(con, c: Ctx) -> tuple[int | None, list[int]]:
-    """Foydalanuvchiga mos o'qituvchi (teacher_id) va xodim (staff.id) yozuvlari — ism bo'yicha."""
-    tid = c.user.get("teacher_id")
-    name = _short(c.user.get("full_name"))
-    sids = [r["id"] for r in db.rows(con, "SELECT id FROM staff WHERE full_name=?", (name,))] if name else []
-    if not tid and name:
-        t = db.rows(con, "SELECT id FROM teachers WHERE full_name=?", (name,))
-        if len(t) == 1: tid = t[0]["id"]
-    return tid, sids
+    """Foydalanuvchining o'z o'qituvchi (teacher_id) va xodim (staff.id) yozuvlari — barqaror bog'lanish bo'yicha (user_link)."""
+    ln = user_link(con, c.user)
+    return ln["teacher_id"], ([ln["staff_id"]] if ln["staff_id"] else [])
 
 def _where(c: Ctx, a="a") -> tuple[str, list]:
     m = mode(c)

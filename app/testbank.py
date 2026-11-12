@@ -295,8 +295,15 @@ def _course(c: Ctx, cid: int, write=False) -> dict:
     return r
 
 def _topics(cid: int, n: int) -> list[dict]:
-    titles = {r["topic_no"]: r["t"] for r in db.rows(_con, "SELECT topic_no, MAX(topic) t FROM dl_items WHERE course_id=? GROUP BY topic_no", (cid,))}
-    return [{"no": i, "title": (titles.get(i) or "").strip()} for i in range(1, n + 1)]
+    """Mavzu nomlari — «Dars tayyorlash» (app/paket.py) bilan bir xil ustuvorlikda: o'qituvchi kiritgan nom > yuklangan Word sarlavhasi >
+    tasdiqlangan sillabus > kontent monitoringi (dl_items.topic); nomi yo'q mavzu — bo'sh («N-mavzu» deb ko'rsatiladi)."""
+    try:
+        from . import paket as PKT
+        ls = {l["key"]: l for l in PKT.lessons(cid) if l["kind"] == "maruza"}
+        return [{"no": i, "title": "" if (ls.get(i) or {"untitled": True}).get("untitled") else ls[i]["title"]} for i in range(1, n + 1)]
+    except Exception:
+        titles = {r["topic_no"]: r["t"] for r in db.rows(_con, "SELECT topic_no, MAX(topic) t FROM dl_items WHERE course_id=? GROUP BY topic_no", (cid,))}
+        return [{"no": i, "title": (titles.get(i) or "").strip()} for i in range(1, n + 1)]
 
 def split_of(course: dict) -> int:
     n = int(course.get("topics") or 15)
@@ -310,8 +317,34 @@ def _topic_title(t: dict) -> str: return t["title"] or f"{t['no']}-mavzu"
 # =============================================================================================
 # Savollar: o'qish / yozish
 # =============================================================================================
+def _paket_source(cid: int, no: int) -> dict | None:
+    """«Dars tayyorlash»da (app/paket.py) shu mavzuga yuklangan ma'ruza matni (pk_assets, purpose='matn') — tb_sources qatori shaklida.
+    Bir marta yuklangan matn ikkala bo'limda ishlaydi: rasm/jadval belgilari («[RASM:…]») olib tashlanadi."""
+    try:
+        if not db.one(_con, "SELECT name FROM sqlite_master WHERE type='table' AND name='pk_assets'"): return None
+        a = db.one(_con, "SELECT * FROM pk_assets WHERE course_id=? AND topic_no=? AND purpose='matn' AND deleted=0 ORDER BY id DESC LIMIT 1", (cid, no))
+        if not a: return None
+        from . import paket as PKT
+        m = json.loads(a["meta"] or "{}")
+        txt = PKT._plain(m.get("text") or "").strip()[:MAX_STORE_CHARS]
+        if not txt: return None
+        return {"id": None, "course_id": cid, "topic_no": no, "name": a["name"], "kind": a["kind"], "chars": len(txt), "truncated": int(bool(m.get("truncated"))),
+                "text": txt, "user_id": a["user_id"], "user_name": a["user_name"], "ts": a["ts"], "src": a["src"] or "paket", "origin": "paket"}
+    except Exception as e:
+        print("testbank._paket_source:", repr(e)); return None
+
 def _source(cid: int, no: int) -> dict | None:
-    return db.one(_con, "SELECT * FROM tb_sources WHERE course_id=? AND topic_no=? ORDER BY id DESC LIMIT 1", (cid, no))
+    """Mavzu matni: Test bankda yuklangan (tb_sources) yoki «Dars tayyorlash»da yuklangan ma'ruza matni — qaysi biri keyinroq yuklangan bo'lsa."""
+    s = db.one(_con, "SELECT * FROM tb_sources WHERE course_id=? AND topic_no=? ORDER BY id DESC LIMIT 1", (cid, no))
+    p = _paket_source(cid, no)
+    if s: s["origin"] = "testbank"
+    out = p if p and (not s or (p["ts"] or "") >= (s["ts"] or "")) else s
+    if out and s and p:       # iqtibos tekshiruvi (QC) — ikkala matn bo'yicha: eski matndan tuzilgan savollar yangi yuklashdan keyin «iqtibos topilmadi» bo'lmasin
+        out["qc_text"] = (p["text"] if out is p else s["text"]) + "\n" + (s["text"] if out is p else p["text"])
+    return out
+
+def _qc_text(src: dict | None) -> str | None:
+    return (src.get("qc_text") or src["text"]) if src else None
 
 def _pack(r: dict, c: Ctx | None = None, course: dict | None = None) -> dict:
     q = {k: r[k] for k in ("id", "course_id", "topic_no", "qtype", "stem", "explanation", "difficulty", "bloom", "source_quote", "status",
@@ -356,7 +389,7 @@ def _clean(q: dict) -> dict:
 
 def _insert(cid: int, no: int, q: dict, author: dict, status="qoralama", engine="qolda", gen_id=None, src="", source=None, others=None) -> int:
     q = _clean(q)
-    flags = qc(q, source["text"] if source else None, others if others is not None else _others(cid))
+    flags = qc(q, _qc_text(source), others if others is not None else _others(cid))
     now = _now()
     qid = _con.execute("""INSERT INTO tb_questions(course_id,topic_no,qtype,stem,options,correct,answers,explanation,difficulty,bloom,source_quote,source_id,
                           status,flags,blocking,author_id,author_name,engine,gen_id,src,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
@@ -409,7 +442,13 @@ def save_source(c: Ctx, cid: int, no: int, raw: bytes | None, text: str | None, 
                            (cid, no, name[:160], kind, len(txt), int(trunc), txt, c.user["id"], c.user["full_name"], _now(), "qolda")).lastrowid
         _con.commit()
     rbac.audit(_con, c, "testbank: mavzu matni yuklandi", RES, True, f"kurs #{cid} · {no}-mavzu · {name[:60]} · {len(txt)} belgi")
-    return {"ok": True, "id": sid, "chars": len(txt), "truncated": bool(trunc), "kind": kind}
+    title = ""
+    try:
+        from . import paket as PKT
+        title = PKT.note_text_title(cid, no, txt)        # «3-MAVZU: …» sarlavhasi — mavzu nomi (nomi yo'q bo'lsa)
+    except Exception as e:
+        print("testbank.save_source title:", repr(e))
+    return {"ok": True, "id": sid, "chars": len(txt), "truncated": bool(trunc), "kind": kind, "title": title}
 
 
 # =============================================================================================
@@ -488,7 +527,7 @@ def generate(c: Ctx, cid: int, topics: list[int], n: int, types: list[str], mix:
     if any(not 1 <= t <= total for t in tps): raise HTTPException(400, "Mavzu raqami noto'g'ri")
     if not CC.has_key():
         rbac.audit(_con, c, "testbank: generatsiya — AI ulanmagan", RES, True, f"kurs #{cid}")
-        raise HTTPException(503, "AI ulanmagan: test yaratish uchun ANTHROPIC_API_KEY sozlanmagan. Administratorga murojaat qiling. "
+        raise HTTPException(503, "AI ulanmagan — administratorga murojaat qiling. "
                                  "Savollarni hozircha qo'lda kiritishingiz mumkin («Savol qo'shish»).")
     missing = [t for t in tps if not _source(cid, t)]
     if missing: raise HTTPException(400, f"Mavzu matni yuklanmagan: {', '.join(str(t) + '-mavzu' for t in missing)}. Avval ma'ruza matnini yuklang.")
@@ -546,7 +585,7 @@ def _requalify(r: dict, q: dict | None = None) -> list[dict]:
     q = q or {"qtype": r["qtype"], "stem": r["stem"], "options": json.loads(r["options"] or "[]"), "correct": json.loads(r["correct"] or "[]"),
               "answers": json.loads(r["answers"] or "[]"), "source_quote": r["source_quote"]}
     src = _source(r["course_id"], r["topic_no"])
-    return qc(q, src["text"] if src else None, _others(r["course_id"], r["id"]))
+    return qc(q, _qc_text(src), _others(r["course_id"], r["id"]))
 
 def update_question(c: Ctx, qid: int, body: dict) -> dict:
     r, course = _question(c, qid, write=True)
@@ -669,6 +708,15 @@ def course_view(c: Ctx, cid: int) -> dict:
     cnt = _counts(); mq = min_q()
     srcs = {r["topic_no"]: r for r in db.rows(_con, """SELECT s.topic_no, s.name, s.chars, s.truncated, s.ts, s.user_name FROM tb_sources s
                                                        WHERE s.id IN (SELECT MAX(id) FROM tb_sources WHERE course_id=? GROUP BY topic_no)""", (cid,))}
+    try:      # «Dars tayyorlash»da yuklangan ma'ruza matni ham (keyinroq yuklangani ustun) — _source() bilan bir xil qoida
+        if db.one(_con, "SELECT name FROM sqlite_master WHERE type='table' AND name='pk_assets'"):
+            for r in db.rows(_con, """SELECT a.topic_no, a.name, json_extract(a.meta, '$.chars') chars, json_extract(a.meta, '$.truncated') truncated, a.ts, a.user_name
+                                      FROM pk_assets a WHERE a.id IN (SELECT MAX(id) FROM pk_assets WHERE course_id=? AND purpose='matn' AND deleted=0
+                                      AND topic_no BETWEEN 1 AND ? GROUP BY topic_no)""", (cid, n)):
+                cur = srcs.get(r["topic_no"])
+                if not cur or (r["ts"] or "") >= (cur["ts"] or ""): srcs[r["topic_no"]] = {**r, "chars": r["chars"] or 0, "origin": "paket"}
+    except Exception as e:
+        print("testbank.course_view paket:", repr(e))
     flags = {r["topic_no"]: r for r in db.rows(_con, "SELECT topic_no, SUM(blocking) b, SUM(flags!='[]') f FROM tb_questions WHERE course_id=? AND deleted=0 GROUP BY 1", (cid,))}
     topics = []
     for t in _topics(cid, n):
@@ -677,7 +725,8 @@ def course_view(c: Ctx, cid: int) -> dict:
         topics.append({**t, "label": _topic_title(t), "oraliq": 1 if t["no"] <= k else 2, "approved": s.get("tasdiqlandi", 0), "review": s.get("tekshiruvda", 0),
                        "draft": s.get("qoralama", 0), "rejected": s.get("rad_etildi", 0), "covered": s.get("tasdiqlandi", 0) >= mq,
                        "blocking": (flags.get(t["no"]) or {}).get("b") or 0, "flagged": (flags.get(t["no"]) or {}).get("f") or 0,
-                       "source": {"name": sr["name"], "chars": sr["chars"], "truncated": bool(sr["truncated"]), "ts": sr["ts"], "by": _short(sr["user_name"])} if sr else None})
+                       "source": {"name": sr["name"], "chars": sr["chars"], "truncated": bool(sr["truncated"]), "ts": sr["ts"], "by": _short(sr["user_name"]),
+                                  "origin": sr.get("origin") or "testbank"} if sr else None})
     k_role = c.role.key
     own = k_role in DEPT or (k_role == TEACH and co.get("teacher_id") == _teacher_id(c))
     return {"course": {"id": co["id"], "subject": co["subject"], "direction": co["direction"], "course": co["course"], "dept": co["dept"],
@@ -923,7 +972,8 @@ def api_source(cid: int, no: int, request: Request):
     s = _source(cid, no)
     if not s: return {"source": None}
     return {"source": {"name": s["name"], "kind": s["kind"], "chars": s["chars"], "truncated": bool(s["truncated"]), "ts": s["ts"],
-                       "by": _short(s["user_name"]), "text": s["text"][:20000], "cut": len(s["text"]) > 20000, "demo": s["src"] == "demo"}}
+                       "by": _short(s["user_name"]), "text": s["text"][:20000], "cut": len(s["text"]) > 20000, "demo": s["src"] == "demo",
+                       "origin": s.get("origin") or "testbank"}}
 
 @router.post(P + "/courses/{cid}/topics/{no}/source")
 async def api_source_upload(cid: int, no: int, request: Request, name: str = "material"):

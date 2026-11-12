@@ -59,7 +59,9 @@ ok(m["tabs"] == ["qamrov", "mavzular", "joylash", "sozlama"] and m["caps"]["appr
 ms = staff.get(P + "/meta").json()
 ok(ms["caps"]["approve"] and ms["caps"]["settings"] and ms["caps"]["build"], "Bo'lim xodimi: yig'ish, tasdiqlash, sozlamalar")
 mt = teach.get(P + "/meta").json()
-ok(mt["caps"]["build"] and not mt["caps"]["approve"] and not mt["caps"]["settings"] and "joylash" in mt["tabs"], "O'qituvchi: yig'adi, tasdiqlamaydi")
+ok(mt["caps"]["build"] and not mt["caps"]["approve"] and not mt["caps"]["settings"] and mt["tabs"] == ["mavzular"] and mt["tab_labels"]["mavzular"] == "Darslarim",
+   "O'qituvchi: tayyorlaydi, tasdiqlamaydi; bitta yorliq — «Darslarim» (Holat / Ommaviy / Sozlamalar yo'q)")
+ok(m["tab_labels"] == {"qamrov": "Holat", "mavzular": "Darslar", "joylash": "Ommaviy", "sozlama": "Sozlamalar"} and m["title"] == "Dars tayyorlash", "Bo'lim yorliqlari: Holat, Darslar, Ommaviy, Sozlamalar")
 mk = kaf.get(P + "/meta").json()
 ok(not mk["caps"]["write"] and mk["caps"]["download"] and mk["tabs"] == ["qamrov", "mavzular"], "Kafedra mudiri: ko'rish va yuklab olish")
 mr = rek.get(P + "/meta").json()
@@ -668,7 +670,7 @@ ok(tv["ready"]["slides"]["src"] == "pdf" and tv["ready"]["slides"]["file"] and t
 ok(teach.post(f"{P}/courses/{C1}/topics/{A1}/slides", params={"name": "buzuq.pdf"}, content=b"%PDF-1.4\nbuzilgan").status_code == 415, "Buzilgan PDF — 415")
 if not os.environ.get("ANTHROPIC_API_KEY"):
     r = teach.post(f"{P}/courses/{C1}/topics/{A1}/keypoints/ai")
-    ok(r.status_code == 503 and "ANTHROPIC_API_KEY" in r.json()["detail"], "AI xulosalar: kalit yo'q — 503 (aniq xabar)")
+    ok(r.status_code == 503 and "AI ulanmagan — administratorga murojaat qiling" in r.json()["detail"] and "ANTHROPIC" not in r.json()["detail"], "AI xulosalar: kalit yo'q — 503 (aniq xabar, texnik nomsiz)")
 ok(kaf.post(f"{P}/courses/{C1}/topics/{A1}/keypoints/ai").status_code == 403 and kaf.post(f"{P}/courses/{C1}/topics/{A1}/keypoints", json={"items": ["x"], "approve": True}).status_code == 403,
    "AI / xulosalar: kafedra mudiri — 403")
 r = teach.post(f"{P}/courses/{C1}/topics/{A1}/keypoints", json={"items": ["Kompyuterlar turlarga bo'linadi.", "Bayt — 8 bit."], "approve": True})
@@ -807,7 +809,7 @@ ok(rek.get(mb + "/exercises").status_code == 403 and rek.post(mb + "/exercises",
 ok(len(head.get(mb + "/exercises").json()["exercises"]) == 1 and q("SELECT COUNT(*) n FROM audit_log WHERE resource='paket' AND allowed=0")[0]["n"] >= den0 + 20, "Rad etilgan urinishlar hech narsani o'zgartirmadi va audit jurnalida")
 if not os.environ.get("ANTHROPIC_API_KEY"):
     r = teach.post(vb + "/exercises/ai", json={"sort": True})
-    ok(r.status_code == 503 and "ANTHROPIC_API_KEY" in r.json()["detail"] and "qo'lda" in r.json()["detail"], "AI mashqlar: kalit yo'q — 503 (aniq xabar)")
+    ok(r.status_code == 503 and "AI ulanmagan — administratorga" in r.json()["detail"] and "ANTHROPIC" not in r.json()["detail"] and "qo'lda" in r.json()["detail"], "AI mashqlar: kalit yo'q — 503 (aniq xabar, texnik nomsiz)")
 # topshiriq: Word'dagi «Savollar» ro'yxati
 r = teach.post(vb + "/text", params={"name": "6-mavzu.docx"}, content=TASKDOC)
 tv = view6(); ag = tv["ready"]["assignment"]
@@ -906,7 +908,7 @@ try:
     tmpm.executescript("INSERT INTO pk_packages(course_id,topic_no,version) VALUES(1,3,1),(1,0,1);")
     tmpm.execute("INSERT INTO pk_meta VALUES('defaults', ?)", (json.dumps({**PK._OLD_DEFAULTS, "blocks": {}}),))
     o1 = PK.migrate(tmpm); o2 = PK.migrate(tmpm)
-    ok(o1["columns"] == ["pk_topics.keypoints", "pk_topics.extra", "pk_packages.lesson"] and o1["packages"] == 2 and o1["defaults"] and o2 == {"columns": [], "packages": 0, "defaults": False}
+    ok(o1["columns"] == ["pk_topics.keypoints", "pk_topics.extra", "pk_packages.lesson", "pk_packages.src_sig"] and o1["packages"] == 2 and o1["defaults"] and o2 == {"columns": [], "packages": 0, "defaults": False}
        and [r_[0] for r_ in tmpm.execute("SELECT lesson FROM pk_packages ORDER BY id")] == ["L3", "kurs"] and json.loads(tmpm.execute("SELECT v FROM pk_meta WHERE k='defaults'").fetchone()[0])["mode"] == "xapi",
        "Eski sxemadan migratsiya: ustunlar qo'shildi, L3/kurs, o'zgartirilmagan standart → xAPI; qayta — o'zgarishsiz")
     tmpm.close()
@@ -1036,7 +1038,7 @@ try:
     try:
         CC.has_key = lambda: False
         try: PK.ai_keypoints(hctx, MID, AK); ok(False, "kalitsiz AI chaqirildi")
-        except PK.HTTPException as e: ok(e.status_code == 503 and "ANTHROPIC_API_KEY" in e.detail, "AI kalitsiz — 503, o'zbekcha aniq xabar")
+        except PK.HTTPException as e: ok(e.status_code == 503 and "AI ulanmagan" in e.detail and "ANTHROPIC" not in e.detail, "AI kalitsiz — 503, o'zbekcha aniq xabar")
         CC.has_key = lambda: True; CC.call_json = fake_call_json
         r = PK.ai_keypoints(hctx, MID, AK)
         ok([i["text"] for i in r["draft"]["items"]] == ["Kompyuterlar o'lchami va vazifasiga ko'ra turlarga bo'linadi.", "Bayt sakkiz bitdan iborat.", "Axborot texnologiyalari jamiyat asosidir."]
@@ -1264,7 +1266,7 @@ try:
     try:
         CC.has_key = lambda: False
         try: PK.ai_exercises(hctx, MID, L3); ok(False, "kalitsiz AI chaqirildi")
-        except PK.HTTPException as e: ok(e.status_code == 503 and "ANTHROPIC_API_KEY" in e.detail, "AI mashqlar kalitsiz — 503")
+        except PK.HTTPException as e: ok(e.status_code == 503 and "AI ulanmagan" in e.detail and "ANTHROPIC" not in e.detail, "AI mashqlar kalitsiz — 503")
         CC.has_key = lambda: True; CC.call_json = fake_ex
         os.environ["ISFT_CORE_PK_MODEL"] = "claude-test-model"
         r = PK.ai_exercises(hctx, MID, L3, sort=True)
@@ -1753,6 +1755,152 @@ ok(ck["total"]["courses"] == q("SELECT COUNT(*) n FROM dl_courses WHERE departme
 cvv = teach.get(f"{P}/courses/{C1}").json()
 t4 = next(x for x in cvv["topics"] if x["no"] == T)
 ok(t4["text"] and t4["slides"] and t4["video"], "Kurs ko'rinishida mavzu tayyorgarligi (M/T/V)")
+
+# =============================================================================================
+print("== 10. «Dars tayyorlash»: dars nomi, bitta yuklash nuqtasi, yuborish, monitoring, eskirgan versiya, navbat")
+# (a) nom Word/matn sarlavhasidan — sof funksiya
+for txt_, want_ in [("3-MAVZU: RAQAMLI IQTISODIYOT ASOSLARI\nReja:\n1. a", "RAQAMLI IQTISODIYOT ASOSLARI"), ("Mavzu: Pul nazariyasi\nMatn", "Pul nazariyasi"),
+                    ("# 2-ma'ruza. Talab va taklif", "Talab va taklif"), ("Kirish\n\nMAVZU 5:\nBozor muvozanati\nReja", "Bozor muvozanati"),
+                    ("Reja:\n1. Mavzu tanlash", ""), ("1-AMALIY MASHG'ULOT: Excel", "Excel"), ("Oddiy matn. Mavzu: bu yerda emas " * 3, "")]:
+    ok(PK.doc_title(txt_) == want_, f"doc_title: {txt_[:34]!r} → {want_!r}")
+N1, N2 = 12, 13
+U = f"{P}/courses/{C1}/topics/{N1}"
+syl = q("SELECT MAX(topic) t FROM dl_items WHERE course_id=? AND topic_no=?", (C1, N1))[0]["t"] or ""
+v0 = teach.get(U).json()
+ok(v0["topic"]["title"] != f"L{N1}" and (v0["lesson"]["untitled"] and v0["topic"]["title"] == f"{N1}-mavzu" or v0["topic"]["title"]) and v0["state"] == "bosh",
+   f"Nomi yo'q dars: «{v0['topic']['title']}» (dars kodi nom o'rnida takrorlanmaydi), holat — Bo'sh")
+ok(v0["ready"]["plan"]["heading"] in (f"{N1}-MAVZU", f"{N1}-MAVZU: {v0['topic']['title'].upper()}") and "L12" not in v0["ready"]["plan"]["heading"], "Reja sarlavhasi: «12-MAVZU» (kod / nom takrorisiz)")
+# (b) bitta yuklash nuqtasi: tur tarkibidan aniqlanadi
+BODY = ("12-MAVZU: PUL NAZARIYASI ASOSLARI\nReja:\n1. Pul tushunchasi\n2. Pul funksiyalari\n\n1. Pul tushunchasi\n" + "Pul — umumiy ekvivalent vazifasini bajaruvchi maxsus tovar. " * 8 +
+        "\n2. Pul funksiyalari\n" + "Pul qiymat o'lchovi, muomala va to'lov vositasi hisoblanadi. " * 8)
+r = teach.post(U + "/upload", params={"name": "maruza12.txt"}, content=BODY.encode("utf-8"))
+ok(r.status_code == 200 and r.json()["as"] == "matn" and r.json()["title_set"] and r.json()["title"] == "PUL NAZARIYASI ASOSLARI" and len(r.json()["plan"]) >= 2,
+   f"/upload: .txt → ma'ruza matni; nom sarlavhadan avtomatik ({r.status_code} {r.text[:120]})")
+v1 = teach.get(U).json()
+ok(v1["topic"]["title"] == "PUL NAZARIYASI ASOSLARI" and v1["lesson"]["title_src"] == "word" and not v1["lesson"]["untitled"] and v1["ready"]["plan"]["heading"] == "12-MAVZU: PUL NAZARIYASI ASOSLARI",
+   "Dars nomi yuklangan matn sarlavhasidan olindi (title_src=word)")
+ok(next(x for x in teach.get(f"{P}/courses/{C1}").json()["topics"] if x["no"] == N1)["title"] == "PUL NAZARIYASI ASOSLARI", "Darslar ro'yxatida ham haqiqiy nom")
+tbs_ = teach.get(f"/api/testbank/courses/{C1}/topics/{N1}/source").json()["source"]
+ok(tbs_ and tbs_["origin"] == "paket" and "umumiy ekvivalent" in tbs_["text"] and "[RASM" not in tbs_["text"], "Test bank shu yerda yuklangan ma'ruza matnini ko'radi (bitta yuklash)")
+tbt_ = next(x for x in teach.get(f"/api/testbank/courses/{C1}").json()["topics"] if x["no"] == N1)
+ok(tbt_["label"] == "PUL NAZARIYASI ASOSLARI" and tbt_["source"] and tbt_["source"]["origin"] == "paket", "Test bankda mavzu nomi va matn manbai — bir xil")
+r = teach.post(U + "/title", json={"title": "  Pul   nazariyasi (qo'lda) "})
+ok(r.status_code == 200 and r.json()["lesson"]["title"] == "Pul nazariyasi (qo'lda)" and r.json()["lesson"]["title_src"] == "qolda", "Qo'lda kiritilgan nom ustun")
+ok(teach.post(U + "/title", json={"title": ""}).json()["lesson"]["title"] == "PUL NAZARIYASI ASOSLARI", "Bo'sh nom — avtomatik nomga (Word sarlavhasi) qaytadi")
+ok(kaf8.post(U + "/title", json={"title": "x"}).status_code == 403 and rek.post(U + "/title", json={"title": "x"}).status_code == 403, "Nomni kafedra / rektor o'zgartira olmaydi (403)")
+from PIL import Image as _Im
+def _img(fmt, size=(800, 450), color=(20, 60, 120)):
+    b_ = io.BytesIO(); _Im.new("RGB", size, color).save(b_, fmt); return b_.getvalue()
+PDF2 = io.BytesIO(); _Im.new("RGB", (800, 450), (200, 30, 30)).save(PDF2, "PDF", save_all=True, append_images=[_Im.new("RGB", (800, 450), (30, 200, 30))]); PDF2 = PDF2.getvalue()
+r = teach.post(U + "/upload", params={"name": "slaydlar.docx"}, content=PDF2)       # kengaytma yolg'on — tarkib PDF
+ok(r.status_code == 200 and r.json()["as"] == "taqdimot" and r.json()["kind"] == "pdf" and r.json()["count"] == 2, f"/upload: PDF → taqdimot (kengaytmaga emas, tarkibga qaraladi) ({r.status_code} {r.text[:100]})")
+r = teach.post(U + "/upload", params={"name": "rasm.png"}, content=_img("PNG"))
+ok(r.status_code == 409 and r.json()["detail"]["ambiguous"] and set(r.json()["detail"]["choices"]) >= {"muqova", "rasm", "slayd"}, "/upload: rasm — noaniq (409 + tanlovlar: muqova / matn rasmi / slayd)")
+r = teach.post(U + "/upload", params={"name": "rasm.png", "as": "muqova"}, content=_img("PNG"))
+ok(r.status_code == 200 and r.json()["as"] == "muqova" and teach.get(U).json()["ready"]["cover"]["src"] == "dars", "/upload?as=muqova: rasm → dars muqovasi")
+MP4 = b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2mp41" + b"\x00" * 4096
+r = teach.post(U + "/upload", params={"name": "dars.bin"}, content=MP4)
+ok(r.status_code == 200 and r.json()["as"] == "video" and r.json()["kind"] == "mp4" and teach.get(U).json()["ready"]["video"]["provider"] == "file", "/upload: mp4 (ftyp) → video fayl")
+r = teach.post(U + "/upload", params={"name": "dars.srt"}, content="1\n00:00:01,000 --> 00:00:03,000\nSalom\n".encode())
+ok(r.status_code == 200 and r.json()["as"] == "subs" and r.json()["cues"] == 1, "/upload: .srt → subtitr")
+r = teach.post(U + "/upload", params={"name": "virus.docx"}, content=b"MZ\x90\x00\x03" + os.urandom(600))
+ok(r.status_code == 415 and "qabul qilinmaydi" in r.json()["detail"] and "Word" in r.json()["detail"], "/upload: noma'lum tur — 415, o'zbekcha tushunarli xabar")
+ok(teach.post(U + "/upload", params={"name": "eski.doc"}, content=b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 600).status_code == 415, "/upload: eski .doc/.ppt — 415")
+ok(teach.post(U + "/upload", params={"name": "a.mp3"}, content=b"ID3\x03\x00\x00" + b"\x00" * 600).status_code == 415, "/upload: audio — 415 (slayd audiosi alohida joyda)")
+ok(teach.post(U + "/upload", params={"name": "x.pdf", "as": "video"}, content=PDF2).status_code == 415 and teach.post(U + "/upload", params={"name": "x.pdf", "as": "zzz"}, content=PDF2).status_code == 400,
+   "/upload: maqsadga mos bo'lmagan tur — 415; noma'lum maqsad — 400")
+ok(teach.post(U + "/upload", params={"name": "bosh.txt"}, content=b"").status_code == 400, "/upload: bo'sh fayl — 400")
+def _big(n):
+    yield b"%PDF-1.4\n" + b"0" * 55
+    for _ in range(n // (1024 * 1024)): yield b"0" * (1024 * 1024)
+r = teach.post(U + "/upload", params={"name": "katta.pdf"}, content=_big(PK.MAX_ASSET + 2 * 1024 * 1024))
+ok(r.status_code == 413 and "50 MB" in r.json()["detail"] and not list((DBP.parent / "paket" / "tmp").glob("up_*.part")),
+   "/upload: video bo'lmagan fayl uchun chegara o'zgarmagan (50 MB) — 413, vaqtinchalik fayl qolmaydi")
+ok(kaf8.post(U + "/upload", params={"name": "a.txt"}, content=BODY.encode()).status_code == 403 and rek.post(U + "/upload", params={"name": "a.txt"}, content=BODY.encode()).status_code == 403
+   and teach.post(f"{P}/courses/{mikro['id']}/topics/1/upload", params={"name": "a.txt"}, content=BODY.encode()).status_code == 403, "/upload: kafedra, rektor va begona kurs — 403")
+# (c) Tayyorlash: asosiy uch qism bor (test ixtiyoriy) → bo'limga yuboriladi
+if SERVER_PLAYER:
+    mon0 = {r_["kind"]: r_ for r_ in q("SELECT * FROM dl_items WHERE course_id=? AND topic_no=?", (C1, N1))}
+    vr = teach.get(U).json()["ready"]
+    ok(vr["sendable"] and vr["core_missing"] == [] and (vr["complete"] or vr["missing"] == ["quiz"]), "Matn + taqdimot + video bor: yuborishga tayyor (test — ixtiyoriy)")
+    b1 = teach.post(U + "/build", json={}).json()
+    ok(b1["ok"] and b1["package"]["status"] == "tayyor" and b1["package"]["version"] == 1, "Tayyorlash → v1, holat «tasdiq kutilmoqda» (testsiz ham)")
+    z1 = zipfile.ZipFile(io.BytesIO(teach.get(f"{P}/packages/{b1['package']['id']}/download").content))
+    tc = z1.read("tincan.xml").decode() if "tincan.xml" in z1.namelist() else ""
+    cj1 = json.loads(z1.read("content.json"))
+    ok("index.html" in z1.namelist() and "<name lang=\"uz\">PUL NAZARIYASI ASOSLARI</name>" in tc and cj1["title"] == "PUL NAZARIYASI ASOSLARI" and cj1["lesson"]["code"] == "L12",
+       "Zip: index.html + tincan.xml; <name> — haqiqiy dars nomi (kod emas)")
+    v2 = teach.get(U).json()
+    ok(v2["state"] == "kutilmoqda" and not v2["stale"] and not v2["changed"] and v2["nextid"] is None, "Dars holati: Tasdiq kutilmoqda; NEXTID versiyasi hali yo'q")
+    rows_ = head.get(f"{P}/courses", params={"only": "waiting", "limit": 400}).json()["items"]
+    row_ = next(x for x in rows_ if x["id"] == C1)
+    wl = sorted(x["no"] for x in head.get(f"{P}/courses/{C1}").json()["topics"] if x["state"] == "kutilmoqda")
+    ok(row_["waiting_no"] == wl[0] and N1 in wl, f"Kurslar ro'yxati: «Ochish» tasdiq kutayotgan darsni ochadi (waiting_no={row_['waiting_no']}, L1 emas)")
+    qu = head.get(P + "/queue").json()
+    ok(any(x["kind"] == "kutilmoqda" and x["course_id"] == C1 and x["no"] == N1 and x["title"] == "PUL NAZARIYASI ASOSLARI" for x in qu["items"]) and qu["waiting"] >= 1,
+       "Bo'lim navbati: tasdiq kutayotgan dars nomi bilan")
+    ok(rek.get(P + "/queue").status_code == 403 and all(x["course_id"] in {c_["id"] for c_ in q("SELECT id FROM dl_courses WHERE teacher_id=?", (teach_tid,))} for x in teach.get(P + "/queue").json()["items"]),
+       "Navbat: rektor — 403; o'qituvchi — faqat o'z kurslari")
+    ok(teach.post(f"{P}/packages/{b1['package']['id']}/action", json={"action": "approve"}).status_code == 403, "O'qituvchi tasdiqlay olmaydi (403)")
+    # (d) qaytarilganda monitoring o'zgarmaydi
+    head.post(f"{P}/packages/{b1['package']['id']}/action", json={"action": "reject", "note": "Sinov: qaytarish"})
+    mon1 = {r_["kind"]: r_ for r_ in q("SELECT * FROM dl_items WHERE course_id=? AND topic_no=?", (C1, N1))}
+    ok(all(mon1[k_]["status"] == mon0[k_]["status"] and mon1[k_]["src"] == mon0[k_]["src"] for k_ in mon0), "Qaytarilgan paket monitoringni o'zgartirmaydi")
+    ok(teach.get(U).json()["state"] == "tayyorlanmoqda" and next(x for x in teach.get(f"{P}/courses/{C1}").json()["topics"] if x["no"] == N1)["returned"], "Qaytarilgan dars: «Tayyorlanmoqda» + qaytarilgan belgisi")
+    r = teach.post(f"{P}/packages/{b1['package']['id']}/action", json={"action": "submit"})
+    ok(r.status_code == 200 and r.json()["package"]["status"] == "tayyor" and kaf8.post(f"{P}/packages/{b1['package']['id']}/action", json={"action": "submit"}).status_code == 403,
+       "O'qituvchi qayta yubordi (submit); kafedra yubora olmaydi (403)")
+    # (e) tasdiqlash → monitoringdagi shu mavzuning paketda BOR materiallari yopiladi
+    logs0 = q("SELECT COUNT(*) n FROM dl_log WHERE item_id IN (SELECT id FROM dl_items WHERE course_id=? AND topic_no=?)", (C1, N1))[0]["n"]
+    ra = head.post(f"{P}/packages/{b1['package']['id']}/action", json={"action": "approve"}).json()
+    mon2 = {r_["kind"]: r_ for r_ in q("SELECT * FROM dl_items WHERE course_id=? AND topic_no=?", (C1, N1))}
+    open0 = [k_ for k_ in ("maruza", "taqdimot", "video") if mon0[k_]["status"] != "tasdiqlandi"]
+    ok(ra["ok"] and ra["monitoring"] == len(open0) and all(mon2[k_]["status"] == "tasdiqlandi" for k_ in ("maruza", "taqdimot", "video"))
+       and all(mon2[k_]["src"] == "paket" and mon2[k_]["checked_at"] and mon2[k_]["uploaded_at"] for k_ in open0),
+       f"Tasdiqlandi → monitoringda ma'ruza, taqdimot, video yopildi (src=paket): {len(open0)} ta")
+    ok(mon2["test"]["status"] == mon0["test"]["status"] or vr["quiz"]["ok"], "Paketda test yo'q — monitoringdagi «test» o'zgarmadi")
+    lg_ = q("SELECT l.action, l.note FROM dl_log l JOIN dl_items i ON i.id=l.item_id WHERE i.course_id=? AND i.topic_no=? ORDER BY l.id DESC LIMIT 1", (C1, N1))
+    logs1 = q("SELECT COUNT(*) n FROM dl_log WHERE item_id IN (SELECT id FROM dl_items WHERE course_id=? AND topic_no=?)", (C1, N1))[0]["n"]
+    ok(logs1 - logs0 == len(open0) and (not open0 or (lg_[0]["action"] == "tasdiqlandi" and "L12 v1" in lg_[0]["note"])), "Monitoring tarixida yozuv: «Dars tayyorlash: L12 v1 tasdiqlandi»")
+    mine_ = teach.get("/api/masofaviy/items", params={"due": "overdue", "limit": 300}).json()["items"]
+    ok(not any(x["topic_no"] == N1 and x["kind"] in ("maruza", "taqdimot", "video") and x["subject"] == own["subject"] and x["direction"] == own["direction"] for x in mine_),
+       "O'qituvchining «muddati o'tgan» ro'yxatida bu materiallar yo'q")
+    v3 = teach.get(U).json()
+    ok(v3["state"] == "tasdiqlangan" and v3["nextid"]["version"] == 1 and not v3["stale"], "Dars: Tasdiqlangan; «NEXTID uchun: v1»")
+    # (f) tasdiqdan keyin manba o'zgardi → «eskirgan»
+    teach.post(U + "/upload", params={"name": "maruza12b.txt"}, content=(BODY + "\nQo'shimcha xatboshi: pul massasi va inflyatsiya o'zaro bog'liq. " * 3).encode("utf-8"))
+    v4 = teach.get(U).json()
+    ok(v4["stale"] and v4["changed"] and v4["nextid"]["version"] == 1 and next(x for x in teach.get(f"{P}/courses/{C1}").json()["topics"] if x["no"] == N1)["stale"],
+       "Tasdiqdan keyin fayl almashtirildi → «Tasdiqlangan versiya eskirgan» (dars va ro'yxatda)")
+    ok(any(x["kind"] == "eskirgan" and x["course_id"] == C1 and x["no"] == N1 for x in head.get(P + "/queue").json()["items"])
+       and any(x["kind"] == "eskirgan" and x["no"] == N1 for x in teach.get(P + "/queue").json()["items"]), "Eskirgan dars bo'lim navbatida va o'qituvchida ko'rinadi")
+    b2 = teach.post(U + "/build", json={}).json()
+    v5 = teach.get(U).json()
+    ok(b2["package"]["version"] == 2 and v5["state"] == "kutilmoqda" and not v5["stale"] and not v5["changed"] and v5["nextid"]["version"] == 1,
+       "Qayta tayyorlandi: v2 tasdiq kutmoqda, eskirgan belgisi yo'q, NEXTID uchun hozircha v1")
+    # (g) tasdiqlangan versiya qaytarilsa — paket orqali yopilgan materiallar qaytadi
+    rr = head.post(f"{P}/packages/{b1['package']['id']}/action", json={"action": "reject", "note": "Sinov: tasdiq bekor"}).json()
+    mon3 = {r_["kind"]: r_ for r_ in q("SELECT * FROM dl_items WHERE course_id=? AND topic_no=?", (C1, N1))}
+    ok(rr["monitoring"] == len(open0) and all(mon3[k_]["status"] == "qaytarildi" for k_ in open0), "Tasdiqlangan paket qaytarildi → paket orqali yopilgan materiallar «qaytarildi»")
+    head.post(f"{P}/packages/{b2['package']['id']}/action", json={"action": "approve"})
+    ok(all(r_["status"] == "tasdiqlandi" for r_ in q("SELECT status FROM dl_items WHERE course_id=? AND topic_no=? AND kind IN ('maruza','taqdimot','video')", (C1, N1))), "v2 tasdiqlandi → materiallar yana yopildi")
+    # (h) to'liq bo'lmagan dars: qoralama → o'qituvchi «shu holicha yuborish»
+    U2 = f"{P}/courses/{C1}/topics/{N2}"
+    teach.post(U2 + "/upload", params={"name": "m13.txt"}, content=BODY.replace("12-MAVZU", "13-MAVZU").encode("utf-8"))
+    b3 = teach.post(U2 + "/build", json={}).json()
+    v6 = teach.get(U2).json()
+    ok(b3["package"]["status"] == "qoralama" and set(v6["ready"]["core_missing"]) == {"slides", "video"} and v6["state"] == "tayyorlanmoqda", "Faqat matn: qoralama (yetishmaydi: taqdimot, video) — bo'limga o'zi ketmaydi")
+    ok(head.post(f"{P}/packages/{b3['package']['id']}/action", json={"action": "approve"}).status_code == 409, "Yuborilmagan darsni tasdiqlab bo'lmaydi (409)")
+    ok(teach.post(f"{P}/packages/{b3['package']['id']}/action", json={"action": "submit"}).json()["package"]["status"] == "tayyor", "«Shu holicha yuborish» → tasdiq kutilmoqda")
+    head.post(f"{P}/packages/{b3['package']['id']}/action", json={"action": "approve"})
+    m13 = {r_["kind"]: r_["status"] for r_ in q("SELECT kind, status FROM dl_items WHERE course_id=? AND topic_no=?", (C1, N2))}
+    ok(m13["maruza"] == "tasdiqlandi" and all(m13[k_] != "tasdiqlandi" or q("SELECT src FROM dl_items WHERE course_id=? AND topic_no=? AND kind=?", (C1, N2, k_))[0]["src"] != "paket" for k_ in ("taqdimot", "video", "test")),
+       "Monitoring: faqat paketda bor qism (ma'ruza) yopildi — taqdimot/video/test paket orqali yopilmadi")
+# (i) UI matni: texnik atamalar o'qituvchiga ko'rinmaydi
+pjs2 = (ROOT / "static" / "paket.js").read_text(encoding="utf-8")
+body_ = re.sub(r"/\*.*?\*/", "", pjs2, flags=re.S)
+ok(not re.search(r"postMessage|\bLRS\b|\bSCO\b|WebVTT|\[RASM|manifest|pleyer|ANTHROPIC|Paketni yig'ish|Avtomatik joylash|Ommaviy yig'ish", body_) and "Tayyorlash" in pjs2 and "Kengaytirilgan sozlamalar" in pjs2
+   and 'id="pkAny"' in pjs2 and "Yuklab olish (.zip)" in pjs2, "paket.js: texnik atamalarsiz; bitta yuklash maydoni, «Tayyorlash», «Kengaytirilgan sozlamalar»")
 
 print()
 if fails:

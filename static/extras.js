@@ -38,7 +38,13 @@
 
   /* "2 soat oldin" */
   function ago(ts) {
-    const t = new Date(String(ts).length <= 10 ? ts + "T00:00:00" : ts);
+    /* faqat sana (soatsiz) — yarim tundan hisoblanmaydi («14 soat oldin» chiqardi): bugun / kecha / N kun oldin */
+    if (String(ts).length <= 10) {
+      const d0 = new Date(ts + "T00:00:00"); if (isNaN(d0)) return "";
+      const n = new Date(), dd = Math.round((new Date(n.getFullYear(), n.getMonth(), n.getDate()) - d0) / 864e5);
+      return dd <= 0 ? "bugun" : dd === 1 ? "kecha" : dd < 7 ? `${dd} kun oldin` : dd < 30 ? `${Math.floor(dd / 7)} hafta oldin` : dmy(d0);
+    }
+    const t = new Date(ts);
     if (isNaN(t)) return "";
     const s = Math.max(0, (Date.now() - t) / 1000), m = s / 60, h = m / 60, d = Math.floor(h / 24);
     if (s < 60) return "hozirgina";
@@ -354,7 +360,7 @@
       const t = c.textContent.replace(/\s+/g, " ").trim();
       if (t) out.push({title: t, sub: "Sahifa", icon: a.dataset.i || "arrow", link: {view: a.dataset.v}});
     });
-    out.push({title: "Majlislar kalendari", sub: "Sahifa · majlislar, topshiriq va xat muddatlari", icon: "calendar", link: {view: "calendar"}});
+    if (typeof modOn !== "function" || modOn("tasks")) out.push({title: "Majlislar kalendari", sub: "Sahifa · majlislar, topshiriq va xat muddatlari", icon: "calendar", link: {view: "calendar"}});
     return out;
   }
   const ACTIONS = () => [
@@ -426,6 +432,8 @@
       if (!r.ok) throw new Error(r.status);
       const j = await r.json();
       if (my !== PAL.seq || !PAL.open) return;
+      /* o'chirilgan bo'limga (app/modules.py) olib boradigan natijalar ko'rsatilmaydi */
+      if (typeof linkOn === "function" && Array.isArray(j.groups)) j.groups = j.groups.map(g => ({...g, items: (g.items || []).filter(it => linkOn(it.link))})).filter(g => g.items.length);
       PAL.data = j; renderPal();
       const ms = document.getElementById("xtPalMs"); if (ms) ms.innerHTML = `${ico("shield", 13)} faqat sizga ruxsat berilgan ma'lumot · ${j.ms} ms`;
     } catch (e) {
@@ -475,7 +483,7 @@
     } else if (q.length >= 2 && !PAL.data && !PAL.items.length) {
       html = `<div class="xt-empty sm"><span class="xt-spin"></span><span>Qidirilmoqda…</span></div>`;
     }
-    if (!q) html += `<p class="xt-tip">${ico("info", 14)} Talaba (ism yoki HEMIS ID), guruh, xodim, hujjat raqami, portal xati, fayl yoki topshiriqni qidiring. Ochish uchun <kbd>Enter</kbd>.</p>`;
+    if (!q) html += `<p class="xt-tip">${ico("info", 14)} Talaba (ism yoki HEMIS ID), guruh, xodim, hujjat raqami, xat, fayl yoki topshiriqni qidiring. Ochish uchun <kbd>Enter</kbd>.</p>`;
     PAL.list.innerHTML = html;
     PAL.active = -1; setActive(PAL.items.length ? 0 : -1, false);
   }
@@ -564,6 +572,9 @@
         go("panel");
         if (l.tab && typeof pnTab === "function") waitFor(() => document.querySelector(`#v-panel .pn-tab[data-t="${l.tab}"]`)).then(b => b && pnTab(l.tab));
         break;
+      case "mywork":   /* {tab: manba} — «Mening vazifalarim» shu manba bo'yicha saralangan holda (mywork.js MW.flt) */
+        if (typeof MW !== "undefined") { MW.flt = l.tab || "all"; try { localStorage.setItem("isft.mwFlt", MW.flt); } catch (e) {} }
+        go("mywork"); break;
       default: go(l.view);
     }
   }
@@ -582,8 +593,17 @@
      ===================================================================== */
   const NP = {data: null, open: false, timer: 0, busy: false};
   const bell = document.getElementById("xtBell"), np = document.getElementById("xtNp"), badge = document.getElementById("xtBadge");
-  const N_IC = {xat: "mail", xat_muddat: "clock", topshiriq: "clock", topshiriq_muddat: "alert", agent: "spark", hujjat: "file"};
-  const N_T = {xat: "Portal xati", xat_muddat: "Xat muddati", topshiriq: "Topshiriq", topshiriq_muddat: "Topshiriq muddati", agent: "AI agent", hujjat: "Hujjat"};
+  const N_IC0 = {xat: "mail", xat_muddat: "clock", topshiriq: "clock", topshiriq_muddat: "alert", agent: "spark", hujjat: "file"};
+  const N_T0 = {xat: "Yozishmalar", xat_muddat: "Xat muddati", topshiriq: "Topshiriq", topshiriq_muddat: "Topshiriq muddati", agent: "AI agent", hujjat: "Hujjat"};
+  /* kind — «Mening vazifalarim» manbasi ham bo'lishi mumkin (murojaat, buyruq, …): ikonka va nom mywork.js MW_SRC dan */
+  const MWS = () => (typeof MW_SRC !== "undefined" ? MW_SRC : {});
+  const N_IC = new Proxy(N_IC0, {get: (o, k) => o[k] || (MWS()[k] || {}).icon});
+  const N_T = new Proxy(N_T0, {get: (o, k) => o[k] || (MWS()[k] || {}).label});
+  /* manba → bo'lim kaliti (app/modules.py): o'chirilgan bo'lim manbasining «yana N ta ish» qatori ham ko'rsatilmaydi */
+  const SRC_MOD = {buyruq: "orders", murojaat: "service", markaz: "ops", majlis: "tasks", portal: "portal", xodim: "staffabs", agent: "agents", sillabus: "syllabus",
+    moliya: "moliya", kadrlar: "kadrlar", ilmiy: "ilmiy", xalqaro: "xalqaro", yoshlar: "yoshlar", amaliyot: "amaliyot", masofaviy: "masofaviy", testbank: "testbank",
+    paket: "paket", harakat: "flows", tekshiruv: "tekshiruv", qabul: "qabul", rejalar: "rejalar"};
+  const srcOn = s => typeof modOn !== "function" || !SRC_MOD[s] || modOn(SRC_MOD[s]);
 
   async function loadNp() {
     if (!appVisible() || NP.busy) return;
@@ -591,7 +611,12 @@
     try {
       const r = await fetch("/api/notifications", {credentials: "same-origin"});
       if (!r.ok) return;
-      NP.data = await r.json(); paintBadge(); if (NP.open) renderNp();
+      const d = await r.json();
+      if (typeof linkOn === "function" && Array.isArray(d.items)) {   /* o'chirilgan bo'lim bildirishnomalari ko'rsatilmaydi, sanoq ham shunga mos */
+        const all = d.items; d.items = all.filter(it => linkOn(it.link) && (it.link?.view !== "mywork" || srcOn(it.kind)));
+        if (d.items.length !== all.length) d.unread = Math.max(0, (d.unread || 0) - all.filter(it => it.unread && !d.items.includes(it)).length);
+      }
+      NP.data = d; paintBadge(); if (NP.open) renderNp();
     } catch (e) {} finally { NP.busy = false; }
   }
   function paintBadge() {
@@ -621,7 +646,10 @@
       } catch (err) { b.disabled = false; }
     });
     np.querySelectorAll(".xt-ni").forEach(a => a.addEventListener("click", e => {
-      e.preventDefault(); const it = items[+a.dataset.i]; closeNp(false); openLink(it.link);
+      e.preventDefault(); const it = items[+a.dataset.i]; closeNp(false);
+      /* jamlangan qator («more-<manba>», link {view:"mywork"}) — Mening vazifalarim shu manba yorlig'i bilan ochiladi */
+      const src = String(it.id || "").startsWith("more-") ? String(it.id).slice(5) : null;
+      openLink(src && it.link && it.link.view === "mywork" && !it.link.tab ? {...it.link, tab: src} : it.link);
     }));
   }
   function openNp(focus) {

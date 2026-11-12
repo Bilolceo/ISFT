@@ -5,9 +5,11 @@ Tamoyillar:
   * Xavfli amal (topshiriq berish, rasmiy eslatma) — faqat inson tasdig'idan keyin (`agent_actions.status='taklif'`).
   * Xavfi past amal (muddatdan oldingi eslatma, ma'lumot xulosasi) — avtomatik, lekin baribir jurnalga yoziladi.
   * Har bir qaror audit jurnalida (rbac.audit, resurs "agents").
-  * `scan()` idempotent: har bir amal kaliti sanani o'z ichiga oladi (agent_actions.key UNIQUE).
+  * `scan()` idempotent. Tasdiq kutadigan takliflar OBYEKT bo'yicha kalitlanadi (topshiriq, xarajat moddasi, hamkor — `_propose`):
+    bir obyekt bo'yicha bir vaqtda bitta ochiq taklif; har kuni takrorlanmaydi, sharti yo'qolsa avtomatik yopiladi (`_expire`).
+    Avtomatik (ma'lumot) yozuvlari — kunlik jurnal (kalitda sana). Bir xil ochiq topshiriq ikkinchi marta yaratilmaydi (`_execute`).
 """
-import datetime as dt, hashlib, json
+import datetime as dt, hashlib, json, re
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel
 from . import clock
@@ -73,6 +75,10 @@ def init(con):
     """)
     con.commit()
     try:
+        dedupe(con)
+    except Exception as e:
+        print("agent_hub.dedupe xatosi:", e)
+    try:
         scan(con)
     except Exception as e:      # demo: agent skaneri ishga tushmasa ham server ishlashi kerak
         print("agent_hub.scan xatosi:", e)
@@ -123,6 +129,78 @@ def _add(con, key, agent, level, title, detail="", payload=None, auto=False, res
     con.commit()
     return aid
 
+# ---------- obyekt bo'yicha takliflar ----------
+COOLDOWN_DAYS = {"bajarildi": 7, "rad": 14}     # qaror qabul qilingan obyekt bo'yicha shu muddatdan oldin qayta taklif qilinmaydi
+OBJ_RE = re.compile(r"^(ijro:overdue:\d+|talaba:jiddiy|moliya:over:.+?|hujjat:partner:\d+)(?::|#)(\d{4}-\d{2}-\d{2})(?:\.\d+)?$")
+
+def _base(key: str) -> str | None:
+    m = OBJ_RE.match(key or "")
+    return m.group(1) if m else None
+
+def _latest(con, base: str) -> dict | None:
+    return db.one(con, "SELECT * FROM agent_actions WHERE substr(key,1,?)=? ORDER BY id DESC LIMIT 1", (len(base) + 1, base + "#"))
+
+def _task_open(con, tid) -> bool:
+    if not tid: return False
+    r = con.execute("SELECT status FROM tasks WHERE id=?", (tid,)).fetchone()
+    return bool(r) and r[0] != "bajarildi"
+
+def _propose(con, base, agent, level, title, detail, payload) -> bool:
+    """Tasdiq kutadigan taklif — OBYEKT kaliti bo'yicha (masalan `ijro:overdue:12`, `moliya:over:Kommunal`). Ochiq taklif bo'lsa — matni
+    yangilanadi (yangi qator yo'q). Qaror qabul qilingan bo'lsa: yaratilgan topshiriq hali ochiq yoki COOLDOWN_DAYS o'tmagan — taklif
+    qilinmaydi. True — yangi taklif yaratildi."""
+    payload = {**payload, "origin": base}
+    last = _latest(con, base)
+    if last and last["status"] == "taklif":
+        pj = json.dumps(payload, ensure_ascii=False)
+        if (last["title"], last["detail"], last["payload"]) != (title[:300], detail[:1000], pj):
+            con.execute("UPDATE agent_actions SET title=?, detail=?, payload=? WHERE id=? AND status='taklif'", (title[:300], detail[:1000], pj, last["id"]))
+            con.commit()
+        return False
+    if last:
+        try: lp = json.loads(last["payload"] or "{}")
+        except ValueError: lp = {}
+        if _task_open(con, lp.get("created_task")): return False
+        try: age = (clock.today() - dt.date.fromisoformat((last["decided_at"] or last["created_at"])[:10])).days
+        except (ValueError, TypeError): age = 999
+        if age < COOLDOWN_DAYS.get(last["status"], 7): return False
+    return bool(_add(con, f"{base}#{_today()}", agent, level, title, detail, payload=payload))
+
+def _expire(con, agent: str, live: set) -> int:
+    """Sharti endi bajarilmaydigan ochiq takliflar (topshiriq bajarildi, xarajat rejaga tushdi, shartnoma uzaytirildi) avtomatik yopiladi."""
+    n = 0
+    for r in db.rows(con, "SELECT id, key FROM agent_actions WHERE status='taklif' AND agent=?", (agent,)):
+        b = _base(r["key"])
+        if b and b not in live:
+            n += con.execute("UPDATE agent_actions SET status='rad', decided_at=?, decided_by=?, result=? WHERE id=? AND status='taklif'",
+                             (_now(), "ISFT Core (avtomatik)", "Dolzarbligini yo'qotdi — sharti endi bajarilmaydi; taklif avtomatik yopildi, hech qanday amal bajarilmadi.", r["id"])).rowcount
+    if n: con.commit()
+    return n
+
+def dedupe(con) -> int:
+    """Eski kalitlar (obyekt + sana — har kuni yangi taklif) tozalanadi: har bir obyekt bo'yicha eng yangi ochiq taklif qoladi, qolgan ochiq
+    takrorlari o'chiriladi (ular bo'yicha qaror qabul qilinmagan); barcha yozuvlar yangi `obyekt#sana` kalitiga o'tadi. Idempotent."""
+    rows = [(r, OBJ_RE.match(r["key"] or "")) for r in db.rows(con, "SELECT id, key, status FROM agent_actions WHERE key LIKE '%:____-__-__' ORDER BY id")]
+    rows = [(r, m) for r, m in rows if m]
+    if not rows: return 0
+    newest = {}
+    for r, m in rows:
+        if r["status"] == "taklif": newest[m.group(1)] = r["id"]
+    # yangi kalitli ochiq taklif allaqachon bo'lsa — eski ochiqlarning hammasi takror
+    for b in list(newest):
+        if db.one(con, "SELECT 1 x FROM agent_actions WHERE status='taklif' AND substr(key,1,?)=?", (len(b) + 1, b + "#")): newest[b] = None
+    dropped = 0
+    for r, m in rows:
+        if r["status"] == "taklif" and newest.get(m.group(1)) != r["id"]:
+            con.execute("DELETE FROM agent_actions WHERE id=?", (r["id"],)); dropped += 1
+        else:
+            nk = f"{m.group(1)}#{m.group(2)}"
+            if con.execute("SELECT 1 FROM agent_actions WHERE key=?", (nk,)).fetchone(): nk += f".{r['id']}"
+            con.execute("UPDATE agent_actions SET key=? WHERE id=?", (nk, r["id"]))
+    con.commit()
+    if dropped: print(f"AI agentlar: {dropped} ta takroriy ochiq taklif olib tashlandi (obyekt bo'yicha bittadan qoldi)")
+    return dropped
+
 def _agent_meeting(con) -> int:
     m = db.one(con, "SELECT id FROM meetings WHERE title=? ORDER BY id LIMIT 1", (AGENT_MEETING,))
     if m: return m["id"]
@@ -147,10 +225,25 @@ def _execute(con, p: dict, who: dict, agent: str, auto=False) -> str:
             except Exception:
                 pass
         if "updated_at" in cols: fields["updated_at"] = _now()
+        # bir xil topshiriq ikki marta yaratilmaydi: shu taklif obyekti bo'yicha avval yaratilgani yoki aynan shu matnli ochiq topshiriq bo'lsa
+        dup = None
+        if p.get("origin"):
+            for r in db.rows(con, "SELECT payload FROM agent_actions WHERE status='bajarildi' AND substr(key,1,?)=? ORDER BY id DESC", (len(p["origin"]) + 1, p["origin"] + "#")):
+                try: ct = json.loads(r["payload"] or "{}").get("created_task")
+                except ValueError: ct = None
+                if _task_open(con, ct): dup = ct; break
+        if not dup:
+            r = con.execute("SELECT id FROM tasks WHERE meeting_id=? AND assignee_role=? AND text=? AND status!='bajarildi' ORDER BY id LIMIT 1",
+                            (mid, role, fields["text"])).fetchone()
+            dup = r[0] if r else None
+        if dup:
+            p["created_task"] = dup
+            return f"Topshiriq #{dup} allaqachon berilgan va hali ochiq — takror yaratilmadi. «Majlislar va topshiriqlar» bo'limida ko'rinadi."
         tid = con.execute(f"INSERT INTO tasks({','.join(fields)}) VALUES({','.join('?' * len(fields))})", tuple(fields.values())).lastrowid
         con.execute("INSERT INTO task_log(task_id,ts,user_id,user_name,action,detail) VALUES(?,?,?,?,?,?)",
                     (tid, _now(), who.get("id"), who.get("full_name"), "ISFT Core agenti taklifi",
                      f"{AG[agent]['name']} tayyorlagan; {_short(who.get('full_name'))} tasdiqladi"))
+        p["created_task"] = tid
         return f"Topshiriq #{tid} yaratildi: {fields['assignee']} · muddat {_dmy(p['due'])}. «Majlislar va topshiriqlar» bo'limida ko'rinadi."
     if eff == "remind":
         ids = [int(i) for i in p.get("task_ids", [])]
@@ -172,9 +265,14 @@ def scan(con) -> int:
     rc = _rector(con)
     d = _today()
     new = 0
+    live = {}          # agent → shu skanerda sharti bajarilgan obyekt kalitlari (qolgan ochiq takliflar eskirgan — _expire)
     def add(*a, **k):
         nonlocal new
         if _add(con, *a, **k): new += 1
+    def propose(base, agent, level, title, detail, payload):
+        nonlocal new
+        live.setdefault(agent, set()).add(base)
+        if _propose(con, base, agent, level, title, detail, payload): new += 1
 
     # 1) Rektor yordamchisi — kunlik brifing tayyorlandi
     try:
@@ -191,15 +289,16 @@ def scan(con) -> int:
         tl = S.tasks_list(con, rc, quiet=True)["tasks"]
         soon = [t for t in tl if t["status"] not in ("bajarildi", "qoralama") and not t["overdue"] and t["days"] is not None and 0 <= t["days"] <= 2]
         for t in soon:
-            add(f"ijro:soon:{t['id']}:{d}", "ijro", 3, f"Eslatma: «{_cut(t['text'])}» — muddatga {t['days']} kun qoldi",
+            add(f"ijro:soon:{t['id']}:{t['due']}", "ijro", 3, f"Eslatma: «{_cut(t['text'])}» — muddatga {t['days']} kun qoldi",
                 f"Ijrochi: {t['assignee'] or ROLES.get(t['assignee_role'], ROLES['rektor']).title} · muddat {_dmy(t['due'])}",
                 payload={"effect": "remind", "task_ids": [t["id"]], "note": f"Muddatga {t['days']} kun qoldi — ISFT Core avtomatik eslatmasi"}, auto=True)
         over = [t for t in tl if t["overdue"]]
         for t in over:
             who = t["assignee"] or ROLES.get(t["assignee_role"], ROLES["rektor"]).title
-            add(f"ijro:overdue:{t['id']}:{d}", "ijro", 2, f"Rasmiy eslatma: «{_cut(t['text'])}»",
-                f"{who} · muddat {_dmy(t['due'])} ({abs(t['days'] or 0)} kun o'tgan). Tasdiqlansa, rasmiy eslatma yuboriladi va topshiriq tarixiga yoziladi.",
-                payload={"effect": "remind", "task_ids": [t["id"]]})
+            propose(f"ijro:overdue:{t['id']}", "ijro", 2, f"Rasmiy eslatma: «{_cut(t['text'])}»",
+                    f"{who} · muddat {_dmy(t['due'])} ({abs(t['days'] or 0)} kun o'tgan). Tasdiqlansa, rasmiy eslatma yuboriladi va topshiriq tarixiga yoziladi.",
+                    {"effect": "remind", "task_ids": [t["id"]]})
+        live.setdefault("ijro", set()); _expire(con, "ijro", live["ijro"])
     except Exception as e:
         print("ijro scan:", e)
 
@@ -216,11 +315,12 @@ def scan(con) -> int:
                 auto=True, result=(f"Xulosa tayyorlandi: {late} ta kechikkan qo'ng'iroq birinchi navbatda." if late else "Xulosa tayyorlandi: kechikkan qo'ng'iroq yo'q, navbat jiddiylik darajasi bo'yicha."))
             jid = con.execute("SELECT COUNT(*) FROM ops_cases WHERE rule='akademik' AND level=3 AND status='ochiq'").fetchone()[0]
             if jid:
-                add(f"talaba:jiddiy:{d}", "talaba", 2, f"Registratorga topshiriq: {jid} ta jiddiy akademik holat",
-                    "«Jiddiy» darajadagi akademik qarzdorlik holatlari bo'yicha ogohlantirish xatlari va buyruq loyihalarini tayyorlash taklif etiladi.",
-                    payload={"effect": "task", "assignee": "Registrator ofisi", "role": "talabalar",
-                             "text": f"{jid} ta «Jiddiy» darajadagi akademik holat bo'yicha talabalarga ogohlantirish xatlarini yuborish va zarur buyruq loyihalarini tayyorlash",
-                             "due": (clock.today() + dt.timedelta(days=5)).isoformat()})
+                propose("talaba:jiddiy", "talaba", 2, f"Registratorga topshiriq: {jid} ta jiddiy akademik holat",
+                        "«Jiddiy» darajadagi akademik qarzdorlik holatlari bo'yicha ogohlantirish xatlari va buyruq loyihalarini tayyorlash taklif etiladi.",
+                        {"effect": "task", "assignee": "Registrator ofisi", "role": "talabalar",
+                         "text": f"{jid} ta «Jiddiy» darajadagi akademik holat bo'yicha talabalarga ogohlantirish xatlarini yuborish va zarur buyruq loyihalarini tayyorlash",
+                         "due": (clock.today() + dt.timedelta(days=5)).isoformat()})
+            live.setdefault("talaba", set()); _expire(con, "talaba", live["talaba"])
     except Exception as e:
         print("talaba scan:", e)
 
@@ -239,12 +339,14 @@ def scan(con) -> int:
             if o["category"] in seen: continue
             seen.add(o["category"])
             n = sum(1 for x in fs["overruns"] if x["category"] == o["category"])
-            add(f"moliya:over:{o['category']}:{d}", "moliya", 2, f"Buxgalteriyaga topshiriq: «{o['category']}» rejadan {o['over_pct']}% oshgan",
-                f"{o['month']} oyida reja {S.mln(o['planned'])}, amalda {S.mln(o['actual'])}; ketma-ket {n} oy oshish. Sabablar tahlili va tejash choralari taklif etiladi.",
-                payload={"effect": "task", "assignee": "Buxgalteriya bo'limi", "role": "buxgalteriya",
-                         "text": f"«{o['category']}» xarajatlari rejadan {o['over_pct']}% oshishi sabablarini tahlil qilish va tejash choralari bo'yicha taklif kiritish",
-                         "due": (clock.today() + dt.timedelta(days=7)).isoformat()})
+            propose(f"moliya:over:{o['category']}", "moliya", 2, f"Buxgalteriyaga topshiriq: «{o['category']}» rejadan {o['over_pct']}% oshgan",
+                    f"{o['month']} oyida reja {S.mln(o['planned'])}, amalda {S.mln(o['actual'])}; ketma-ket {n} oy oshish. Sabablar tahlili va tejash choralari taklif etiladi.",
+                    {"effect": "task", "assignee": "Buxgalteriya bo'limi", "role": "buxgalteriya",
+                     "text": f"«{o['category']}» xarajatlari rejadan {o['over_pct']}% oshishi sabablarini tahlil qilish va tejash choralari bo'yicha taklif kiritish",
+                     "due": (clock.today() + dt.timedelta(days=7)).isoformat()})
             if len(seen) >= 2: break
+        # eskirgan deb faqat rejadan oshmay qolgan moddalar hisoblanadi (skaner 2 ta modda bilan cheklangan — qolgan oshgan moddalar taklifi saqlanadi)
+        _expire(con, "moliya", live.setdefault("moliya", set()) | {f"moliya:over:{o['category']}" for o in fs["overruns"]})
     except Exception as e:
         print("moliya scan:", e)
 
@@ -257,11 +359,12 @@ def scan(con) -> int:
             auto=True, result=f"Xulosa tayyorlandi: {cnt.get('loyiha', 0)} ta loyiha «Hujjatlar markazi»da imzo kutmoqda.")
         intl = S.international_summary(con, rc, quiet=True)
         for p in intl["expiring"]:
-            add(f"hujjat:partner:{p['id']}:{d}", "hujjat", 2, f"Xalqaro bo'limga: {p['name']} shartnomasi {p['days_left']} kunda tugaydi",
-                f"{p['country']} · amal qilish muddati {_dmy(p['expires'])}. Uzaytirish bo'yicha xat va kelishuv loyihasini tayyorlash taklif etiladi.",
-                payload={"effect": "task", "assignee": "Xalqaro hamkorlik bo'limi", "role": "xalqaro",
-                         "text": f"{p['name']} ({p['country']}) bilan hamkorlik shartnomasini uzaytirish: hamkorga xat va kelishuv loyihasini tayyorlash",
-                         "due": (clock.today() + dt.timedelta(days=max(3, min(14, p['days_left'] - 7)))).isoformat()})
+            propose(f"hujjat:partner:{p['id']}", "hujjat", 2, f"Xalqaro bo'limga: {p['name']} shartnomasi {p['days_left']} kunda tugaydi",
+                    f"{p['country']} · amal qilish muddati {_dmy(p['expires'])}. Uzaytirish bo'yicha xat va kelishuv loyihasini tayyorlash taklif etiladi.",
+                    {"effect": "task", "assignee": "Xalqaro hamkorlik bo'limi", "role": "xalqaro",
+                     "text": f"{p['name']} ({p['country']}) bilan hamkorlik shartnomasini uzaytirish: hamkorga xat va kelishuv loyihasini tayyorlash",
+                     "due": (clock.today() + dt.timedelta(days=max(3, min(14, p['days_left'] - 7)))).isoformat()})
+        live.setdefault("hujjat", set()); _expire(con, "hujjat", live["hujjat"])
     except Exception as e:
         print("hujjat scan:", e)
     return new
@@ -306,11 +409,12 @@ def decide(c: Ctx, aid: int, approve: bool) -> dict:
     if not n:
         _con.commit()
         return {"ok": False, "status": a["status"], "result": a["result"] or "Bu taklif bo'yicha qaror allaqachon qabul qilingan."}
+    p = json.loads(a["payload"] or "{}")
     if approve:
-        res = _execute(_con, json.loads(a["payload"] or "{}"), c.user, a["agent"])
+        res = _execute(_con, p, c.user, a["agent"])
     else:
         res = f"Rad etildi ({_short(c.user['full_name'])}). Hech qanday amal bajarilmadi."
-    _con.execute("UPDATE agent_actions SET result=? WHERE id=?", (res[:600], aid))
+    _con.execute("UPDATE agent_actions SET result=?, payload=? WHERE id=?", (res[:600], json.dumps(p, ensure_ascii=False), aid))
     _con.commit()
     return {"ok": True, "status": "bajarildi" if approve else "rad", "result": res}
 
@@ -417,9 +521,11 @@ def api_propose(body: ProposeIn, request: Request):
         raise AccessDenied("⛔ Kuzatuv kengashi uchun faqat ko'rish rejimi.")
     h = hashlib.sha1(json.dumps(p, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:12]
     key = f"chat:{body.agent}:{h}:{_today()}"
-    ex = db.one(_con, "SELECT * FROM agent_actions WHERE key=?", (key,))
+    pre = f"chat:{body.agent}:{h}:"
+    ex = db.one(_con, "SELECT * FROM agent_actions WHERE key=?", (key,)) or \
+         db.one(_con, "SELECT * FROM agent_actions WHERE status='taklif' AND substr(key,1,?)=? ORDER BY id DESC LIMIT 1", (len(pre), pre))   # oldingi kunlardagi ochiq taklif
     if ex:
-        return {"id": ex["id"], "status": ex["status"], "result": ex["result"] or "Bu taklif bugun allaqachon yuborilgan.", "duplicate": True}
+        return {"id": ex["id"], "status": ex["status"], "result": ex["result"] or "Bu taklif allaqachon yuborilgan va tasdiq kutmoqda.", "duplicate": True}
     detail = f"ISFT Core suhbatida {_short(c.user['full_name'])} ({c.role.title}) taklif qildi."
     if p["effect"] == "task": detail += f" Mas'ul: {p['assignee']}, muddat {_dmy(p['due'])}. «{p['text']}»"
     cur = _con.execute("""INSERT INTO agent_actions(key,agent,level,title,detail,status,created_at,payload,result) VALUES(?,?,?,?,?,?,?,?,?)""",

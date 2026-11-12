@@ -47,6 +47,8 @@ DISTANCE = "distance"            # masofaviy ta'lim: LMS faolligi, kontent monit
 LABELS[DISTANCE] = "Masofaviy ta'lim: talabalar faolligi va o'quv kontenti monitoringi"
 TESTBANK = "testbank"             # test bank: mavzu testlari, AI generatsiya, sifat nazorati, oraliq banklari va eksport (app/testbank.py) — kirish moduldagi jadval bo'yicha
 LABELS[TESTBANK] = "Test bank: mavzu testlari va oraliq nazorat banklari"
+HR_STATS = "hr_stats"             # kadrlar bo'yicha FAQAT jamlangan sonlar: shtat (bo'limlar kesimida) va bugungi yo'qliklar soni — ism, pasport, shaxsiy ish yo'q
+LABELS[HR_STATS] = "Kadrlar: jamlangan ko'rsatkichlar (shtat, yo'qliklar soni)"
 PAKET = "paket"                   # kontent paketlari: mavzu manbalari → SCORM 1.2 / SCORM 2004 / xAPI paket, tasdiq, qamrov (app/paket.py) — kirish moduldagi jadval bo'yicha
 LABELS[PAKET] = "Kontent paketlari: SCORM / xAPI paket yig'ish"
 
@@ -67,8 +69,9 @@ def R(*a): return frozenset(a)
 ROLES = {r.key: r for r in [
     Role("kengash", "Kuzatuv kengashi", 1, R(KPI, ACADEMIC, FINANCE, CONTRACTS, SCIENCE, INTL, ADMISSIONS, TASKS, REPORTS, SPACES),
          aggregate_only=R(ACADEMIC, FINANCE, CONTRACTS, ADMISSIONS), deny_note="Shaxsiy ma'lumotlar va kunlik operativ tafsilotlar"),
-    Role("rektor", "Rektor", 1, R(KPI, ACADEMIC, STUDENTS, CONTRACTS, FINANCE, PAYROLL, SCIENCE, INTL, ADMISSIONS, YOUTH, MASTERS, TASKS, AUDIT, REPORTS, FACILITIES, REQUESTS, SPACES, OPS),
-         aggregate_only=R(STUDENTS, PAYROLL, OPS), deny_note="Xom hujjatlar, individual kartochkalar (maxsus so'rovsiz), xodimlar shaxsiy ma'lumoti"),
+    # HR_STATS: «Bugun nechta xodim ta'tilda?» kabi savollarga jamlangan javob (menyusida «Xodimlar ta'tili» bor); HR (shaxsiy ishlar) — yo'q
+    Role("rektor", "Rektor", 1, R(KPI, ACADEMIC, STUDENTS, CONTRACTS, FINANCE, PAYROLL, SCIENCE, INTL, ADMISSIONS, YOUTH, MASTERS, TASKS, AUDIT, REPORTS, FACILITIES, REQUESTS, SPACES, OPS, HR_STATS),
+         aggregate_only=R(STUDENTS, PAYROLL, OPS, HR_STATS), deny_note="Xom hujjatlar, individual kartochkalar (maxsus so'rovsiz), xodimlar shaxsiy ma'lumoti"),
     Role("prorektor_oquv", "O'quv ishlari bo'yicha prorektor", 2, R(KPI, ACADEMIC, STUDENTS, ADMISSIONS, MASTERS, TASKS, REPORTS, REQUESTS, SPACES, OPS),
          deny_note="Moliyaviy hisobotlar, xodimlar maoshi"),
     Role("prorektor_ilmiy", "Ilmiy ishlar va innovatsiyalar bo'yicha prorektor", 2, R(KPI, SCIENCE, INTL, MASTERS, TASKS, REPORTS),
@@ -97,12 +100,12 @@ ROLES = {r.key: r for r in [
     Role("xalqaro", "Xalqaro hamkorlik bo'limi", 3, R(INTL, TASKS)),
     Role("buxgalteriya", "Buxgalteriya bo'limi", 3, R(FINANCE, CONTRACTS, PAYROLL, TASKS, OPS), local_only=True,
          deny_note="Talabalar markazi — faqat kontrakt holatlari (baholar va davomatsiz)"),
-    Role("kadrlar", "Kadrlar bo'limi", 3, R(HR, TASKS), local_only=True),
+    Role("kadrlar", "Kadrlar bo'limi", 3, R(HR, HR_STATS, TASKS), local_only=True),
     Role("xojalik", "Xo'jalik va texnik bo'lim", 3, R(FACILITIES, TASKS, SPACES, PROCUREMENT), deny_note="Talabalar, moliya va kadrlar ma'lumoti"),
     Role("ilmiy_bolim", "Ilmiy tadqiqotlar, innovatsiyalar va ilmiy-pedagogik kadrlar tayyorlash bo'limi", 3, R(SCIENCE, MASTERS, TASKS),
          deny_note="Talaba baholari, moliya va kadrlar ma'lumoti"),
     Role("kotib", "Rektorat kotibi", 1, R(TASKS), deny_note="Talabalar, moliya va kadrlar ma'lumoti — kotib faqat majlis materiallari bilan ishlaydi"),
-    Role("it_head", "Axborot texnologiyalari bo'limi boshlig'i", 3, R(TASKS, REQUESTS, SPACES), deny_note="Talabalar baholari, moliya va kadrlar ma'lumoti · kameralar — faqat texnik holat"),
+    Role("it_head", "Axborot texnologiyalari bo'limi boshlig'i", 3, R(TASKS, REQUESTS, SPACES, AUDIT), deny_note="Talabalar baholari, moliya va kadrlar ma'lumoti · kameralar — faqat texnik holat"),
     # murojaatlar — faqat AT bo'limi navbati va o'ziga biriktirilganlari (app/service.py UNIT_ONLY); umumiy hodisa xabarini yubormaydi
     Role("it_staff", "Axborot texnologiyalari bo'limi muhandisi", 3, R(TASKS, REQUESTS),
          deny_note="Faqat o'ziga biriktirilgan topshiriqlar · murojaatlar — AT bo'limi navbati va o'ziga biriktirilganlari"),
@@ -123,7 +126,9 @@ ROLES = {r.key: r for r in [
     # Yoshlar ishlari (app/yoshlar.py): Ma'naviyat va ma'rifat bo'limi — turar joy va tadbirlar; komendant — faqat yotoqxona (joylashtirish, to'lov, tartib)
     Role("manaviyat", "Ma'naviyat va ma'rifat bo'limi", 3, R(YOUTH, TASKS), deny_note="Talaba baholari, moliya va kadrlar ma'lumoti · talabalar — faqat turar joy va tadbirlar doirasida"),
     Role("komendant", "Talabalar turar joyi komendanti", 3, R(YOUTH, TASKS), deny_note="Talaba baholari, moliya va kadrlar ma'lumoti · faqat yotoqxona: joylashtirish, to'lov, tartib qaydlari"),
-    Role("tyutor", "Tyutor", 4, R(OPS, ACADEMIC, STUDENTS), scope="fakultet", deny_note="Boshqa fakultet, moliya va kadrlar ma'lumoti"),
+    # scope="fakultet" — o'qituvchilar (teacher_scope) va murojaatlar uchun; TALABALAR — faqat biriktirilgan guruhlar (Ctx.student_scope)
+    Role("tyutor", "Tyutor", 4, R(OPS, ACADEMIC, STUDENTS), scope="fakultet",
+         deny_note="O'ziga biriktirilmagan guruhlar talabalari, boshqa fakultet, moliya va kadrlar ma'lumoti"),
     Role("kafedra", "Kafedra mudiri", 4, R(ACADEMIC, STUDENTS, SCIENCE, TASKS, OPS, REPORTS), scope="kafedra",
          deny_note="Boshqa kafedra, moliya va kadrlar ma'lumoti · Talabalar markazi — o'z kafedrasi, o'quv holatlari (o'qish)"),
     Role("oqituvchi", "O'qituvchi", 4, R(ACADEMIC, STUDENTS, TASKS), scope="o'qituvchi",
@@ -141,7 +146,7 @@ ROLES.update(LEGACY_ROLES)
 ACTIVE_ROLES = {k: r for k, r in ROLES.items() if not r.legacy}
 
 # Telegram orqali hech qachon xom holda chiqmaydigan resurslar
-TELEGRAM_BLOCKED = R(PAYROLL, HR)
+TELEGRAM_BLOCKED = R(PAYROLL, HR, HR_STATS)
 TELEGRAM_AGGREGATE = R(FINANCE, STUDENTS)
 
 class AccessDenied(Exception):
@@ -169,15 +174,43 @@ class Ctx:
     def aggregate_only(self, resource: str) -> bool:
         return resource in self.role.aggregate_only or (self.channel == "telegram" and resource in TELEGRAM_AGGREGATE)
 
-    # Ko'lam filtrlari: SQL sharti qaytaradi
+    # Ko'lam filtrlari: SQL sharti qaytaradi.
+    # TALABALAR KO'LAMI — YAGONA QOIDA. Barcha modullar (services, extras qidiruvi, Portal, Talabalar markazi, reyting, hujjatlar,
+    # buyruqlar) shu funksiyadan foydalanadi; modul faqat qo'shimcha toraytirishi mumkin (masalan, buxgalteriya — faqat kontrakt).
+    #   tyutor      — faqat o'ziga biriktirilgan guruhlar (tutor_groups), butun fakultet EMAS;
+    #   sirtqi      — faqat sirtqi ta'lim shakli;  masofaviy bo'lim — faqat masofaviy ta'lim shakli;
+    #   kafedra     — o'z kafedrasi guruhlari;  o'qituvchi — o'zi dars beradigan guruhlar;  qolganlar — institut.
     def student_scope(self, alias="s"):
-        sc = self.role.scope
+        k, sc, u = self.role.key, self.role.scope, self.user
+        if k == "tyutor":
+            return f"{alias}.group_id IN (SELECT group_id FROM tutor_groups WHERE user_id={int(u.get('id') or 0)})"
+        if k == "sirtqi":
+            return f"{alias}.study_form='sirtqi'"
+        if k in ("masofaviy", "masofaviy_xodim"):
+            return f"{alias}.study_form='masofaviy'"
         if sc == "fakultet":
-            return f"{alias}.faculty_id = {int(self.user['faculty_id'])}"
+            return f"{alias}.faculty_id = {int(u.get('faculty_id') or 0)}"
         if sc == "kafedra":
-            return f"{alias}.group_id IN (SELECT id FROM groups_ WHERE department_id={int(self.user['department_id'])})"
+            return f"{alias}.group_id IN (SELECT id FROM groups_ WHERE department_id={int(u.get('department_id') or 0)})"
         if sc == "o'qituvchi":
-            return f"{alias}.group_id IN (SELECT group_id FROM teacher_groups WHERE teacher_id={int(self.user['teacher_id'])})"
+            return f"{alias}.group_id IN (SELECT group_id FROM teacher_groups WHERE teacher_id={int(u.get('teacher_id') or 0)})"
+        return "1=1"
+
+    def group_scope(self, alias="g"):
+        """Guruhlar ko'lami (groups_ taxallusi) — student_scope bilan bir xil qoida."""
+        k, sc, u = self.role.key, self.role.scope, self.user
+        if k == "tyutor":
+            return f"{alias}.id IN (SELECT group_id FROM tutor_groups WHERE user_id={int(u.get('id') or 0)})"
+        if k == "sirtqi":
+            return f"{alias}.id IN (SELECT DISTINCT group_id FROM students WHERE study_form='sirtqi')"
+        if k in ("masofaviy", "masofaviy_xodim"):
+            return f"{alias}.id IN (SELECT DISTINCT group_id FROM students WHERE study_form='masofaviy')"
+        if sc == "fakultet":
+            return f"{alias}.faculty_id = {int(u.get('faculty_id') or 0)}"
+        if sc == "kafedra":
+            return f"{alias}.department_id = {int(u.get('department_id') or 0)}"
+        if sc == "o'qituvchi":
+            return f"{alias}.id IN (SELECT group_id FROM teacher_groups WHERE teacher_id={int(u.get('teacher_id') or 0)})"
         return "1=1"
 
     def teacher_scope(self, alias="t"):
@@ -192,6 +225,12 @@ class Ctx:
 
     def scope_label(self, con):
         sc = self.role.scope
+        if self.role.key == "tyutor":
+            try: n = con.execute("SELECT COUNT(*) FROM tutor_groups WHERE user_id=?", (self.user.get("id"),)).fetchone()[0]
+            except Exception: n = 0
+            return f"Biriktirilgan guruhlar ({n} ta)"
+        if self.role.key == "sirtqi": return "Sirtqi ta'lim talabalari"
+        if self.role.key in ("masofaviy", "masofaviy_xodim"): return "Masofaviy ta'lim talabalari"
         if sc == "fakultet":
             return db.one(con, "SELECT name FROM faculties WHERE id=?", (self.user["faculty_id"],))["name"] + " fakulteti"
         if sc == "kafedra":
@@ -239,6 +278,20 @@ def check_password(stored: str | None, pw: str) -> bool:
         _, salt, h = stored.split("$")
         return hmac.compare_digest(hashlib.pbkdf2_hmac("sha256", pw.encode(), bytes.fromhex(salt), 120_000).hex(), h)
     return hmac.compare_digest(str(stored).encode(), pw.encode())   # eski (ochiq) yozuv — keyingi kirishda xeshga o'tkaziladi
+
+def pin_fp(stored: str | None) -> str:
+    """Parol yozuvining barmoq izi — Telegram ulanishi qaysi parol bilan tasdiqlanganini eslab qolish uchun (bot.py)."""
+    return hashlib.sha256(("tg:" + str(stored or "")).encode()).hexdigest()[:24]
+
+def set_password(con, uid: int, pin_hash: str) -> bool:
+    """Parolni almashtirishning YAGONA yo'li (tiklash, sinov paroli, o'zi o'zgartirish): yangi xesh yoziladi va Telegram ulanishi uziladi —
+    eski parol bilan ulangan bot endi javob bermaydi, foydalanuvchi kod va yangi parol bilan qayta ulanadi. True — ulanish bor edi."""
+    u = db.one(con, "SELECT telegram_id FROM users WHERE id=?", (uid,))
+    con.execute("UPDATE users SET pin=?, telegram_id=NULL WHERE id=?", (pin_hash, uid))
+    try: con.execute("UPDATE users SET tg_pin_fp=NULL WHERE id=?", (uid,))
+    except Exception: pass      # ustun hali yo'q (bot hech qachon ishga tushmagan baza)
+    con.commit()
+    return bool(u and u.get("telegram_id"))
 
 _PATR = ("ovich", "evich", "ovna", "evna")
 

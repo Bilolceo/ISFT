@@ -25,7 +25,7 @@ PY = sys.executable
 
 # Tartib: avval faqat o'qiydigan/o'zini tozalaydigan to'plamlar, keyin bazani ko'proq o'zgartiradiganlar.
 # talabalar_markazi — oxirida: qoidalar dvigatelini (OPS.evaluate) qayta ishlatadi va demo holatini o'zgartiradi.
-ORDER = ["ruxsatlar", "regressiya", "registrar", "reyting", "flows", "portal", "mywork", "topshiriq_bolimlar", "topshiriq_vakolat",
+ORDER = ["modullar", "ruxsatlar", "regressiya", "registrar", "reyting", "flows", "portal", "mywork", "topshiriq_bolimlar", "topshiriq_vakolat",
          "syllabus", "orders", "staffabs", "accounts", "majlis_qarori", "facecam", "hikvision"]
 LAST = ["talabalar_markazi"]
 SUITE_TIMEOUT = int(os.getenv("ISFT_TEST_SUITE_TIMEOUT", "900"))
@@ -66,6 +66,13 @@ def env_for(data: Path, args):
              ISFT_CORE_STAFFABS_DIR=str(data / "staffabs_files"), ISFT_CORE_SECRETS_DIR=str(data / "secrets"),
              PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8")
     e.setdefault("ISFT_CORE_TZ", "Asia/Tashkent")
+    # Bo'limlar kaliti (app/modules.py): testlar STANDART holatni kutadi — tashqi sozlama olib tashlanadi. Kamera simulyatori serverda
+    # yoqiladi (seed ma'lumoti saqlansin; facecam/hikvision to'plamlari kerak), lekin «cams»/«spaces» bo'limi standart o'chiq qoladi —
+    # ularni kerakli to'plam o'zi yoqadi (facecam: /api/modules orqali; hikvision: o'z jarayonida ISFT_CORE_MODULES bilan).
+    for k in ("ISFT_CORE_MODULES", "ISFT_CORE_REAL_DATA", "ISFT_CORE_SHOW_DEMO_PASSWORD", "ISFT_CORE_TRUSTED_PROXIES"):
+        e.pop(k, None)
+    e["ISFT_CORE_CAM_SIM"] = "1"
+    e["ISFT_CORE_OCC_KEEP_DAYS"] = "40"   # test_regressiya 2–4 haftalik seed tarixini kutadi (standart saqlash — 7 kun)
     e.pop("TELEGRAM_BOT_TOKEN", None)            # testda bot ishga tushmasin
     for k in ("ISFT_CORE_DEMO_TOOLS", "ISFT_CORE_PRES_FAKE", "ISFT_CORE_PRES_DAILY", "ISFT_CORE_CHECK_FAKE", "ISFT_CORE_CHECK_DAILY", "ISFT_CORE_CHECK_SYNC"):   # testlar standart (prod) sozlamani kutadi
         e.pop(k, None)

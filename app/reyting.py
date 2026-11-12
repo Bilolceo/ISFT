@@ -176,15 +176,12 @@ def guard(c: Ctx, action: str, detail: str = "", names=False) -> str:
 def scope_sql(c: Ctx, a="r", id_col="student_id") -> str:
     """Talabalar ko'lami. a — rating_cache (r) yoki students (s) taxallusi; ikkalasida group_id, faculty_id, study_form bor."""
     k = c.role.key
-    if k == "sirtqi": return f"{a}.study_form='sirtqi'"
-    if k == "kafedra": return f"{a}.group_id IN (SELECT id FROM groups_ WHERE department_id={int(c.user.get('department_id') or 0)})"
-    if k == "tyutor": return f"{a}.group_id IN (SELECT group_id FROM tutor_groups WHERE user_id={int(c.user.get('id') or 0)})"
+    if k in ("sirtqi", "kafedra", "tyutor"): return c.student_scope(a)   # yagona qoida — rbac.Ctx.student_scope
     if k == "oqituvchi": return f"{a}.{id_col} IN (SELECT student_id FROM grades WHERE teacher_id={int(c.user.get('teacher_id') or 0)})"
     return "1=1"
 
 def scope_label(c: Ctx) -> str:
     k = c.role.key
-    if k == "sirtqi": return "Sirtqi ta'lim talabalari"
     if k == "oqituvchi": return "Siz baholagan talabalar"
     return c.scope_label(_con)
 

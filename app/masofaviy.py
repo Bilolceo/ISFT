@@ -866,6 +866,28 @@ TEMPLATE_EXAMPLE = {
     "activity": ["301234567890", "2026-11-02", "4", "120", "9", "2", "2", "2", "2", "2026-11-06 19:40"],
     "content": ["Mikroiqtisodiyot", "Iqtisodiyot", "1", "5", "video", "yuklandi", "https://youtu.be/...", "2026-09-27"],
 }
+def template_rows(kind: str) -> list[list[str]]:
+    """Namuna qatorlari — bazadagi HAQIQIY masofaviy talaba (HEMIS ID) va kurs bilan: namuna fayl o'zgarishsiz yuklansa ham import o'tadi
+    (qiymatlar joriy holat bilan bir xil — ma'lumot buzilmaydi). Baza bo'sh bo'lsa — umumiy namuna (TEMPLATE_EXAMPLE)."""
+    try:
+        if kind == "activity":
+            wk = _monday(_today())
+            sts = db.rows(_con, "SELECT id, hemis_id FROM students WHERE study_form='masofaviy' AND hemis_id IS NOT NULL AND hemis_id!='' ORDER BY id LIMIT 2")
+            out = []
+            for st in sts:
+                a = db.one(_con, "SELECT * FROM dl_activity WHERE student_id=? ORDER BY week DESC LIMIT 1", (st["id"],))
+                if a: out.append([st["hemis_id"], a["week"], a["logins"] or 0, a["minutes"] or 0, a["views"] or 0, a["vc_att"] or 0, a["vc_total"] or 0,
+                                  a["tasks_done"] or 0, a["tasks_total"] or 0, (a["last_login"] or "").replace("T", " ")[:16]])
+                else: out.append([st["hemis_id"], wk.isoformat(), 4, 120, 9, 2, 2, 2, 2, f"{wk.isoformat()} 19:40"])
+            return [[str(x) for x in r] for r in out] or [TEMPLATE_EXAMPLE[kind]]
+        rows = db.rows(_con, """SELECT c.subject, c.direction, c.course, i.topic_no, i.kind, i.status, i.url, i.due FROM dl_items i JOIN dl_courses c ON c.id=i.course_id
+                                WHERE i.topic_no<=? ORDER BY (i.url IS NOT NULL AND i.url!='') DESC, c.id, i.topic_no, i.id LIMIT 2""", (TOPICS_PER_COURSE,))
+        inv = {"maruza": "ma'ruza", "taqdimot": "taqdimot", "video": "video", "test": "test"}
+        return [[r["subject"], r["direction"], str(r["course"]), str(r["topic_no"]), inv.get(r["kind"], r["kind"]), r["status"],
+                 r["url"] if r["url"] and URL_RE.match(r["url"]) and len(r["url"]) <= 500 else "", r["due"] or ""] for r in rows] or [TEMPLATE_EXAMPLE[kind]]
+    except Exception as e:
+        print("masofaviy.template_rows:", repr(e)); return [TEMPLATE_EXAMPLE[kind]]
+
 KIND_ALIASES = {"maruza": "maruza", "ma'ruza": "maruza", "ma'ruza matni": "maruza", "matn": "maruza", "taqdimot": "taqdimot", "slayd": "taqdimot",
                 "ppt": "taqdimot", "video": "video", "videodars": "video", "test": "test"}
 ST_ALIASES = {"yuklandi": "yuklandi", "yuklangan": "yuklandi", "berildi": "yuklandi", "ha": "yuklandi", "bor": "yuklandi",
@@ -951,8 +973,8 @@ def import_content(c: Ctx, raw: bytes, name: str) -> dict:
         if st and st != it["status"]:
             upd["status"] = st
             if st in GIVEN and not it["uploaded_at"]: upd["uploaded_at"] = now
-        if url: upd["url"] = url
-        if _d(r.get("muddat")): upd["due"] = _d(r["muddat"]).isoformat()
+        if url and url != (it["url"] or ""): upd["url"] = url
+        if _d(r.get("muddat")) and _d(r["muddat"]).isoformat() != it["due"]: upd["due"] = _d(r["muddat"]).isoformat()
         if upd:
             upd["src"] = "import"
             _con.execute(f"UPDATE dl_items SET {', '.join(k + '=?' for k in upd)} WHERE id=?", (*upd.values(), it["id"]))
@@ -970,6 +992,30 @@ def _log_import(c, kind, name, rows, ok, skipped, note):
 def _log(item_id, c: Ctx, action, note=""):
     _con.execute("INSERT INTO dl_log(item_id,ts,user_id,user_name,action,note) VALUES(?,?,?,?,?,?)",
                  (item_id, _iso(_now()), c.user["id"], c.user["full_name"], action, note[:500]))
+
+# --- «Dars tayyorlash» (app/paket.py) bilan bog'lanish: dars paketi tasdiqlansa — shu mavzuning paketda bor materiallari yopiladi -------------
+def sync_from_package(c: Ctx, course_id: int, topic_no: int, kinds: list[str], note: str) -> int:
+    """Tasdiqlangan dars paketida HAQIQATDA bor materiallar (kinds: maruza / taqdimot / video / test) kontent monitoringida «tasdiqlandi»
+    bo'ladi: src='paket', tarixga (dl_log) yoziladi. Allaqachon tasdiqlangani o'zgarmaydi. → yopilgan materiallar soni."""
+    kinds = [k for k in kinds if k in KINDS]
+    if not kinds: return 0
+    now, n = _iso(_now()), 0
+    for it in db.rows(_con, f"SELECT id, status FROM dl_items WHERE course_id=? AND topic_no=? AND kind IN ({','.join('?' * len(kinds))}) AND status!='tasdiqlandi'",
+                      (int(course_id), int(topic_no), *kinds)):
+        _con.execute("""UPDATE dl_items SET status='tasdiqlandi', uploaded_at=COALESCE(uploaded_at, ?), uploaded_by=COALESCE(uploaded_by, ?),
+                        checked_at=?, checked_by=?, note=NULL, src='paket' WHERE id=?""", (now, c.user["id"], now, c.user["id"], it["id"]))
+        _log(it["id"], c, "tasdiqlandi", note); n += 1
+    if n: _con.commit(); invalidate()
+    return n
+
+def unsync_from_package(c: Ctx, course_id: int, topic_no: int, note: str) -> int:
+    """Tasdiqlangan dars paketi qaytarilganda: faqat paket orqali yopilgan (src='paket') materiallar «qaytarildi» holatiga o'tadi."""
+    now, n = _iso(_now()), 0
+    for it in db.rows(_con, "SELECT id FROM dl_items WHERE course_id=? AND topic_no=? AND src='paket' AND status='tasdiqlandi'", (int(course_id), int(topic_no))):
+        _con.execute("UPDATE dl_items SET status='qaytarildi', checked_at=?, checked_by=?, note=? WHERE id=?", (now, c.user["id"], note[:500], it["id"]))
+        _log(it["id"], c, "qaytarildi", note); n += 1
+    if n: _con.commit(); invalidate()
+    return n
 
 
 # =============================================================================================
@@ -1144,6 +1190,22 @@ def api_review(iid: int, body: ReviewIn, request: Request):
     _log(iid, c, to, body.note.strip()); _con.commit(); invalidate()
     return {"ok": True, "status": to}
 
+class BulkReviewIn(BaseModel):
+    ids: list[int] = Field(..., min_length=1, max_length=500)
+
+@router.post(P + "/items/bulk-review")
+def api_bulk_review(body: BulkReviewIn, request: Request):
+    """Ommaviy tasdiqlash: faqat «Yuklandi (tekshiruvda)» holatidagi tanlangan materiallar; boshqa holatdagilari o'tkazib yuboriladi (soni qaytadi)."""
+    c = C(request); guard(c, "materiallarni ommaviy tasdiqlash", DEPT, f"{len(body.ids)} ta")
+    ids = sorted({int(i) for i in body.ids})
+    now, done = _iso(_now()), 0
+    for iid in ids:
+        n = _con.execute("UPDATE dl_items SET status='tasdiqlandi', checked_at=?, checked_by=?, note=NULL WHERE id=? AND status='yuklandi'",
+                         (now, c.user["id"], iid)).rowcount
+        if n: _log(iid, c, "tasdiqlandi", "ommaviy tasdiqlash"); done += 1
+    _con.commit(); invalidate()
+    return {"ok": True, "approved": done, "skipped": len(ids) - done}
+
 @router.get(P + "/items/{iid}/log")
 def api_item_log(iid: int, request: Request):
     c = C(request); guard(c, "material tarixi", ALL, f"#{iid}")
@@ -1228,7 +1290,8 @@ def api_report(request: Request):
 def api_template(kind: str, request: Request):
     c = C(request); guard(c, "import namunasi", DEPT, kind)
     if kind not in TEMPLATES: raise HTTPException(404)
-    bio = io.StringIO(); w = csv.writer(bio, delimiter=";"); w.writerow(TEMPLATES[kind]); w.writerow(TEMPLATE_EXAMPLE[kind])
+    bio = io.StringIO(); w = csv.writer(bio, delimiter=";"); w.writerow(TEMPLATES[kind])
+    for row in template_rows(kind): w.writerow(row)
     return Response("﻿" + bio.getvalue(), media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition": f'attachment; filename="masofaviy_{kind}_namuna.csv"'})
 

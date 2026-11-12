@@ -32,3 +32,9 @@ div.w5-step{cursor:default}
 @media (max-width:760px){.w5-funnel{grid-template-columns:repeat(3,minmax(0,1fr))}.w5-grid{grid-template-columns:1fr}}
 /* Kiruvchi xatlar, Qabul, KPI jadvallari: tor ekranda kesilmasin — gorizontal skroll */
 #dvList,#qbList,.card:has(> table.w5-tbl){overflow-x:auto}
+/* Qabul: abituriyentlar jadvali to'liq kenglikda (1366px da amal tugmalari kesilmasin), amallar o'raladi */
+.w5-qb{display:grid;gap:14px;grid-template-columns:minmax(0,1fr)}
+.w5-qb>.card{min-width:0;margin:0}
+.w5-acts-c{white-space:normal}
+.w5-acts-c .btn{margin:2px 4px 2px 0}
+.w5-modal [aria-invalid="true"]{border-color:var(--bad,#c0392b);outline:2px solid color-mix(in srgb,var(--bad,#c0392b) 25%,transparent)}

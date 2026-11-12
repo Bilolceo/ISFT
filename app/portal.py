@@ -332,6 +332,7 @@ def _norm(s: str) -> str:
 def _fts_add(con, mid: int, tid: int, body: str):
     if not FTS_OK[0]: return
     t = db.one(con, "SELECT ref_no, subject FROM portal_threads WHERE id=?", (tid,)) or {}
+    con.execute("DELETE FROM portal_fts WHERE rowid=?", (mid,))   # xat tashqaridan o'chirilgan bo'lsa (id qayta ishlatiladi) — eski indeks qatori yangi xatni yiqitmasin
     con.execute("INSERT INTO portal_fts(rowid, thread_id, subject, body) VALUES(?,?,?,?)", (mid, tid, _norm(f"{t.get('ref_no') or ''} {t.get('subject') or ''}"), _norm(body)))
 
 def reindex(con):
@@ -417,6 +418,15 @@ def personal_sql(c: Ctx, a="t") -> tuple[str, list]:
 def personal(con, c: Ctx, t: dict) -> bool:
     if not member_only(c): return True
     return bool(con.execute(f"SELECT 1 FROM portal_threads t WHERE t.id=? AND {_pers_sql()}", (t["id"], *_pers_args(c))).fetchone())
+
+def _need_access(con, c: Ctx, t: dict, action: str) -> None:
+    """Yozish amallari (qaytarib olish, yopish, qayta ochish, muddat, yo'naltirish, tayinlash, talabalar ro'yxati, ko'rib chiqish, arxiv)
+    uchun YAGONA kirish qoidasi — thread_detail va reply bilan bir xil: yozishmani ocha olmaydigan xodim uni o'zgartira ham olmaydi.
+    Bo'lim xodimi (rahbar emas) — faqat shaxsan unga tegishli yozishma (personal()); rahbariyat — hammasi. Har amalning o'z sharti
+    (yuboruvchi bo'lim, qabul qiluvchi bo'lim va h.k.) shundan keyin tekshiriladi."""
+    if is_leader(c) or personal(con, c, t): return
+    rbac.audit(con, c, f"portal: {action}", RES, False, f"{t['ref_no']}: xodimga biriktirilmagan")
+    raise AccessDenied("⛔ Bu yozishma shaxsan sizga biriktirilmagan — uni bo'lim rahbari taqsimlaydi. So'rov audit jurnaliga yozildi.")
 
 def _box_where(c: Ctx, box: str) -> tuple[str, list]:
     me, uid = my_unit(c), c.user["id"]
@@ -1169,6 +1179,7 @@ class DueIn(BaseModel):
 
 def change_due(con, c: Ctx, tid: int, body: DueIn) -> dict:
     t = _thread(con, tid); me = my_unit(c); um = unit_map(con)
+    _need_access(con, c, t, "muddatni o'zgartirish")
     if t["from_unit"] != me and not is_leader(c):
         rbac.audit(con, c, "portal: muddatni o'zgartirish", RES, False, t["ref_no"])
         raise AccessDenied("⛔ Muddatni faqat yuboruvchi bo'lim yoki rahbariyat o'zgartiradi. So'rov audit jurnaliga yozildi.")
@@ -1201,6 +1212,7 @@ def change_due(con, c: Ctx, tid: int, body: DueIn) -> dict:
 
 def recall(con, c: Ctx, tid: int, note: str = "") -> None:
     t = _thread(con, tid); me = my_unit(c)
+    _need_access(con, c, t, "xatni qaytarib olish")
     if t["from_unit"] != me and t["from_user"] != c.user["id"]:
         rbac.audit(con, c, "portal: xatni qaytarib olish", RES, False, t["ref_no"])
         raise AccessDenied("⛔ Xatni faqat yuboruvchi bo'lim qaytarib oladi. So'rov audit jurnaliga yozildi.")
@@ -1231,6 +1243,8 @@ def assign(con, c: Ctx, tid: int, user_id: int | None, ts: str | None = None):
         rbac.audit(con, c, "portal: ijrochi tayinlash", RES, False, t["ref_no"])
         raise AccessDenied("⛔ Ijrochi faqat xat kelgan bo'lim ichida tayinlanadi.")
     head = head_user(con, me) == c.user["id"]
+    # biriktirilmagan kiruvchi xatni bo'lim rahbari taqsimlaydi: xodim ocha olmaydigan xatni «o'ziga olib» o'qiladigan qila olmaydi
+    _need_access(con, c, t, "ijrochi tayinlash")
     if user_id is None:
         if not head and r["assignee"] != c.user["id"]: raise AccessDenied("⛔ Ijrochini faqat bo'lim rahbari olib tashlaydi.")
         con.execute("UPDATE portal_recipients SET assignee=NULL, assignee_name=NULL, assigned_at=NULL, assigned_by=NULL WHERE thread_id=? AND unit=?", (tid, me))
@@ -1252,6 +1266,7 @@ def assign(con, c: Ctx, tid: int, user_id: int | None, ts: str | None = None):
 def forward(con, c: Ctx, tid: int, body: ForwardIn, ts: str | None = None) -> list[str]:
     t = _thread(con, tid); _need_open(t)
     me = my_unit(c); um = unit_map(con)
+    _need_access(con, c, t, "yo'naltirish")
     r = db.one(con, "SELECT * FROM portal_recipients WHERE thread_id=? AND unit=?", (tid, me))
     if not r:
         rbac.audit(con, c, "portal: yo'naltirish", RES, False, t["ref_no"])
@@ -1273,6 +1288,7 @@ def forward(con, c: Ctx, tid: int, body: ForwardIn, ts: str | None = None) -> li
 
 def close_thread(con, c: Ctx, tid: int, note: str = "", ts: str | None = None):
     t = _thread(con, tid); me = my_unit(c)
+    _need_access(con, c, t, "yozishmani yopish")
     if t["from_unit"] != me and not is_leader(c):
         rbac.audit(con, c, "portal: yozishmani yopish", RES, False, t["ref_no"])
         raise AccessDenied("⛔ Yozishmani faqat yuboruvchi bo'lim yoki rahbariyat yopadi.")
@@ -1285,6 +1301,7 @@ def close_thread(con, c: Ctx, tid: int, note: str = "", ts: str | None = None):
 
 def reopen_thread(con, c: Ctx, tid: int):
     t = _thread(con, tid); me = my_unit(c)
+    _need_access(con, c, t, "yozishmani qayta ochish")
     if t["from_unit"] != me and not is_leader(c):
         raise AccessDenied("⛔ Yozishmani faqat yuboruvchi bo'lim yoki rahbariyat qayta ochadi.")
     if (t["status"] or "ochiq") == "ochiq": raise HTTPException(409, "Yozishma ochiq")
@@ -1295,6 +1312,7 @@ def reopen_thread(con, c: Ctx, tid: int):
 
 def archive(con, c: Ctx, tid: int, on: bool):
     t = _thread(con, tid)
+    _need_access(con, c, t, "arxivlash")
     if not _is_part(con, t, my_unit(c)): raise AccessDenied("⛔ Faqat o'z yozishmalaringizni arxivlash mumkin.")
     if on: con.execute("INSERT OR IGNORE INTO portal_hidden(thread_id,user_id,at) VALUES(?,?,?)", (tid, c.user["id"], _now()))
     else: con.execute("DELETE FROM portal_hidden WHERE thread_id=? AND user_id=?", (tid, c.user["id"]))
@@ -1305,6 +1323,7 @@ def archive(con, c: Ctx, tid: int, on: bool):
 # ---------------------------------------------------------------------------------------------
 def add_students(con, c: Ctx, tid: int, body: StudentsIn) -> int:
     t = _thread(con, tid); me = my_unit(c)
+    _need_access(con, c, t, "ro'yxatga talaba qo'shish")
     if t["from_unit"] != me:
         rbac.audit(con, c, "portal: ro'yxatga talaba qo'shish", RES, False, t["ref_no"])
         raise AccessDenied("⛔ Talabalar ro'yxatini faqat xatni yuborgan bo'lim to'ldiradi. So'rov audit jurnaliga yozildi.")
@@ -1324,6 +1343,7 @@ def add_students(con, c: Ctx, tid: int, body: StudentsIn) -> int:
 def mark_students(con, c: Ctx, tid: int, body: MarkIn, ts: str | None = None) -> dict:
     """Ijrochi bo'lim har bir talaba bo'yicha «bajarildi / bajarilmadi (izoh)» belgilaydi. Faqat o'z ko'lamidagi talabalar."""
     t = _thread(con, tid); me = my_unit(c)
+    _need_access(con, c, t, "talabalar ijrosini belgilash")
     rs = db.rows(con, "SELECT * FROM portal_recipients WHERE thread_id=?", (tid,))
     ex = _executors(con, t, rs)
     if me not in ex or not stu_full(c):
@@ -2082,6 +2102,7 @@ def api_recall(tid: int, body: NoteIn, request: Request):
 def api_review(tid: int, body: ReviewIn, request: Request):
     """Javobni ko'rib chiqish: {unit, decision: "accept"|"return", comment, due?}. Boshqa modullar (sillabuslar) ham ishlatadi."""
     c = C(request)
+    _need_access(_con, c, _thread(_con, tid), "javobni ko'rib chiqish")
     r = review_answer(_con, c, tid, body)
     _audit(c, "portal: javob qabul qilindi" if r["decision"] == "accept" else "portal: javob qayta ishlashga qaytarildi", True,
            f"{_thread(_con, tid)['ref_no']} → {r['unit']}" + (f" · {body.comment[:150]}" if body.comment else ""))

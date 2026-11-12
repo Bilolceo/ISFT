@@ -39,12 +39,39 @@ CREATE TABLE IF NOT EXISTS procurements(id INTEGER PRIMARY KEY, ticket_id INT, r
   status TEXT, note TEXT, created_by INT, created_by_name TEXT, created_at TEXT, updated_at TEXT, updated_by_name TEXT);
 """
 # murojaatlar va nosozliklar navbati: kim olgan (assignee_user), qachon
-_ADD_COLS = {"requests": [("assignee_user", "INT"), ("taken_at", "TEXT")], "tickets": [("assignee_user", "INT"), ("taken_at", "TEXT"), ("procurement_id", "INT")]}
+_ADD_COLS = {"requests": [("assignee_user", "INT"), ("taken_at", "TEXT"), ("route_note", "TEXT")], "tickets": [("assignee_user", "INT"), ("taken_at", "TEXT"), ("procurement_id", "INT")]}
 IT_UNIT = "Axborot texnologiyalari bo'limi"
 # lavozim → murojaatlar navbatidagi bo'lim nomi (classify() qaytaradigan nom bilan bir xil)
 ROLE_REQ_UNIT = {"it_head": IT_UNIT, "it_staff": IT_UNIT, "talabalar": "Registrator ofisi", "registrator_xodim": "Registrator ofisi",
                  "sirtqi": "Sirtqi bo'lim", "akademik": "Akademik faoliyatni boshqarish bo'limi", "buxgalteriya": "Buxgalteriya bo'limi"}
 UNIT_ONLY = ("it_staff",)          # faqat o'z bo'limi navbati va o'ziga biriktirilganlar
+FALLBACK_UNIT = "Registrator ofisi"
+# Murojaat faqat navbatini OCHA OLADIGAN bo'limga yo'naltiriladi (lavozimida rbac.REQUESTS bor). Buxgalteriya, Ma'naviyat va ma'rifat
+# bo'limlarida murojaatlar navbati yo'q — ularga tasniflangan murojaat egasiz qolmasligi uchun Registrator ofisiga tushadi (route_note bilan).
+RECEIVING_UNITS = frozenset(u for r, u in ROLE_REQ_UNIT.items() if REQUESTS in rbac.ROLES[r].allow)
+SUPERVISORS = ("rektor", "prorektor_oquv")   # navbati yo'q, lekin har qanday murojaat holatini o'zgartira oladigan rahbariyat
+
+def route_unit(unit: str) -> tuple[str, str | None]:
+    """(navbat egasi, izoh). Tasniflangan bo'lim navbatni ocha olmasa — Registrator ofisi, izohda asl bo'lim."""
+    if unit in RECEIVING_UNITS: return unit, None
+    return FALLBACK_UNIT, f"Mavzu bo'yicha mas'ul — {unit} (bu bo'limda murojaatlar navbati yo'q): Registrator ofisi {unit} bilan kelishib javob beradi"
+
+def reroute_orphans(con) -> int:
+    """Navbati yo'q bo'limda egasiz qolgan ochiq murojaatlar → Registrator ofisi (idempotent)."""
+    n = 0
+    for r in db.rows(con, "SELECT id, unit FROM requests WHERE status IN ('yangi','jarayonda') AND assignee_user IS NULL"):
+        if r["unit"] in RECEIVING_UNITS: continue
+        unit, note = route_unit(r["unit"] or FALLBACK_UNIT)
+        con.execute("UPDATE requests SET unit=?, route_note=? WHERE id=?", (unit, note, r["id"])); n += 1
+    if n: con.commit()
+    return n
+
+def can_handle(ctx: Ctx, r: dict) -> bool:
+    """Murojaat holatini kim o'zgartiradi: egasi bo'lgan bo'lim (navbat), shaxsan biriktirilgan xodim yoki rahbariyat. Boshqa bo'lim
+    (masalan, AT boshlig'i — Registrator ofisi murojaatini) javob bera olmaydi va yopa olmaydi."""
+    if ctx.role.key in SUPERVISORS: return True
+    if r.get("assignee_user") == ctx.user["id"]: return True
+    return ROLE_REQ_UNIT.get(ctx.role.key) == r.get("unit")
 INCIDENT_OWNERS = ("it_head", "talabalar")   # umumiy hodisa xabari — menyu belgisida shu lavozimlarga «harakat kutmoqda»
 PROC_STATUSES = ["yangi", "ko'rib chiqilmoqda", "buyurtma berildi", "yetkazildi", "rad etildi"]
 
@@ -57,6 +84,8 @@ def init(con):
     con.commit()
     try: seed_queue_demo(con)
     except Exception as e: print("service.seed_queue_demo:", e)
+    try: reroute_orphans(con)
+    except Exception as e: print("service.reroute_orphans:", e)
 
 DEMO_IT = [("LMS'da yangi kursga o'qituvchi sifatida qo'shib bering, kafedra mudiri ruxsat bergan", 22, "jarayonda", 26),
            ("Talaba akkauntiga ikkinchi email manzil qo'shib berishingizni so'rayman", 22, "yangi", 20),
@@ -256,11 +285,12 @@ def create_request(con, text, name="", contact="", hemis_id="", channel="veb-for
     if len(text) < 5: raise HTTPException(400, "Murojaat matni juda qisqa")
     st = db.one(con, "SELECT id, faculty_id, full_name FROM students WHERE hemis_id=?", ((hemis_id or "").strip(),)) if hemis_id else None
     cat, unit, topic = classify(text)
+    unit, route_note = route_unit(unit)
     when = when or now()
-    cur = con.execute("""INSERT INTO requests(created_at,channel,student_id,faculty_id,name,contact,text,category,topic,unit,status)
-                         VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+    cur = con.execute("""INSERT INTO requests(created_at,channel,student_id,faculty_id,name,contact,text,category,topic,unit,status,route_note)
+                         VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
                       (iso(when), channel, st and st["id"], st and st["faculty_id"], (name or (st and st["full_name"]) or "")[:80],
-                       (contact or "")[:80], text, cat, topic, unit, "yangi"))
+                       (contact or "")[:80], text, cat, topic, unit, "yangi", route_note))
     rid = cur.lastrowid
     inc = _group_incident(con, topic, when) if topic else None
     con.commit()
@@ -318,6 +348,7 @@ def requests_overview(con, ctx: Ctx, quiet=False):
     for r in reqs:
         r["number"] = f"M-{r['id']:04d}"; r["assignee_name"] = names.get(r.get("assignee_user"))
         r["mine"] = r.get("assignee_user") == ctx.user["id"]
+        r["can_handle"] = can_handle(ctx, r)
     q = my_queue(con, ctx)
     staff = []
     if ctx.role.key == "it_head":   # AT boshlig'i murojaatni muhandisga biriktiradi
@@ -452,7 +483,8 @@ class TStatus(BaseModel):
 @router.post("/api/svc/tickets/{tid}/status")
 def ticket_status(tid: int, body: TStatus, request: Request):
     c = C(request); _g(c, FACILITIES, "nosozlik holatini o'zgartirish", f"#{tid} → {body.status}")
-    if body.status not in TICKET_STATUSES: raise HTTPException(400)
+    if body.status not in TICKET_STATUSES: raise HTTPException(400, "Holat noto'g'ri")
+    if not db.one(_con, "SELECT 1 x FROM tickets WHERE id=?", (tid,)): raise HTTPException(404, "Nosozlik topilmadi")
     _con.execute("UPDATE tickets SET status=?, note=COALESCE(NULLIF(?,''),note), resolved_at=? WHERE id=?",
                  (body.status, body.note[:300], iso(now()) if body.status == "hal qilindi" else None, tid))
     _con.commit(); return {"ok": True}
@@ -488,9 +520,14 @@ class RStatus(BaseModel):
 @router.post("/api/svc/requests/{rid}/status")
 def request_status(rid: int, body: RStatus, request: Request):
     c = C(request); _g(c, REQUESTS, "murojaat holatini o'zgartirish", f"M-{rid:04d} → {body.status}")
-    r = db.one(_con, f"SELECT id FROM requests WHERE id=? AND {_req_scope(c)}", (rid,))
-    if not r: raise HTTPException(404)
-    if body.status not in ("yangi", "jarayonda", "javob berildi", "hal qilindi"): raise HTTPException(400)
+    r = db.one(_con, f"SELECT id, unit, assignee_user, answer FROM requests WHERE id=? AND {_req_scope(c)}", (rid,))
+    if not r: raise HTTPException(404, "Murojaat topilmadi")
+    if body.status not in ("yangi", "jarayonda", "javob berildi", "hal qilindi"): raise HTTPException(400, "Holat noto'g'ri")
+    if not can_handle(c, r):
+        rbac.audit(_con, c, "murojaat holatini o'zgartirish", REQUESTS, False, f"M-{rid:04d}: boshqa bo'lim navbati ({r['unit']})")
+        raise AccessDenied(f"⛔ Bu murojaat «{r['unit']}» navbatida — holatini shu bo'lim (yoki rahbariyat) o'zgartiradi. Urinish audit jurnaliga yozildi.")
+    if body.status == "javob berildi" and not (body.answer or "").strip():
+        raise HTTPException(400, "«Javob berildi» uchun javob matnini yozing")
     _con.execute("UPDATE requests SET status=?, answer=COALESCE(NULLIF(?,''),answer), resolved_at=? WHERE id=?",
                  (body.status, body.answer[:1000], iso(now()) if body.status == "hal qilindi" else None, rid))
     if body.status == "jarayonda":   # «Olindi» — hech kim olmagan bo'lsa, menga biriktiriladi
@@ -599,7 +636,13 @@ class Notice(BaseModel):
 @router.post("/api/svc/incidents/{iid}/notify")
 def incident_notify(iid: int, body: Notice, request: Request):
     c = C(request); _g(c, REQUESTS, "hodisa bo'yicha umumiy xabar yuborish", f"#{iid}"); _incident_guard(c)
-    return {"ok": True, "answered": notify_incident(_con, iid, body.text)}
+    if not db.one(_con, "SELECT 1 x FROM incidents WHERE id=?", (iid,)): raise HTTPException(404, "Hodisa topilmadi")
+    if len((body.text or "").strip()) < 10: raise HTTPException(400, "Xabar matnini yozing")
+    n = notify_incident(_con, iid, body.text.strip())
+    # Tashqi kanal (SMS / Telegram / email) YO'Q: matn hodisaga va ochiq murojaatlarga JAVOB sifatida yoziladi — talaba uni murojaat
+    # raqami bo'yicha (kabinet / holat sahifasi) ko'radi. `answered` — eski mijozlar uchun; aniq ma'nosi — `stored`.
+    return {"ok": True, "answered": n, "stored": n, "delivered": False,
+            "message": f"Javob {n} ta murojaatga yozildi. Xabar tashqi kanal orqali yuborilmadi — murojaatchi javobni murojaat raqami bo'yicha ko'radi."}
 
 def notify_incident(con, iid, text) -> int:
     """Hodisa bo'yicha umumiy xabar: hodisaga yoziladi, ochiq murojaatlarga javob sifatida qo'yiladi (majlis qarori oqimi ham ishlatadi)."""
@@ -618,7 +661,16 @@ def incident_resolve(iid: int, request: Request):
 @router.post("/api/svc/events/{eid}/{action}")
 def event_toggle(eid: int, action: str, request: Request):
     c = C(request); _g(c, YOUTH, f"tadbir ro'yxatini {'ochish' if action == 'open' else 'yopish'}", f"#{eid}")
-    if action not in ("open", "close"): raise HTTPException(400)
+    if action not in ("open", "close"): raise HTTPException(400, "Amal noto'g'ri: open yoki close")
+    ev = db.one(_con, "SELECT * FROM events WHERE id=?", (eid,))
+    if not ev: raise HTTPException(404, "Tadbir topilmadi")
+    if action == "open":      # ro'yxatga olish faqat tasdiqlangan tadbirga va faqat tadbir kuni ochiladi
+        if (ev.get("status") or "tasdiqlangan") != "tasdiqlangan":
+            raise HTTPException(409, "Ro'yxatga olish faqat tasdiqlangan tadbir uchun ochiladi (tadbir holati: " + str(ev.get("status")) + ")")
+        if str(ev.get("date") or "")[:10] != clock.today().isoformat():
+            raise HTTPException(409, "Ro'yxatga olish faqat tadbir kuni ochiladi (tadbir sanasi: " + str(ev.get("date") or "—")[:10] + ")")
+    elif not db.one(_con, "SELECT 1 x FROM event_qr WHERE event_id=?", (eid,)):
+        return {"ok": True}       # hech qachon ochilmagan — yopadigan narsa yo'q (QR yozuvi yaratilmaydi)
     event_code(_con, eid)
     _con.execute("UPDATE event_qr SET open=? WHERE event_id=?", (1 if action == "open" else 0, eid)); _con.commit()
     return {"ok": True}

@@ -285,7 +285,11 @@ def update_account(uid: int, body: AccountIn, request: Request):
     if unit != (u.get("unit") or ""): ch.append(f"bo'lim: {u.get('unit') or '—'} → {unit}")
     if not ch: return {"ok": True, "changed": False, "message": "O'zgarish yo'q"}
     cols = {"full_name": full, "role": role, "unit": unit, **extra}
-    _con.execute(f"UPDATE users SET {', '.join(k + '=?' for k in cols)} WHERE id=?", (*cols.values(), uid)); _con.commit()
+    _con.execute(f"UPDATE users SET {', '.join(k + '=?' for k in cols)} WHERE id=?", (*cols.values(), uid))
+    if _short(full) != _short(u["full_name"]):     # ism o'zgardi: bog'lanmagan akkaunt yangi ism bo'yicha boshqa xodimning yozuvlariga ulanmaydi
+        from . import staff_absence as SA
+        SA.lock_user_link(_con, uid)
+    _con.commit()
     n = SS.revoke_user(_con, uid) if role != u["role"] else 0      # rol o'zgarsa — eski ruxsatli sessiyalar yopiladi
     rbac.audit(_con, c, "akkauntlar: tahrirlandi", RES, True, f"#{uid} · " + " · ".join(ch) + (f" · sessiyalar yopildi: {n}" if n else ""))
     return {"ok": True, "changed": True, "message": "Saqlandi" + (" · rol o'zgargani uchun sessiyalari yopildi" if role != u["role"] else "")}
@@ -311,20 +315,22 @@ def account_action(uid: int, action: str, request: Request, response: Response):
 
     if action == "reset-password":
         pw = temp_password(); h = rbac.hash_password(pw)
-        _con.execute("UPDATE users SET pin=? WHERE id=?", (h, uid)); _con.commit()
+        tg = rbac.set_password(_con, uid, h)       # parol + Telegram ulanishi uziladi (eski parol bilan ulangan bot ishlamay qoladi)
         n = SS.revoke_user(_con, uid); SS.LOGIN_USER.reset(uid)
-        rbac.audit(_con, c, "akkauntlar: parol tiklandi", RES, True, f"{tag} · vaqtinchalik parol · sessiyalar yopildi: {n}")
+        rbac.audit(_con, c, "akkauntlar: parol tiklandi", RES, True, f"{tag} · vaqtinchalik parol · sessiyalar yopildi: {n}" + (" · Telegram uzildi" if tg else ""))
         response.headers["Cache-Control"] = "no-store"
-        return {"ok": True, "password": pw, "revoked": n,
-                "message": "Yangi vaqtinchalik parol faqat hozir ko'rsatiladi. Xodim kirgach, uni «Parolni o'zgartirish» oynasida almashtirsin."}
+        return {"ok": True, "password": pw, "revoked": n, "telegram_unlinked": tg,
+                "message": "Yangi vaqtinchalik parol faqat hozir ko'rsatiladi. Xodim kirgach, uni «Parolni o'zgartirish» oynasida almashtirsin."
+                           + (" Telegram ulanishi uzildi — xodim botga kod va yangi parolni qayta yuboradi." if tg else "")}
     if action == "demo-password":
         if not demo_mode():
             rbac.audit(_con, c, f"akkauntlar: {label}", RES, False, f"{tag} · sinov rejimi o'chirilgan")
             _bad("Sinov paroli faqat sinov rejimida tiklanadi (ISFT_CORE_HIDE_DEMO_HINT o'rnatilgan)")
-        _con.execute("UPDATE users SET pin=? WHERE id=?", (rbac.hash_password(rbac.DEMO_PASSWORD), uid)); _con.commit()
+        tg = rbac.set_password(_con, uid, rbac.hash_password(rbac.DEMO_PASSWORD))
         n = SS.revoke_user(_con, uid); SS.LOGIN_USER.reset(uid)
-        rbac.audit(_con, c, "akkauntlar: sinov paroli tiklandi", RES, True, f"{tag} · sessiyalar yopildi: {n}")
-        return {"ok": True, "revoked": n, "message": "Sinov paroli tiklandi. Sessiyalari yopildi."}
+        rbac.audit(_con, c, "akkauntlar: sinov paroli tiklandi", RES, True, f"{tag} · sessiyalar yopildi: {n}" + (" · Telegram uzildi" if tg else ""))
+        return {"ok": True, "revoked": n, "telegram_unlinked": tg,
+                "message": "Sinov paroli tiklandi. Sessiyalari yopildi." + (" Telegram ulanishi uzildi." if tg else "")}
     if action == "unlock":
         was = SS.LOGIN_USER.wait_min(uid)
         SS.LOGIN_USER.reset(uid)

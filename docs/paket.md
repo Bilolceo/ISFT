@@ -1,9 +1,66 @@
-# Kontent paketlari moduli
+# «Dars tayyorlash» (Kontent paketlari) moduli
 
 **Kod:** `app/paket.py`, `static/paket.js`, `static/paket.css` (pleyer — `app/paket_player/`, alohida ish oqimi)
 **Testlar:** `tests/test_paket.py`, brauzer integratsiyasi — `tools/paket_build_check.js` (PW va CHROME berilganda test chaqiradi)
 **API:** `/api/paket/*`
 **Ruxsat resursi:** `rbac.PAKET` (kirish — moduldagi jadval bo'yicha, har bir so'rov audit jurnalida)
+
+## «Dars tayyorlash» — bitta ekran (2026-11 qayta ishlangan)
+
+Bo'lim ichidagi sarlavha — **«Dars tayyorlash»** (menyu bandi nomi — shell'da). O'qituvchi darhol o'z darslariga tushadi (yorliqlarsiz, «Darslarim»);
+bo'lim: **Holat** (avvalgi «Qamrov») · **Darslar** (yuqorida ko'rib chiqish navbati) · **Ommaviy** (avvalgi «Avtomatik joylash»: video havolalar +
+«Hammasini tayyorlash») · **Sozlamalar**; kafedra: Holat, Darslar (faqat ko'rish); rahbariyat: Holat. API'dagi yorliq kalitlari o'zgarmagan
+(`qamrov`, `mavzular`, `joylash`, `sozlama`); nomlari — `meta.tab_labels`.
+
+**Dars ekrani:** darslar ro'yxati (haqiqiy nom + sodda holat: Bo'sh / Tayyorlanmoqda / Tasdiq kutilmoqda / Tasdiqlangan; telefonda — ro'yxat `select`) →
+**bitta yuklash maydoni** («Fayllarni shu yerga tashlang» + «Fayl tanlash», bir nechta fayl, har biriga jarayon va o'zbekcha xato) + YouTube havolasi →
+to'rtta holat kartasi (Matn, Taqdimot, Video, Test va mashqlar — «Almashtirish» / «Olib tashlash»; reja, rasm, jadval, adabiyot, topshiriq soni Matn
+kartasi ichida ma'lumot sifatida; ixtiyoriy qismlarda ogohlantirish belgisi yo'q) → pastki amallar paneli (`position: sticky` — telefonda ham doim ko'rinadi):
+**«Tayyorlash»** / «Yuklab olish» → natija kartasi (Ko'rish, Yuklab olish (.zip), «Tayyorlandi → Bo'limga yuborildi → Tasdiqlandi», «NEXTID uchun: vN»,
+«NEXTID'ga qanday yuklanadi?») → «Mashq va test qo'shish» (ixtiyoriy: shu mavzuning Test bank savollari joyida — qo'shish, AI, tekshiruvga yuborish;
+mashqlar) → «Kengaytirilgan sozlamalar» (yopiq: dars turi — «NEXTID uchun (standart)» / SCORM, tugallanish qoidasi, o'tish bali, savollar soni,
+urinishlar, dars qismlari, muqova va muallif, video muqovasi, subtitr, matnni joylashtirish, matnga rasm, xulosalar, slayd izohi/audiosi, qo'shimcha
+fayllar; butun kurs uchun — Darslar ro'yxati (NEXTID), kurs muqovasi / o'qituvchi rasmi, Kurs paketi). «Tayyorlash» bosilgach ko'rish oynasi o'zi ochiladi
+(ichida «Yuklab olish (.zip)»). Bo'lim ochilgandan zip yuklab olinguncha — 5 bosish (dars, «Fayl tanlash», rasm maqsadi, «Tayyorlash», «Yuklab olish»).
+
+**Dars nomi** (`_mk_lesson`, `title_src`): o'qituvchi kiritgan (`pk_lessons.title`, joyida tahrirlanadi — `POST …/title`) > yuklangan Word/matn sarlavhasi
+(«3-MAVZU: RAQAMLI IQTISODIYOT ASOSLARI», «Mavzu: …» — `doc_title()`, `pk_topics.extra.doc_title`; Test bankda yuklangan matndan ham) > tasdiqlangan
+sillabus (`syl_items`) > `dl_items.topic` > «N-mavzu». Dars kodi nom o'rnida ishlatilmaydi («L2 L2» yo'q): nomsiz darsda reja sarlavhasi «2-MAVZU»,
+`tincan.xml` `<name>` — «2-mavzu». Word yuklanganda nom o'zi qo'yiladi (`title_set`) va toast chiqadi.
+
+**Bitta yuklash nuqtasi** — `POST …/topics/{no}/upload?name=&as=&lang=&caption=` (har so'rovda bitta fayl, tana diskka oqim bilan — `_stream_any`).
+Tur **faqat tarkibdan** (magic bytes): Word → matn; PDF / PPTX → taqdimot; MP4 / WebM → video; .srt / .vtt → subtitr; .txt → matn; .xlsx → qo'shimcha
+fayl; **rasm — noaniq**: `as` berilmasa 409 `{detail: {ambiguous, choices: muqova | rasm | slayd | poster}}` (UI bitta savol beradi). `as` — majburiy maqsad
+(masalan PDF ma'ruza matni sifatida); mos kelmasa 415; eski .doc/.ppt, audio va noma'lum tur — 415 (o'zbekcha izoh bilan); chegaralar o'zgarmagan
+(video — `ISFT_CORE_PK_VIDEO_MB`, qolganlari 50 MB; subtitr 2 MB). Eski alohida yuklash yo'llari (`/text`, `/slides`, `/video/file` …) qolgan.
+
+**Bo'limga yuborish.** «Tayyor» (tasdiq kutilmoqda) — asosiy uch qism (matn, taqdimot, video — `CORE`, sozlamada yoqilganlari) bor bo'lsa; **test va mashqlar
+ixtiyoriy** (`ready.sendable`, `ready.core_missing`). `ready.complete` / `missing` (to'rttasi) — Holat va «Hammasini tayyorlash» uchun avvalgidek. Asosiy qism
+yetishmasa versiya «qoralama» qoladi; o'qituvchi «Shu holicha bo'limga yuborish»ni bosishi mumkin (`action: submit` — faqat oxirgi versiya).
+
+**Tasdiqlash → kontent monitoringi.** Ma'ruza (L) darsi tasdiqlanganda `dl_items`'dagi shu kurs/mavzuning paketda HAQIQATDA bor materiallari (matn → `maruza`,
+taqdimot, video, test — yig'ilgan paytdagi `readiness` va yoqilgan bloklar bo'yicha) «tasdiqlandi» bo'ladi: `src='paket'`, `dl_log` yozuvi «Dars tayyorlash:
+L3 v1 tasdiqlandi» (`masofaviy.sync_from_package`); javobda `monitoring` — yopilganlar soni. «Tasdiq kutilmoqda» versiya qaytarilsa — monitoring o'zgarmaydi;
+**tasdiqlangan** versiya qaytarilsa va boshqa tasdiqlangan versiya qolmasa — faqat paket orqali yopilganlari «qaytarildi» (`unsync_from_package`).
+
+**Eskirgan tasdiq.** Har yig'ishda manbalar imzosi yoziladi (`pk_packages.src_sig`, `source_sig()`: fayllar, havola/sozlama/xulosa, dars nomi, mashqlar,
+Test bankdagi tasdiqlangan savollar, zaxira matn/video, standart sozlama — fayllar o'qilmaydi). Tasdiqlangan versiya oxirgisi bo'lib, imzo o'zgargan bo'lsa —
+darsda, darslar ro'yxatida va navbatda «Tasdiqlangan versiya eskirgan — qayta tayyorlang». Yangi versiya yig'ilgach: «NEXTID uchun: v1» (tasdiqlangani) +
+«v2 hali tasdiqlanmagan». «O'zgarish yo'q» bo'lsa imzo yangilanadi (yolg'on signal o'zini tuzatadi). Eski (imzosiz) paketlar eskirgan deb ko'rsatilmaydi.
+
+**Navbat** — `GET /queue` (ko'lam bo'yicha): `kutilmoqda` (oxirgi versiyasi tasdiq kutayotgan darslar) va `eskirgan`. Holat → «Tasdiq kutayotganlar» →
+«Ko'rib chiqish» kutayotgan darsning o'zini ochadi (`courses[].waiting_no`), L1 ni emas.
+
+**«ISFT shablonida taqdimot yaratish»** (Taqdimot kartasi, o'qituvchi) — `POST …/deck/create`: yuklangan ma'ruza matni «Taqdimot» moduliga beriladi
+(`taqdimot.create`, qayta yuklash shart emas), tuzilgan deck darsga biriktiriladi.
+
+**Matn — Test bank bilan umumiy (ikki tomonga).** Bu yerda yuklangan ma'ruza matnini Test bank ham ko'radi (`testbank._source`: keyinroq yuklangani ustun);
+Test bankdagi matn avvalgidek zaxira manba.
+
+**So'zlar.** Foydalanuvchi matnida iframe / launch / postMessage / LRS / manifest / SCO / WebVTT / `[RASM:…]` / «pleyer» / `ANTHROPIC_API_KEY` yo'q
+(AI yo'q bo'lsa: «AI ulanmagan — administratorga murojaat qiling»); texnik tafsilot faqat shu hujjatda. Pleyerdagi bo'lim sarlavhasi qadamlarini birinchi
+blokka qo'shish (qadamlar sonini kamaytirish) bu bosqichda **qilinmadi** — `tools/paket_player_check.js` (1300+ qator) va `test_paket_player.py` qadam
+indekslariga bog'langan.
 
 ## Nima uchun
 
@@ -453,7 +510,9 @@ video mavjud emas). Test — Test bank namunasidagi tasdiqlangan savollar. Darsl
 | GET | `/assets/{aid}` (asl fayl), POST `/assets/{aid}/delete` | ko'rish — bo'lim, kafedra, o'qituvchi; o'chirish — bo'lim, o'qituvchi |
 | GET | `/packages/{pid}`, `/packages/{pid}/download`, `/packages/{pid}/preview/{yo'l}` (→ 302 imzolangan yo'lga) | bo'lim, kafedra, o'qituvchi |
 | GET | `/pv/{token}/{yo'l}` (cookie'siz, imzolangan; ko'lam qayta tekshiriladi) | token egasi |
-| POST | `/packages/{pid}/action` `{action: approve\|reject, note}` | bo'lim |
+| POST | `/packages/{pid}/action` `{action: approve\|reject\|submit, note}` | approve / reject — bo'lim; submit — bo'lim, o'qituvchi |
+| GET | `/queue` | bo'lim, kafedra, o'qituvchi (ko'lam bo'yicha) |
+| POST | `/courses/{cid}/topics/{no}/upload` (`?name=&as=&lang=&caption=`), `/title` `{title}`, `/deck/create` | bo'lim, o'qituvchi (`deck/create` — o'qituvchi) |
 | POST | `/settings` (standart sozlamalar) | bo'lim |
 
 ## Testlar

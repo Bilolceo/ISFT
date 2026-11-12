@@ -1,5 +1,5 @@
 """ISFT Core MVP — veb-server. Ishga tushirish: ./run.sh  (http://localhost:8000)"""
-import datetime as dt
+import datetime as dt, os
 from pathlib import Path
 from fastapi import FastAPI, Request, HTTPException, Response
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
@@ -7,12 +7,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from . import clock
 from . import db, rbac, services as S, ai, reports, documents as D, service as SV, occupancy as OC, decisions as DEC, student_ops as OPSM, agent as AG
+from . import modules as MODS   # bo'limlar kaliti (yoqilgan/o'chirilgan) — docs/modullar.md
 from .rbac import AccessDenied
 
 ROOT = Path(__file__).resolve().parent.parent
 app = FastAPI(title="ISFT Core")
 con = db.connect()
 db.init(con)  # yangi jadvallar (masalan, documents) mavjud bazaga ham qo'shiladi
+MODS.init(con)  # bo'limlar kaliti: jadval (idempotent); standartlar — app/modules.py, muhit — ISFT_CORE_MODULES
 DEC.init(con)  # majlis qarori oqimi: meetings/tasks kengaytmasi, chat, tarix, demo akkauntlar
 OPSM.init(con)  # talabalar markazi: qoidalar, holatlar, call-markaz, otrabotka
 # "Lavozim ism" hujjatidagi bo'lim (id'lar o'zgarmasligi uchun seed'dan keyin qo'shiladi)
@@ -51,6 +53,9 @@ def photo_of(u): return PHOTOS.get(_pkey(u["full_name"])) if ":" in (u.get("full
 async def _warm():
     import asyncio
     asyncio.create_task(ai.warmup())
+    # Kameralar: fon so'rovchisi va voqea tinglovchilari doim ishga tushadi, lekin «cams»/«spaces» bo'limi o'chiq bo'lsa hech narsa
+    # qilmaydi (har aylanishda MODS.cams_on() tekshiriladi — sahifadan yoqilsa, qayta ishga tushirishsiz ishlay boshlaydi).
+    # Simulyator kameralari faqat ISFT_CORE_CAM_SIM=1 bo'lganda so'raladi (app/occupancy.py).
     asyncio.create_task(OC.poller())
     asyncio.create_task(OC.events_supervisor())   # Hikvision voqealar oqimi tinglovchilari
     asyncio.create_task(OPSM.poller())   # qoidalar har 10 daqiqada qayta hisoblanadi
@@ -96,6 +101,25 @@ class Login(BaseModel):
     password: str = ""
     pin: str = ""      # eski mijozlar uchun
 
+def _login_item(u, demo: bool, dup: set) -> dict:
+    """Kirish ro'yxati uchun bitta qator. Kirishdan oldin shaxsiy ma'lumot (F.I.Sh., rasm) berilmaydi — faqat lavozim nomi;
+    bir xil nomli akkauntlar (tyutorlar, bo'lim xodimlari) akkaunt raqami bilan farqlanadi. Namoyish rejimida (ISFT_CORE_SHOW_DEMO_PASSWORD=1)
+    avvalgidek ism va rasm ham chiqadi."""
+    t = rbac.user_title(u)
+    it = {"id": u["id"], "role": t, "level": rbac.ROLES[u["role"]].level}
+    if demo: it.update(name=u["full_name"], photo=photo_of(u))
+    elif t in dup: it["hint"] = f"akkaunt № {u['id']}"
+    if u["role"] == "tyutor": it["search_only"] = True
+    return it
+
+@app.get("/api/public/core.js")
+def public_core_js():
+    """Kirish sahifasidan oldin sinxron o'qiladigan ochiq sozlamalar (static/index.html). Sinov paroli faqat ISFT_CORE_SHOW_DEMO_PASSWORD=1 da."""
+    demo = MODS.show_demo_password()
+    f = {"real_data": MODS.real_data(), "demo_login": demo, "demo_pw": rbac.DEMO_PASSWORD if demo else ""}
+    body = f"window.ISFT_FLAGS={_json.dumps(f)};\n" + ("" if demo else "window.ISFT_HIDE_DEMO_HINT=true;\n")
+    return Response(body, media_type="application/javascript", headers={"Cache-Control": "no-store"})
+
 @app.get("/api/users")
 def users():
     us = db.rows(con, "SELECT * FROM users ORDER BY id")
@@ -104,11 +128,37 @@ def users():
     us = [u for u in us if rbac.ROLES[u["role"]].level != 4 or u["role"] in ("kafedra", "oqituvchi", "tyutor")]
     us = [u for u in us if u.get("active") != 0 and not rbac.ROLES[u["role"]].legacy]   # faolsizlantirilgan / bekor qilingan lavozim — ro'yxatda yo'q
     us.sort(key=lambda u: (rbac.ROLES[u["role"]].level, u.get("department_id") or 0, u["id"]))
-    return [{"id": u["id"], "name": u["full_name"], "role": rbac.user_title(u), "level": rbac.ROLES[u["role"]].level, "photo": photo_of(u),
-             **({"search_only": True} if u["role"] == "tyutor" else {})} for u in us]
+    demo = MODS.show_demo_password()
+    seen, dup = set(), set()
+    for u in us:
+        t = rbac.user_title(u)
+        (dup if t in seen else seen).add(t)
+    return [_login_item(u, demo, dup) for u in us]
+
+# Proksi ortidagi mijoz manzili. start.sh uvicorn'ni --forwarded-allow-ips='*' bilan ishga tushiradi, ya'ni request.client.host —
+# X-Forwarded-For ning ENG CHAPDAGI qiymati, uni esa mijozning o'zi yozib yuborishi mumkin (urinishlar cheklovini chetlab o'tish).
+# Shuning uchun sarlavhani o'zimiz o'qiymiz: ishonchli proksilar soni N bo'lsa (ISFT_CORE_TRUSTED_PROXIES, standart 1 — Railway),
+# haqiqiy mijoz — o'ngdan N-chi yozuv (uni oxirgi ishonchli proksi qo'shgan, mijoz soxtalashtira olmaydi).
+# N=0 — proksi yo'q: sarlavha butunlay e'tiborga olinmaydi. Sarlavha yo'q (lokal ishga tushirish) — to'g'ridan-to'g'ri ulanish manzili.
+import ipaddress as _ipa
+try: TRUSTED_PROXIES = max(0, int(os.getenv("ISFT_CORE_TRUSTED_PROXIES", "1")))
+except ValueError: TRUSTED_PROXIES = 1
 
 def _ip(request: Request) -> str:
-    return (request.client.host if request.client else "") or "?"
+    peer = (request.client.host if request.client else "") or "?"
+    if TRUSTED_PROXIES <= 0: return peer
+    hops = [h.strip() for h in ",".join(request.headers.getlist("x-forwarded-for")).split(",") if h.strip()]
+    if not hops: return peer
+    cand = hops[-TRUSTED_PROXIES] if len(hops) >= TRUSTED_PROXIES else hops[0]
+    if cand.startswith("[") and "]" in cand: cand = cand[1:cand.index("]")]            # [IPv6]:port
+    elif cand.count(":") == 1: cand = cand.split(":")[0]                                # IPv4:port
+    # DIQQAT: bu yerda `peer` ga qaytib bo'lmaydi — uvicorn --proxy-headers uni sarlavhaning chap (mijoz yozgan) qiymatiga almashtirgan bo'lishi mumkin
+    for h in [cand] + hops[::-1]:
+        try:
+            return str(_ipa.ip_address(h))
+        except ValueError:
+            continue
+    return "?"
 
 @app.post("/api/login")
 def login(body: Login, request: Request, response: Response):
@@ -151,7 +201,8 @@ def me(request: Request):
     c = ctx(request)
     return {"id": c.user["id"], "name": c.user["full_name"], "role": c.title, "greet": rbac.greeting(c.user), "photo": photo_of(c.user), "role_key": c.role.key, "level": c.role.level,
             "scope": c.scope_label(con), "allow": sorted(c.role.allow), "deny_note": c.role.deny_note,
-            "labels": rbac.LABELS, "today": clock.today().isoformat()}
+            "labels": rbac.LABELS, "today": clock.today().isoformat(),
+            "modules": MODS.state(), "flags": MODS.flags()}   # bo'limlar kaliti (mahsulot sozlamasi, xavfsizlik chegarasi emas)
 
 SECTIONS = {"academic": S.academic_overview, "risk": S.at_risk_students, "contracts": S.contracts_summary, "finance": S.finance_summary,
             "payroll": S.payroll_summary, "hr": S.hr_list, "science": S.science_summary, "international": S.international_summary,
@@ -175,7 +226,7 @@ def dashboard(request: Request):
 @app.get("/api/section/{name}")
 def section(name: str, request: Request):
     if name not in SECTIONS: raise HTTPException(404)
-    return SECTIONS[name](con, ctx(request))
+    return SECTIONS[name](con, ctx(request))   # audit jurnali: rektor, kengash, AT bo'limi boshlig'i (rbac.AUDIT)
 
 class Q(BaseModel):
     q: str
@@ -201,74 +252,8 @@ def report(kind: str, request: Request):
     p = reports.build(con, ctx(request), kind)
     return FileResponse(p, filename=p.name, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
-class Transcript(BaseModel):
-    transcript: str
-
-@app.post("/api/meetings/extract")
-async def extract(body: Transcript, request: Request):
-    c = ctx(request); rbac.require(con, c, rbac.TASKS, "bayonnomadan topshiriq ajratish")
-    return await ai.extract_tasks_result(body.transcript)   # {"tasks": [...], "source": "ai" | "qoida"}
-
-class Meeting(BaseModel):
-    title: str
-    transcript: str
-    tasks: list[dict]
-
-# Mas'ul lavozimni aniqlash. Tartib muhim: "Moliya fakulteti dekani" — prorektor emas. Institutda dekan lavozimi yo'q (Yevropa
-# modeli): eski matnlardagi "dekan/dekanat" fakultet darajasidagi vazifa sifatida Registrator ofisiga ("talabalar") yo'naltiriladi.
-# Prorektor yo'nalishlari faqat matnda "prorektor" so'zi bo'lsa tekshiriladi.
-ROLE_FIRST = [("dekan", "talabalar"), ("kafedra", "kafedra"), ("o'qituvchi", "oqituvchi")]
-ROLE_PROREKTOR = [("o'quv", "prorektor_oquv"), ("ilmiy", "prorektor_ilmiy"), ("moliya", "prorektor_moliya"), ("yoshlar", "prorektor_yoshlar")]
-ROLE_UNITS = [("qabul", "qabul"), ("xalqaro", "xalqaro"), ("registrator", "talabalar"), ("axborot texnologiyalari", "it_head"), ("buxgalter", "buxgalteriya"), ("kadr", "kadrlar"), ("talabalar bilan", "talabalar"),
-              ("magistr", "magistratura"), ("ilmiy tadqiqot", "ilmiy_bolim"), ("xo'jalik", "xojalik"),
-              ("akademik faoliyat", "akademik"), ("imtihon", "imtihon"),
-              ("sirtqi", "sirtqi"), ("ma'lumotlar bazasi", "malumotlar_bazasi"), ("masofaviy", "masofaviy")]
-
-def role_for(who: str) -> str:
-    low = ai.norm(who or "")
-    for h, r in ROLE_FIRST:
-        if h in low: return r
-    if "prorektor" in low:
-        for h, r in ROLE_PROREKTOR:
-            if h in low: return r
-    for h, r in ROLE_UNITS:
-        if h in low: return r
-    return "rektor"
-
-def _valid_due(v) -> str:
-    try:
-        return dt.date.fromisoformat(str(v)).isoformat()
-    except (ValueError, TypeError):
-        return (clock.today() + dt.timedelta(days=14)).isoformat()
-
-@app.post("/api/meetings")
-def save_meeting(body: Meeting, request: Request):
-    c = ctx(request); rbac.require(con, c, rbac.TASKS, "majlisni saqlash", body.title)
-    if c.role.key not in ("rektor", "kengash") and not c.role.key.startswith("prorektor_"):
-        raise AccessDenied("⛔ Majlis topshiriqlarini faqat rahbariyat kiritadi.")
-    cur = con.execute("INSERT INTO meetings(title,date,kind,transcript) VALUES(?,?,?,?)", (body.title, clock.today().isoformat(), "Rektorat", body.transcript))
-    for t in body.tasks:
-        who = str(t.get("assignee") or "").strip()[:120]
-        con.execute("INSERT INTO tasks(meeting_id,assignee,assignee_role,text,due,status) VALUES(?,?,?,?,?,?)",
-                    (cur.lastrowid, who, role_for(who), str(t.get("text", ""))[:500], _valid_due(t.get("due")), "jarayonda"))
-    con.commit()
-    return {"ok": True, "count": len(body.tasks)}
-
-class Status(BaseModel):
-    status: str
-
-@app.post("/api/tasks/{tid}/status")
-def task_status(tid: int, body: Status, request: Request):
-    c = ctx(request); rbac.require(con, c, rbac.TASKS, "topshiriq holatini o'zgartirish", str(tid))
-    t = db.one(con, "SELECT * FROM tasks WHERE id=?", (tid,))
-    if not t: raise HTTPException(404)
-    if t.get("unit"):   # majlis qarori oqimidagi topshiriq — holatni faqat ijrochi o'z oynasidan yangilaydi
-        raise AccessDenied("⛔ Bu topshiriq holatini bo'lim rahbari yoki biriktirilgan xodim yangilaydi.")
-    if c.role.key not in ("rektor", "kengash") and not DEC.legacy_mine(c, t):   # rol + (kafedrada) o'z bo'limi
-        raise AccessDenied("⛔ Bu topshiriq sizga tegishli emas.")
-    if body.status not in ("bajarildi", "jarayonda", "bajarilmagan"): raise HTTPException(400, "Noto'g'ri holat")
-    con.execute("UPDATE tasks SET status=? WHERE id=?", (body.status, tid)); con.commit()
-    return {"ok": True}
+# Eski bir bosishli endpointlar (POST /api/meetings, /api/meetings/extract, /api/tasks/{tid}/status) olib tashlandi: UI ularni chaqirmas,
+# kotib qoralama → rahbar tasdig'i oqimini (app/decisions.py: /api/dec/…) chetlab o'tar edi.
 
 class Doc(BaseModel):
     text: str
@@ -397,6 +382,8 @@ body{{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 Manrope,-appl
 <div class="h"><img src="/brand/{'logo-sm.png' if (D.B.BRAND_DIR / 'logo-sm.png').exists() else 'isft-mark.png'}" alt="ISFT"><div><b>ISFT INSTITUTI</b><small>Hujjat haqiqiyligini tekshirish</small></div></div>
 <div class="b">{body}</div><div class="f">Tekshiruv kodi: {_e(code.upper())} · Shaxsiy ma'lumotlar qisqartirilgan holda ko'rsatiladi.</div></div></body></html>"""
 
+MODS.bind(con, ctx)
+app.include_router(MODS.router)
 SV.bind(con, ctx)
 app.include_router(SV.router)
 OC.bind(con, ctx)

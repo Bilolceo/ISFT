@@ -23,4 +23,11 @@ if [ ! -f "$DB" ] || [ "$WANT" != "$HAVE" ]; then
   fi
 fi
 # Telegram bot shu jarayon ichida ishlaydi (TELEGRAM_BOT_TOKEN bo'lsa) — alohida jarayon kerak emas.
+# Bo'limlar kaliti va namoyish sozlamalari (docs/modullar.md):
+#   ISFT_CORE_MODULES="+moliya,-testbank"  bo'limlarni yoqish/o'chirish (sahifadagi «Bo'limlar»dan ustun)
+#   ISFT_CORE_CAM_SIM=1                    kamera simulyatori (standart: o'chiq — fon so'rovchisi va avtomatik arizalar yo'q)
+#   ISFT_CORE_REAL_DATA=1                  «Namuna ma'lumot» tasmasi ko'rsatilmaydi (HEMIS/NEXTID ulangach)
+#   ISFT_CORE_SHOW_DEMO_PASSWORD=1         kirish sahifasida sinov paroli va ismlar (faqat namoyish)
+# Proksi: --forwarded-allow-ips='*' sxema (https) uchun kerak; mijoz IP manzilini ilova o'zi X-Forwarded-For ning o'ngdan
+# ISFT_CORE_TRUSTED_PROXIES-chi (standart 1 — Railway) qiymatidan oladi — urinishlar cheklovini sarlavha bilan chetlab o'tib bo'lmaydi.
 exec uvicorn app.main:app --host 0.0.0.0 --port "${PORT:-8000}" --proxy-headers --forwarded-allow-ips='*'

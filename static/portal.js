@@ -1173,7 +1173,7 @@ if (typeof renderPanel === "function") {
       if (!ME || ME.level > 2) return r;
       const s = await J("/api/portal/summary"); PT.sum = s;
       if (!s.unread && !s.all_overdue) return r;
-      const html = `<button class="pn-act${s.all_overdue ? " bad" : ""} pt-pnact" onclick="PT.tab='mail';PT.box='inbox';PT.flt='all';PT.open=null;go('portal')">${ico("portal", 16)}<span>Portal: yangi xatlar</span><b>${s.unread}</b>${s.all_overdue ? `<em>${s.all_overdue} ta javobsiz, muddati o'tgan</em>` : ""}</button>`;
+      const html = `<button class="pn-act${s.all_overdue ? " bad" : ""} pt-pnact" onclick="PT.tab='mail';PT.box='inbox';PT.flt='all';PT.open=null;go('portal')">${ico("portal", 16)}<span>Yozishmalar: yangi xatlar</span><b>${s.unread}</b>${s.all_overdue ? `<em>${s.all_overdue} ta javobsiz, muddati o'tgan</em>` : ""}</button>`;
       const v = $("#v-panel"); if (v.querySelector(".pt-pnact")) return r;
       const acts = v.querySelector(".pn-acts");
       if (acts) acts.insertAdjacentHTML("beforeend", html);

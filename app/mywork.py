@@ -316,7 +316,28 @@ def _due_key(v) -> str:
     s = str(v or "").replace(" ", "T")[:19]
     return s + "T23:59:59" if len(s) == 10 else s
 
+# Qisqa kesh (xodim bo'yicha): qo'ng'iroqcha har 60 soniyada so'raydi — har safar barcha manbalarni (20+ modul) qayta yig'masin.
+# «Mening vazifalarim» sahifasi va bosh sahifa (collect) HAR DOIM yangi hisoblaydi va keshni yangilaydi; qo'ng'iroqcha (extras.notifications →
+# collect_cached) keshdan oladi, CACHE_TTL dan eski bo'lsa — qayta yig'adi. Shu sabab ikki joydagi sonlar bitta hisobdan chiqadi.
+CACHE_TTL = 75
+_CACHE: dict = {}
+
+def collect_cached(c: Ctx, max_age: float = CACHE_TTL) -> dict:
+    import time
+    hit = _CACHE.get(c.user["id"])
+    if hit and hit[1] == c.role.key and time.time() - hit[0] <= max_age: return hit[2]
+    return collect(c)
+
+def invalidate(uid=None) -> None:
+    _CACHE.pop(uid, None) if uid is not None else _CACHE.clear()
+
 def collect(c: Ctx) -> dict:
+    import time
+    d = _collect(c)
+    if c.channel == "web": _CACHE[c.user["id"]] = (time.time(), c.role.key, d)
+    return d
+
+def _collect(c: Ctx) -> dict:
     today, now = _today(), clock.now()
     items, errors = [], []
     for key, fn in COLLECT:

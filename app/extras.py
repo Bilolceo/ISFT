@@ -26,6 +26,7 @@ _ctx = None
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS notif_reads(user_id INTEGER PRIMARY KEY, seen_at TEXT);
+CREATE TABLE IF NOT EXISTS notif_first(user_id INT, item_id TEXT, ts TEXT, PRIMARY KEY(user_id, item_id));
 CREATE INDEX IF NOT EXISTS ix_students_hemis ON students(hemis_id);
 CREATE INDEX IF NOT EXISTS ix_students_name_nc ON students(full_name COLLATE NOCASE);
 """
@@ -115,12 +116,13 @@ def change_password(body: PasswordIn, request: Request):
     if p: _err(400, "new", p)
     if body.new == body.current: _err(400, "new", "Yangi parol joriy paroldan farq qilsin")
     h = rbac.hash_password(body.new)
-    _con.execute("UPDATE users SET pin=? WHERE id=?", (h, uid)); _con.commit()
+    tg = rbac.set_password(_con, uid, h)     # Telegram ulanishi ham uziladi — botga yangi parol bilan qayta ulanadi
     PW_LIMIT.reset(uid)
     # boshqa brauzer/qurilmalardagi sessiyalar bekor qilinadi, joriy sessiya yangi parol bilan davom etadi
     n = SS.revoke_user(_con, uid, keep_tok=request.cookies.get("sid"), new_pin=h)
-    rbac.audit(_con, c, "parol o'zgartirildi", "auth", True, f"boshqa sessiyalar yopildi: {n}")
-    return {"ok": True, "message": "Parol o'zgartirildi. Boshqa qurilmalardagi sessiyalar yopildi."}
+    rbac.audit(_con, c, "parol o'zgartirildi", "auth", True, f"boshqa sessiyalar yopildi: {n}" + (" · Telegram uzildi" if tg else ""))
+    return {"ok": True, "telegram_unlinked": tg, "message": "Parol o'zgartirildi. Boshqa qurilmalardagi sessiyalar yopildi."
+            + (" Telegram ulanishi uzildi — botga lavozim kodi va yangi parolni qayta yuboring." if tg else "")}
 
 # =============================================================================================
 # 2b. Shaxsiy ma'lumotlar: lavozim, bo'lim, rahbar/kurator, ruxsatlar, Telegram, kirishlar tarixi
@@ -346,9 +348,79 @@ def _due_date(v) -> dt.date | None:
     try: return dt.date.fromisoformat(str(v)[:10]) if v else None
     except ValueError: return None
 
+# Qo'ng'iroqchadagi «ish» yozuvlari — mywork.collect() elementlaridan (yagona manba). Bu yerda faqat ko'rinish: sarlavha, daraja, vaqt.
+SRC_T = {"majlis": "Topshiriqlar", "portal": "Yozishmalar", "markaz": "Talabalar markazi", "buyruq": "Buyruqlar", "murojaat": "Murojaatlar", "xodim": "Xodimlar ta'tili",
+         "agent": "AI agentlar", "sillabus": "O'quv dasturlari"}
+SRC_CAP = 8            # bitta manbadan qo'ng'iroqchada ko'pi bilan shuncha qator; qolgani — bitta jamlangan yozuv («Mening vazifalarim»ga havola)
+_NF_SCHEMA = "CREATE TABLE IF NOT EXISTS notif_first(user_id INT, item_id TEXT, ts TEXT, PRIMARY KEY(user_id, item_id))"
+
+def _first_seen(uid, ids: list) -> dict:
+    """Ish qachon birinchi marta shu xodim ro'yxatida paydo bo'lgan — «yangi» belgisi shu vaqtdan (har kuni qayta «o'qilmagan» bo'lmaydi).
+    Ro'yxatdan chiqqan ish yozuvi o'chiriladi (qayta paydo bo'lsa — yana yangi)."""
+    try: have = {r["item_id"]: r["ts"] for r in db.rows(_con, "SELECT item_id, ts FROM notif_first WHERE user_id=?", (uid,))}
+    except Exception: _con.execute(_NF_SCHEMA); _con.commit(); have = {}
+    now = _iso(_now()); cur = set(ids)
+    new, gone = [i for i in cur if i not in have], [i for i in have if i not in cur]
+    if new or gone:
+        _con.executemany("INSERT OR IGNORE INTO notif_first(user_id,item_id,ts) VALUES(?,?,?)", [(uid, i, now) for i in new])
+        _con.executemany("DELETE FROM notif_first WHERE user_id=? AND item_id=?", [(uid, i) for i in gone])
+        _con.commit()
+    return {i: have.get(i, now) for i in cur}
+
+def _work_notifs(c: Ctx, events: list) -> list[dict]:
+    from . import mywork as MW
+    work = MW.collect_cached(c)["items"]
+    today = _today(); uid = c.user["id"]
+    ev_ids = {e["id"] for e in events}
+    ev_links = [e["link"] for e in events if e.get("kind") in ("topshiriq", "topshiriq_muddat", "sillabus")]   # shu obyekt hodisa sifatida allaqachon bor
+    fs = _first_seen(uid, [it["id"] for it in work])
+    out = []
+    for it in work:
+        src, iid = it["source"], it["id"]
+        if iid in ev_ids or (src in ("majlis", "sillabus") and it["link"] in ev_links): continue
+        d = _due_date(it["due"]); over = bool(it.get("overdue")); days = (d - today).days if d else None
+        soon = d is not None and not over and days <= 2
+        when = "" if not soon else "bugun" if days <= 0 else "ertaga" if days == 1 else "2 kundan keyin"
+        nid, kind, title = iid, src, it["title"]
+        if src == "majlis" and it["kind"] == "topshiriq" and iid.startswith("mt"):
+            nid, kind = ("to" if over else "tn") + iid[2:], "topshiriq_muddat" if over else "topshiriq"
+            title = (f"Topshiriq muddati o'tgan: {title}" if over else f"Topshiriq muddati {when}: {title}" if soon else title)
+        elif src == "majlis":
+            kind = "topshiriq_muddat" if over else "topshiriq"
+            if iid == "mtall": nid = "tall"
+        elif src == "portal":
+            kind = "xat_muddat" if d else "xat"
+            if it["kind"] == "xat":
+                title = f"Javob muddati o'tgan: «{title}»" if over else f"Javob muddati {when}: «{title}»" if soon else f"«{title}»"
+            elif it["kind"] == "rezolyutsiya" and over:
+                title = title.replace("Rezolyutsiya ijrosi:", "Rezolyutsiya ijrosi kechikmoqda:", 1)
+        ts = fs.get(iid) or _iso(_now())
+        if d and over: ts = max(ts, _day_ts(d + dt.timedelta(days=1)))          # muddat o'tganda yana «yangi» bo'lib ko'tariladi
+        elif soon: ts = max(ts, _day_ts(d - dt.timedelta(days=2)))
+        out.append({"id": nid, "kind": kind, "icon": ("alert" if over else "clock") if kind in ("xat_muddat", "topshiriq", "topshiriq_muddat") and (over or soon) else (it.get("icon") or "list"),
+                    "level": "bad" if over else "warn" if (it.get("sign") or soon or it.get("priority") == "high") else "info",
+                    "title": title, "sub": " · ".join(x for x in [it.get("sub") or "", f"muddat {d.strftime('%d.%m.%Y')}" if d else ""] if x),
+                    "ts": ts, "link": it["link"], "_src": src})
+    # qo'ng'iroqchani to'ldirmaslik: AI takliflari 3 tadan ko'p bo'lsa — bitta yozuv; boshqa manbalar — SRC_CAP tadan, qolgani jamlanadi (soni aniq)
+    res = []
+    for src in dict.fromkeys(x["_src"] for x in out):
+        rows = sorted((x for x in out if x["_src"] == src), key=lambda x: ({"bad": 0, "warn": 1, "info": 2}[x["level"]], x["ts"]))
+        if src == "agent" and len(rows) > 3:
+            res.append({"id": "agall", "kind": "agent", "icon": "spark", "level": "info", "title": f"AI agentlar: {len(rows)} ta taklif tasdiqingizni kutmoqda",
+                        "sub": "Har biri «Mening vazifalarim»da alohida qator", "ts": max(x["ts"] for x in rows), "link": max(rows, key=lambda x: x["ts"])["link"]})
+            continue
+        keep = rows if len(rows) <= SRC_CAP else rows[:SRC_CAP - 1]
+        res += keep
+        if len(rows) > len(keep):
+            rest = rows[len(keep):]
+            res.append({"id": f"more-{src}", "kind": src, "icon": "list", "level": "info", "title": f"{SRC_T.get(src, 'Boshqa ishlar')}: yana {len(rest)} ta ish kutmoqda",
+                        "sub": "To'liq ro'yxat — «Mening vazifalarim»da", "ts": max(x["ts"] for x in rest), "link": {"view": "mywork"}})
+    for x in res: x.pop("_src", None)
+    return res
+
 def notifications(c: Ctx) -> list[dict]:
-    from . import portal as PT, agent_hub as AH
-    items = []; today = _today(); me = PT.my_unit(c); um = PT.unit_map(_con)
+    from . import portal as PT
+    items = []; me = PT.my_unit(c); um = PT.unit_map(_con)
     # --- portal: o'qilmagan xatlar va javoblar (shu xodim bo'yicha; tizim yozuvlari hisobga olinmaydi) ---
     uid = c.user["id"]
     rows = db.rows(_con, """SELECT t.id, t.subject, t.ref_no, t.from_unit, t.priority, m.created_at last_at, m.unit last_unit, m.kind last_kind
@@ -377,104 +449,22 @@ def notifications(c: Ctx) -> list[dict]:
         items.append({"id": "ptall", "kind": "xat", "icon": "mail", "level": "info", "title": f"Portal: {len(plain)} ta o'qilmagan xat va javob",
                       "sub": " · ".join(subj) + (f" va yana {len(plain) - 2} ta" if len(plain) > 2 else ""),
                       "ts": max(i["ts"] for i in plain), "link": {"view": "portal", "flt": "unread"}})
-    # --- portal: muddat eslatmalari (menga biriktirilgan / bo'limimga / javob kelmagan / rezolyutsiya ijrosi) ---
-    for it in PT.reminders_for(_con, c.user):
-        d = _due_date(it["due"])
-        if not d: continue
-        over = it["kind"] == "otgan"
-        lab = {"menga": "", "bolimga": "", "yuborgan": "Javob kelmadi: ", "nazorat": "Rezolyutsiya ijrosi kechikmoqda: "}[it["who"]]
-        n = it["days_left"]
-        when = "bugun" if n == 0 else "ertaga" if n == 1 else f"{n} kundan keyin"
-        title = lab + f"«{it['subject']}»" if lab else (f"Javob muddati o'tgan: «{it['subject']}»" if over else f"Javob muddati {when}: «{it['subject']}»")
-        sub = " · ".join(x for x in [PT.WHO_LABEL[it["who"]] if it["who"] in ("menga", "bolimga") else "", PT._uname(um, it.get("from_unit")) if it["who"] in ("menga", "bolimga") else "",
-                                     it["ref_no"], f"muddat {d.strftime('%d.%m.%Y')}"] if x)
-        items.append({"id": f"p{it['who'][0]}{it['thread_id']}", "kind": "xat_muddat", "icon": "alert" if over else "clock", "level": "bad" if over else "warn",
-                      "title": title, "sub": sub, "ts": _day_ts(d + dt.timedelta(days=1)) if over else _day_ts(d - dt.timedelta(days=1)),
-                      "link": {"view": "portal", "thread": it["thread_id"]}})
-    # --- majlis topshiriqlari ---
-    tl = _visible_tasks(c)
-    if tl:
-        lead = c.role.key in ("rektor", "kengash", "kotib")
-        for t in tl:
-            if not t.get("mine") or t["status"] in ("bajarildi", "qoralama"): continue
-            d = _due_date(t.get("due_at") or t.get("due"))
-            if not d: continue
-            days = (d - today).days
-            if t.get("overdue"):
-                items.append({"id": f"to{t['id']}", "kind": "topshiriq_muddat", "icon": "alert", "level": "bad",
-                              "title": f"Topshiriq muddati o'tgan: {t['text']}", "sub": f"{t.get('meeting') or 'Majlis'} · muddat {d.strftime('%d.%m.%Y')} · {-days} kun o'tdi" if days < 0 else f"{t.get('meeting') or 'Majlis'} · muddat bugun edi",
-                              "ts": _day_ts(d + dt.timedelta(days=1)), "link": _task_link(t)})
-            elif 0 <= days <= 2:
-                items.append({"id": f"tn{t['id']}", "kind": "topshiriq", "icon": "clock", "level": "warn",
-                              "title": f"Topshiriq muddati {'bugun' if days == 0 else 'ertaga' if days == 1 else '2 kundan keyin'}: {t['text']}",
-                              "sub": f"{t.get('meeting') or 'Majlis'} · muddat {d.strftime('%d.%m.%Y')}",
-                              "ts": _day_ts(d - dt.timedelta(days=2)), "link": _task_link(t)})
-        if lead:   # rahbariyat: institut bo'yicha muddati o'tganlar — bitta jamlangan bildirishnoma
-            over = [t for t in tl if t.get("overdue")]
-            if over:
-                last = max((_due_date(t.get("due_at") or t.get("due")) for t in over), default=today) or today
-                items.append({"id": "tall", "kind": "topshiriq_muddat", "icon": "tasks", "level": "bad",
-                              "title": f"Institut bo'yicha {len(over)} ta topshiriq muddati o'tgan",
-                              "sub": " · ".join(sorted({str(t.get('assignee') or '') for t in over if t.get('assignee')})[:4]),
-                              "ts": _day_ts(last + dt.timedelta(days=1)), "link": {"view": "tasks"}})
-    # --- ierarxik topshiriqlar: yangi, qaytarildi, qabulimni kutmoqda (app/directives.py) ---
+    # --- hodisalar (jonli): ierarxik topshiriqlar — yangi, qaytarildi, qabulimni kutmoqda (app/directives.py); sillabuslar (app/syllabus.py) ---
     try:
         from . import directives as DIR
         items += DIR.notifications(c)
     except Exception as e:
         print("notifications.directives:", repr(e))
-    # --- AI agentlar takliflari (faqat rahbariyat, tasdiqlash huquqi bo'lsa) ---
-    if AH.can_view_page(c) and c.role.key != "kengash":
-        props = [r for r in db.rows(_con, "SELECT id, agent, title, created_at FROM agent_actions WHERE status='taklif' ORDER BY id DESC")
-                 if AH.can_approve(c, r["agent"])]
-        # 3 tagacha — har biri alohida; ko'p bo'lsa qo'ng'iroqchani to'ldirmaslik uchun bitta yozuv (soni aniq, havola — eng yangi taklifning
-        # ko'rib chiqish oynasi). «Mening vazifalarim»da esa har bir taklif alohida qator.
-        if 0 < len(props) <= 3:
-            for r in props:
-                items.append({"id": f"ag{r['id']}", "kind": "agent", "icon": "spark", "level": "info", "title": f"AI agent taklifi: {r['title']}",
-                              "sub": f"{AH.AG.get(r['agent'], {}).get('name', r['agent'])} · tasdiqingizni kutmoqda", "ts": _ts(r["created_at"]), "link": {"view": "agents", "action": r["id"]}})
-        elif props:
-            names = sorted({AH.AG.get(r["agent"], {}).get("name", r["agent"]) for r in props})
-            items.append({"id": "agall", "kind": "agent", "icon": "spark", "level": "info",
-                          "title": f"AI agentlar: {len(props)} ta taklif tasdiqingizni kutmoqda", "sub": " · ".join(names[:3]) + (f" va yana {len(names) - 3}" if len(names) > 3 else ""),
-                          "ts": max(_ts(r["created_at"]) for r in props), "link": {"view": "agents", "action": props[0]["id"]}})
-    # --- O'quv dasturlari (app/syllabus.py): biriktirish, qaytarish, eslatma, tekshiruv va tasdiq kutayotganlar ---
     try:
         from . import syllabus as SY
         items += SY.notif_items(c)
     except Exception as e: print("notifications.syllabus:", repr(e))
-    # --- Buyruqlar (yagona joy): imzo / kelishuv kutayotganlar, qaytarilgan loyihalar, devonxona jurnali (orders.pending) ---
+    # --- kutilayotgan ishlar: «Mening vazifalarim» bilan AYNAN bitta yig'uvchi (mywork.collect — majlis, portal muddatlari, markaz, buyruqlar,
+    #     murojaatlar, AI takliflari va barcha modul adapterlari). Alohida hisob-kitob yo'q — sonlar ikki joyda bir xil. ---
     try:
-        from . import orders as ORD
-        if c.role.key in ORD.REG_READ:
-            pd = ORD.pending(c)
-            lab = {"sign": ("Imzo kutilmoqda", "warn", "submitted_at"), "forward": ("Kelishuv kutilmoqda", "warn", "submitted_at"),
-                   "returned": ("Buyruq loyihasi qaytarildi", "bad", "created_at"), "register": ("Devonxona jurnaliga oling", "info", "signed_at")}
-            for k, rows in pd.items():
-                t_, lvl, tsk = lab[k]
-                for r in rows[:10]:
-                    items.append({"id": f"or{k[0]}{r['id']}", "kind": "buyruq", "icon": "file", "level": lvl, "title": f"{t_}: {r['title']}",
-                                  "sub": " · ".join(x for x in [r.get("reg_no") or f"Loyiha #{r['id']}", r["kind_name"], r.get("returned_note") if k == "returned" else ""] if x),
-                                  "ts": _ts(r.get(tsk) or r["created_at"]), "link": {"view": "orders", "order": r["id"]}})
-    except Exception as e: print("notifications.orders:", repr(e))
-    # --- Murojaatlar: menga biriktirilgan ochiq murojaatlar ---
-    try:
-        from . import service as SV
-        for r in SV.my_queue(_con, c)["mine"][:10]:
-            items.append({"id": f"rq{r['id']}", "kind": "murojaat", "icon": "mail", "level": "info", "title": f"Murojaat {r['number']} sizga biriktirilgan",
-                          "sub": " · ".join(x for x in [r["category"], (r["text"] or "")[:60]] if x), "ts": _ts(r.get("taken_at") or r["created_at"]),
-                          "link": {"view": "service", "tab": "requests", "request": r["id"]}})
-    except Exception as e: print("notifications.service:", repr(e))
-    try:   # yangi modullar — Mening vazifalarim bilan bir xil manba (app/pending.py)
-        from . import pending as PD, mywork as MW
-        day0 = _iso(dt.datetime.combine(_today(), dt.time(0, 0)))
-        for key, fn in PD.ADAPTERS:
-            try: rows = fn(c, MW._item)
-            except Exception: continue
-            for r in rows[:6]:
-                items.append({"id": r["id"], "kind": key, "icon": r.get("icon") or "list", "level": "bad" if r.get("priority") == "high" else "warn" if r.get("sign") else "info",
-                              "title": r["title"], "sub": r.get("sub") or "", "ts": day0, "link": r["link"]})
-    except Exception as e: print("notifications.pending:", repr(e))
+        items += _work_notifs(c, items)
+    except Exception as e:
+        print("notifications.work:", repr(e))
     now = _iso(_now())
     for it in items: it["ts"] = min(it["ts"], now)      # kelajakdagi vaqt "… oldin" deb ko'rinmasin
     items.sort(key=lambda x: x["ts"], reverse=True)
@@ -485,7 +475,10 @@ def api_notifications(request: Request):
     c = C(request); seen = _seen(c.user["id"])
     items = notifications(c)
     for it in items: it["unread"] = not seen or it["ts"] > seen
-    return {"items": items, "unread": sum(it["unread"] for it in items), "seen_at": seen, "now": _iso(_now())}
+    from . import mywork as MW
+    wc = MW.collect_cached(c)["counts"]       # notifications() hozirgina to'ldirgan kesh — «Mening vazifalarim»dagi sonning o'zi
+    return {"items": items, "unread": sum(it["unread"] for it in items), "seen_at": seen, "now": _iso(_now()),
+            "work": {"total": wc["total"], "overdue": wc["overdue"], "today": wc["today"], "by_source": wc["by_source"]}}
 
 @router.post("/api/notifications/read")
 def api_notifications_read(request: Request):

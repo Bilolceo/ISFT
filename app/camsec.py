@@ -573,6 +573,7 @@ def _hall(con, t):
 # ---------------------------------------------------------------------------------------------
 def kpi(con, ctx: Ctx):
     if not ctx.can(SPACES): return None
+    if not _oc().live(): return None       # «Kameralar» KPI: bo'lim yoqilgan va (ISFT_CORE_CAM_SIM=1 yoki haqiqiy kamera ulangan) bo'lsagina
     t = now(); d0 = dt.datetime.combine(t.date(), dt.time())
     p12 = con.execute("SELECT COUNT(*) FROM cam_events WHERE ts>=? AND priority<=2 AND COALESCE(status,'')!='notogri'", (iso(d0),)).fetchone()[0]
     ser = []

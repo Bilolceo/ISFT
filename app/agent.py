@@ -24,6 +24,7 @@ TOOL_LABEL = {
     "youth": "Murojaatlar va tadbirlar", "masters": "Magistratura", "tasks": "Majlis topshiriqlari ijrosi", "alerts": "Proaktiv ogohlantirishlar",
     "qoidalar": AR.SOURCE, "cameras": "Kameralar (Hikvision, faqat metama'lumot: xona, vaqt, tur, son)",
     "facecam": "Kirish nazorati (Face ID: faqat yozma rozilik bergan shaxslar, ko'lamingiz bo'yicha)",
+    "staffabs": "Xodimlar yo'qligi (jamlangan)",
 }
 STRATEGIC = ["ortda", "muammo", "umumiy holat", "nima qilish", "tavsiya", "xulosa", "qanday holat", "e'tibor", "strateg", "brifing",
              "bugun nima", "bugungi holat", "holat qanday", "eng muhim", "ustuvor"]
@@ -550,6 +551,9 @@ async def run(con, ctx: Ctx, q: str):
         yield ev(t="step", id=n, label=TOOL_LABEL.get(n, n), status="run")
         await asyncio.sleep(0.12)
         try:
+            if n in ("cameras", "facecam"):   # kameralar bo'limi o'chiq (yoki simulyator o'chiq va haqiqiy kamera yo'q) — namuna ma'lumotdan javob berilmaydi
+                from . import occupancy as _OC
+                if not _OC.live(): raise AccessDenied("«Kameralar va xavfsizlik» bo'limi hozircha o'chirilgan — kameralar ulanmagan.")
             if n == "qoidalar":   # me'yoriy ma'lumot — RBAC talab qilmaydi; mavzu savoldan (yoki oldingi savoldan)
                 rt = rule_topics(ai.norm(q)) or (mem or {}).get("rules") or []
                 data[n] = rules_data(con, rt)

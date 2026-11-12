@@ -30,6 +30,12 @@ def S(uid):
     assert r.status_code == 200, f"login {uid}: {r.status_code} {r.text}"
     return c
 
+# Kameralar bo'limi standart holda o'chiq (app/modules.py) — bu to'plam uni yoqadi va oxirida avvalgi holatga qaytaradi
+import atexit
+_IT = S(21); _CAMS0 = bool(_IT.get("/api/modules").json()["modules"].get("cams"))
+assert _IT.post("/api/modules/cams", json={"enabled": True}).status_code == 200
+atexit.register(lambda: _IT.post("/api/modules/cams", json={"enabled": _CAMS0}))
+
 def q(sql, args=()):
     con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
     try: return con.execute(sql, args).fetchall()

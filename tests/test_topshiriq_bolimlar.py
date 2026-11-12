@@ -183,8 +183,8 @@ Rektor: yig'ilish yopildi."""
     T = open_k4[0]
     RESTORE.append((T, one("SELECT status, result, result_at, result_by, review, review_note, review_at, review_by, updated_at, assignee_user, assignee FROM tasks WHERE id=?", (T,))))
     for uid, who in ((31, "kaf2 mudiri"), (2, "rektor"), (1, "kengash"), (14, "kaf4 mudirining o'zi")):
-        ok(U[uid].post(f"/api/tasks/{T}/status", json={"status": "bajarildi"}).status_code == 403,
-           f"{who}: eski bir bosishli «Bajarildi» (/api/tasks/…/status) ishlamaydi (403)")
+        ok(U[uid].post(f"/api/tasks/{T}/status", json={"status": "bajarildi"}).status_code in (403, 404, 405),
+           f"{who}: eski bir bosishli «Bajarildi» (/api/tasks/…/status) ishlamaydi (olib tashlangan)")
     ok(up(2, T, status="bajarildi", result="boshqa birov").status_code == 403, "rektor boshqaning topshirig'ini yakunlay olmaydi (403)")
     ok(up(1, T, status="bajarildi", result="x").status_code == 403, "kengash boshqaning topshirig'ini yakunlay olmaydi (403)")
     ok(up(14, T, status="bajarildi").status_code == 400, "ijrochi natijasiz yakunlay olmaydi (400)")

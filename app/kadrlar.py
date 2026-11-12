@@ -404,9 +404,10 @@ def api_staff(request: Request, q: str = "", unit: str = "", flag: str = "", sta
     return {"total": len(items), "items": items[offset:offset + limit]}
 
 def _own_staff_id(c: Ctx) -> int | None:
-    n = _short(c.user.get("full_name"))
-    r = db.rows(_con, "SELECT f.staff_id FROM hr_files f JOIN staff s ON s.id=f.staff_id WHERE s.full_name=?", (n,)) if n and ":" in (c.user.get("full_name") or "") else []
-    return r[0]["staff_id"] if len(r) == 1 else None
+    """O'z shaxsiy ishi — akkaunt ↔ xodim barqaror bog'lanishi bo'yicha (staff_absence.user_link: ism faqat birinchi, bir qiymatli bog'lashda)."""
+    from . import staff_absence as SA
+    sid = SA.user_link(_con, c.user)["staff_id"]
+    return sid if sid and db.one(_con, "SELECT 1 x FROM hr_files WHERE staff_id=?", (sid,)) else None
 
 def file_detail(sid: int, full=True) -> dict:
     f = db.one(_con, f"{_FSQL} WHERE f.staff_id=?", (sid,))

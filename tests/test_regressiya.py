@@ -35,13 +35,13 @@ ok(oq.get("/api/docs/lookup/task").status_code==403, "o'qituvchi rektorat topshi
 ok(reg.get("/api/docs/lookup/student?q=").status_code==200, "Registrator ofisi talabalarni qidira oladi")
 ok(ty.post("/api/svc/incidents/2/notify",json={"text":"x"*30}).status_code==403, "tyutor umumiy hodisa xabarini yubora olmaydi")
 ok("requests" not in ty.get("/api/svc/overview").json(), "tyutorda murojaatlar (umumiy xabar) yorlig'i yo'q")
-# eski bir bosishli holat API (main.py) — bo'limli (yagona oqimdagi) topshiriqni o'zgartirmaydi: 403 (avval whitelist 400 edi)
-ok(rk.post("/api/tasks/1/status",json={"status":"<script>"}).status_code in (400,403), "topshiriq holati: eski API orqali o'zgartirib bo'lmaydi")
-r=rk.post("/api/meetings",json={"title":"Test","transcript":"t","tasks":[{"assignee":"Moliya fakulteti dekani","text":"x","due":"15.11"},{"assignee":"Moliya-iqtisod ishlari prorektori","text":"y","due":"2026-11-31"}]})
-ok(r.status_code==200, "buzuq sanali majlis saqlandi (400/500 emas)")
-row=DB.execute("select assignee_role,due from tasks order by id desc limit 2").fetchall()
-ok(row[1][0]=="talabalar" and row[0][0]=="prorektor_moliya", f"rol aniqlash ('dekani' → Registrator ofisi): {row}")
-ok(rk.get("/api/dashboard").status_code==200 and rk.get("/api/section/tasks").status_code==200, "panel buzuq sanadan keyin ham ishlaydi")
+# eski bir bosishli endpointlar (main.py) olib tashlangan: kotib qoralama → tasdiq oqimini (/api/dec/…) chetlab o'tib bo'lmaydi
+n_meet=DB.execute("select count(*) from meetings").fetchone()[0]
+ok(rk.post("/api/tasks/1/status",json={"status":"bajarildi"}).status_code in (404,405), "eski /api/tasks/{id}/status yo'q (404/405)")
+ok(rk.post("/api/meetings",json={"title":"Test","transcript":"t","tasks":[{"assignee":"Rektor","text":"x","due":"2026-11-30"}]}).status_code in (404,405), "eski POST /api/meetings yo'q (404/405)")
+ok(rk.post("/api/meetings/extract",json={"transcript":"t"}).status_code in (404,405), "eski POST /api/meetings/extract yo'q (404/405)")
+ok(DB.execute("select count(*) from meetings").fetchone()[0]==n_meet, "eski endpointlar orqali majlis yaratilmadi")
+ok(rk.get("/api/dashboard").status_code==200 and rk.get("/api/section/tasks").status_code==200, "panel va topshiriqlar ishlaydi")
 from app import ai
 SAMPLE="""Rektorat yig'ilishi, 2026-yil 6-noyabr.
 Rektor: Moliya fakulteti 2-kurslaridagi vaziyat jiddiy. Registrator ofisi: pasaygan guruhlar bo'yicha har bir talaba bilan individual reja tuzsin, muddat 17.11.

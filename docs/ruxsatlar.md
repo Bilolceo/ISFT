@@ -66,3 +66,43 @@ bajaradi; fakultetlar akademik tuzilma sifatida qoladi, fakultet tyutorlari (#24
   qarzdorlar ro'yxati endi Registrator ofisida ham chiqariladi.
 - Portal: «Dekanatlar» guruhi → «Fakultet tyutorlari» (`fak1..fak3` — «<fakultet> fakulteti tyutorlari»). Majlis matnidagi
   «dekan/dekanat» Registrator ofisiga yo'naltiriladi. Face ID: dekan ko'lami olib tashlandi (tyutor — o'z fakulteti talabalari).
+
+## Xavfsizlik va izchillik tuzatishlari (2026-11-12)
+Regressiya testi: `tests/test_xavfsizlik.py` (+ `tests/test_qabul.py`, `tests/test_rejalar.py`).
+
+- **Talabalar ko'lami — yagona qoida** (`rbac.Ctx.student_scope()` / `group_scope()`): tyutor — faqat o'ziga biriktirilgan guruhlar
+  (`tutor_groups`; butun fakultet emas), Sirtqi bo'lim — faqat sirtqi talabalar, Masofaviy bo'lim — faqat masofaviy, kafedra mudiri — o'z
+  kafedrasi guruhlari, o'qituvchi — o'zi dars beradigan guruhlar. Talabalar markazi (`student_ops._scope_sql`), reyting (`reyting.scope_sql`),
+  hujjatlar (`documents._sscope`, `_groups_sql`), buyruqlar (`orders.st_scope`), umumiy qidiruv, `/api/section/risk`, Portal «kontingent»
+  bazasi va talaba qidiruvi shu funksiyadan oladi; modul faqat qo'shimcha toraytiradi (masalan, buxgalteriya — faqat kontrakt talabalari;
+  reytingda o'qituvchi — o'zi baholagan talabalar).
+- **Portal yozish amallari**: qaytarib olish, yopish, qayta ochish, muddat, yo'naltirish, ijrochi tayinlash / o'ziga olish, talabalar ro'yxati,
+  javobni ko'rib chiqish, arxiv — hammasi `portal._need_access()` dan o'tadi: xodim ocha olmaydigan (shaxsan unga tegishli bo'lmagan) xatni
+  o'zgartira ham olmaydi (403, auditga yoziladi). Biriktirilmagan kiruvchi xatni bo'lim rahbari taqsimlaydi; xodim faqat avval o'ziga
+  tegishli bo'lgan xatni qayta «o'ziga oladi».
+- **Murojaatlar** (`app/service.py`): murojaat faqat navbatini ocha oladigan bo'limga tushadi (`RECEIVING_UNITS` — lavozimida `requests`
+  ruxsati bor bo'limlar). Buxgalteriya va Ma'naviyat bo'limiga tasniflangani Registrator ofisiga yo'naltiriladi, `requests.route_note`da asl
+  mas'ul bo'lim yoziladi. Holatni faqat egasi bo'lgan bo'lim, shaxsan biriktirilgan xodim yoki rahbariyat (rektor, o'quv prorektori)
+  o'zgartiradi (`can_handle`); «javob berildi» — javob matni bilan. Umumiy hodisa xabari tashqi kanalga yuborilmaydi — javob sifatida
+  murojaatlarga yoziladi (`stored`, `delivered: false`). Tadbir QR ro'yxati faqat mavjud, tasdiqlangan tadbirga va faqat o'z kunida ochiladi.
+- **Hayfsan**: yagona yo'l — «Buyruqlar»dagi «hayfsan» buyrug'i. Har qanday (Talabalar markazidan, bevosita Buyruqlarda tuzilgan yoki
+  Hujjatlar markazidan ko'chirilgan) hayfsan buyrug'i imzolanganda `student_ops.sync_discipline()` har bir talabaga «amalda» intizomiy yozuv
+  beradi (idempotent; arxiv — `historic` — buyruqlar hisobga olinmaydi). Hujjatlar markazida «reprimand» taqdimnomasi tuzilmaydi;
+  «leave_order» → `orders.draft_staff_leave` (xodim buyrug'i loyihasi).
+- **Parol va Telegram**: parol tiklansa, sinov paroliga qaytarilsa yoki xodim o'zi almashtirsa (`rbac.set_password`) — Telegram ulanishi
+  uziladi, javobda `telegram_unlinked`. Bot ulanishni parol iziga bog'laydi (`users.tg_pin_fp`): parol boshqa yo'l bilan o'zgargan bo'lsa ham
+  keyingi murojaatda qayta tasdiqlash (KOD parol) so'raladi, rejali xabarlar yuborilmaydi.
+- **Xodim ↔ akkaunt** (`staff_absence.user_link`, jadval `user_staff`): «o'z» yo'qliklari va shaxsiy ishi (kadrlar) barqaror id bo'yicha.
+  Ism faqat birinchi bog'lashda va faqat bir qiymatli bo'lsa ishlatiladi (bitta xodim, bitta akkaunt, yozuv band emas); adashlar va nomi
+  o'zgartirilgan bog'lanmagan akkaunt — «o'z» yozuvlarisiz.
+- **AI agent takliflari**: tasdiq kutadigan takliflar obyekt bo'yicha kalitlanadi (`ijro:overdue:<id>#sana` va h.k.): bitta obyektga bitta
+  ochiq taklif, har kuni takrorlanmaydi, sharti yo'qolsa avtomatik yopiladi, qarordan keyin 7/14 kun (yoki yaratilgan topshiriq yopilguncha)
+  qayta taklif qilinmaydi; bir xil ochiq topshiriq ikkinchi marta yaratilmaydi. Eski takrorlar server startida tozalanadi (`dedupe`).
+- **Kutilayotgan ishlar — bitta yig'uvchi**: qo'ng'iroqcha (`/api/notifications`) ishlarni `mywork.collect()` dan oladi (xodim bo'yicha 75 s
+  kesh — `collect_cached`), javobda `work.total` = «Mening vazifalarim»dagi son. Jonli hodisalar (o'qilmagan xat, yangi/qaytarilgan topshiriq,
+  sillabus) alohida. «Yangi» belgisi — ish birinchi marta paydo bo'lgan vaqtdan (`notif_first`), muddat yaqinlashganda yana ko'tariladi.
+- **Rektor — kadrlar jamlanmasi**: yangi resurs `hr_stats` (rektor, Kadrlar): suhbatda «Bugun nechta xodim ta'tilda?» — faqat sonlar
+  (`staff_absence.agent_tool`, ai.py «staffabs»). `hr` (shaxsiy ma'lumot, pasport) rektorga yopiq qoladi.
+- **Qabul buyrug'i**: loyiha (.docx) bosqichni o'zgartirmaydi; `qb_batches` — loyiha → kiritilgan (alohida tasdiq) → imzolangan | bekor;
+  qayta yuklab olish va (imzolanguncha) qaytarish mumkin. «Buyruqlar» moduli bilan avtomatik bog'lanmaydi (abituriyent hali `students`da yo'q).
+- **KPI maqsadlari**: bir ko'rsatkichga bitta maqsad (409), foizli ko'rsatkich ≤ 100, muddat o'tmishda emas va 5 yildan uzoq emas.

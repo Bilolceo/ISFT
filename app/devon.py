@@ -115,7 +115,13 @@ def api_meta(request: Request):
     units = [{"key": u["key"], "name": u["name"]} for u in PT.units(_con) if u["group"] in ("bolim", "rahbariyat", "fakultet")]
     w, a = _scope(c)
     cnt = {r["status"]: r["n"] for r in db.rows(_con, f"SELECT status, COUNT(*) n FROM in_letters WHERE {w} GROUP BY 1", a)}
-    return {"can": {"register": c.role.key in REGISTRAR, "resolve": c.role.key in RESOLVERS}, "role": c.role.key,
+    # sarlavha osti matni — lavozimga qarab (kotib rezolyutsiya qo'ymaydi: unga «sizga yo'naltirilgan» emas, kuzatuv ko'rinishi)
+    k = c.role.key
+    sub = ("Tashqi tashkilotlardan kelgan xatlar: ro'yxatga olish → rezolyutsiya → ijro → javob" if k in REGISTRAR else
+           "Institutga kelgan barcha xatlar: rezolyutsiya qo'ying va ijrosini nazorat qiling" if k == "rektor" else
+           "Sizga rezolyutsiya uchun yo'naltirilgan xatlar" if k in RESOLVERS else
+           "Institutga kelgan xatlar va ularning ijrosi — kuzatuv (faqat ko'rish): rezolyutsiyani rahbariyat qo'yadi, ro'yxatga Devonxona oladi")
+    return {"can": {"register": c.role.key in REGISTRAR, "resolve": c.role.key in RESOLVERS}, "role": c.role.key, "subtitle": sub,
             "resolvers": RESOLVERS, "statuses": ST, "units": units, "counts": cnt}
 
 @router.get(P + "/letters")

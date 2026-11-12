@@ -230,7 +230,7 @@ def _deny(c, action, msg, detail=""):
 def _audit(c, action, detail=""): rbac.audit(_con, c, f"buyruqlar: {action}", RES, True, detail)
 
 def is_sirtqi(c: Ctx) -> bool: return c.role.key == "sirtqi"
-def st_scope(c: Ctx, alias="s") -> str: return f"{alias}.study_form='sirtqi'" if is_sirtqi(c) else "1=1"
+def st_scope(c: Ctx, alias="s") -> str: return c.student_scope(alias)   # yagona qoida — rbac.Ctx.student_scope (sirtqi — faqat sirtqi talabalar)
 _STAFF_SQL = "(" + ",".join(f"'{k}'" for k in STAFF_KINDS) + ")"
 def ord_scope(c: Ctx, alias="o") -> str:
     """Ko'lam: Kadrlar — faqat xodimlar buyruqlari; talabalar bilan ishlovchi bo'limlar — faqat talabalar buyruqlari (sirtqi — sirtqi);
@@ -520,6 +520,14 @@ def sign(o: dict, c: Ctx, base_url: str) -> dict:
             _con.commit()
         except Exception:
             _con.rollback(); raise
+    if o["kind"] in ("hayfsan", "bekor"):   # hayfsan: imzo bilan intizomiy yozuv «amalda» (bekor qilinsa — «bekor»), qaysi yo'l bilan tuzilganidan qat'i nazar
+        try:
+            from . import student_ops as OPSM
+            nd = OPSM.sync_discipline(_con)
+            if nd and o["kind"] == "hayfsan": _log(o["id"], c, "hayfsan qayd etildi", f"{nd} ta talabaning intizomiy yozuvi «amalda»"); _con.commit()
+            res["discipline"] = nd
+        except Exception as e:
+            print("orders.sign: sync_discipline:", repr(e))
     fname = _publish(o, c, base_url)
     _audit(c, "buyruq imzolandi", f"{reg} · {KINDS[o['kind']]['short']} · " + (_j(o.get("params")).get("staff_name", "xodim") if is_staff_kind(o["kind"]) else f"{len(its)} ta talaba"))
     return {"ok": True, "reg_no": reg, "date": today, "file": fname, **res}
@@ -803,6 +811,9 @@ def migrate_legacy_docs(con) -> int:
                 data = {"reason": p.get("reason")} if p.get("reason") else {}
                 if p.get("from_date"): data["date_from"] = p["from_date"]
                 o = create_order(c, kind, [{"student_id": sid, "data": data}], src, note=f"Hujjatlar markazidan ko'chirildi ({d['reg_no']})")
+                if kind == "hayfsan":   # eski taqdimnomaga yozilgan hayfsan («loyiha») endi shu buyruqqa bog'lanadi — imzolansa «amalda» bo'ladi
+                    try: con.execute("UPDATE discipline SET doc_reg=? WHERE student_id=? AND doc_reg=? AND status!='bekor'", (f"BUYRUQ#{o['id']}", sid, d["reg_no"]))
+                    except Exception: pass
                 ch = checks(db.one(con, "SELECT * FROM orders WHERE id=?", (o["id"],)))
                 if ch["errors"]:
                     con.execute("UPDATE orders SET returned_note=? WHERE id=?", ("Hujjatlar markazidan ko'chirildi — majburiy maydonlarni to'ldirib, imzoga qayta yuboring", o["id"]))

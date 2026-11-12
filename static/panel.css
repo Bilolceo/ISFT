@@ -228,3 +228,8 @@
 .pn-mwi:last-child{border-bottom:0}.pn-mwi:hover .pn-mwt{color:var(--brand)}
 .pn-mwt{min-width:0;overflow-wrap:anywhere}.pn-mwi .tiny{flex:none;white-space:nowrap}
 @media (max-width:620px){.pn-mwi{flex-direction:column;gap:2px}.desk-i .v{font-size:24px}}
+
+/* Hisobotlar: «Hisobotlar» menyu bandi o'chiq bo'lganda yuklab olish tugmalari panelda */
+.pn-reps{margin-top:14px}.pn-reps h3{margin:0}
+.pn-reps-l{display:flex;flex-wrap:wrap;gap:8px}
+.pn-reps-l .btn{white-space:normal;text-align:left}

@@ -87,7 +87,7 @@ async function renderMasofaviy(tab) {
   DL.tab = tab && M.tabs.includes(tab) ? tab : (DL.tab && M.tabs.includes(DL.tab) ? DL.tab : M.tabs[0]);
   const demo = M.source === "demo";
   v.innerHTML = `<div class="dl-head"><div><h2>Masofaviy ta'lim</h2><span class="muted">${esc(M.scope)} · ${dlD(M.today)}</span></div>
-      <div class="dl-acts">${typeof renderTestbank === "function" && !document.querySelector('#nav a[data-v="testbank"]')?.classList.contains("hidden") ? `<button type="button" class="btn sm ghost" data-tb>${ico("checkc", 15)} Test bank</button>` : ""}${typeof renderPaket === "function" && !document.querySelector('#nav a[data-v="paket"]')?.classList.contains("hidden") ? `<button type="button" class="btn sm ghost" data-pk>${ico("package", 15)} Kontent paketlari</button>` : ""}${M.caps.report ? `<a class="btn sm" href="/api/masofaviy/report.docx">${ico("report", 15)} Hisobot (.docx)</a>` : ""}</div></div>
+      <div class="dl-acts">${typeof renderTestbank === "function" && !document.querySelector('#nav a[data-v="testbank"]')?.classList.contains("hidden") ? `<button type="button" class="btn sm ghost" data-tb>${ico("checkc", 15)} Test bank</button>` : ""}${typeof renderPaket === "function" && !document.querySelector('#nav a[data-v="paket"]')?.classList.contains("hidden") ? `<button type="button" class="btn sm ghost" data-pk>${ico("package", 15)} Dars tayyorlash</button>` : ""}${M.caps.report ? `<a class="btn sm" href="/api/masofaviy/report.docx">${ico("report", 15)} Hisobot (.docx)</a>` : ""}</div></div>
     ${demo ? `<div class="dl-demo">${ico("info", 15)}<span><b>Namuna ma'lumot.</b> LMS faolligi va kontent holati — demo. Haqiqiy LMS va videokonferensiya eksportini «Import» bo'limidan yuklang yoki API ulanadi.</span></div>` : ""}
     <div class="dl-tabs" role="tablist">${M.tabs.map(t => `<button type="button" role="tab" aria-selected="${t === DL.tab}" class="${t === DL.tab ? "on" : ""}" data-t="${t}">${esc(DL_TABS[t])}</button>`).join("")}</div>
     <div id="dlBox"><div class="dl-empty">Yuklanmoqda…</div></div>`;
@@ -287,6 +287,8 @@ async function dlContent(box) {
         <select id="dlSt" aria-label="Holat"><option value="">Barcha holatlar</option>${Object.entries(DL_IST).map(([k, v]) => `<option value="${k}" ${T.status === k ? "selected" : ""}>${v[0]}</option>`).join("")}</select>
         <select id="dlK" aria-label="Material turi"><option value="">Barcha turlar</option>${Object.entries(M.kinds).map(([k, v]) => `<option value="${k}" ${T.kind === k ? "selected" : ""}>${esc(v)}</option>`).join("")}</select>
         <input id="dlCq" type="search" placeholder="Fan, mavzu yoki o'qituvchi" value="${esc(T.q)}" aria-label="Qidiruv"></div>
+      ${M.caps.review && d.items.some(r => r.status === "yuklandi") ? `<div class="dl-acts dl-bulk"><button type="button" class="btn sm primary" id="dlBulk">${ico("check", 15)} Ro'yxatdagi «Tekshiruvda» materiallarni tasdiqlash (${d.items.filter(r => r.status === "yuklandi").length})</button>
+        <span class="muted">havolalarini ko'rib chiqqan bo'lsangiz — hammasini birdan tasdiqlaydi; qaytarish — har biriga alohida</span></div>` : ""}
       <p class="muted">${fmt(d.total)} ta material${flt.length ? ` · ${flt.join(", ")} <button type="button" class="dl-link" id="dlClr">filtrni tozalash</button>` : ""}</p>
       ${dlTable([["Fan / mavzu", r => `<b>${esc(r.subject)}</b><small>${r.topic_no}-mavzu${r.topic ? ": " + esc(r.topic) : ""}</small><small>${esc(r.direction)}, ${r.course}-kurs</small>`],
                  ["Tur", r => esc(r.kind_label)],
@@ -303,6 +305,14 @@ async function dlContent(box) {
     if (T.q) { const q = $("#dlCq"); q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
     const clr = $("#dlClr"); if (clr) clr.onclick = () => { Object.assign(T, {department_id: 0, teacher_id: 0, direction: ""}); re(); };
     box.querySelectorAll("[data-rv]").forEach(b => b.onclick = () => dlReview(+b.dataset.rv, b.dataset.ok === "1"));
+    const bulk = $("#dlBulk");      /* ommaviy tasdiqlash — shu sahifada ko'rinib turgan «Tekshiruvda» materiallar (testbank'dagi kabi) */
+    if (bulk) bulk.onclick = async () => {
+      const ids = d.items.filter(r => r.status === "yuklandi").map(r => r.id);
+      if (!confirm(`${ids.length} ta material tasdiqlansinmi?`)) return;
+      bulk.disabled = true;
+      const r = await dlApi("/api/masofaviy/items/bulk-review", {ids});
+      if (r) { toast(`Tasdiqlandi: ${r.approved} ta${r.skipped ? ` · o'tkazib yuborildi: ${r.skipped}` : ""}`); renderMasofaviy("kontent"); } else bulk.disabled = false;
+    };
     box.querySelectorAll("[data-up]").forEach(b => b.onclick = () => dlUpload(+b.dataset.up));
     box.querySelectorAll("[data-lg]").forEach(b => b.onclick = () => dlItemLog(+b.dataset.lg));
   }

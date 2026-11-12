@@ -156,7 +156,7 @@ ok(sv and sv["text"] == LONG and not sv["demo"], "Saqlangan matn qaytadi")
 print("== 4. AI generatsiya: serverda kalit yo'q → aniq o'zbekcha xato (soxta generatsiya yo'q)")
 n0 = q("SELECT COUNT(*) n FROM tb_questions")[0]["n"]
 r = teach.post(f"{P}/courses/{own['id']}/generate", json={"topics": [TOPIC], "n": 5, "types": ["mcq"]})
-ok(r.status_code == 503 and "AI ulanmagan" in r.json().get("detail", "") and "ANTHROPIC_API_KEY" in r.json()["detail"], "Kalitsiz: 503 «AI ulanmagan … ANTHROPIC_API_KEY»")
+ok(r.status_code == 503 and "AI ulanmagan" in r.json().get("detail", "") and "administratorga murojaat qiling" in r.json()["detail"] and "ANTHROPIC" not in r.json()["detail"], "Kalitsiz: 503 «AI ulanmagan — administratorga murojaat qiling» (texnik nomsiz)")
 ok(q("SELECT COUNT(*) n FROM tb_questions")[0]["n"] == n0, "Kalitsiz hech qanday savol yaratilmaydi")
 ok(kaf.post(f"{P}/courses/{own['id']}/generate", json={"topics": [TOPIC], "n": 5}).status_code == 403, "Kafedra mudiri generatsiya qilolmaydi (403)")
 ok(teach.post(f"{P}/courses/{own['id']}/generate", json={"topics": [TOPIC], "n": 99}).status_code == 422, "Savollar soni chegarasi (≤ 30)")
@@ -353,6 +353,25 @@ print("== 10. Sahifa fayllari")
 idx = httpx.get(B + "/index.html").text; js = httpx.get(B + "/app.js").text
 ok('data-v="testbank"' in idx and 'id="v-testbank"' in idx and 'src="testbank.js"' in idx, "index.html: menyu, bo'lim va skript ulangan")
 ok('a[data-v="testbank"]' in js and httpx.get(B + "/testbank.js").status_code == 200 and httpx.get(B + "/testbank.css").status_code == 200, "app.js: menyu ko'rinishi; testbank.js/css mavjud")
+
+print("== «Dars tayyorlash» bilan umumiy matn va mavzu nomi")
+NT = 11
+TXT = "11-MAVZU: INNOVATSIYA SIYOSATI\nReja:\n1. Davlat siyosati\n\n" + "Innovatsiya siyosati davlat tomonidan yangiliklarni rag'batlantirish choralaridir. " * 8
+r = teach.post(f"{P}/courses/{own['id']}/topics/{NT}/source/text", json={"text": TXT, "name": "m11.txt"})
+ok(r.status_code == 200 and r.json()["title"] == "INNOVATSIYA SIYOSATI", "Test bankda yuklangan matn sarlavhasidan mavzu nomi olindi")
+pv = teach.get(f"/api/paket/courses/{own['id']}/topics/{NT}").json()
+ok(pv["ready"]["text"]["ok"] and pv["ready"]["text"]["src"] == "testbank" and pv["topic"]["title"] == "INNOVATSIYA SIYOSATI", "«Dars tayyorlash» Test bankdagi matnni va nomni ko'radi")
+ok(next(x for x in teach.get(f"{P}/courses/{own['id']}").json()["topics"] if x["no"] == NT)["label"] == "INNOVATSIYA SIYOSATI", "Test bank ro'yxatida ham shu nom («11-mavzu» emas)")
+TXT2 = "11-MAVZU: INNOVATSIYA SIYOSATI VA KLASTERLAR\nReja:\n1. Klasterlar\n\n" + "Klaster — o'zaro bog'liq korxonalar va tashkilotlarning hududiy birlashmasi. " * 8
+r = teach.post(f"/api/paket/courses/{own['id']}/topics/{NT}/text/paste", json={"text": TXT2})
+sv = teach.get(f"{P}/courses/{own['id']}/topics/{NT}/source").json()["source"]
+ok(r.status_code == 200 and sv["origin"] == "paket" and "Klaster" in sv["text"], "Keyinroq «Dars tayyorlash»da yuklangan matn Test bankda ham amal qiladi (bitta yuklash)")
+rq = teach.post(f"{P}/courses/{own['id']}/topics/{NT}/questions", json={"qtype": "tf", "stem": "Innovatsiya siyosati davlat tomonidan yangiliklarni rag'batlantirish choralarimi?", "options": [], "correct": [0], "answers": [],
+                "explanation": "", "difficulty": "oson", "bloom": "eslash", "source_quote": "Innovatsiya siyosati davlat tomonidan yangiliklarni rag'batlantirish choralaridir."})
+ok(rq.status_code == 200 and not any(f["code"] == "quote_missing" for f in rq.json().get("flags", [])), "Iqtibos tekshiruvi ikkala matn bo'yicha (eski matndan olingan iqtibos «topilmadi» bo'lmaydi)")
+tjs = httpx.get(B + "/testbank.js").text
+ok("ANTHROPIC" not in tjs and "●" not in tjs and 'ico("plus", 15)} Savol qo\'shish' in tjs and "Kengaytirilgan: boshqa LMS uchun eksport" in tjs,
+   "testbank.js: texnik nomsiz, «●»siz, «+ Savol qo'shish», LMS eksportlari «Kengaytirilgan» ichida")
 
 print()
 if fails:

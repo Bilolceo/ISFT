@@ -28,8 +28,8 @@
         <div class="tk-small" style="display:flex;flex-direction:column;gap:6px;margin-top:6px;max-height:260px;overflow:auto">
           ${a.diary.map((x) => `<div><b>${dmy(x.day)}</b> ${esc(x.text)} <span class="tk-muted">— ${esc(x.author_kind === "rahbar" ? "rahbar: " + x.author : "siz")}</span></div>`).join("") || `<span class="tk-muted">Hali yozuv yo'q</span>`}
         </div>
-        ${a.can_diary ? `<form class="am-t-diary" style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><input class="tk-in" name="day" type="date" value="${esc(d.today)}" style="max-width:170px">
-          <input class="tk-in" name="text" maxlength="2000" placeholder="Bugun nima qildingiz?" style="flex:1;min-width:180px"><button class="btn sm" type="submit">Yozish</button></form>` : ""}
+        ${a.can_diary ? `<form class="am-t-diary" style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">${a.diary_note ? `<div class="tk-small tk-muted" style="flex-basis:100%">${esc(a.diary_note)}</div>` : ""}<input class="tk-in" name="day" type="date" value="${esc(a.diary_day || d.today)}" min="${esc(a.diary_min || "")}" max="${esc(a.diary_max || d.today)}" style="max-width:170px">
+          <input class="tk-in" name="text" maxlength="2000" placeholder="${a.ended ? "Shu kuni nima qildingiz?" : "Bugun nima qildingiz?"}" style="flex:1;min-width:180px"><button class="btn sm" type="submit">Yozish</button></form>` : ""}
         ${a.can_report ? `<form class="am-t-report" style="margin-top:12px"><label class="tk-field"><span>Amaliyot hisoboti (kamida ${d.rules.report_min_chars} belgi): bajarilgan ishlar, olingan ko'nikmalar, xulosa</span>
           <textarea name="text" rows="5" maxlength="4000"></textarea></label><button class="btn sm primary" type="submit" style="margin-top:6px">Hisobotni topshirish</button>
           <div class="tk-small tk-muted">Tashkilot tavsifnomasi va imzolangan kundalik qog'ozda kafedra rahbariga topshiriladi.</div></form>` : ""}

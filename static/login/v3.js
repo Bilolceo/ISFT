@@ -25,7 +25,7 @@ window.LOGIN_HTML = `
 
       <div class="v3-pwrow">
         <label for="password">Parol</label>
-        <span class="v3-hint" title="Sinov rejimi: parol Isft2026"${window.ISFT_HIDE_DEMO_HINT ? ' hidden style="display:none"' : ""}>Sinov rejimi: Isft2026</span>
+        <span class="v3-hint"${window.ISFT_HIDE_DEMO_HINT || !(window.ISFT_FLAGS && ISFT_FLAGS.demo_pw) ? ' hidden style="display:none"' : ""}>Sinov rejimi: ${(window.ISFT_FLAGS && ISFT_FLAGS.demo_pw) || ""}</span>
       </div>
       <div class="v3-pw" id="pwWrap">
         <span class="v3-pw-ico" data-ico="lock"></span>

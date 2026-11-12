@@ -8,6 +8,45 @@ const fmt = n => typeof n === "number" ? n.toLocaleString("ru-RU").replace(/,/g,
 const mln = x => Math.abs(x) >= 1e9 ? (x/1e9).toFixed(2)+" mlrd" : (x/1e6).toFixed(1)+" mln";
 let ME = null, DASH = null, selUser = null;
 
+/* ---------- bo'limlar kaliti (app/modules.py · docs/modullar.md) ----------
+   ME.modules — {kalit: yoqilganmi}. Bu mahsulot kaliti (menyu, panel, bildirishnoma, qidiruv), xavfsizlik chegarasi emas — ruxsatni server tekshiradi.
+   MOD_SOFT — kaliti faqat menyu bandini boshqaradigan sahifalar: suhbat paneldan, kiruvchi xat «Mening vazifalarim»dan ochiladi. */
+const MOD_SOFT = ["chat", "kiruvchi"];
+const modOn = k => !k || !ME || !ME.modules || !(k in ME.modules) || ME.modules[k] !== false;
+/* havola ({view, tab, …}) qaysi bo'limga tegishli: «Nosozliklar va murojaatlar» ichidagi yorliqlar o'z kalitiga ega */
+const SVC_TAB_MOD = {events: "yoshlar", requests: "ops"};   /* Tadbir qatnashuvi — Yoshlar ishlari bilan; Murojaatlar va hodisalar — Talabalar navbati bilan */
+function linkMod(l) {
+  if (!l || !l.view) return null;
+  if (l.view === "service") return SVC_TAB_MOD[l.tab] || "service";
+  return l.view === "calendar" ? "tasks" : l.view;
+}
+const linkOn = l => { const m = linkMod(l); return !m || MOD_SOFT.includes(m) || modOn(m); };
+/* «Mening vazifalarim» javobi (/api/mywork): o'chirilgan bo'limlarga olib boradigan ishlar chiqarib tashlanadi, sanoqlar qayta hisoblanadi */
+function modWork(d) {
+  if (!d || !Array.isArray(d.items) || !ME || !ME.modules) return d;
+  const items = d.items.filter(it => linkOn(it.link));
+  if (items.length === d.items.length) return d;
+  const c = {total: items.length, badge: items.length, overdue: 0, today: 0, week: 0, later: 0, none: 0, units: 0, sign: 0, by_source: {}};
+  items.forEach(it => { c[it.bucket] = (c[it.bucket] || 0) + 1; c.by_source[it.source] = (c.by_source[it.source] || 0) + 1; if (it.sign) c.sign++; c.units += it.count || 1; });
+  return {...d, items, counts: {...(d.counts || {}), ...c}};
+}
+/* o'chirilgan bo'lim sahifasi o'rnida ko'rsatiladigan karta */
+function modOffCard(v) {
+  const a = document.querySelector(`#nav a[data-v="${v}"]`), name = a ? (a.dataset.lbl0 || a.dataset.lbl || a.textContent.replace(/\d+$/, "").trim()) : "Bu bo'lim";
+  const adm = ME && ["it_head", "rektor"].includes(ME.role_key);
+  return `<div class="head"><div><h2>${esc(name)}</h2></div></div><div class="card locked mod-off"><div class="pn-lock">${ico("eyeoff" in ICONS ? "eyeoff" : "lock", 22)}</div><b>Bu bo'lim o'chirilgan</b>
+    <span class="tiny">«${esc(name)}» hozircha ishlatilmaydi: egasi (mas'ul bo'lim) va haqiqiy ma'lumot manbai belgilanmagan. ${adm ? "Uni «Bo'limlar» sahifasida yoqishingiz mumkin." : "Kerak bo'lsa, AT bo'limi boshlig'iga murojaat qiling."}</span>
+    <div class="row-actions" style="margin-top:10px;justify-content:center">${adm ? `<button class="btn sm primary" onclick="go('modullar')">Bo'limlar sahifasi →</button>` : ""}<button class="btn sm" onclick="go('panel')">Boshqaruv paneliga qaytish</button></div></div>`;
+}
+/* «Namuna ma'lumot» belgisi va tepadagi tasma (ISFT_CORE_REAL_DATA=1 bo'lsa ko'rsatilmaydi) */
+const realData = () => !!(ME && ME.flags && ME.flags.real_data);
+const demoChip = (t = "Namuna ma'lumot (HEMIS ulanmagan)") => realData() ? "" : `<span class="demo-chip" title="Bu raqamlar namuna (sun'iy) ma'lumotdan — haqiqiy tizim bilan integratsiya hali yo'q">${esc(t)}</span>`;
+function dataBanner() {
+  const b = document.getElementById("dataBanner"); if (!b) return;
+  b.hidden = realData();
+  document.getElementById("app")?.classList.toggle("has-banner", !realData());
+}
+
 async function api(path, opts = {}) {
   const r = await fetch(path, {credentials: "same-origin", headers: {"Content-Type": "application/json"}, ...opts});
   if (r.status === 401) { showLogin(); throw new Error("auth"); }
@@ -106,7 +145,7 @@ const ICONS = {
 ICONS.trophy = '<path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/>';
 ICONS.inbox = '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>';
 ICONS.users = '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>';
-ICONS.package = '<path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="m7.5 4.27 9 5.15"/>';   /* paket.js: Kontent paketlari */
+ICONS.package = '<path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="m7.5 4.27 9 5.15"/>';   /* paket.js: Dars tayyorlash */
 const ico = (n, sz = 18) => `<svg class="i" viewBox="0 0 24 24" width="${sz}" height="${sz}" aria-hidden="true">${ICONS[n] || ""}</svg>`;
 function hydrateIcons(root = document) {
   root.querySelectorAll("[data-ico]").forEach(el => { if (!el.dataset.done) { el.innerHTML = ico(el.dataset.ico); el.dataset.done = 1; } });
@@ -131,15 +170,17 @@ const avHtml = u => u.photo ? `<img src="${esc(u.photo)}" alt="" loading="lazy" 
 function setAv(el, u, base) { el.className = `${base} l${u.level}${u.photo ? " has-photo" : ""}`; el.innerHTML = avHtml(u); }
 let USERS = [], LVL = 1;
 const initials = t => { const w = String(t).replace(/[^\p{L}\s]/gu, "").split(/\s+/).filter(Boolean); return ((w[0] || "")[0] || "").toUpperCase() + ((w[1] || "")[0] || "").toUpperCase(); };
-const personOf = u => u.name.includes(":") ? u.name.split(":")[1].trim() : "Demo foydalanuvchi";
+/* /api/users kirishdan oldin ism bermaydi (faqat lavozim; bir xil nomlilarga «akkaunt № N»). Ism — faqat namoyish rejimida (ISFT_CORE_SHOW_DEMO_PASSWORD=1). */
+const personOf = u => u.name ? (u.name.includes(":") ? u.name.split(":")[1].trim() : "") : (u.hint || "");
 async function showLogin() {
   $("#app").classList.add("hidden"); $("#login").classList.remove("hidden");
   USERS = await fetch("/api/users").then(r => r.ok ? r.json() : []).catch(() => []);
-  if (!selUser) selUser = (USERS.find(u => u.level === 1 && /^Rektor$/i.test(u.role)) || USERS[0]).id;
+  if (!USERS.length) { const l = $("#roleList"); if (l) l.innerHTML = `<div class="role-empty">Lavozimlar ro'yxatini yuklab bo'lmadi.<br><a href="#" onclick="event.preventDefault();showLogin()">Qayta urinish</a></div>`; $("#loginBtn").disabled = true; return; }
+  if (!selUser || !USERS.some(u => u.id === selUser)) selUser = (USERS.find(u => u.level === 1 && /^Rektor$/i.test(u.role)) || USERS[0]).id;
   LVL = (USERS.find(u => u.id === selUser) || {level: 1}).level;
   $("#lvlTabs").innerHTML = [1, 2, 3, 4].map(l => `<button type="button" role="tab" data-l="${l}">${LVL_TABS[l]}</button>`).join("");
   $("#lvlTabs").querySelectorAll("button").forEach(b => b.onclick = () => { LVL = +b.dataset.l; $("#roleSearch").value = ""; drawRoles(); $("#roleList").scrollTop = 0; });
-  drawRoles(); if ($("#password") && !$("#password").value && !window.ISFT_HIDE_DEMO_HINT) $("#password").value = DEMO_PW;   /* sinov rejimi: oldindan to'ldirilgan */
+  drawRoles(); if ($("#password") && !$("#password").value && !window.ISFT_HIDE_DEMO_HINT && DEMO_PW) $("#password").value = DEMO_PW;   /* faqat namoyish rejimida oldindan to'ldiriladi */
   $("#loginBtn").disabled = !selUser;
 }
 function drawRoles() {
@@ -148,8 +189,8 @@ function drawRoles() {
   if (q) $("#lvlTabs").querySelectorAll("button").forEach(b => { b.classList.remove("on"); b.setAttribute("aria-selected", false); });
   const list = USERS.filter(u => q ? (u.role + " " + personOf(u)).toLowerCase().replace(/[ʻʼ‘’`]/g, "'").includes(q) : u.level === LVL && !u.search_only);   /* tyutorlar — faqat qidiruvda */
   const el = $("#roleList");
-  el.innerHTML = list.length ? list.map(u => `<div class="role-row ${u.id === selUser ? "sel" : ""}" data-id="${u.id}" tabindex="0" role="option" aria-selected="${u.id === selUser}" title="${esc(u.role)} — ${esc(personOf(u))}">
-    <span class="avatar l${u.level}${u.photo ? " has-photo" : ""}">${avHtml(u)}</span><div><b>${esc(u.role)}</b><small>${esc(personOf(u))}${q ? ` · ${LVL_TABS[u.level]}` : ""}</small></div><span class="chk">${u.id === selUser ? ico("check", 13) : ""}</span></div>`).join("")
+  el.innerHTML = list.length ? list.map(u => `<div class="role-row ${u.id === selUser ? "sel" : ""}" data-id="${u.id}" tabindex="0" role="option" aria-selected="${u.id === selUser}" title="${esc([u.role, personOf(u)].filter(Boolean).join(" — "))}">
+    <span class="avatar l${u.level}${u.photo ? " has-photo" : ""}">${avHtml(u)}</span><div><b>${esc(u.role)}</b><small>${esc([personOf(u), q ? LVL_TABS[u.level] : ""].filter(Boolean).join(" · "))}</small></div><span class="chk">${u.id === selUser ? ico("check", 13) : ""}</span></div>`).join("")
     : `<div class="role-empty">Hech narsa topilmadi.<br>Boshqa so'z bilan qidirib ko'ring.</div>`;
   el.querySelectorAll(".role-row").forEach(r => {
     r.onclick = () => { selUser = +r.dataset.id; LVL = (USERS.find(u => u.id === selUser) || {}).level || LVL; $("#loginBtn").disabled = false; drawRoles(); };
@@ -162,7 +203,7 @@ function drawRoles() {
 }
 $("#roleSearch").oninput = () => drawRoles();  /* nom orqali — variantlar drawRoles ni almashtirishi mumkin */
 /* Parol: #password (type=password) · #pwEye (ko'rsatish/yashirish) · #pwWrap (xato bo'lsa .err) */
-const DEMO_PW = "Isft2026";
+const DEMO_PW = (window.ISFT_FLAGS && window.ISFT_FLAGS.demo_pw) || "";   /* sinov paroli sahifada yo'q; faqat ISFT_CORE_SHOW_DEMO_PASSWORD=1 da server beradi (/api/public/core.js) */
 const pwShake = () => { const w = $("#pwWrap"); if (!w) return; w.classList.remove("err"); void w.offsetWidth; w.classList.add("err"); setTimeout(() => w.classList.remove("err"), 450); };
 if ($("#pwEye")) $("#pwEye").onclick = () => {
   const i = $("#password"), show = i.type === "password"; i.type = show ? "text" : "password";
@@ -193,15 +234,24 @@ async function boot() {
   $("#meName").textContent = ME.role; $("#meScope").textContent = scopeTxt; $("#meScope").hidden = !scopeTxt;
   setAv($("#meAv"), ME, "avatar");
   $("#todayChip").innerHTML = `${ico("calendar", 15)} ${dmy(ME.today)}`;
+  navApply();
+  dataBanner();
+  status(); badges();
+  go("panel");
+}
+/* Menyu ko'rinishi: lavozim (quyidagi qoidalar) → bo'limlar kaliti (ME.modules) → guruhlash. «Bo'limlar» sahifasida kalit o'zgarsa qayta chaqiriladi. */
+function navApply() {
   /* ruxsati umuman yo'q bo'limlar menyuda ko'rsatilmaydi (ichkaridagi kartalar baribir 🔒 bilan himoyalangan) */
   if (typeof navLayout === "function") navLayout(ME.role_key);   /* nav.js: lavozimga ko'ra menyu tartibi */
   const NAV_HIDE_AGENTS = !(["rektor", "kengash", "kotib"].includes(ME.role_key) || ME.role_key.startsWith("prorektor_"));
   document.querySelector('#nav a[data-v="agents"]')?.classList.toggle("hidden", NAV_HIDE_AGENTS);
-  const NAV_NEED = {service: ["facilities", "requests", "youth", "procurement"], spaces: ["spaces"], cams: ["spaces"], audit: ["audit"], ops: ["ops"], tasks: ["tasks"], reports: ["reports"], qabul: ["admissions"]};   /* qabul: w5.js (app/qabul.py) — ko'rinish rbac ADMISSIONS dan */
+  const NAV_NEED = {service: ["facilities", "procurement", ...(modOn("ops") ? ["requests"] : []), ...(modOn("yoshlar") ? ["youth"] : [])], spaces: ["spaces"], cams: ["spaces"], ops: ["ops"], tasks: ["tasks"], reports: ["reports"], qabul: ["admissions"]};   /* qabul: w5.js (app/qabul.py) — ko'rinish rbac ADMISSIONS dan */
   /* tor vazifali lavozimlar uchun keraksiz bo'limlar yashiriladi (server baribir ruxsatni tekshiradi) */
   const NAV_HIDE = {call_center: ["chat", "reports", "documents", "docs", "rbac"], tyutor: ["reports", "docs"], kengash: ["cams"]};
   document.querySelectorAll("#nav a").forEach(a => { if (a.dataset.v === "agents") return; const need = NAV_NEED[a.dataset.v]; a.classList.toggle("hidden", (!!need && !need.some(x => ME.allow.includes(x))) || (NAV_HIDE[ME.role_key] || []).includes(a.dataset.v)); });
-  document.querySelector('#nav a[data-v="accounts"]')?.classList.toggle("hidden", !["it_head", "rektor"].includes(ME.role_key));   /* accounts.js: AT boshlig'i (boshqaruv), rektor (ko'rish) */
+  /* tizim sahifalari — faqat AT bo'limi boshlig'i menyusida: Akkauntlar, Ruxsat darajalari, Audit jurnali (rektor uchun sahifa/API ochiq qoladi, menyuda yo'q) */
+  ["accounts", "rbac", "audit"].forEach(v => document.querySelector(`#nav a[data-v="${v}"]`)?.classList.toggle("hidden", ME.role_key !== "it_head"));
+  document.querySelector('#nav a[data-v="modullar"]')?.classList.toggle("hidden", !["it_head", "rektor"].includes(ME.role_key));   /* Bo'limlar kaliti: AT boshlig'i va rektor */
   document.querySelector('#nav a[data-v="orders"]')?.classList.toggle("hidden", !["talabalar", "registrator_xodim", "sirtqi", "malumotlar_bazasi", "prorektor_oquv", "rektor", "kadrlar", "devonxona"].includes(ME.role_key));   /* orders.js: Buyruqlar — talabalar va xodimlar buyruqlari, devonxona reyestri */
   document.querySelector('#nav a[data-v="staffabs"]')?.classList.toggle("hidden", !["kadrlar", "kafedra", "akademik", "rektor", "prorektor_oquv", "oqituvchi"].includes(ME.role_key));   /* staffabs.js: xodimlar ta'tili */
   document.querySelector('#nav a[data-v="syllabus"]')?.classList.toggle("hidden", !["akademik", "kafedra", "oqituvchi", "prorektor_oquv", "rektor"].includes(ME.role_key));   /* syllabus.js: O'quv dasturlari */
@@ -216,27 +266,32 @@ async function boot() {
   document.querySelector('#nav a[data-v="kiruvchi"]')?.classList.toggle("hidden", !["devonxona", "rektor", "prorektor_oquv", "prorektor_ilmiy", "prorektor_moliya", "prorektor_yoshlar", "kotib"].includes(ME.role_key));   /* w5.js: Kiruvchi xatlar (app/devon.py) */
   { const a = document.querySelector('#nav a[data-v="rejalar"]'); if (a) { a.classList.toggle("hidden", !["strategik", "sifat", "rektor", "kengash", "prorektor_oquv"].includes(ME.role_key)); if (ME.role_key === "sifat") { const t = [...a.childNodes].find(n => n.nodeType === 3 && n.textContent.trim()); if (t) t.textContent = "Sifat amallari"; } } }   /* w5.js: KPI maqsadlari / Sifat amallari (app/rejalar.py) */
   document.querySelector('#nav a[data-v="yoshlar"]')?.classList.toggle("hidden", !["prorektor_yoshlar", "manaviyat", "komendant", "tyutor", "buxgalteriya", "rektor", "talabalar"].includes(ME.role_key));   /* yoshlar.js: Yoshlar ishlari — turar joy va tadbirlar (ruxsat — app/yoshlar.py MODES) */
-  if (typeof kadrlarNav === "function") kadrlarNav();
+  if (modOn("kadrlar") && typeof kadrlarNav === "function") kadrlarNav();   /* asinxron: keyinroq bandni ochishi mumkin — bo'lim o'chiq bo'lsa chaqirilmaydi */
   document.querySelector('#nav a[data-v="amaliyot"]')?.classList.toggle("hidden", !["amaliyot", "kafedra", "oqituvchi", "tyutor", "talabalar", "registrator_xodim", "sirtqi", "rektor", "prorektor_oquv"].includes(ME.role_key));   /* amaliyot.js: Amaliyot (ruxsat — app/amaliyot.py mode) */
   document.querySelector('#nav a[data-v="masofaviy"]')?.classList.toggle("hidden", !["masofaviy", "masofaviy_xodim", "rektor", "prorektor_oquv", "kafedra", "oqituvchi"].includes(ME.role_key));   /* masofaviy.js: Masofaviy ta'lim (ruxsat — app/masofaviy.py) */
   document.querySelector('#nav a[data-v="testbank"]')?.classList.toggle("hidden", !["masofaviy", "masofaviy_xodim", "rektor", "prorektor_oquv", "kafedra", "oqituvchi"].includes(ME.role_key));   /* testbank.js: Test bank — mavzu testlari va oraliq banklari (ruxsat — app/testbank.py) */
-  document.querySelector('#nav a[data-v="paket"]')?.classList.toggle("hidden", !["masofaviy", "masofaviy_xodim", "rektor", "prorektor_oquv", "kafedra", "oqituvchi"].includes(ME.role_key));   /* paket.js: Kontent paketlari — SCORM / xAPI (ruxsat — app/paket.py) */
-  if (typeof camsNav === "function") camsNav();   /* cams.js: navbat zonasi mas'ullari (qabul, kassa) o'z navbatini ko'radi */
+  document.querySelector('#nav a[data-v="paket"]')?.classList.toggle("hidden", !["masofaviy", "masofaviy_xodim", "rektor", "prorektor_oquv", "kafedra", "oqituvchi"].includes(ME.role_key));   /* paket.js: Dars tayyorlash — SCORM / xAPI (ruxsat — app/paket.py) */
+  if (modOn("cams") && typeof camsNav === "function") camsNav();   /* cams.js: navbat zonasi mas'ullari (qabul, kassa) o'z navbatini ko'radi */
   /* lavozimga keraksiz bandlar (UX tahlili): ruxsat matritsasi — faqat AT boshlig'i va rektor (qolganlar — profilda «Sizning ruxsatlaringiz»);
      Tarjima va shartnoma — hujjat bilan ishlaydiganlarga; Auditoriyalar — xo'jalik, akademik, AT; Registrator — talaba kartasidagi bo'limlar menyuda emas */
   {
     const R = ME.role_key, hide = v => document.querySelector(`#nav a[data-v="${v}"]`)?.classList.add("hidden");
-    if (!["it_head", "rektor"].includes(R)) hide("rbac");
     if (!["xalqaro", "yuridik", "rektor", "prorektor_ilmiy", "prorektor_oquv", "kotib", "devonxona", "strategik"].includes(R)) hide("docs");
     if (!["xojalik", "akademik", "it_head", "it_staff"].includes(R)) hide("spaces");
     if (["akademik", "qabul"].includes(R) || (R === "tyutor" && !(typeof fcRole === "function" && fcRole()))) hide("cams");   /* tyutor — Face ID kirish nazorati uchun qoladi */
     const TRIM = {kengash: ["mywork", "chat", "agents", "tasks", "portal", "documents", "cams", "spaces"],
                   talabalar: ["moliya", "yoshlar", "amaliyot"], registrator_xodim: ["moliya", "yoshlar", "amaliyot"], akademik: ["xalqaro"], buxgalteriya: ["yoshlar", "flows", "cams", "spaces"]};   /* buxgalteriya: barcha to'lovlar Moliya ichida */
     (TRIM[R] || []).forEach(hide);
+    /* --- bo'limlar kaliti: o'chirilgan bo'lim hech kimning menyusida yo'q --- */
+    document.querySelectorAll("#nav a[data-v]").forEach(a => { if (!modOn(a.dataset.v)) a.classList.add("hidden"); });
+    /* Kiruvchi xatlar: Devonxona uchun doim menyuda (reyestrni u yuritadi); boshqalar xatni «Mening vazifalarim»dan ochadi */
+    if (R === "devonxona") document.querySelector('#nav a[data-v="kiruvchi"]')?.classList.remove("hidden");
+    /* ixcham menyu: rahbar va o'qituvchi uchun ikkinchi darajali bandlar menyudan olinadi (sahifa havola orqali ochilaveradi).
+       rektor — Test bank va Dars tayyorlash xulosasi «Masofaviy ta'lim»da; o'qituvchi — topshiriq, hujjat va masofaviy muddatlar «Mening vazifalarim»da */
+    const LEAN = {rektor: ["testbank", "paket"], oqituvchi: ["tasks", "documents", "masofaviy"]};
+    (LEAN[R] || []).forEach(hide);
   }
   if (typeof navGroup === "function") navGroup(ME.role_key);   /* nav.js: guruhlar, tezkor bandlar, lavozimga xos nomlar */
-  status(); badges();
-  go("panel");
 }
 /* AI holati (/api/status → ai): AIS.tools — {chat, extract, contract, translate, reply}: "ai" | "qoida" | null (mavjud emas) */
 let AIS = null;
@@ -272,6 +327,20 @@ async function badges() {
 document.querySelectorAll("#nav a").forEach(a => a.onclick = e => { e.preventDefault(); if (a.dataset.v === "tasks") { DEC.open = null; if (typeof DIR !== "undefined") DIR.open = null; } go(a.dataset.v); });
 $("#menuBtn").onclick = () => $("#app").classList.toggle("nav-open");
 $("#scrim").onclick = () => $("#app").classList.remove("nav-open");
+/* O'chirilgan bo'lim: sahifa o'rniga «Bu bo'lim o'chirilgan» kartasi. index.html oxirida go() eng tashqi qatlam sifatida shu bilan o'raladi
+   (boshqa fayllar go() ni o'rab, prev() dan keyin o'zi chizadi — shuning uchun tekshiruv eng tashqarida turishi kerak). true — to'xtatildi. */
+function modGate(v) {
+  const sec = document.getElementById("v-" + v);
+  if (!sec || MOD_SOFT.includes(v) || modOn(v)) return false;
+  clearInterval(SPC.timer); clearInterval(DEC.timer);
+  $("#app").classList.remove("nav-open");
+  document.querySelectorAll("#nav a").forEach(a => a.classList.remove("on"));
+  document.querySelectorAll(".view").forEach(s => s.classList.add("hidden"));
+  sec.classList.remove("hidden"); sec.innerHTML = modOffCard(v);
+  $("#crumb").textContent = sec.querySelector("h2")?.textContent || "";
+  window.scrollTo({top: 0});
+  return true;
+}
 function go(v) {
   clearInterval(SPC.timer); if (v !== "tasks") clearInterval(DEC.timer);
   $("#app").classList.remove("nav-open");
@@ -281,7 +350,7 @@ function go(v) {
   document.querySelectorAll(".view").forEach(s => s.classList.add("hidden"));
   $("#v-" + v).classList.remove("hidden");
   window.scrollTo({top: 0});
-  const fn = ({panel: renderPanel, chat: renderChat, tasks: renderTasks, reports: renderReports, docs: renderDocs, documents: renderDocuments, service: renderService, ops: renderOps, spaces: renderSpaces, rbac: renderRbac, audit: renderAudit, agents: typeof renderAgents === "function" ? renderAgents : null, portal: typeof renderPortal === "function" ? renderPortal : null, cams: typeof renderCams === "function" ? renderCams : null, mywork: typeof renderMywork === "function" ? renderMywork : null, accounts: typeof renderAccounts === "function" ? renderAccounts : null, syllabus: typeof renderSyllabus === "function" ? renderSyllabus : null, staffabs: typeof renderStaffabs === "function" ? renderStaffabs : null, kadrlar: typeof renderKadrlar === "function" ? renderKadrlar : null, kiruvchi: typeof renderKiruvchi === "function" ? renderKiruvchi : null, qabul: typeof renderQabul === "function" ? renderQabul : null, rejalar: typeof renderRejalar === "function" ? renderRejalar : null, orders: typeof renderOrders === "function" ? renderOrders : null, reyting: typeof renderReyting === "function" ? renderReyting : null, flows: typeof renderFlows === "function" ? renderFlows : null, ilmiy: typeof renderIlmiy === "function" ? renderIlmiy : null, taqdimot: typeof renderTaqdimot === "function" ? renderTaqdimot : null, tekshiruv: typeof renderTekshiruv === "function" ? renderTekshiruv : null, amaliyot: typeof renderAmaliyot === "function" ? renderAmaliyot : null, moliya: typeof renderMoliya === "function" ? renderMoliya : null, yoshlar: typeof renderYoshlar === "function" ? renderYoshlar : null})[v];
+  const fn = ({panel: renderPanel, chat: renderChat, tasks: renderTasks, reports: renderReports, docs: renderDocs, documents: renderDocuments, service: renderService, ops: renderOps, spaces: renderSpaces, rbac: renderRbac, audit: renderAudit, agents: typeof renderAgents === "function" ? renderAgents : null, portal: typeof renderPortal === "function" ? renderPortal : null, cams: typeof renderCams === "function" ? renderCams : null, mywork: typeof renderMywork === "function" ? renderMywork : null, accounts: typeof renderAccounts === "function" ? renderAccounts : null, modullar: renderModullar, syllabus: typeof renderSyllabus === "function" ? renderSyllabus : null, staffabs: typeof renderStaffabs === "function" ? renderStaffabs : null, kadrlar: typeof renderKadrlar === "function" ? renderKadrlar : null, kiruvchi: typeof renderKiruvchi === "function" ? renderKiruvchi : null, qabul: typeof renderQabul === "function" ? renderQabul : null, rejalar: typeof renderRejalar === "function" ? renderRejalar : null, orders: typeof renderOrders === "function" ? renderOrders : null, reyting: typeof renderReyting === "function" ? renderReyting : null, flows: typeof renderFlows === "function" ? renderFlows : null, ilmiy: typeof renderIlmiy === "function" ? renderIlmiy : null, taqdimot: typeof renderTaqdimot === "function" ? renderTaqdimot : null, tekshiruv: typeof renderTekshiruv === "function" ? renderTekshiruv : null, amaliyot: typeof renderAmaliyot === "function" ? renderAmaliyot : null, moliya: typeof renderMoliya === "function" ? renderMoliya : null, yoshlar: typeof renderYoshlar === "function" ? renderYoshlar : null})[v];
   Promise.resolve().then(fn).catch(e => { if (e?.message === "auth") return; $("#v-" + v).innerHTML = e?.message === "denied" ? locked("Bu bo'lim") : errCard(v); });
 }
 
@@ -416,7 +485,10 @@ const kUpd = s => { if (!s) return ""; const t = String(s); if (!/^\d{4}-\d{2}-\
 function kpiHtml(k, P = DASH?.panels || {}, K = DASH?.kpis || []) {
   const c = kChart(k, P, K), st = kpiState(k);
   const tr = k.trend ? `<span class="trend ${k.trend < 0 ? "dn" : "up"}" title="o'tgan davrga nisbatan">${ico(k.trend < 0 ? "trend_dn" : "trend_up", 14)}${Math.abs(k.trend)}</span>` : "";
-  const src = k.source || k.updated ? `<div class="kc-src" title="${esc([k.source && "Manba: " + k.source, k.updated && "yangilandi " + k.updated].filter(Boolean).join(" · "))}">${ico("server", 13)}<span>${[k.source && "Manba: " + esc(String(k.source).replace(/\s*\(.*\)\s*$/, "")), k.updated && kUpd(k.updated)].filter(Boolean).join(" · ")}</span></div>` : "";
+  /* manba: integratsiya yo'q ekan — ko'rinib turadigan «Namuna ma'lumot (HEMIS ulanmagan)» belgisi; aks holda ikonka + izoh (ux.css matnni yashiradi) */
+  const demoSrc = /^Namuna/i.test(k.source || "");
+  const src = demoSrc ? `<div class="kc-src kc-demo">${demoChip(k.source)}</div>`
+    : k.source || k.updated ? `<div class="kc-src" title="${esc([k.source && "Manba: " + k.source, k.updated && "yangilandi " + k.updated].filter(Boolean).join(" · "))}">${ico("server", 13)}<span>${[k.source && "Manba: " + esc(String(k.source).replace(/\s*\(.*\)\s*$/, "")), k.updated && kUpd(k.updated)].filter(Boolean).join(" · ")}</span></div>` : "";
   return `<div class="card kpi kc ${st}"${k.key ? ` data-k="${esc(k.key)}"` : ""}>
     <div class="l">${esc(k.label)}</div>
     <div class="kc-m"><div class="kc-vw"><div class="v">${esc(Number.isInteger(k.value) ? fmt(k.value) : k.value)}${tr}</div><div class="s">${esc(k.sub)}</div></div>${c.ring != null ? kRing(c.ring, `${k.label}: ulush ${Math.round(c.ring)}%`) : ""}</div>
@@ -509,19 +581,43 @@ const skelCard = (lines = 3, cls = "") => `<div class="card skel-card ${cls}" ar
 const skelPanel = () => `<div class="head pn-head"><div><h2>Assalomu alaykum, ${esc(ME.greet || ME.role)}</h2><span class="muted">${dmy(ME.today)} · ma'lumot yuklanmoqda…</span></div></div>
   <div class="grid g4 pn-kpis" role="status" aria-label="Ko'rsatkichlar yuklanmoqda">${skelCard(2, "skel-kpi").repeat(4)}</div><div class="grid g2" style="margin-top:14px">${skelCard(4)}${skelCard(4)}</div>`;
 const DESK_ROLES = ["strategik", "sifat", "marketing", "yuridik"];   /* app/desks.py — lavozim ish stoli panelda */
+/* panel bo'laklari qaysi bo'limga (kalitga) tegishli: /api/dashboard panels kaliti, KPI kaliti, ogohlantirish sohasi → app/modules.py kaliti */
+const PANEL_MOD = {contracts: "moliya", finance: "moliya", payroll: "moliya", science: "ilmiy", masters: "ilmiy", international: "xalqaro", admissions: "qabul", youth: "yoshlar", hr: "kadrlar"};
+const KPI_MOD = {kontrakt: "moliya", byudjet: "moliya", scopus: "ilmiy", magistrantlar: "ilmiy", hamkorlar: "xalqaro", qabul: "qabul", murojaatlar: "yoshlar", xodimlar: "kadrlar", kameralar: "cams", topshiriqlar: "tasks"};
+const ALERT_MOD = {Kontrakt: "moliya", Moliya: "moliya", Xalqaro: "xalqaro", Yotoqxona: "yoshlar", Murojaatlar: "ops", Tadbirlar: "yoshlar", Auditoriyalar: "spaces",
+  Kameralar: "cams", Xavfsizlik: "cams", Favqulodda: "cams", Navbat: "cams", Topshiriqlar: "tasks", "Xo'jalik": "service"};
+/* «Hisobotlar» menyu bandi o'chiq bo'lsa — yuklab olish tugmalari shu yerda (ruxsat va bo'lim kaliti bo'yicha) */
+const REP_MOD = {moliya: "moliya", ilmiy: "ilmiy"};
+function repList() {
+  const ok = k => ME.allow.includes("reports") && (k === "reports" || ME.allow.includes(k));
+  return REP.filter(([k, , , res]) => ok(res) && modOn(REP_MOD[k]));
+}
+function pnReportsHtml() {
+  if (modOn("reports")) return "";
+  const mine = repList(), desk = DESK_ROLES.includes(ME.role_key) && ME.role_key !== "yuridik";
+  if (!mine.length && !desk) return "";
+  return `<section class="card pn-reps" aria-label="Hisobotlar"><h3 class="pn-h">${pnH("report", "Hisobotlar")}</h3>
+    <p class="tiny muted" style="margin:2px 0 10px">Word hisobot bir tugmada — yuklab olingan paytdagi holat bo'yicha, faqat ruxsatingiz doirasida. ${demoChip("Namuna ma'lumot")}</p>
+    <div class="pn-reps-l">${mine.map(([k, t, d]) => `<a class="btn sm" href="/api/report/${k}" download title="${esc(d)}">${ico("report", 15)} ${esc(t)}</a>`).join("")}${desk ? `<a class="btn sm" href="/api/desk/export.csv" download>${ico("chart", 15)} Ish stoli jadvali (.csv)</a>` : ""}</div></section>`;
+}
 async function renderPanel() {
   const el = $("#v-panel"); el.innerHTML = skelPanel();
   const full = !(ME.level >= 3 || ME.role_key === "kotib"), safe = p => Promise.resolve(p).catch(() => null);
   const desk = DESK_ROLES.includes(ME.role_key);
-  const [dash, briefH, decL, opsS, agD, deskD, mw, BG] = await Promise.all([J("/api/dashboard"),
-    typeof briefCardHtml === "function" ? safe(briefCardHtml()) : "",
-    full && ME.level <= 2 ? safe(J("/api/dec/list")) : null,
-    ME.allow.includes("ops") ? safe(J("/api/ops/summary")) : null,
-    full ? safe(J("/api/agents")) : null,
+  /* o'chirilgan bo'limlarga tegishli so'rovlar yuborilmaydi; «Sizdan kutilmoqda» — to'liq ro'yxatdan (o'chirilgan bo'lim ishlari chiqarilgach, eng yaqin 5 tasi) */
+  const [dash, briefH, decL, opsS, agD, deskD, mw, BG0, MWD] = await Promise.all([J("/api/dashboard"),
+    modOn("agents") && typeof briefCardHtml === "function" ? safe(briefCardHtml()) : "",
+    modOn("tasks") && full && ME.level <= 2 ? safe(J("/api/dec/list")) : null,
+    modOn("ops") && ME.allow.includes("ops") ? safe(J("/api/ops/summary")) : null,
+    modOn("agents") && full ? safe(J("/api/agents")) : null,
     desk ? safe(J("/api/desk")) : null,
-    null, safe(J("/api/bugun"))]);
+    null, safe(J("/api/bugun")), safe(J("/api/mywork"))]);
   DASH = dash;
-  const P = DASH.panels, L = ME.labels;
+  const MWF = modWork(MWD);
+  const BG = BG0 ? {...BG0, ...(MWF ? {items: MWF.items.slice(0, 5), counts: MWF.counts} : {}), kpis: (BG0.kpis || []).filter(k => linkOn(k.link))} : BG0;
+  /* panel kartalari, KPI va ogohlantirishlar: o'chirilgan bo'limga tegishlilari ko'rsatilmaydi */
+  const P = Object.fromEntries(Object.entries(DASH.panels).filter(([k]) => modOn(PANEL_MOD[k]))), L = ME.labels;
+  const ALERTS = DASH.alerts.filter(a => modOn(ALERT_MOD[a.area]));
   let h = `<div class="head pn-head"><div><h2>Assalomu alaykum, ${esc(ME.greet || ME.role)}</h2><span class="muted">${ME.scope === "Butun institut" ? "" : esc(ME.scope) + " · "}${dmy(ME.today)} · ma'lumot institut serveridan</span></div></div>`;
 
   /* --- «Sizdan kutilmoqda»: Mening vazifalarim bilan bir xil manba (app/mywork.py + app/pending.py), eng yaqin 5 tasi --- */
@@ -535,7 +631,7 @@ async function renderPanel() {
   const ownK = BG && !BG.institute && BG.kpis && BG.kpis.length ? BG.kpis : null;
   if (ownK) PNL.ownK = ownK;
   /* --- KPI: 4 ta asosiy + qolgani yig'ilgan --- */
-  const K = DASH.kpis, head = KPI_HEAD.map(([key, l]) => K.find(k => k.key === key) || K.find(k => !k.key && k.label === l)).filter(Boolean);
+  const K = DASH.kpis.filter(k => modOn(KPI_MOD[k.key])), head = KPI_HEAD.map(([key, l]) => K.find(k => k.key === key) || K.find(k => !k.key && k.label === l)).filter(Boolean);
   K.forEach(k => { if (head.length < 4 && !head.includes(k)) head.push(k); });
   const rest = K.filter(k => !head.includes(k));
   const kh = k => kpiHtml(k, P, K);
@@ -566,7 +662,7 @@ async function renderPanel() {
   }
 
   /* --- asosiy amallar qatori --- */
-  const brief = briefH || "", high = DASH.alerts.filter(a => a.level === "high").length;
+  const brief = briefH || "", high = ALERTS.filter(a => a.level === "high").length;
   const pend = typeof briefCardHtml === "function" && briefCardHtml.last ? briefCardHtml.last.pending : +((brief.match(/Tasdiqlash kutilmoqda:\s*<b>(\d+)/) || [])[1] || 0);
   if (full) {
     const acts = [];
@@ -583,18 +679,18 @@ async function renderPanel() {
     }
     const camK = ME.allow.includes("spaces") && DASH.kpis.find(k => k.key === "kameralar");   /* cams.js — Kameralar va xavfsizlik */
     if (camK) acts.push(`<button class="pn-act cm-pa${camK.bad ? " bad" : ""}" onclick="go('cams')" title="${esc(camK.sub || "")}">${ico("cctv", 16)}<span>Kameralar: P1/P2 bugun</span><b>${fmt(camK.value)}</b>${(camK.offline ?? +(String(camK.sub).match(/(\d+) kamera oflayn/) || [])[1]) ? `<em>${camK.offline ?? String(camK.sub).match(/(\d+) kamera oflayn/)[1]} kamera oflayn</em>` : ""}</button>`);
-    if (DASH.alerts.length) acts.push(`<button class="pn-act${high ? " bad" : ""}" onclick="const d=document.getElementById('pnAlerts');d.open=true;d.scrollIntoView({behavior:'smooth',block:'start'})" title="Yuqori darajadagi ogohlantirishlar; jami ${DASH.alerts.length} ta">${ico("bolt", 16)}<span>${high ? "Muhim ogohlantirishlar" : "Ogohlantirishlar"}</span><b>${high || DASH.alerts.length}</b>${high ? `<em class="n">jami ${DASH.alerts.length}</em>` : ""}</button>`);
+    if (ALERTS.length) acts.push(`<button class="pn-act${high ? " bad" : ""}" onclick="const d=document.getElementById('pnAlerts');d.open=true;d.scrollIntoView({behavior:'smooth',block:'start'})" title="Yuqori darajadagi ogohlantirishlar; jami ${ALERTS.length} ta">${ico("bolt", 16)}<span>${high ? "Muhim ogohlantirishlar" : "Ogohlantirishlar"}</span><b>${high || ALERTS.length}</b>${high ? `<em class="n">jami ${ALERTS.length}</em>` : ""}</button>`);
     /* tugmachalar qatori olib tashlandi: o'sha raqamlar «Sizdan kutilmoqda» va menyudagi yagona hisoblagichda (takror sanalmasin) */
   }
   h += brief;
 
   /* --- barcha ogohlantirishlar: yig'ilgan (brifing ularning eng muhimini ko'rsatadi) --- */
-  if (DASH.alerts.length) {
-    const T = {high: "Yuqori", mid: "O'rta", low: "Past"}, mid = DASH.alerts.filter(a => a.level === "mid").length;
-    h += `<details class="card pn-alerts" id="pnAlerts"${brief || DASH.alerts.length > 6 ? "" : " open"}><summary>${ico("bolt", 16)}<span class="pn-st">Barcha ogohlantirishlar (${DASH.alerts.length})</span>
+  if (ALERTS.length) {
+    const T = {high: "Yuqori", mid: "O'rta", low: "Past"}, mid = ALERTS.filter(a => a.level === "mid").length;
+    h += `<details class="card pn-alerts" id="pnAlerts"${brief || ALERTS.length > 6 ? "" : " open"}><summary>${ico("bolt", 16)}<span class="pn-st">Barcha ogohlantirishlar (${ALERTS.length})</span>
       <span class="pn-tags">${high ? `<span class="tag high">${high} yuqori</span>` : ""}${mid ? `<span class="tag mid">${mid} o'rta</span>` : ""}</span></summary>
       <p class="tiny muted" style="margin:0 0 10px">ISFT Core chorak yakunini kutmasdan aniqlagan holatlar.</p><div class="alerts">` +
-      DASH.alerts.map(a => `<div class="alert"><span class="tag ${a.level}">${T[a.level]}</span><span><b>${esc(a.area)}:</b> ${esc(a.text)}</span></div>`).join("") + `</div></details>`;
+      ALERTS.map(a => `<div class="alert"><span class="tag ${a.level}">${T[a.level]}</span><span><b>${esc(a.area)}:</b> ${esc(a.text)}</span></div>`).join("") + `</div></details>`;
   }
 
   /* --- kartalar: [tab, html] yoki [tab, null, bo'lim nomi] (yopiq) --- */
@@ -681,9 +777,9 @@ async function renderPanel() {
     }
     if (ME.role_key === "kotib")
       shown.unshift(card(pnH("file", "Majlis materiali"), `<p class="tiny">Majlis yozuvini ISFT Core'ga bering: bayonnoma qoralamasi va topshiriqlar tayyorlanadi, tasdiqlagach bo'limlar navbatiga tushadi.</p><button class="btn primary" onclick="DEC.open=null;go('tasks')">Boshlash →</button>`));
-    if (ME.allow.some(a => ["facilities", "requests", "youth"].includes(a)))
-      shown.unshift(card(pnH("wrench", "Murojaatlar va nosozliklar"), `<p class="tiny">QR nosozliklar, murojaatlar va tadbir qatnashuvi — bir joyda.</p><button class="btn primary" onclick="go('service')">Ochish →</button>`));
-    if (ME.allow.includes("spaces"))
+    if (modOn("service") && !document.querySelector('#nav a[data-v="service"]')?.classList.contains("hidden"))
+      shown.unshift(card(pnH("wrench", "Nosozliklar va murojaatlar"), `<p class="tiny">Xonadagi QR orqali kelgan nosozliklar, murojaatlar va xarid so'rovlari.</p><button class="btn primary" onclick="go('service')">Ochish →</button>`));
+    if (modOn("spaces") && ME.allow.includes("spaces"))
       shown.push(card(pnH("camera", "Auditoriyalar bandligi"), `<p class="tiny">Kameralardan faqat odamlar soni: hozir qaysi xona band, qaysi biri bo'sh turibdi.</p><button class="btn" onclick="go('spaces')">Ochish →</button>`));
     h += `<div class="grid g2" style="margin-top:14px">${shown.join("")}</div>`;
   } else {
@@ -697,6 +793,7 @@ async function renderPanel() {
       h += tabs.map(([k]) => `<div class="pn-pane" role="tabpanel" data-t="${k}"${k === PNL.tab ? "" : " hidden"}><div class="grid g2">${open.filter(c => c.t === k).map(c => c.html).join("")}</div></div>`).join("") + lockNote;
     }
   }
+  h += pnReportsHtml();
   el.innerHTML = h;
   pnBindHero(el);
   el.querySelectorAll("[data-open]").forEach(b => b.onclick = () => openDecision(+b.dataset.open));
@@ -933,7 +1030,7 @@ function decRow(d) {
   const done = d.tasks.filter(t => t.status === "bajarildi").length;
   return `<div class="dec-row"><div class="dec-row-h"><div><b>${esc(d.title)}</b><span class="muted tiny"> · ${dmy(d.date)} · ${d.status === "qoralama" ? `<span class="tag mid">qoralama</span>` : `${done}/${d.tasks.length} bajarildi`}</span></div>
     <button class="btn sm ${d.status === "qoralama" ? "primary" : ""}" data-open="${d.id}">${d.status === "qoralama" ? "Tahrirlash" : "Ochish"} →</button></div>
-    ${d.tasks.map(t => `<div class="dec-line"><span class="dl-unit">${esc(t.unit_name || "bo'lim aytilmagan")}</span><span class="dl-who">${whoHtml(t)}</span><span class="dl-tags">${dstTag(t)}${reviewTag(t)}</span>
+    ${d.tasks.map(t => `<div class="dec-line"${t.text ? ` title="${esc(t.text)}"` : ""}><span class="dl-unit">${esc(t.unit_name || "bo'lim aytilmagan")}</span>${t.text ? `<span class="dl-text">${esc(String(t.text).length > 120 ? String(t.text).slice(0, 120) + "…" : t.text)}</span>` : ""}<span class="dl-who">${whoHtml(t)}</span><span class="dl-tags">${dstTag(t)}${reviewTag(t)}</span>
       <span class="dl-res">${t.result ? esc(t.result.length > 110 ? t.result.slice(0, 110) + "…" : t.result) : t.blocked ? `<span class="muted">${esc(t.dep?.unit_name || "")} natijasi kutilmoqda</span>` : ""}</span></div>`).join("")}</div>`;
 }
 
@@ -1180,13 +1277,13 @@ async function renderOps() {
   const T = {stol: "Ish stoli", holatlar: "Holatlar", navbat: rk === "call_center" ? "Qo'ng'iroqlar navbati" : `Mening navbatim${mine ? ` <span class="tag ${mine.late ? "high" : "gray"}">${fmt(mine.n)}</span>` : ""}`,
     calls: "Call-markaz navbati", otrabotka: "Otrabotka", ruxsatnoma: "Ruxsatnoma", qoidalar: "Qoidalar"};
   const canRun = ["talabalar", "prorektor_oquv"].includes(rk);
-  const src = pgSrc(`Manba: HEMIS (baho, davomat, buyruqlar) va buxgalteriya (kontrakt) — sinov ma'lumotlari · qoidalar har 10 daqiqada tekshiriladi${OPSV.sum.last_run ? `, oxirgisi: <b>${whenTxt(OPSV.sum.last_run)}</b>` : ""}`);
+  const src = pgSrc(`${realData() ? "Manba: HEMIS (baho, davomat, buyruqlar) va buxgalteriya (kontrakt)" : demoChip() + " baho, davomat, buyruq va kontrakt — sun'iy"} · qoidalar har 10 daqiqada tekshiriladi${OPSV.sum.last_run ? `, oxirgisi: <b>${whenTxt(OPSV.sum.last_run)}</b>` : ""}`);
   const intro = `Tizim o'zi aniqlagan xavf holatlari (davomat, baho, kontrakt, hujjat) — mas'ul bo'lim navbatiga topshiriq bo'lib tushadi. Talaba yozgan murojaatlar — «Murojaatlar va nosozliklar»da.`;
   const info = `<details class="pg-info" id="opsInfo" style="margin:4px 0 10px"><summary>${ico("info", 14)}${op ? "Qanday ishlaydi: qoidalar, manba va raqamlar" : "Me'yorlar, huquqiy asos va ma'lumot manbasi"}</summary>
       ${op ? `<p class="tiny muted">${intro}</p><div>${src}</div>` : ""}
       <p class="tiny muted">Davomat chegaralari — institut me'yori: 30 soat sababsiz → qo'ng'iroq va ogohlantirish xati, 48 soatdan oshsa → hayfsan. Qolganlari (JPA 3.0, 2 ta fan, 3 kun, call-markaz me'yori…) — <b>institut tomonidan hali tasdiqlanmagan</b> namunaviy qiymatlar. Ma'lumotlar sun'iy (sinov bazasi).</p>
       <p class="tiny muted">Har topshiriqning <b>muddati</b> — haqiqiy muddat (kontrakt eslatmasi — to'lov sanasidan oldin, davomat 30+ soat — 24 soat ichida); call-markaz rejasi uni o'zgartirmaydi. «Kechikkan» — faqat muddati haqiqatda o'tganlar; «rejaga ko'ra kechikadi» — navbat to'lgani uchun muddatdan keyinga rejalashtirilganlar.</p>
-      <p class="tiny muted">Bu yerdagi raqamlar — <b>holatlar</b>; bitta talabada bir nechta holat bo'lishi mumkin. Paneldagi «O'qishda xavf» — <b>talabalar</b> soni. Ogohlantirish xati — Hujjatlar markazida (ro'yxat raqami va QR bilan), buyruq loyihasi — «Buyruqlar»da tayyorlanadi.</p>
+      <p class="tiny muted">Bu yerdagi raqamlar — <b>holatlar</b>; bitta talabada bir nechta holat bo'lishi mumkin. Paneldagi «O'qishda xavf» — <b>talabalar</b> soni. Ogohlantirish xati — «Hujjat chiqarish»da (ro'yxat raqami va QR bilan), buyruq loyihasi — «Buyruqlar»da tayyorlanadi.</p>
       <div class="tiny muted" id="opsBasis"></div></details>`;
   el.innerHTML = `<div class="head"><div><h2>Talabalar navbati</h2>${op ? "" : `<span class="muted">${intro}</span>${src}`}</div>
     <div class="row-actions">${canRun ? `<button class="btn sm" id="opsRun">${ico("refresh", 16)} Hozir tekshirish</button>` : ""}${tabs.map(t => `<button class="btn ${t === OPSV.tab ? "primary" : ""}" data-ot="${t}">${T[t]}</button>`).join("")}${["talabalar", "registrator_xodim", "sirtqi"].includes(rk) ? `<a class="btn" href="/talaba/xodim" target="_blank" rel="noopener" title="Talaba kabinetidan kelgan so'rovlar (ma'lumotnoma, sababli dars qoldirish va boshqalar)">${ico("mail", 15)} Talaba murojaatlari</a>` : ""}</div></div>
@@ -1519,14 +1616,13 @@ const REP = [["brifing", "Rahbariyat uchun haftalik brifing", "KPI, ogohlantiris
   ["moliya", "Moliyaviy holat va kontrakt tushumi", "Byudjet ijrosi, rejadan oshishlar, qarzdorlik", "finance"],
   ["ilmiy", "Ilmiy salohiyat hisoboti", "Nashrlar, kafedralar reytingi, grantlar", "science"]];
 function renderReports() {
-  const ok = k => ME.allow.includes("reports") && (k === "reports" || ME.allow.includes(k));
-  /* ruxsat yo'q hisobotlar ko'rsatilmaydi («Lavozimingiz uchun ruxsat yo'q» kartalari — shovqin) */
-  const mine = REP.filter(([, , , res]) => ok(res));
+  /* ruxsat yo'q hisobotlar ko'rsatilmaydi («Lavozimingiz uchun ruxsat yo'q» kartalari — shovqin); o'chirilgan bo'lim hisoboti ham */
+  const mine = repList();
   const desk = DESK_ROLES.includes(ME.role_key) && ME.role_key !== "yuridik" ? `<div class="card"><h3>${ico("chart", 18)} Ish stoli jadvali (CSV)</h3><p class="muted">Boshqaruv panelidagi ko'rsatkichlar va kesim jadvali — Excel uchun</p><a class="btn" href="/api/desk/export.csv" download>Yuklab olish (.csv)</a></div>` : "";
-  $("#v-reports").innerHTML = `<div class="head"><div><h2>Tahliliy hisobotlar</h2><span class="muted">Word hisobotlar, bir tugmada — faqat ruxsatingiz doirasida. Rasmiy buyruqlar — «Buyruqlar»da, ma'lumotnomalar — «Hujjatlar markazi»da.</span><span id="repSrc"></span></div></div>
+  $("#v-reports").innerHTML = `<div class="head"><div><h2>Tahliliy hisobotlar</h2><span class="muted">Word hisobotlar, bir tugmada — faqat ruxsatingiz doirasida. Rasmiy buyruqlar — «Buyruqlar»da, ma'lumotnomalar — «Hujjat chiqarish»da.</span><span id="repSrc"></span></div></div>
   <div class="grid g2">${mine.map(([k, t, d]) => `<div class="card"><h3>${ico("report", 18)} ${t}</h3><p class="muted">${d}</p><a class="btn primary" href="/api/report/${k}" download>Yuklab olish (.docx)</a></div>`).join("")}${desk}</div>
   ${!mine.length && !desk ? `<div class="card"><p class="muted">Lavozimingiz uchun tahliliy hisobot yo'q.</p></div>` : ""}`;
-  syncInfo().then(s => { const e = $("#repSrc"); if (e) e.outerHTML = pgSrc(`Manba: HEMIS va buxgalteriya (sinov ma'lumotlari)${s.updated ? ` · yangilandi <b>${whenTxt(s.updated)}</b>` : ""} · hisobot yuklab olingan paytdagi holat bo'yicha tuziladi`); }).catch(() => {});
+  syncInfo().then(s => { const e = $("#repSrc"); if (e) e.outerHTML = pgSrc(`${realData() ? `Manba: HEMIS va buxgalteriya${s.updated ? ` · yangilandi <b>${whenTxt(s.updated)}</b>` : ""}` : demoChip()} · hisobot yuklab olingan paytdagi holat bo'yicha tuziladi`); }).catch(() => {});
 }
 
 /* ---------- docs ---------- */
@@ -1540,7 +1636,7 @@ function renderDocs() {
   /* tool: "ai" | "qoida" | null — null bo'lsa tugma o'chiq, sababi ko'rsatiladi */
   const tb = (m, i, t) => { const st = m in tools ? tools[m] : "ai", off = st == null;
     return `<button class="btn${DOCSV.mode === m ? " primary" : ""}" data-m="${m}"${off ? ` disabled title="${esc(reason)}"` : st === "qoida" ? ` title="Qoida asosida ishlaydi (AI o'chiq)"` : ""}>${ico(i, 16)} ${t}${st === "qoida" ? ` <span class="tag gray">qoida</span>` : ""}</button>`; };
-  $("#v-docs").innerHTML = `<div class="head"><div><h2>Tarjima va shartnoma yordamchisi</h2><span class="muted">Xorijiy xat tarjimasi, shartnomadagi xavfli bandlar va javob loyihasi. Matn institut serverida qayta ishlanadi — tashqariga chiqmaydi. Bo'limlararo xatlar — «Portal»da.</span><span id="docAi"></span></div></div>
+  $("#v-docs").innerHTML = `<div class="head"><div><h2>Tarjima va shartnoma yordamchisi</h2><span class="muted">Xorijiy xat tarjimasi, shartnomadagi xavfli bandlar va javob loyihasi. Matn institut serverida qayta ishlanadi — tashqariga chiqmaydi. Bo'limlararo xatlar — «Yozishmalar»da.</span><span id="docAi"></span></div></div>
   <div class="card"><div class="row-actions" style="margin-bottom:10px">
     ${tb("translate", "globe", "Tarjima qilish")}${tb("contract", "scale", "Shartnomani tekshirish")}${tb("reply", "mail", "Javob loyihasi")}
     <span class="muted tiny" style="align-self:center">Namuna: <a href="#" data-s="translate">xat</a> · <a href="#" data-s="contract">shartnoma</a> · <a href="#" data-s="reply">so'rov</a></span></div>
@@ -1563,7 +1659,7 @@ async function renderRbac() {
   const {roles, labels, full} = await J("/api/rbac");
   const keys = Object.keys(labels);
   $("#v-rbac").innerHTML = `<div class="head"><div><h2>Ruxsat darajalari (RBAC)</h2><span class="muted">Har bir so'rov bajarilishidan oldin shu jadval bo'yicha tekshiriladi. Siz: <b>${esc(ME.role)}</b>${full ? "" : " — quyida faqat sizning lavozimingiz ruxsatlari (to'liq jadval rahbariyat va tizim ma'murida)"}</span></div></div>
-  <div class="card"><div class="tw"><table class="rbac"><thead><tr><th>Lavozim</th>${keys.map(k => `<th title="${esc(labels[k])}">${esc(labels[k])}</th>`).join("")}<th>Ko'lam</th></tr></thead><tbody>
+  <div class="card rbac-card"><div class="tw rbac-tw" tabindex="0" role="region" aria-label="Ruxsatlar jadvali (gorizontal aylantiriladi)"><table class="rbac"><thead><tr><th>Lavozim</th>${keys.map(k => `<th title="${esc(labels[k])}">${esc(labels[k])}</th>`).join("")}<th>Ko'lam</th></tr></thead><tbody>
   ${roles.map(r => `<tr class="${r.key === ME.role_key ? "me" : ""}"><td><b>${esc(r.title)}</b>${r.local_only ? `<br><span class="tag gray">faqat mahalliy</span>` : ""}</td>${keys.map(k =>
     r.allow.includes(k) ? (r.aggregate_only.includes(k) ? `<td class="a" title="Faqat jamlangan">Σ</td>` : `<td class="y">${ico("check", 16)}</td>`) : `<td class="x">—</td>`).join("")}<td class="tiny">${esc(r.scope)}</td></tr>`).join("")}
   </tbody></table></div><p class="tiny muted"><span class="good">${ico("check", 14)}</span> — to'liq ruxsat · Σ — faqat jamlangan (shaxsiy ma'lumotsiz) · — — ruxsat yo'q. Telegram kanalida ish haqi va kadrlar ma'lumoti hech kimga chiqmaydi.</p></div>
@@ -1577,10 +1673,38 @@ async function renderRbac() {
 /* ---------- audit ---------- */
 async function renderAudit() {
   const el = $("#v-audit"); let rows;
-  try { rows = await J("/api/section/audit"); } catch (e) { if (e.message !== "denied") throw e; el.innerHTML = `<div class="head"><h2>Audit jurnali</h2></div>` + locked("Audit jurnali (faqat Rektor)"); return; }
+  try { rows = await J("/api/section/audit"); } catch (e) { if (e.message !== "denied") throw e; el.innerHTML = `<div class="head"><h2>Audit jurnali</h2></div>` + locked("Audit jurnali (AT bo'limi boshlig'i)"); return; }
   el.innerHTML = `<div class="head"><div><h2>Audit jurnali</h2><span class="muted">Oxirgi 50 ta so'rov · rad etilganlar qizil</span></div><button class="btn" onclick="renderAudit()">${ico("refresh", 16)} Yangilash</button></div>
   <div class="card">${tbl(["Vaqt", "Foydalanuvchi", "Kanal", "Amal", "Natija", "Izoh"], rows.map(a => [`${dmy(a.ts)} ${esc(a.ts.slice(11, 16))}`, esc(a.role), esc(a.channel), esc(a.action),
     a.allowed ? `<span class="tag low">ruxsat</span>` : `<span class="tag high">rad etildi</span>`, `<span class="tiny muted">${esc(a.detail)}</span>`]))}</div>`;
+}
+
+/* ---------- Bo'limlar (kalitlar) — AT bo'limi boshlig'i va rektor ---------- */
+const MODG = [["asosiy", "Asosiy bo'limlar"], ["menyu", "Faqat menyu bandi"], ["kutilmoqda", "Egasi va ma'lumot manbai kutilayotgan bo'limlar"], ["tizim", "Tizim sahifalari (AT bo'limi boshlig'i)"]];
+async function renderModullar() {
+  const el = $("#v-modullar");
+  if (!["it_head", "rektor"].includes(ME.role_key)) { el.innerHTML = `<div class="head"><div><h2>Bo'limlar</h2></div></div>` + locked("Bo'limlar (AT bo'limi boshlig'i va rektor)"); return; }
+  const d = await J("/api/modules"), list = d.list || [];
+  ME.modules = d.modules;
+  const row = m => `<li class="mod-row${m.enabled ? "" : " off"}"><div class="mod-b"><b>${esc(m.title)}</b><small>${esc(m.desc)}</small>
+      ${m.enabled ? (m.needs && !m.lock ? `<small class="muted">Mas'ul: ${esc(m.needs)}</small>` : "") : `<small class="mod-why">${ico("info", 13)}O'chiq: ${esc(m.why_off || d.no_owner)}${m.group === "kutilmoqda" && m.needs ? ` · yoqishdan oldin kerak: ${esc(m.needs)}` : ""}</small>`}</div>
+    ${m.lock ? `<span class="tag gray" title="Tizim ishlashi uchun kerak">doim yoqilgan</span>` : m.env ? `<span class="tag gray" title="Server sozlamasi ISFT_CORE_MODULES bilan belgilangan — sahifadan o'zgartirib bo'lmaydi">${m.enabled ? "yoqilgan" : "o'chiq"} · server sozlamasi</span>`
+      : `<button type="button" class="mod-sw${m.enabled ? " on" : ""}" role="switch" aria-checked="${m.enabled}" data-mod="${esc(m.key)}" aria-label="${esc(m.title)}: ${m.enabled ? "o'chirish" : "yoqish"}"><i></i><span>${m.enabled ? "Yoqilgan" : "O'chiq"}</span></button>`}</li>`;
+  const onN = list.filter(m => m.enabled && !m.lock).length;
+  el.innerHTML = `<div class="head"><div><h2>Bo'limlar</h2><span class="muted">Qaysi bo'lim menyu, panel, bildirishnoma va qidiruvda ko'rinishini shu yerda belgilaysiz. O'chirilgan bo'lim o'chib ketmaydi — ma'lumoti saqlanadi, istalgan payt qayta yoqiladi. Hozir yoqilgan: <b>${onN}</b> ta.</span></div></div>
+    <p class="src-note" style="margin-bottom:12px">${ico("info", 15)}<span>Bu — mahsulot sozlamasi, xavfsizlik chegarasi emas: kim nimani ko'ra olishini avvalgidek «Ruxsat darajalari» belgilaydi. Bo'limni yoqishdan oldin uning mas'ul bo'limi va haqiqiy ma'lumot manbai aniq bo'lsin.</span></p>
+    ${MODG.map(([g, t]) => { const ms = list.filter(m => m.group === g); return ms.length ? `<section class="card mod-card"><h3>${esc(t)}</h3><ul class="mod-list">${ms.map(row).join("")}</ul></section>` : ""; }).join("")}`;
+  el.querySelectorAll("[data-mod]").forEach(b => b.onclick = () => busy(b, async () => {
+    const want = b.getAttribute("aria-checked") !== "true";
+    let r;
+    try { r = await J(`/api/modules/${b.dataset.mod}`, {method: "POST", body: JSON.stringify({enabled: want})}); }
+    catch (e) { if (e.message !== "denied" && e.message !== "auth") { let m = ""; try { m = JSON.parse(e.message).detail; } catch (x) {} toast(m || "O'zgartirib bo'lmadi"); } return; }
+    ME.modules = r.modules;
+    navApply(); document.querySelectorAll("#nav a").forEach(a => a.classList.toggle("on", a.dataset.v === "modullar"));
+    if (typeof badges === "function") badges();
+    toast(want ? "Bo'lim yoqildi — menyuda paydo bo'ldi" : "Bo'lim o'chirildi — menyudan olindi (ma'lumoti saqlanadi)");
+    await renderModullar();
+  }, "…"));
 }
 
 boot().catch(() => {});
@@ -1704,6 +1828,7 @@ async function docRegistry() {
 /* SVC.focus — havoladan kelgan qator (rq12 / tk5 / pr3) ajratiladi; SVC.queue === "unit" — faqat mening navbatim */
 const SVC = {tab: null, data: null, focus: null, queue: null};
 const SVC_TABS = {facilities: "Nosozliklar (QR)", requests: "Murojaatlar va hodisalar", procurement: "Xarid so'rovlari", events: "Tadbir qatnashuvi"};
+const SVC_TITLE = "Nosozliklar va murojaatlar";   /* menyu va sahifa nomi — hamma lavozimda bir xil */
 const SVC_TABS_ICO = {facilities: "wrench", requests: "mail", procurement: "file", events: "gift"};
 const ago = iso => { const m = Math.max(0, Math.round((Date.now() - new Date(iso)) / 60000)); if (m < 1) return "hozir"; return m < 60 ? `${m} daq. oldin` : m < 1440 ? `${Math.round(m/60)} soat oldin` : `${Math.round(m/1440)} kun oldin`; };
 const st = s => `<span class="status ${({"hal qilindi": "imzolangan", "javob berildi": "berilgan", "jarayonda": "loyiha", "ochiq": "bekor"})[s] || ""}" style="${s === "ochiq" ? "text-decoration:none" : ""}">${esc(s)}</span>`;
@@ -1711,13 +1836,14 @@ async function renderService() {
   const el = $("#v-service");
   el.innerHTML = `<p class="muted">Yuklanmoqda…</p>`;
   SVC.data = await J("/api/svc/overview");
-  const tabs = SVC.data.tabs;
-  if (!tabs.length) { el.innerHTML = `<div class="head"><div><h2>${esc(document.querySelector('#nav a[data-v="service"]')?.dataset.lbl || "Murojaatlar va nosozliklar")}</h2></div></div>` + locked("Murojaatlar va nosozliklar — xo'jalik, murojaatlar va tadbirlar mas'ullari uchun"); return; }
+  /* yorliqlar: Nosozliklar (QR) va Xarid so'rovlari; «Murojaatlar va hodisalar» — «ops» (Talabalar navbati) kaliti, «Tadbir qatnashuvi» — «yoshlar» kaliti yoqilganda */
+  const tabs = SVC.data.tabs.filter(t => modOn(SVC_TAB_MOD[t]));
+  if (!tabs.length) { el.innerHTML = `<div class="head"><div><h2>${SVC_TITLE}</h2></div></div>` + locked("Nosozliklar va murojaatlar — xo'jalik, AT va xarid bo'limlari uchun"); return; }
   if (!tabs.includes(SVC.tab)) SVC.tab = tabs[0];
   const lead = ME.role_key === "it_staff" ? "AT bo'limi navbatidagi va sizga biriktirilgan murojaatlar: «Olindi» — o'zingizga olasiz, «Hal qilindi» — yopasiz."
     : ME.role_key === "xarid" ? "Xo'jalik bo'limi «Xarid kerak» deb belgilagan nosozliklar bo'yicha xarid so'rovlari."
-    : "Kelib tushgan murojaatlar, xonadagi QR orqali nosozliklar va tadbir qatnashuvi. Tizim tasniflaydi va bir xillarini birlashtiradi — qarorni mas'ul xodim qabul qiladi.";
-  el.innerHTML = `<div class="head"><div><h2>${esc(document.querySelector('#nav a[data-v="service"]')?.dataset.lbl || "Murojaatlar va nosozliklar")}</h2><span class="muted">${lead}</span></div>
+    : "Xonadagi QR orqali kelgan nosozliklar, murojaatlar va xarid so'rovlari. Tizim bir xillarini birlashtiradi — qarorni mas'ul xodim qabul qiladi.";
+  el.innerHTML = `<div class="head"><div><h2>${SVC_TITLE}</h2><span class="muted">${lead}</span></div>
     ${tabs.length > 1 ? `<div class="row-actions">${tabs.map(t => `<button class="btn ${t === SVC.tab ? "primary" : ""}" data-t="${t}">${ico(SVC_TABS_ICO[t], 16)} ${SVC_TABS[t]}</button>`).join("")}</div>` : ""}</div><div id="svcBody"></div>`;
   el.querySelectorAll("[data-t]").forEach(b => b.onclick = () => { SVC.tab = b.dataset.t; SVC.focus = null; SVC.queue = null; renderService(); });
   ({facilities: svcFacilities, requests: svcRequests, procurement: svcProcurement, events: svcEvents})[SVC.tab](SVC.data[SVC.tab]);
@@ -1771,10 +1897,11 @@ function svcRequests(r) {
   let h = `<div class="grid g4">${kp.map(k => `<div class="card kpi ${k[3] ? "bad" : ""}"><div class="l">${k[0]}</div><div class="v">${k[1]}</div><div class="s">${esc(k[2])}</div></div>`).join("")}</div>`;
   /* mening navbatim (menyu belgisi bilan bir xil): menga biriktirilgan + bo'limim navbatidagi hech kim olmaganlar */
   const Q = r.queue || {mine: [], unit: []}, qIds = new Set([...Q.mine, ...Q.unit]);
-  const reqRow = x => [`<span data-row="rq${x.id}">${x.number}</span>`, esc(x.text),
+  const reqRow = x => [`<span data-row="rq${x.id}">${x.number}</span>`, esc(x.text) + (x.route_note ? `<br><span class="tiny muted">${esc(x.route_note)}</span>` : ""),
     `<span class="ctag" style="font-size:10.5px;padding:2px 8px;border-radius:20px;background:var(--accent-soft);color:var(--accent)">${esc(x.category)}</span><br><span class="tiny muted">→ ${esc(x.unit)}${x.assignee_name ? ` · <b>${x.mine ? "sizda" : esc(x.assignee_name)}</b>` : ""}</span>`,
     esc(x.channel), ago(x.created_at), st(x.status),
-    ["hal qilindi", "javob berildi"].includes(x.status) ? "" : `<div class="row-actions">${x.status === "yangi" ? `<button class="btn sm" data-rq="${x.id}" data-s="jarayonda">Olindi</button>` : ""}<button class="btn sm primary" data-rq="${x.id}" data-s="hal qilindi">${ico("check", 16)} Hal qilindi</button>${r.staff?.length && x.unit === "Axborot texnologiyalari bo'limi" ? `<select class="sel-sm" data-asg="${x.id}" aria-label="Muhandisga biriktirish"><option value="">Biriktirish…</option>${r.staff.map(s => `<option value="${s.id}" ${s.id === x.assignee_user ? "selected" : ""}>${esc(s.name)}</option>`).join("")}</select>` : ""}</div>`];
+    /* can_handle === false — murojaat boshqa bo'lim/ijrochiniki (service.py): holat va javob tugmalari yo'q, faqat ko'rish */
+    ["hal qilindi", "javob berildi"].includes(x.status) || x.can_handle === false ? (x.can_handle === false && !["hal qilindi", "javob berildi"].includes(x.status) ? `<span class="tiny muted">faqat ko'rish</span>` : "") : `<div class="row-actions">${x.status === "yangi" ? `<button class="btn sm" data-rq="${x.id}" data-s="jarayonda">Olindi</button>` : ""}<button class="btn sm primary" data-rq="${x.id}" data-s="hal qilindi">${ico("check", 16)} Hal qilindi</button>${r.staff?.length && x.unit === "Axborot texnologiyalari bo'limi" ? `<select class="sel-sm" data-asg="${x.id}" aria-label="Muhandisga biriktirish"><option value="">Biriktirish…</option>${r.staff.map(s => `<option value="${s.id}" ${s.id === x.assignee_user ? "selected" : ""}>${esc(s.name)}</option>`).join("")}</select>` : ""}</div>`];
   if (qIds.size) {
     const mine = r.requests.filter(x => qIds.has(x.id));
     h += `<div class="card" style="margin-top:14px"><div class="head" style="margin-bottom:8px"><div><h3 style="margin:0">Mening navbatim <span class="muted">${mine.length}</span></h3><span class="tiny muted">${Q.mine.length} ta sizga biriktirilgan${Q.unit.length ? ` · ${Q.unit.length} ta ${esc(Q.unit_name || "bo'lim")} navbatida hech kim olmagan` : ""} · menyudagi raqam shu ro'yxat</span></div></div>` +
@@ -1786,7 +1913,7 @@ function svcRequests(r) {
       ${!r.can_broadcast ? `<p class="tiny muted">Bu umumiy hodisa — talabalarga xabarni Registrator ofisi yoki AT bo'limi boshlig'i yuboradi. ${ME.role_key === "it_staff" ? "Sizning navbatingizda" : "Sizning fakultetingizdan"} ${i.n} ta murojaat.</p>` : i.notified_at ? `<p class="tiny"><span class="good">${ico("checkc", 14)}</span> Talabalarga umumiy xabar yuborilgan (${ago(i.notified_at)}): <i>${esc(i.notice)}</i></p>` :
       `<p class="tiny muted">Tizim ${i.n} ta bir xil xabarni bitta hodisa deb aniqladi. Har biriga alohida javob yozish o'rniga — bitta umumiy xabar:</p>
       <textarea id="ntc${i.id}" style="min-height:90px" placeholder="Xabar loyihasi tayyorlanmoqda…"></textarea>
-      <div class="row-actions" style="margin-top:8px"><button class="btn" data-ai="${i.id}">${ico("spark", 16)} AI bilan qayta yozish</button><button class="btn primary" data-send="${i.id}" disabled>${ico("send", 16)} ${i.n} kishiga yuborish</button></div>`}
+      <div class="row-actions" style="margin-top:8px"><button class="btn" data-ai="${i.id}">${ico("spark", 16)} AI bilan qayta yozish</button><button class="btn primary" data-send="${i.id}" disabled>${ico("send", 16)} ${i.n} ta murojaatga javob yozish</button></div>`}
       <div class="row-actions" style="margin-top:8px">${r.can_broadcast ? `<button class="btn sm" data-res="${i.id}">${ico("check", 16)} Hodisa hal qilindi (barchasini yopish)</button>` : ""}<button class="btn sm ghost" data-show="${i.id}">Xabarlarni ko'rish</button></div>
       <div id="incList${i.id}" class="hidden" style="margin-top:8px">${tbl(["№", "Kanal", "Matn", "Vaqt"], r.requests.filter(x => x.incident_id === i.id).map(x => [x.number, esc(x.channel), esc(x.text), ago(x.created_at)]))}</div></div>`;
   }
@@ -1814,8 +1941,8 @@ function svcRequests(r) {
     if (!arm(b, `Ha, ${b.textContent.trim()}`)) return;
     busy(b, async () => {
       const j = await J(`/api/svc/incidents/${b.dataset.send}/notify`, {method: "POST", body: JSON.stringify({text})});
-      toast(`Umumiy xabar ${j.answered} ta murojaatga javob sifatida yozildi`); renderService(); if (typeof badges === "function") badges();
-    }, "Yuborilmoqda…");
+      toast(j.message || `Javob ${j.stored ?? j.answered ?? 0} ta murojaatga yozib qo'yildi${j.delivered === false ? " — talabalarga avtomatik yuborilmadi" : ""}`); renderService(); if (typeof badges === "function") badges();
+    }, "Yozilmoqda…");
   });
   document.querySelectorAll("[data-res]").forEach(b => b.onclick = () => { if (!arm(b, "Ha, hodisani yopish va barcha murojaatlarni hal qilish")) return; busy(b, async () => { const j = await J(`/api/svc/incidents/${b.dataset.res}/resolve`, {method: "POST"}); toast(`Hodisa yopildi, ${j.closed} ta murojaat hal qilindi`); renderService(); if (typeof badges === "function") badges(); }); });
   document.querySelectorAll("[data-show]").forEach(b => b.onclick = () => $("#incList" + b.dataset.show).classList.toggle("hidden"));

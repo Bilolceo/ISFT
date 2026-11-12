@@ -32,9 +32,10 @@
               ops: "talaba", flows: "talaba", masofaviy: "talaba", testbank: "talaba", paket: "talaba", reyting: "talaba", syllabus: "talaba", amaliyot: "talaba", taqdimot: "talaba", tekshiruv: "talaba",
               ilmiy: "ilm", xalqaro: "ilm", moliya: "moliya", kadrlar: "moliya", staffabs: "moliya",
               yoshlar: "kampus", service: "kampus", spaces: "kampus", cams: "kampus",
-              kiruvchi: "hujjat", qabul: "talaba", rejalar: "ish", portal: "hujjat", documents: "hujjat", orders: "hujjat", reports: "hujjat", docs: "hujjat", rbac: "tizim", audit: "tizim", accounts: "tizim"};
+              kiruvchi: "hujjat", qabul: "talaba", rejalar: "ish", portal: "hujjat", documents: "hujjat", orders: "hujjat", reports: "hujjat", docs: "hujjat", rbac: "tizim", audit: "tizim", accounts: "tizim", modullar: "tizim"};
   /* lavozimga xos nom: bitta sahifa turli lavozimda turli ish (xarid — so'rovlar, xo'jalik — nosozliklar, yoshlar — murojaatlar) */
-  const LBL = {service: {xarid: "Xarid so'rovlari", xojalik: "Nosozliklar", it_head: "Nosozliklar", it_staff: "Nosozliklar", manaviyat: "Murojaatlar", komendant: "Murojaatlar"}};
+  /* «Nosozliklar va murojaatlar» nomi hamma lavozimda bir xil (avval lavozimga qarab o'zgarar edi — bitta sahifa uch xil nom bilan chalkashtirardi) */
+  const LBL = {};
   const PIN_KEY = "isft-nav-pins", G_KEY = "isft-nav-groups";
   const jget = (k, d) => { try { return JSON.parse(store.get(k) || "") || d; } catch (e) { return d; } };
   const label = a => { if (!a.dataset.lbl0) a.dataset.lbl0 = [...a.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join("").trim(); return a.dataset.lbl0; };
@@ -241,7 +242,7 @@ let SYNC_INFO = null;
 async function syncInfo() {
   if (SYNC_INFO) return SYNC_INFO;
   const d = (typeof DASH !== "undefined" && DASH && DASH.kpis) ? DASH : await J("/api/dashboard");
-  const ks = (d.kpis || []).filter(k => k.updated && /^(HEMIS|Buxgalteriya)/i.test(k.source || ""));
+  const ks = (d.kpis || []).filter(k => k.updated && /^(HEMIS|Buxgalteriya|Namuna)/i.test(k.source || ""));
   const upd = ks.map(k => k.updated).sort().pop() || null;
   return (SYNC_INFO = {updated: upd});
 }

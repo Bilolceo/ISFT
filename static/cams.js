@@ -93,7 +93,7 @@ async function renderCams(keep) {
     const r = await J("/api/cams/report", {method: "POST"});
     if (!r?.file) return toast("Hisobotni tayyorlab bo'lmadi");
     const a = document.createElement("a"); a.href = `/api/docs/file/${encodeURIComponent(r.file)}`; a.download = r.file; document.body.appendChild(a); a.click(); a.remove();
-    toast(`Hisobot tayyor: ${r.file} — Hujjatlar markazida ham saqlandi`);
+    toast(`Hisobot tayyor: ${r.file} — «Hujjat chiqarish» reyestrida ham saqlandi`);
   }, "Tayyorlanmoqda…");
   cmCounts(); cmBody();
 }

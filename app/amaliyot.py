@@ -62,6 +62,10 @@ def _today(): return clock.today()
 def _now(): return clock.now_iso()
 def _bad(msg, code=400): raise HTTPException(code, msg)
 def _short(n): return (n or "").split(":", 1)[1].strip() if ":" in (n or "") else (n or "")
+def _dmy(v) -> str:
+    v = str(v or "")[:10]
+    return f"{v[8:10]}.{v[5:7]}.{v[:4]}" if len(v) == 10 else v
+
 def _date(v, label="Sana"):
     try: return dt.date.fromisoformat(str(v)[:10]).isoformat()
     except (TypeError, ValueError): _bad(f"{label} noto'g'ri: {v}")
@@ -671,11 +675,14 @@ def grade(c: Ctx, aid: int, score: int, note: str) -> dict:
 def add_diary(aid: int, text: str, author: str, kind: str, day: str = "") -> dict:
     text = (text or "").strip()
     if len(text) < 5: _bad("Matn juda qisqa")
-    d = _date(day, "Kun") if day else _today().isoformat()
     a = db.one(_con, "SELECT a.status, p.start, p.end FROM prac_assign a JOIN prac_periods p ON p.id=a.period_id WHERE a.id=?", (aid,))
+    # sana berilmasa — bugun; amaliyot tugagan bo'lsa (talaba) — davrning oxirgi kuni (bugungi sana davrdan tashqarida, yozuv rad etilardi)
+    d = _date(day, "Kun") if day else (min(a["end"], _today().isoformat()) if kind == "talaba" and a and a["end"] else _today().isoformat())
     if kind == "talaba":
         if a["status"] not in ("boshlandi", "qaytarildi"): _bad("Kundalik amaliyot davomida yoziladi")
-        if not a["start"] <= d <= min(a["end"], _today().isoformat()): _bad("Kun amaliyot davri ichida va bugundan kech bo'lmasligi kerak")
+        if not a["start"] <= d <= min(a["end"], _today().isoformat()):
+            _bad(f"Kun amaliyot davri ichida ({_dmy(a['start'])} – {_dmy(a['end'])}) va bugundan kech bo'lmasligi kerak" +
+                 (" — amaliyot yakunlangan, sanani davr ichidan tanlang" if a["end"] < _today().isoformat() else ""))
     with _lock:
         _con.execute("INSERT INTO prac_diary(assign_id,day,text,author,author_kind,at) VALUES(?,?,?,?,?,?)", (aid, d, text[:2000], author, kind, _now()))
         _con.commit()
@@ -885,6 +892,14 @@ def api_t_list(request: Request):
         r["flags"] = flags(r, today)
         r["letter"] = AR.letter(r["score"]) if r["score"] is not None else None
         r["can_diary"] = r["status"] in ("boshlandi", "qaytarildi") and r["start"] <= today
+        # amaliyot davri tugagan (hisobot hali topshirilmagan): holat «Amaliyotda» emas, kundalik sanasi — davr ichidagi oxirgi kun
+        r["ended"] = bool(r["end"]) and r["end"] < today
+        if r["ended"] and r["status"] == "boshlandi":
+            r["status_name"] = "Yakunlangan — hisobot kutilmoqda"
+        r["diary_min"], r["diary_max"] = r["start"], min(r["end"] or today, today)
+        r["diary_day"] = r["diary_max"]
+        r["diary_note"] = (f"Amaliyot {_dmy(r['end'])} da yakunlangan. Kundalikka faqat amaliyot kunlari ({_dmy(r['start'])} – {_dmy(r['end'])}) uchun yozuv "
+                           "qo'shiladi — sanani shu oraliqdan tanlang, so'ng hisobotni topshiring.") if r["ended"] and r["can_diary"] else ""
         r["can_report"] = r["status"] in ("boshlandi", "qaytarildi") and today >= r["start"]
         r["diary"] = db.rows(_con, "SELECT day, text, author, author_kind FROM prac_diary WHERE assign_id=? ORDER BY day DESC, id DESC LIMIT 30", (r["id"],))
     pending = db.rows(_con, """SELECT p.title, p.start, p.end FROM prac_periods p WHERE p.group_id=? AND p.end>=?

@@ -94,14 +94,15 @@ async function fcLoad(more) {
   let r;
   try { r = await J(`/api/face/frames?date=${encodeURIComponent(FC.date)}&camera=${FC.cam}&kind=${encodeURIComponent(FC.kind)}&q=${encodeURIComponent(FC.q)}&offset=${FC.off}&limit=${FC.lim}`); }
   catch (e) { if (seq === FC.seq) { g.innerHTML = e?.message === "denied" ? locked("Kirish kadrlari") : errCard("cams"); g.style.opacity = ""; } return; }
-  if (seq !== FC.seq) return;
+  if (seq !== FC.seq || !g.isConnected) return;   /* javob kelguncha boshqa sahifaga o'tilgan — elementlar yo'q (null xatosi bo'lmasin) */
   FC.list = more ? FC.list.concat(r.frames) : r.frames; FC.total = r.total;
   g.removeAttribute("aria-busy"); g.style.opacity = "";
-  $("#fcCnt").textContent = fmt(r.total);
+  { const cnt = $("#fcCnt"); if (cnt) cnt.textContent = fmt(r.total); }
   g.innerHTML = FC.list.length ? FC.list.map(fcCard).join("") : `<div class="cm-empty fc-empty">${ico("scanface", 26)}<b>Kadr topilmadi</b><span>Tanlangan sana va filtr bo'yicha kirish qayd etilmagan.</span>${FC.kind || FC.q || FC.cam ? `<button class="btn sm" id="fcReset">Filtrni tiklash</button>` : ""}</div>`;
   g.querySelectorAll("[data-fid]").forEach(b => b.onclick = () => fcOpen(+b.dataset.fid));
   const rs = $("#fcReset"); if (rs) rs.onclick = () => { FC.kind = ""; FC.q = ""; FC.cam = 0; renderFace($("#cmBody")); };
   const left = r.total - FC.list.length, m = $("#fcMore");
+  if (!m) return;
   m.innerHTML = left > 0 ? `<button class="btn ghost sm">Yana ${Math.min(FC.lim, left)} ta ko'rsatish <span class="muted">(${left} qoldi)</span></button>` : "";
   if (left > 0) m.querySelector("button").onclick = () => { FC.off += FC.lim; fcLoad(true); };
 }
@@ -175,11 +176,11 @@ async function fcReport() {
     ${f.prev7?.entries_avg ? `<p class="tiny muted">Oldingi ${f.prev7.days} ish kuni o'rtachasi: ${f.prev7.entries_avg} kirish (bugun ${f.entries}, ${f.prev7.entries_delta_pct > 0 ? "+" : ""}${f.prev7.entries_delta_pct}%).</p>` : ""}
     <button class="btn sm" id="fcDocx">${ico("download", 15)}Word yuklab olish</button>`;
   box.querySelectorAll("[data-tl]").forEach(a => a.onclick = e => { e.preventDefault(); fcTimeline(+a.dataset.tl); });
-  $("#fcDocx").onclick = () => busy($("#fcDocx"), async () => {
+  const dx = $("#fcDocx"); if (dx) dx.onclick = () => busy(dx, async () => {
     const j = await J("/api/face/report/docx", {method: "POST", body: JSON.stringify({date: FC.date})});
     if (!j?.file) return toast("Hisobotni tayyorlab bo'lmadi");
     const a = document.createElement("a"); a.href = `/api/docs/file/${encodeURIComponent(j.file)}`; a.download = j.file; document.body.appendChild(a); a.click(); a.remove();
-    toast(`Hisobot tayyor: ${j.file} — Hujjatlar markazida ham saqlandi`);
+    toast(`Hisobot tayyor: ${j.file} — «Hujjat chiqarish» reyestrida ham saqlandi`);
   }, "Tayyorlanmoqda…");
 }
 

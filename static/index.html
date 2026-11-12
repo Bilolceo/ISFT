@@ -14,12 +14,12 @@
 <link rel="stylesheet" href="talaba_karta.css">
 <link rel="stylesheet" href="ops_focus.css">
 <script src="/api/public/config.js"></script><!-- extras: ISFT_HIDE_DEMO_HINT -->
+<script src="/api/public/core.js"></script><!-- main.py: ISFT_FLAGS (namuna ma'lumot tasmasi; sinov paroli faqat ISFT_CORE_SHOW_DEMO_PASSWORD=1 da) -->
 <script>
-/* Kirish sahifasi dizayn variantlari: ?login=1..3 yoki localStorage "jarvis-login". 0 — avvalgi dizayn. */
-(function(){var v=null,m=location.search.match(/[?&]login=(\d)/);if(m){v=m[1];try{localStorage.setItem("jarvis-login",v)}catch(e){}}
-else{try{v=localStorage.getItem("jarvis-login")}catch(e){}}if(!/^[0-3]$/.test(v||""))v="1";window.LV=v;
-document.write(v==="0"?'<link rel="stylesheet" href="login.css">':'<link rel="stylesheet" href="/login/v'+v+'.css"><script src="/login/v'+v+'.js"><\/script>');
-document.write('<link rel="stylesheet" href="/login/switcher.css">');})();
+/* Kirish sahifasi: foydalanuvchilar uchun bitta dizayn (1 — «Markaziy»). Dizayn almashtirgich olib tashlangan;
+   ishlab chiquvchi uchun ?login=0..3 faqat shu ochilishga ta'sir qiladi (saqlanmaydi). */
+(function(){var m=location.search.match(/[?&]login=([0-3])(?:&|$)/),v=m?m[1]:"1";window.LV=v;try{localStorage.removeItem("jarvis-login")}catch(e){}
+document.write(v==="0"?'<link rel="stylesheet" href="login.css">':'<link rel="stylesheet" href="/login/v'+v+'.css"><script src="/login/v'+v+'.js"><\/script>');})();
 </script>
 <link rel="icon" type="image/png" href="/brand/favicon.png">
 </head>
@@ -50,11 +50,11 @@ document.write('<link rel="stylesheet" href="/login/switcher.css">');})();
       <div class="seg" id="lvlTabs" role="tablist" aria-label="Lavozim guruhi"></div>
       <label class="role-search"><span data-ico="search"></span><input id="roleSearch" type="search" placeholder="Lavozim yoki ism bo'yicha qidirish" aria-label="Lavozim yoki ism bo'yicha qidirish"></label>
       <div id="roleList" class="role-list" role="listbox" aria-label="Lavozimlar"></div>
-      <label class="pin-label" for="password">Parol <span class="pin-demo">· sinov rejimi: Isft2026</span></label>
+      <label class="pin-label" for="password">Parol</label>
       <div class="pw-wrap" id="pwWrap"><span data-ico="lock"></span><input id="password" type="password" autocomplete="current-password" placeholder="Parolingiz"><button type="button" class="pw-eye" id="pwEye" aria-label="Parolni ko'rsatish"><span data-ico="eye"></span></button></div>
       <button id="loginBtn" type="button" class="btn primary block" disabled><span id="loginTxt">Kirish</span> <span data-ico="arrow"></span></button>
     </form>
-    <p class="signin-foot">Haqiqiy tizimda kirish OneID yoki HEMIS akkaunti orqali · ma'lumotlar sun'iy (demo)</p>
+    <p class="signin-foot">Parolni AT bo'limidan olasiz · ma'lumotlar namuna (sun'iy)</p>
   </section>
 </div>
 
@@ -88,10 +88,10 @@ document.write('<link rel="stylesheet" href="/login/switcher.css">');})();
       <a href="#" data-v="amaliyot" data-i="pin" class="hidden">Amaliyot</a>
       <a href="#" data-v="masofaviy" data-i="monitor" class="hidden">Masofaviy ta'lim</a>
       <a href="#" data-v="testbank" data-i="checkc" class="hidden">Test bank</a>
-      <a href="#" data-v="paket" data-i="package" class="hidden">Kontent paketlari</a>
+      <a href="#" data-v="paket" data-i="package" class="hidden">Dars tayyorlash</a>
       <a href="#" data-v="moliya" data-i="money" class="hidden">Moliya</a>
       <a href="#" data-v="yoshlar" data-i="gift" class="hidden">Yoshlar ishlari</a>
-      <a href="#" data-v="service" data-i="wrench">Murojaatlar va nosozliklar</a>
+      <a href="#" data-v="service" data-i="wrench">Nosozliklar va murojaatlar</a>
       <a href="#" data-v="staffabs" data-i="plane" class="hidden">Xodimlar ta'tili</a>
       <a href="#" data-v="kadrlar" data-i="idcard" class="hidden">Kadrlar</a>
       <a href="#" data-v="kiruvchi" data-i="inbox" class="hidden">Kiruvchi xatlar</a>
@@ -105,6 +105,7 @@ document.write('<link rel="stylesheet" href="/login/switcher.css">');})();
       <a href="#" data-v="rbac" data-i="shield" data-g="cfg">Ruxsat darajalari</a>
       <a href="#" data-v="audit" data-i="history" data-g="cfg">Audit jurnali</a>
       <a href="#" data-v="accounts" data-i="ukey" data-g="cfg" class="hidden">Akkauntlar</a>
+      <a href="#" data-v="modullar" data-i="list" data-g="cfg" class="hidden">Bo'limlar</a>
     </nav>
     <div class="side-foot">
       <div class="me"><span class="avatar" id="meAv"></span><div><b id="meName"></b><small id="meScope"></small></div></div>
@@ -112,6 +113,7 @@ document.write('<link rel="stylesheet" href="/login/switcher.css">');})();
   </aside>
   <div class="scrim" id="scrim"></div>
   <div class="shell">
+    <div class="data-banner" id="dataBanner" role="note" hidden>Namuna ma'lumot — haqiqiy tizimlar (HEMIS, NEXTID) hali ulanmagan</div>
     <header class="top">
       <button type="button" class="icon-btn menu-btn" id="menuOpen" aria-label="Menyuni ochish" title="Menyuni ochish" aria-controls="side" aria-expanded="false"><span data-ico="menu"></span></button>
       <img class="top-logo" src="/brand/logo-sm.png" alt="ISFT" width="40" height="36"><div class="crumb"><b id="crumb">Boshqaruv paneli</b></div>
@@ -145,6 +147,7 @@ document.write('<link rel="stylesheet" href="/login/switcher.css">');})();
       <section id="v-rbac" class="view hidden"></section>
       <section id="v-audit" class="view hidden"></section>
       <section id="v-accounts" class="view hidden"></section>
+      <section id="v-modullar" class="view hidden"></section>
       <section id="v-staffabs" class="view hidden"></section>
       <section id="v-kadrlar" class="view hidden"></section>
       <section id="v-kiruvchi" class="view hidden"></section>
@@ -198,7 +201,13 @@ document.write('<link rel="stylesheet" href="/login/switcher.css">');})();
 <script src="paket.js"></script>
 <script src="moliya.js"></script>
 <script src="yoshlar.js"></script>
-<script src="/login/switcher.js"></script>
-<script>window.LOGIN_AFTER && LOGIN_AFTER();</script>
+<script>
+window.LOGIN_AFTER && LOGIN_AFTER();
+/* Sovuq yuklanishda /api/users javobi shu qatordan OLDIN kelib, ro'yxat variant ilgaklarisiz chizilgan bo'lishi mumkin
+   (LOGIN_AFTER drawRoles ni endi o'radi) — «Yuklanmoqda…» qotib qolmasligi uchun qayta chiziladi. */
+try { if (typeof USERS !== "undefined" && USERS.length && !document.getElementById("login").classList.contains("hidden")) drawRoles(); } catch (e) {}
+/* Bo'limlar kaliti: go() ning eng tashqi qatlami (app.js modGate) — o'chirilgan bo'lim o'rniga «Bu bo'lim o'chirilgan» kartasi */
+(function () { const prev = go; go = function (v) { if (typeof modGate === "function" && modGate(v)) return; return prev.apply(this, arguments); }; })();
+</script>
 </body>
 </html>

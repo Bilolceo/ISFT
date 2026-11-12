@@ -254,7 +254,7 @@ def bugun(c) -> list:
             out.append(_k("Nashr arizalari", pubs, "tekshiruv yoki tuzatish kutmoqda" if k == "kafedra" else "qaytarilgan", "warn" if pubs else "", {"view": "ilmiy", "tab": "nashrlar"}))
         elif k == "tyutor":
             from . import student_ops as SO
-            w = f"s.group_id IN (SELECT group_id FROM tutor_groups WHERE user_id={int(c.user['id'])})"
+            w = c.student_scope("s")
             m = SO.risk_metrics(_con, w)
             g = _one(f"SELECT COUNT(*) n FROM tutor_groups WHERE user_id={int(c.user['id'])}")
             out += [_k("Mening guruhlarim", g, f"{m['students']} faol talaba", "", {"view": "ops"}),

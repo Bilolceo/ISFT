@@ -98,9 +98,31 @@ def _lock(token):
     return f
 
 # ---------- foydalanuvchi buyruqlari ----------
+def _ensure_fp():
+    if "tg_pin_fp" not in {r[1] for r in con.execute("PRAGMA table_info(users)")}:
+        con.execute("ALTER TABLE users ADD COLUMN tg_pin_fp TEXT"); con.commit()
+
+def still_linked(u) -> bool:
+    """Ulanish hali amaldami: akkaunt faol va parol ulanish paytidagidek. Parol qaysi yo'l bilan o'zgargan bo'lmasin (tiklash, o'zi almashtirgan,
+    CLI) — ulanish uziladi va bot qayta tasdiqlashni (KOD parol) so'raydi. Eski ulanishlar (iz yo'q) birinchi murojaatda joriy parolga bog'lanadi."""
+    if not u or u.get("active") == 0: return False   # accounts.py: faolsizlantirilgan akkaunt
+    try:
+        _ensure_fp()
+        if "pin" not in u or "tg_pin_fp" not in u: u = db.one(con, "SELECT * FROM users WHERE id=?", (u["id"],)) or u
+        fp = rbac.pin_fp(u.get("pin"))
+        if not u.get("tg_pin_fp"):
+            con.execute("UPDATE users SET tg_pin_fp=? WHERE id=?", (fp, u["id"])); con.commit(); return True
+        if u["tg_pin_fp"] != fp:
+            con.execute("UPDATE users SET telegram_id=NULL, tg_pin_fp=NULL WHERE id=?", (u["id"],)); con.commit()
+            rbac.audit(con, rbac.Ctx(u, rbac.ROLES[u["role"]], "telegram"), "telegram ulanishi uzildi", "auth", True, "parol o'zgargan — qayta tasdiqlash kerak")
+            return False
+    except Exception as e:
+        log.warning("still_linked: %s", e)
+    return True
+
 def user_by_tg(tg_id):
     u = db.one(con, "SELECT * FROM users WHERE telegram_id=?", (tg_id,))
-    return u if u and u.get("active") != 0 else None   # accounts.py: faolsizlantirilgan akkaunt
+    return u if still_linked(u) else None
 
 async def start(update: Update, _: ContextTypes.DEFAULT_TYPE):
     u = user_by_tg(update.effective_user.id)
@@ -108,7 +130,8 @@ async def start(update: Update, _: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Siz {rbac.ROLES[u['role']].title} sifatida ulangansiz.\nSavol bering yoki /brifing, /topshiriqlar buyruqlaridan foydalaning.")
         return
     await update.message.reply_text("Assalomu alaykum! Men ISFT Core — institutning sun'iy intellektli boshqaruv tizimiman.\n\n"
-                                    "Ulanish uchun lavozim kodingiz va parolingizni bitta xabarda yuboring.\nKo'rinishi: KOD parol")
+                                    "Ulanish uchun lavozim kodingiz va parolingizni bitta xabarda yuboring.\nKo'rinishi: KOD parol\n"
+                                    "(Parol o'zgartirilgan yoki tiklangan bo'lsa, ulanish uziladi — yangi parol bilan qayta ulaning.)")
 
 async def logout(update: Update, _):
     con.execute("UPDATE users SET telegram_id=NULL WHERE telegram_id=?", (update.effective_user.id,)); con.commit()
@@ -137,7 +160,8 @@ async def try_link(update: Update, text: str) -> bool:
         await update.message.reply_text(f"⛔ {role.title} ma'lumotlari faqat institut ichki tarmog'ida ishlaydi. Telegram orqali ulanish mumkin emas.")
         return True
     con.execute("UPDATE users SET telegram_id=NULL WHERE telegram_id=?", (update.effective_user.id,))
-    con.execute("UPDATE users SET telegram_id=? WHERE id=?", (update.effective_user.id, u["id"])); con.commit()
+    _ensure_fp()
+    con.execute("UPDATE users SET telegram_id=?, tg_pin_fp=? WHERE id=?", (update.effective_user.id, rbac.pin_fp(u["pin"]), u["id"])); con.commit()
     rbac.audit(con, ctx, "telegram ulanish", "auth", True)
     await update.message.reply_text(f"✅ Ulandi: {role.title}\nKo'lam: {ctx.scope_label(con)}\n\nSavol bering, masalan: «Qaysi yo'nalishda ortda qolyapmiz?»\nBuyruqlar: /brifing /topshiriqlar /chiqish")
     return True
@@ -225,6 +249,7 @@ async def send_briefs(bot):
     except Exception:         # skaner xatosi brifingni to'xtatmaydi — mavjud takliflar bilan yuboriladi
         log.exception("agent skaneri xatosi")
     for u in db.rows(con, f"SELECT * FROM users WHERE telegram_id IS NOT NULL AND role IN ({','.join('?' * len(BRIEF_ROLES))})", BRIEF_ROLES):
+        if not still_linked(u): continue       # parol o'zgargan — qayta tasdiqlanmaguncha hech narsa yuborilmaydi
         ctx = rbac.Ctx(u, rbac.ROLES[u["role"]], "telegram")
         try:
             await bot.send_message(u["telegram_id"], AH.brief_text(con, ctx))
@@ -248,6 +273,7 @@ async def send_portal_reminders(bot):
     Bir xil eslatma kuniga bir marta; muddati o'tganlar — har 3 kunda (portal_reminders jurnali)."""
     from . import portal as PT
     for u, text, keys in await asyncio.to_thread(lambda: list(PT.telegram_digest(con))):
+        if not still_linked(u): continue
         try:
             await bot.send_message(u["telegram_id"], text)
             PT.mark_reminded(con, u["id"], keys)

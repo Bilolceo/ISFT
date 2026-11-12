@@ -14,7 +14,7 @@ import httpx
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel, Field
 from . import clock
-from . import db, rbac, hikvision as HK, secret_store as SS
+from . import db, rbac, hikvision as HK, secret_store as SS, modules as MODS
 from .rbac import Ctx, AccessDenied, SPACES
 
 router = APIRouter()
@@ -66,6 +66,54 @@ def init(con):
     con.commit()
     from . import camsec as CS
     CS.init(con)
+    cleanup(con)
+
+# =====================================================================
+# Simulyator kaliti va tozalash
+#   ISFT_CORE_CAM_SIM=1 bo'lmasa simulyator kameralari so'ralmaydi, ular nomidan nosozlik arizasi ochilmaydi, panelda «Kameralar» yo'q.
+#   Bo'lim kaliti («cams» / «spaces», app/modules.py) o'chiq bo'lsa fon so'rovchisi umuman ishlamaydi (haqiqiy kameralar ham).
+# =====================================================================
+KEEP_DAYS = int(os.getenv("ISFT_CORE_OCC_KEEP_DAYS", "7"))   # simulyator yoqilganda sanoq namunalari shuncha kun saqlanadi
+SIM_REPORTERS = ("ISFT Core (avtomatik)", "ISFT Core (kamera voqeasi)")
+
+def sim_on() -> bool: return MODS.cam_sim()
+def live() -> bool:
+    """Kamera ma'lumoti ko'rsatiladimi: bo'lim yoqilgan VA (simulyator yoqilgan yoki kamida bitta haqiqiy kamera ulangan)."""
+    if not MODS.cams_on(): return False
+    if sim_on(): return True
+    try:
+        return bool(_con is not None and db.one(_con, "SELECT 1 x FROM cameras WHERE mode='isapi' LIMIT 1"))
+    except Exception:
+        return False
+
+def cleanup(con) -> dict:
+    """Ishga tushishda (idempotent). Simulyator o'chiq: simulyator ochgan OCHIQ arizalar («Kamera … javob bermayapti» va h.k.) va
+    simulyator sanoqlari o'chiriladi (haqiqiy — isapi — kameralar xonalariga tegilmaydi). Simulyator yoqilgan: KEEP_DAYS kundan eski sanoqlar."""
+    out = {"tickets": 0, "occupancy": 0}
+    try:
+        if sim_on():
+            if KEEP_DAYS > 0:
+                lim = iso(now() - dt.timedelta(days=KEEP_DAYS))
+                out["occupancy"] = con.execute("DELETE FROM occupancy WHERE ts<?", (lim,)).rowcount
+        else:
+            real = "SELECT room_id FROM cameras WHERE mode='isapi'"
+            ids = [r[0] for r in con.execute(
+                f"""SELECT id FROM tickets WHERE reporter IN (?,?) AND COALESCE(status,'')!='hal qilindi' AND procurement_id IS NULL
+                    AND (room_id IS NULL OR room_id NOT IN ({real}))""", SIM_REPORTERS).fetchall()]
+            if ids:
+                qm = ",".join("?" * len(ids))
+                con.execute(f"DELETE FROM tickets WHERE id IN ({qm})", ids)
+                con.execute(f"UPDATE cameras SET ticket_id=NULL, ticket_kind=NULL WHERE ticket_id IN ({qm})", ids)
+                try: con.execute(f"UPDATE cam_events SET ticket_id=NULL WHERE ticket_id IN ({qm})", ids)
+                except Exception: pass
+                out["tickets"] = len(ids)
+            out["occupancy"] = con.execute(f"DELETE FROM occupancy WHERE room_id NOT IN ({real})").rowcount
+        con.commit()
+        if out["tickets"] or out["occupancy"] > 1000:
+            print(f"occupancy.cleanup: simulyator {'yoqilgan' if sim_on() else 'yoqilmagan'} — {out['tickets']} ariza, {out['occupancy']} sanoq o'chirildi")
+    except Exception as e:   # tozalash hech qachon ishga tushishni to'xtatmasin
+        print("occupancy.cleanup:", e)
+    return out
 
 def bind(con, ctx_fn):
     global _con, _ctx
@@ -173,6 +221,8 @@ async def read_camera(con, cam) -> int:
 # =====================================================================
 # Fon so'rovchisi
 # =====================================================================
+_LAST_TRIM = time.time()
+
 async def poller():
     await asyncio.sleep(3)
     while True:
@@ -184,8 +234,13 @@ async def poller():
 
 async def poll_once():
     con = _con; t = now()
+    if not MODS.cams_on(): return          # bo'lim o'chiq — hech qaysi kamera so'ralmaydi, ariza ochilmaydi
     from . import camsec as CS
     cams = db.rows(con, "SELECT c.*, r.zone, r.capacity, r.guard FROM cameras c JOIN rooms r ON r.id=c.room_id")
+    if not sim_on(): cams = [c for c in cams if c["mode"] == "isapi"]   # simulyator kameralari — faqat ISFT_CORE_CAM_SIM=1 da
+    global _LAST_TRIM
+    if sim_on() and time.time() - _LAST_TRIM > 86400:                   # kuniga bir marta: eski sanoqlar (KEEP_DAYS)
+        _LAST_TRIM = time.time(); cleanup(con)
     async def one(cam):
         try:
             n = await read_camera(con, cam); return cam, n, None
@@ -271,7 +326,7 @@ async def events_supervisor():
     await asyncio.sleep(4)
     while True:
         try:
-            want = {c["id"] for c in db.rows(_con, "SELECT id FROM cameras WHERE mode='isapi' AND events=1")}
+            want = {c["id"] for c in db.rows(_con, "SELECT id FROM cameras WHERE mode='isapi' AND events=1")} if MODS.cams_on() else set()
             for cid, task in list(EVT["tasks"].items()):
                 if cid not in want or task.done():
                     task.cancel(); EVT["tasks"].pop(cid, None)
@@ -469,6 +524,7 @@ def room_day(con, ctx: Ctx, room_id: int, day: str | None = None):
     return {"room": r["name"], "capacity": r["capacity"], "date": d.isoformat(), "points": pts, "lessons": lessons}
 
 def alerts(con, ctx: Ctx):
+    if not live(): return []               # bo'lim o'chiq yoki simulyator o'chiq va haqiqiy kamera yo'q — panelda kamera ogohlantirishi yo'q
     try:
         o = overview(con, ctx, quiet=True)
     except AccessDenied:

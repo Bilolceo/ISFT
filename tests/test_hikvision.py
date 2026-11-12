@@ -9,6 +9,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT)); from app import clock as CLK   # noqa: E402 — institut vaqti (ISFT_CORE_TZ / ISFT_CORE_FAKE_TODAY), server bilan bir xil
 TMP = Path(tempfile.mkdtemp(prefix="jarvis-hik-"))
 os.environ["ISFT_CORE_SECRETS_DIR"] = str(TMP / "secrets")        # importdan OLDIN
+# Kameralar standart holda o'chiq (app/modules.py): bu to'plam bo'limni va simulyatorni o'z muhitida yoqadi
+os.environ["ISFT_CORE_MODULES"] = "+cams,+spaces"; os.environ["ISFT_CORE_CAM_SIM"] = "1"
 sys.path.insert(0, str(ROOT))
 from app import db, hikvision as HK, secret_store as SS          # noqa: E402
 

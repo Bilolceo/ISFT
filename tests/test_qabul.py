@@ -186,11 +186,46 @@ names = [row[1] for row in tables[0][1:]]
 ok("TEST Abituriyent Birinchi" in names and any(row[4] == "TEST-Q-777" for row in tables[0][1:]), "Jadvalda TEST abituriyentlar va shartnoma raqami")
 ok(names == sorted(names), "Ro'yxat F.I.Sh. bo'yicha tartiblangan")
 ok(any(DIR0 in p.text for p in doc.paragraphs), "Matnda yo'nalish nomi bor")
-ok(q1("SELECT COUNT(*) FROM qb_applicants WHERE stage='shartnoma' AND direction=?", (DIR0,)) == 0, "Yo'nalishdagi barcha shartnomalar «buyruq» bosqichiga o'tdi")
-r = q("SELECT stage, order_batch FROM qb_applicants WHERE id=?", (a1,))[0]
-ok(r[0] == "buyruq" and r[1] == f"{DIR0[:30]} · {CLK.now().date().isoformat()}", f"Buyruq to'plami belgilandi: {r[1]}")
-ok(q1("SELECT COUNT(*) FROM qb_log WHERE app_id=? AND action LIKE 'qabul buyrug%'", (a1,)) == 1, "Tarix jurnali: buyruq loyihasiga kiritildi")
-ok(qb.post(X + "/order", params={"direction": DIR0}).status_code == 409, "Shu yo'nalishda ikkinchi marta → 409 (shartnoma qolmadi)")
+# loyiha tuzish bosqichni O'ZGARTIRMAYDI: to'plam «loyiha» holatida, abituriyentlar shartnomada qoladi
+BID = int(r.headers.get("x-qabul-batch") or 0)
+ok(BID and q1("SELECT COUNT(*) FROM qb_applicants WHERE stage='shartnoma' AND direction=?", (DIR0,)) == K
+   and q("SELECT stage, order_batch FROM qb_applicants WHERE id=?", (a1,))[0] == ("shartnoma", None), f"Loyiha tuzildi (to'plam #{BID}) — bosqich o'zgarmadi, {K} tasi shartnomada")
+r2 = qb.post(X + "/order", params={"direction": DIR0})
+ok(r2.status_code == 200 and int(r2.headers["x-qabul-batch"]) == BID and q1("SELECT COUNT(*) FROM qb_batches WHERE direction=? AND status='loyiha'", (DIR0,)) == 1,
+   "Loyihani qayta tuzish — o'sha to'plam yangilanadi (ikkinchi to'plam ochilmaydi)")
+bl = J(qb.get(X + "/batches"))["items"]
+b0 = next(b for b in bl if b["id"] == BID)
+ok(b0["status"] == "loyiha" and b0["n"] == K and b0["can_confirm"] and b0["can_rollback"] and not b0["can_finalize"], "To'plamlar ro'yxati: loyiha, tasdiqlash mumkin")
+rd = qb.get(X + f"/batches/{BID}/docx")
+ok(rd.status_code == 200 and len(docx_tables(rd.content)[1][0]) == K + 1, "Loyihani qayta yuklab olish — o'sha ro'yxat")
+ok(mkt.post(X + f"/batches/{BID}/confirm").status_code == 403 and mkt.post(X + f"/batches/{BID}/rollback").status_code == 403, "Marketing to'plamni tasdiqlay/qaytara olmaydi (403)")
+ok(qb.post(X + "/batches/999999/confirm").status_code == 404, "Mavjud bo'lmagan to'plam → 404")
+# loyihani bekor qilish — hech kim ko'chmagan
+J(qb.post(X + f"/batches/{BID}/rollback", json={"note": "sinov"}))
+ok(q("SELECT status FROM qb_batches WHERE id=?", (BID,))[0][0] == "bekor" and q1("SELECT COUNT(*) FROM qb_applicants WHERE stage='shartnoma' AND direction=?", (DIR0,)) == K
+   and qb.get(X + f"/batches/{BID}/docx").status_code == 410 and qb.post(X + f"/batches/{BID}/confirm").status_code == 409, "Loyiha bekor qilindi: bosqichlar joyida, tasdiqlab bo'lmaydi")
+# yangi loyiha → tasdiq → qaytarish → yana tasdiq → yakunlash
+BID = int(qb.post(X + "/order", params={"direction": DIR0}).headers["x-qabul-batch"])
+cf = J(qb.post(X + f"/batches/{BID}/confirm"))
+ok(cf["moved"] == K and cf["batch"]["status"] == "kiritilgan" and q1("SELECT COUNT(*) FROM qb_applicants WHERE stage='shartnoma' AND direction=?", (DIR0,)) == 0,
+   "Tasdiq: yo'nalishdagi barcha shartnomalar «buyruq» bosqichiga o'tdi")
+ok(qb.post(X + f"/batches/{BID}/confirm").status_code == 409, "Ikkinchi tasdiq → 409")
+rb = J(qb.post(X + f"/batches/{BID}/rollback", json={}))
+ok(rb["returned"] == K and q("SELECT stage, order_batch, batch_id FROM qb_applicants WHERE id=?", (a1,))[0] == ("shartnoma", None, None), f"Qaytarish: {K} ta abituriyent yana «shartnoma»da")
+BID = int(qb.post(X + "/order", params={"direction": DIR0}).headers["x-qabul-batch"])
+w("UPDATE qb_applicants SET stage='hujjat' WHERE id=?", (a1,))
+ok(qb.post(X + f"/batches/{BID}/confirm").status_code == 409, "Loyihadan keyin ro'yxat o'zgargan bo'lsa tasdiq → 409 (loyihani qayta tuzing)")
+w("UPDATE qb_applicants SET stage='shartnoma' WHERE id=?", (a1,))
+J(qb.post(X + f"/batches/{BID}/confirm"))
+r = q("SELECT stage, order_batch, batch_id FROM qb_applicants WHERE id=?", (a1,))[0]
+ok(r[0] == "buyruq" and r[1] == f"{DIR0[:30]} · {CLK.now().date().isoformat()}" and r[2] == BID, f"Buyruq to'plami belgilandi: {r[1]}")
+ok(q1("SELECT COUNT(*) FROM qb_log WHERE app_id=? AND action = 'qabul buyrug''i loyihasiga kiritildi'", (a1,)) == 2, "Tarix jurnali: buyruq loyihasiga kiritildi (ikki tasdiq)")
+ok(qb.get(X + f"/batches/{BID}/docx").status_code == 200, "Tasdiqlangan to'plam fayli qayta yuklab olinadi")
+ok(qb.post(X + f"/batches/{BID}/finalize", json={"reg_no": ""}).status_code == 400, "Yakunlash: buyruq raqamisiz → 400")
+J(qb.post(X + f"/batches/{BID}/finalize", json={"reg_no": "TB-TEST/0001"}))
+ok(qb.post(X + f"/batches/{BID}/rollback", json={}).status_code == 409 and q("SELECT stage FROM qb_applicants WHERE id=?", (a1,))[0][0] == "buyruq",
+   "Imzolangan to'plam qaytarilmaydi (409)")
+ok(qb.post(X + "/order", params={"direction": DIR0}).status_code == 409, "Shu yo'nalishda yana loyiha → 409 (shartnoma qolmadi)")
 ok(qb.post(X + f"/applicants/{a1}/reject", json={"note": "buyruqdan keyin"}).status_code == 409, "Buyruqdagi abituriyentni rad etib bo'lmaydi (409)")
 ok(qb.post(X + f"/applicants/{a1}/advance", json={}).status_code == 409, "Buyruq bosqichidan keyingi qadam yo'q (409)")
 ok(q1("SELECT COUNT(*) FROM audit_log WHERE action='qabul: buyruq loyihasi' AND allowed=1") >= 1, "Buyruq loyihasi auditda")

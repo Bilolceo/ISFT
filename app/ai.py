@@ -43,6 +43,9 @@ TOOLS = {
     "tasks": (S.tasks_list, "majlis topshiriqlari va ularning muddati"),
     "cameras": (lambda con, ctx, quiet=False: __import__("app.camsec", fromlist=["agent_tool"]).agent_tool(con, ctx, quiet),
                 "kameralar: bo'sh turgan xonalar, xavfsizlik voqealari, navbat, kamera holati (faqat metama'lumot)"),
+    # faqat sonlar (rbac.HR_STATS): rektor ham so'ray oladi; ism-sharif va shaxsiy ishlar — yo'q (app/staff_absence.py agent_tool)
+    "staffabs": (lambda con, ctx, quiet=False: __import__("app.staff_absence", fromlist=["agent_tool"]).agent_tool(con, ctx, quiet),
+                 "xodimlar yo'qligi: bugun nechta xodim ta'tilda, kasallik varaqasida, xizmat safarida (faqat sonlar)"),
     "facecam": (lambda con, ctx, quiet=False: __import__("app.facecam", fromlist=["agent_tool"]).agent_tool(con, ctx, quiet),
                 "kirish nazorati (Face ID): bugun kim kirdi, kechikkan o'qituvchilar, notanish shaxslar (faqat rozilik bergan shaxslar)"),
 }
@@ -53,6 +56,8 @@ KEYWORDS = {
     "finance": ["byudjet", "xarajat", "moliya", "kommunal", "pul", "sarf"],
     "payroll": ["maosh", "ish haqi", "oylik", "ish haq"],
     "hr": ["xodim", "kadr", "pasport", "shtat"],
+    "staffabs": ["xodim ta'til", "xodimlar ta'til", "xodim ta'tilda", "ta'tilda", "mehnat ta'til", "kasallik varaq", "xizmat safar", "komandirovka",
+                 "ishda yo'q", "ishga chiqma", "nechta xodim", "xodimlar soni", "necha xodim"],
     "science": ["ilmiy", "maqola", "scopus", "nashr", "grant", "h-index", "salohiyat", "web of science", "phd", "daraja"],
     "international": ["xalqaro", "hamkor", "xorij", "erasmus", "almashinuv", "shartnoma"],
     "admissions": ["qabul", "abituriyent", "ariza"],
@@ -76,6 +81,9 @@ def route(q: str) -> list[str]:
     if "cameras" in hit and "risk" in hit and not any(w in q.replace("xavfsizlik", "") for w in KEYWORDS["risk"]):
         hit.remove("risk")      # "xavfsizlik voqeasi" — kamera mavzusi, "o'qishda xavf" emas
     if "risk" in hit and "academic" in hit: hit.remove("academic")
+    if "staffabs" in hit and "hr" in hit and not any(w in q for w in ("pasport", "ro'yxat", "royxat", "shaxsiy ish")):
+        hit.remove("hr")        # «nechta xodim ta'tilda» — jamlangan son; shaxsiy ma'lumot (kadrlar bazasi) so'ralmagan
+    if "staffabs" in hit and "talaba" in q and "xodim" not in q: hit.remove("staffabs")   # talabaning akademik ta'tili — boshqa mavzu
     return hit
 
 def strategic(q: str) -> bool:
@@ -278,6 +286,9 @@ def fallback_answer(data: dict, denied: list[str]) -> str:
         elif k == "payroll":
             lines.append(f"• Oylik ish haqi fondi jami: {S.mln(v['total_fund'])}. " + ", ".join(f"{u['unit']}: {S.mln(u['fund'])} ({u['n']} xodim)" for u in v["by_unit"][:5]) + ".")
             if "staff" not in v: lines.append("• Shaxsiy ish haqi ma'lumotlari bu darajaga faqat jamlangan shaklda chiqadi.")
+        elif k == "staffabs":
+            lines.append("• " + v["text"])
+            if v.get("by_unit"): lines.append("• Shtat: " + ", ".join(f"{u['unit']} {u['n']}" for u in v["by_unit"][:5]) + ".")
         elif k == "hr":
             lines.append(f"• Xodimlar: " + ", ".join(f"{u['unit']} {u['n']}" for u in v["by_unit"][:5]) + ".")
         elif k == "alerts":

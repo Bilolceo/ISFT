@@ -8,7 +8,7 @@ Rahbariyat uchun sun'iy intellektli boshqaruv tizimining ishlaydigan namunasi. B
 cd ~/Desktop/isft/jarvis-mvp
 ./run.sh
 ```
-So'ng brauzerda: **http://localhost:8000** · Demo parol: **Isft2026**
+So'ng brauzerda: **http://localhost:8000**. Kirish sahifasi sinov parolini va xodimlar ismini ko'rsatmaydi; namoyish uchun: `ISFT_CORE_SHOW_DEMO_PASSWORD=1 ./run.sh` (demo parol — `ISFT_CORE_DEMO_PASSWORD`, standart `Isft2026`).
 
 Birinchi marta ishga tushganda virtual muhit va baza avtomatik yaratiladi. To'liq AI uchun Ollama ishlab turishi va `qwen3:8b` modeli yuklangan bo'lishi kerak (`ollama pull qwen3:8b`).
 
@@ -41,19 +41,23 @@ Tarmoqdagi boshqa qurilmadan (masalan, rektorning planshetidan) kirish: `http://
 | Audit jurnali | Har bir so'rov: kim, qachon, nima, ruxsat/rad | ✅ |
 | Telegram bot | Bitta bot, ko'p rol; ish haqi/kadrlar botga chiqmaydi | ✅ token kerak |
 
-## Menyu tuzilmasi
+## Menyu tuzilmasi va bo'limlar kaliti
 
-Kundalik bo'limlar tepada, kam ishlatiladiganlari yig'iladigan guruhda (`static/nav.js`). Lavozimga ruxsat bo'lmagan bo'limlar menyuda ko'rinmaydi.
+Mahsulot soddalashtirildi: egasi (mas'ul bo'lim) va haqiqiy ma'lumot manbai yo'q bo'limlar **yashirilgan** (kod va API joyida, bitta
+kalit bilan qayta yoqiladi). Yagona manba — `app/modules.py`; to'liq ro'yxat, standartlar va yoqish tartibi: **[docs/modullar.md](docs/modullar.md)**.
 
-| Guruh | Bo'limlar |
+| Standart holat | Bo'limlar |
 |---|---|
-| Asosiy | Boshqaruv paneli · ISFT Core bilan suhbat · AI agentlar · Majlislar va topshiriqlar |
-| Ish jarayonlari | Portal (bo'limlararo xat, fayl, umumiy bazalar) · Hujjatlar markazi (rasmiy hujjat, raqam va QR) · Talabalar markazi (tizim aniqlagan xavf holatlari) · Reyting (o'zlashtirish reytingi, qaydnoma, a'lochilar) · Murojaatlar va nosozliklar (kelib tushgan murojaatlar, QR nosozliklar, tadbir qatnashuvi) · Hisobotlar (tahliliy Word hisobotlar) |
-| Sozlamalar va xavfsizlik (yig'ilgan) | Auditoriyalar · Tarjima va shartnoma · Ruxsat darajalari · Audit jurnali |
+| Yoqilgan | Boshqaruv paneli · Mening vazifalarim · Majlislar va topshiriqlar · Yozishmalar · Hujjat chiqarish · Buyruqlar · Talabalar navbati · Masofaviy ta'lim · Test bank · Dars tayyorlash · Taqdimot · Nosozliklar va murojaatlar |
+| Faqat AT bo'limi boshlig'i | Ruxsat darajalari · Audit jurnali · Akkauntlar · Bo'limlar (bu sahifa rektorda ham bor) |
+| O'chiq | Moliya · Kadrlar · Xodimlar ta'tili · Yoshlar ishlari · Auditoriyalar · Kameralar va xavfsizlik · O'quv dasturlari · Akademik jarayonlar · Reyting · Amaliyot · Ilmiy faoliyat · Xalqaro hamkorlik · KPI maqsadlari · Ishlarni tekshirish · Qabul · Tarjima va shartnoma · AI takliflari · (menyu bandi sifatida) Suhbat, Hisobotlar, Kiruvchi xatlar |
 
-- Xo'jalik bo'limida «Auditoriyalar», Xalqaro bo'limda «Tarjima va shartnoma» kundalik ish sifatida «Ish jarayonlari»ga chiqariladi.
-- Ixcham rejim (faqat ikonkalar): tepadagi ☰ tugma yoki klaviaturada `[`. Tanlov brauzerda eslab qolinadi; 981–1200px ekranda standart holatda ixcham. 980px dan tor ekranda — chiquvchi mobil menyu.
-- Nomlar o'zgardi: «Yozishma yordamchisi» → **Tarjima va shartnoma** (Portaldagi «Yozishmalar» bilan adashmaslik uchun), «Xizmat markazi» → **Murojaatlar va nosozliklar** («Talabalar markazi» bilan adashmaslik uchun).
+- Yoqish/o'chirish: menyu → **Bo'limlar** (AT bo'limi boshlig'i, rektor) yoki `ISFT_CORE_MODULES="+moliya,-testbank"`. Bu mahsulot kaliti, xavfsizlik chegarasi emas — ruxsatni `app/rbac.py` tekshiradi.
+- Standart holatda rektor menyusida 10 ta, o'qituvchida 6 ta band; guruhlangan (yig'iladigan) menyu faqat 12 tadan ko'p band bo'lganda yoqiladi (`static/nav.js`).
+- Ilova tepasida «Namuna ma'lumot — haqiqiy tizimlar (HEMIS, NEXTID) hali ulanmagan» tasmasi; `ISFT_CORE_REAL_DATA=1` bilan o'chadi.
+- Kamera simulyatori standart holda o'chiq (`ISFT_CORE_CAM_SIM=1` va «Kameralar» bo'limi yoqilgandagina ishlaydi).
+- Ixcham rejim (faqat ikonkalar): tepadagi ☰ tugma yoki klaviaturada `[`. 980px dan tor ekranda — chiquvchi mobil menyu.
+- Nomlar: bo'limlararo xatlar — **Yozishmalar**, rasmiy hujjatlar — **Hujjat chiqarish**, QR nosozliklar va xarid — **Nosozliklar va murojaatlar** (nom lavozimga qarab o'zgarmaydi).
 
 ## Arxitektura (taklifnomadagi 3 qatlam)
 
@@ -111,9 +115,9 @@ app/bot.py       Telegram bot
 static/          veb-interfeys (internetsiz ishlaydi, CDN yo'q); static/nav.js — yon menyu guruhlari va ixcham rejim
 ```
 
-## Hujjatlar markazi (qog'ozbozlikni avtomatlashtirish)
+## Hujjat chiqarish (qog'ozbozlikni avtomatlashtirish)
 
-Menyu: **Ish jarayonlari → Hujjatlar markazi** (rasmiy hujjat chiqarish; tahliliy hisobotlar — «Hisobotlar»da). 14 ta shablon, hammasi bazadan avtomatik to'ldiriladi:
+Menyu: **Hujjat chiqarish** (rasmiy hujjat chiqarish; tahliliy hisobotlar — «Hisobotlar»da). 14 ta shablon, hammasi bazadan avtomatik to'ldiriladi:
 
 | Bo'lim | Hujjatlar |
 |---|---|
@@ -137,7 +141,7 @@ o'qituvchi — faqat o'z fanlari), har bir amal audit jurnalida. Fayllar: `data/
 **Institut tasdiqlashi kerak bo'lgan sozlamalar** (`app/documents.py` boshida): fan krediti (o'quv dasturida bo'lmasa standart 6 — `academic_rules.CREDIT_DEFAULT`; transkript va Reyting bir xil manbadan),
 1 stavka yuklamasi (840 soat), pedagog xodimlar ta'tili (56 kun). Bular institut nizomi bilan solishtirilishi shart.
 
-## Murojaatlar va nosozliklar (`app/service.py`, avval «Xizmat markazi»)
+## Nosozliklar va murojaatlar (`app/service.py`)
 | Modul | Xodim | Ommaviy sahifa (login'siz) |
 |---|---|---|
 | Xona QR nosozliklari | Xo'jalik va texnik bo'lim, rektor, yoshlar prorektori | `/q/<xona-kodi>` — muammo turi, izoh, rasm (EXIF tozalanadi) |
@@ -150,6 +154,7 @@ o'qituvchi — faqat o'z fanlari), har bir amal audit jurnalida. Fayllar: `data/
 - QR manzil: avtomatik lokal IP. Doimiy domen bo'lsa: `ISFT_CORE_PUBLIC_URL=https://jarvis.isft.uz ./run.sh`.
 
 ## Auditoriyalar bandligi (`app/occupancy.py`)
+- **Standart holatda o'chiq** (bo'lim kaliti `spaces`/`cams`; simulyator — `ISFT_CORE_CAM_SIM=1`). Batafsil: docs/modullar.md.
 - Ulagichlar: `isapi` — Hikvision, lokal tarmoq, HTTP Digest, `POST /ISAPI/System/Video/inputs/channels/{ch}/counting/search` (bugungi kirdi − chiqdi = xonadagi son). Kamera "region people counting" qo'llasa: `ISFT_CORE_CAM_OCC_PATH=/ISAPI/...{ch}...` (aniq yo'l kamera modeli ISAPI hujjatidan olinadi). `sim` — jadval + davomatdan simulyator.
 - Fon jarayoni har `ISFT_CORE_CAM_POLL` (60) soniyada so'raydi, 5 daqiqada bir o'lchov saqlaydi. Video/rasm hech qachon olinmaydi.
 - Ruxsat: rektor, o'quv prorektori, xo'jalik, kuzatuv kengashi. O'qituvchi ismi faqat rektor va o'quv prorektoriga. Kamera sozlash — xo'jalik va rektor; parol API javobida qaytarilmaydi.

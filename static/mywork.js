@@ -21,7 +21,7 @@ if (typeof ICONS === "object") {
 
 const MW_SRC = {
   majlis: {label: "Majlis", icon: "tasks"},
-  portal: {label: "Portal", icon: "mail"},
+  portal: {label: "Yozishmalar", icon: "mail"},
   markaz: {label: "Markaz", icon: "users", long: "Talabalar markazi"},
   buyruq: {label: "Buyruqlar", icon: "file"},
   murojaat: {label: "Murojaatlar", icon: "mail", long: "Murojaatlar va nosozliklar"},
@@ -36,7 +36,7 @@ const MW_SRC = {
   amaliyot: {label: "Amaliyot", icon: "pin"},
   masofaviy: {label: "Masofaviy ta'lim", icon: "monitor"},
   testbank: {label: "Test bank", icon: "checkc"},
-  paket: {label: "Kontent paketlari", icon: "folder"},
+  paket: {label: "Dars tayyorlash", icon: "folder"},
   harakat: {label: "Talaba harakati", icon: "cap"},
   tekshiruv: {label: "Ishlar", icon: "check"},
   talaba: {label: "Talaba so'rovlari", icon: "user"},
@@ -88,8 +88,8 @@ function mwRow(it, i) {
 
 function mwBody() {
   const d = MW.data, items = d.items.filter(it => MW.flt === "all" || (MW.flt === "sign" ? it.sign : it.source === MW.flt));
-  if (!d.items.length) return `<div class="card mw-empty">${ico("checkc", 30)}<b>Hammasi joyida</b><span class="muted">Hozircha sizdan kutilayotgan ish yo'q: majlis topshiriqlari, portal xatlari, imzo va tasdiqlar — barchasi bajarilgan.</span>
-      <div class="mw-empty-acts"><button class="btn sm" type="button" data-go="tasks">${ico("tasks", 15)} Majlislar</button><button class="btn sm" type="button" data-go="portal">${ico("mail", 15)} Portal</button></div></div>`;
+  if (!d.items.length) return `<div class="card mw-empty">${ico("checkc", 30)}<b>Hammasi joyida</b><span class="muted">Hozircha sizdan kutilayotgan ish yo'q: majlis topshiriqlari, yozishmalar, imzo va tasdiqlar — barchasi bajarilgan.</span>
+      <div class="mw-empty-acts"><button class="btn sm" type="button" data-go="tasks">${ico("tasks", 15)} Majlislar</button><button class="btn sm" type="button" data-go="portal">${ico("mail", 15)} Yozishmalar</button></div></div>`;
   if (!items.length) return `<div class="card mw-empty">${ico("checkc", 26)}<b>Bu manbada ish yo'q</b><span class="muted">Boshqa manbalarni ko'rish uchun «Hammasi»ni tanlang.</span></div>`;
   const idx = new Map(d.items.map((it, i) => [it, i]));
   return MW_GROUPS.map(([k, title, icon, hint]) => {
@@ -106,7 +106,7 @@ function mwDraw() {
   if (MW.flt !== "all" && !(MW.flt === "sign" && c.sign) && !srcs.includes(MW.flt)) MW.flt = "all";
   const tile = (k, label, n, cls, icon) => `<div class="mw-st ${cls}${n ? "" : " zero"}"><span class="mw-st-ic">${ico(icon, 16)}</span><b>${fmt(n)}</b><span>${label}</span></div>`;
   const who = (typeof ME !== "undefined" && ME) ? [ME.role, ME.scope && ME.scope !== "Butun institut" ? ME.scope : ""].filter(Boolean).join(" · ") : "";
-  el.innerHTML = `<div class="head"><div><h2>Mening vazifalarim</h2><span class="muted">Sizdan kutilayotgan hamma ish bitta joyda: topshiriqlar, portal xatlari va rezolyutsiyalar, Talabalar markazi navbati, buyruqlar (imzo, kelishuv, qaytarilgan), murojaatlar, xodimlar ta'tili, o'quv dasturlari va AI takliflari.${who ? ` <b class="mw-whoami">${esc(who)}</b>` : ""}</span></div>
+  el.innerHTML = `<div class="head"><div><h2>Mening vazifalarim</h2><span class="muted">Sizdan kutilayotgan hamma ish bitta joyda: topshiriqlar, yozishmalar va rezolyutsiyalar, Talabalar markazi navbati, buyruqlar (imzo, kelishuv, qaytarilgan) va nosozliklar.${who ? ` <b class="mw-whoami">${esc(who)}</b>` : ""}</span></div>
       <div class="row-actions"><button class="btn sm" type="button" id="mwRefresh">${ico("refresh", 15)} Yangilash</button></div></div>
     <div class="mw-stats">${tile("overdue", "Muddati o'tgan", c.overdue, "bad", "alert")}${tile("today", "Bugun", c.today, "warn", "clock")}${tile("week", "Shu hafta", c.week, "", "calendar")}${tile("total", "Jami ish", c.total, "tot", "list")}</div>
     ${srcs.length > 1 || c.sign ? `<div class="pn-tabs mw-tabs" role="tablist" aria-label="Manba bo'yicha saralash">
@@ -122,18 +122,20 @@ function mwDraw() {
   const rb = $("#mwRefresh"); if (rb) rb.onclick = () => busy(rb, async () => { await renderMywork(); if (typeof badges === "function") badges(); });
 }
 
+/* o'chirilgan bo'limlarga (app/modules.py) tegishli ishlar ro'yxatda ham, sanoqda ham yo'q — app.js modWork() */
+const mwFilter = d => typeof modWork === "function" ? modWork(d) : d;
 async function renderMywork() {
   const el = $("#v-mywork");
   try { MW.flt = localStorage.getItem("isft.mwFlt") || "all"; } catch (e) {}
   if (!MW.data) el.innerHTML = `<p class="muted">Yuklanmoqda…</p>`;
-  MW.data = await J("/api/mywork");
+  MW.data = mwFilter(await J("/api/mywork"));
   mwDraw();
 }
 
 /* menyudagi raqam = sahifadagi «Jami ish» (yagona qoida: sizdan harakat kutayotgan ishlar); izohda — kechikkan va bugungilar */
 async function myworkBadge(set) {
   try {
-    const d = await J("/api/mywork"), c = d.counts; MW.data = d;
+    const d = mwFilter(await J("/api/mywork")), c = d.counts; MW.data = d;
     set("mywork", c.badge ?? c.total, `Sizdan kutilayotgan ishlar: ${c.total} ta` + (c.overdue || c.today ? ` (kechikkan ${c.overdue}, bugun ${c.today})` : ""));
   } catch (e) {}
 }

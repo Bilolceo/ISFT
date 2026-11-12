@@ -14,6 +14,7 @@ if (typeof ICONS === "object") {
   if (!ICONS.upload) ICONS.upload = '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/>';
   if (!ICONS.download) ICONS.download = '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>';
 }
+if (typeof ICONS === "object" && !ICONS.plus) ICONS.plus = '<path d="M12 5v14M5 12h14"/>';
 if (!document.querySelector('link[href="testbank.css"]')) document.head.insertAdjacentHTML("beforeend", '<link rel="stylesheet" href="testbank.css">');
 
 const TB_TABS = {qamrov: "Fanlar va qamrov", mavzu: "Mavzu testlari", bank: "Banklar (oraliq 1/2)", sozlama: "Sozlamalar"};
@@ -74,7 +75,7 @@ async function renderTestbank(tab) {
   const M = TB.meta;
   TB.tab = tab && M.tabs.includes(tab) ? tab : (TB.tab && M.tabs.includes(TB.tab) ? TB.tab : M.tabs[0]);
   v.innerHTML = `<div class="tb-head"><div><h2>Test bank</h2><span class="muted">${esc(M.scope)} · mavzu testlari va oraliq nazorat banklari</span></div>
-      <div class="tb-acts tight">${typeof renderPaket === "function" && !document.querySelector('#nav a[data-v="paket"]')?.classList.contains("hidden") ? `<button type="button" class="btn sm ghost" data-pk>${ico("package", 15)} Kontent paketlari</button>` : ""}${M.ai.on ? tbChip("AI: " + (M.ai.model || "Claude"), "info") : tbChip("AI ulanmagan — savollar qo'lda", "warn")}</div></div>
+      <div class="tb-acts tight">${typeof renderPaket === "function" && !document.querySelector('#nav a[data-v="paket"]')?.classList.contains("hidden") ? `<button type="button" class="btn sm ghost" data-pk>${ico("package", 15)} Dars tayyorlash</button>` : ""}${M.ai.on ? tbChip("AI: " + (M.ai.model || "Claude"), "info") : tbChip("AI ulanmagan — savollar qo'lda", "warn")}</div></div>
     ${M.demo ? `<div class="tb-demo">${ico("info", 15)}<span><b>Namuna.</b> «Mikroiqtisodiyot» va bitta o'qituvchi kursidagi savollar va ma'ruza matnlari — sun'iy (demo). Haqiqiy testlar mavzu matni yuklanib, AI yoki qo'lda tuziladi.</span></div>` : ""}
     <div class="tb-tabs" role="tablist">${M.tabs.map(t => `<button type="button" role="tab" aria-selected="${t === TB.tab}" class="${t === TB.tab ? "on" : ""}" data-t="${t}">${esc(TB_TABS[t])}</button>`).join("")}</div>
     <div id="tbBox"><div class="tb-empty">Yuklanmoqda…</div></div>`;
@@ -106,7 +107,7 @@ async function tbPicker(box, onPick) {
     if (TB.cid && !items.some(x => x.id === TB.cid) && !q) {
       try { const c = await tbApi(`/api/testbank/courses/${TB.cid}`); items.unshift({id: TB.cid, subject: c.course.subject, direction: c.course.direction, course: c.course.course, started: true}); } catch (e) {}
     }
-    sel.innerHTML = items.map(x => `<option value="${x.id}" ${x.id === TB.cid ? "selected" : ""}>${esc(x.subject)} — ${esc(x.direction)}, ${x.course}-kurs${x.started ? " ●" : ""}</option>`).join("")
+    sel.innerHTML = items.map(x => `<option value="${x.id}" ${x.id === TB.cid ? "selected" : ""}>${esc(x.subject)} — ${esc(x.direction)}, ${x.course}-kurs${x.started ? " — savollari bor" : ""}</option>`).join("")
       || `<option value="">Topilmadi</option>`;
     if (d.total > items.length) sel.insertAdjacentHTML("beforeend", `<option disabled>… yana ${fmt(d.total - items.length)} ta — qidiruvdan foydalaning</option>`);
   };
@@ -201,7 +202,7 @@ async function tbTopicPanel(el, d) {
   const withSrc = d.topics.filter(x => x.source);
   el.innerHTML = `<div class="tb-grid">
     <div class="card tb-card"><h3>${t.no}-mavzu: ${esc(t.label)} <span class="muted">· mavzu matni</span></h3>
-      ${s ? `<p class="tb-src">${ico("file", 15)} <b>${esc(s.name)}</b> · ${fmt(s.chars)} belgi${s.truncated ? " (qisqartirilgan)" : ""} · ${esc(s.by || "")} · ${tbD(s.ts)}${s.demo ? " " + tbChip("namuna", "warn") : ""}</p>
+      ${s ? `<p class="tb-src">${ico("file", 15)} <b>${esc(s.name)}</b> · ${fmt(s.chars)} belgi${s.truncated ? " (qisqartirilgan)" : ""} · ${esc(s.by || "")} · ${tbD(s.ts)}${s.demo ? " " + tbChip("namuna", "warn") : ""}${s.origin === "paket" ? " " + tbChip("«Dars tayyorlash»da yuklangan", "info") : ""}</p>
              <details class="tb-srctext"><summary>Matnni ko'rish</summary><pre>${esc(s.text)}${s.cut ? "\n…" : ""}</pre></details>`
           : `<p class="muted">Bu mavzu uchun ma'ruza matni yuklanmagan. Testlar faqat yuklangan matn asosida tuziladi.</p>`}
       ${can.write ? `<div class="tb-acts"><label class="btn sm tb-file">${ico("upload", 15)} Fayl yuklash (.docx, .pdf, .txt)<input type="file" accept=".docx,.pdf,.txt" hidden id="tbSf"></label>
@@ -209,7 +210,7 @@ async function tbTopicPanel(el, d) {
     </div>
     ${can.write && M.caps.generate ? `<div class="card tb-card"><h3>AI bilan test tuzish</h3>
       ${M.ai.on ? `<p class="muted">Model: ${esc(M.ai.model)} · bugun ${M.ai.used_today}/${M.ai.daily} · bir martada ${M.limits.max_topics} tagacha mavzu</p>`
-                : `<p class="tb-warnbox">${ico("alert", 15)} AI ulanmagan (ANTHROPIC_API_KEY sozlanmagan). Savollarni «Savol qo'shish» orqali qo'lda kiriting yoki administratorga murojaat qiling.</p>`}
+                : `<p class="tb-warnbox">${ico("alert", 15)} AI ulanmagan — administratorga murojaat qiling. Savollarni «Savol qo'shish» orqali qo'lda kiritish mumkin.</p>`}
       <fieldset class="tb-fs"><legend>Mavzular</legend><div class="tb-checks">${withSrc.length ? withSrc.map(x => `<label><input type="checkbox" name="tbGt" value="${x.no}" ${x.no === t.no ? "checked" : ""}> ${x.no}. ${esc(x.label)}</label>`).join("") : `<span class="muted">Avval mavzu matnini yuklang</span>`}</div></fieldset>
       <div class="tb-form">
         <label>Mavzu boshiga savollar<input type="number" id="tbGn" min="1" max="${M.limits.max_n}" value="10"></label>
@@ -221,7 +222,7 @@ async function tbTopicPanel(el, d) {
   </div>
   <div class="card tb-card"><div class="tb-item-h"><div><h3>Savollar <span class="muted">· ${items.length} ta</span></h3>
       <p class="muted">Qoralama → tekshiruvga yuborish (o'qituvchi) → tasdiqlash / rad etish (Masofaviy ta'lim bo'limi). Bloklovchi belgisi bor savol yuborilmaydi.</p></div>
-      <div class="tb-acts tight">${can.write ? `<button type="button" class="btn sm" id="tbAdd">${ico("check", 15)} Savol qo'shish</button>` : ""}
+      <div class="tb-acts tight">${can.write ? `<button type="button" class="btn sm" id="tbAdd">${ico("plus", 15)} Savol qo'shish</button>` : ""}
         ${can.write && cnt("qoralama") ? `<button type="button" class="btn sm ghost" id="tbBs">Qoralamalarni yuborish (${cnt("qoralama")})</button>` : ""}
         ${can.review && cnt("tekshiruvda") ? `<button type="button" class="btn sm primary" id="tbBa">Tekshiruvdagilarni tasdiqlash (${cnt("tekshiruvda")})</button>` : ""}</div></div>
     <div class="tb-seg" role="tablist">${[["", "Hammasi", items.length], ...Object.entries(TB_ST).map(([k, v]) => [k, v[0], cnt(k)])].map(([k, l, n]) =>
@@ -374,11 +375,13 @@ async function tbBankView(el) {
     ${isT ? `<div class="tb-filters"><label class="tb-sr" for="tbBt">Mavzu</label><select id="tbBt">${cv.topics.map(t => `<option value="${t.no}" ${"t" + t.no === TB.part ? "selected" : ""}>${t.no}. ${esc(t.label)} — ${t.approved} ta</option>`).join("")}</select></div>` : ""}
     <div class="tb-kpis sm">${tbKpi(b.label, fmt(n), "tasdiqlangan savol", n ? "ok" : "warn")}${Object.entries(M.qtypes).map(([k, v]) => tbKpi(v, fmt(b.by_type[k] || 0))).join("")}</div>
     <div class="tb-exp">
-      <a class="btn sm ${n ? "" : "disabled"}" href="${exp("xml")}" ${n ? "" : 'aria-disabled="true" tabindex="-1"'}>${ico("download", 15)} Moodle XML</a>
-      <a class="btn sm ghost ${n ? "" : "disabled"}" href="${exp("gift")}" ${n ? "" : 'aria-disabled="true" tabindex="-1"'}>${ico("download", 15)} GIFT</a>
-      <a class="btn sm ghost ${mcq ? "" : "disabled"}" href="${exp("aiken")}" ${mcq ? "" : 'aria-disabled="true" tabindex="-1"'}>${ico("download", 15)} Aiken${n > mcq ? ` (${mcq} ta)` : ""}</a>
-      <a class="btn sm ghost" href="${exp("docx")}">${ico("download", 15)} Word (.docx, kalit bilan)</a></div>
-    <p class="tb-note">Moodle: Savollar banki → Import → «Moodle XML» (kategoriyalar: fan / oraliq / mavzu) yoki «GIFT». Aiken — faqat bir javobli savollar.</p>
+      <a class="btn sm ${n ? "" : "disabled"}" href="${exp("docx")}" ${n ? "" : 'aria-disabled="true" tabindex="-1"'}>${ico("download", 15)} Word (.docx) — savollar va javoblar kaliti</a></div>
+    <details class="tb-more"><summary>Kengaytirilgan: boshqa LMS uchun eksport (Moodle XML, GIFT, Aiken)</summary>
+      <div class="tb-exp" style="margin-top:8px">
+        <a class="btn sm ghost ${n ? "" : "disabled"}" href="${exp("xml")}" ${n ? "" : 'aria-disabled="true" tabindex="-1"'}>${ico("download", 15)} Moodle XML</a>
+        <a class="btn sm ghost ${n ? "" : "disabled"}" href="${exp("gift")}" ${n ? "" : 'aria-disabled="true" tabindex="-1"'}>${ico("download", 15)} GIFT</a>
+        <a class="btn sm ghost ${mcq ? "" : "disabled"}" href="${exp("aiken")}" ${mcq ? "" : 'aria-disabled="true" tabindex="-1"'}>${ico("download", 15)} Aiken${n > mcq ? ` (${mcq} ta)` : ""}</a></div>
+      <p class="tb-note">Moodle: Savollar banki → Import → «Moodle XML» (kategoriyalar: fan / oraliq / mavzu) yoki «GIFT». Aiken — faqat bir javobli savollar. NEXTID uchun test dars ichida ketadi («Dars tayyorlash»).</p></details>
     ${!isT ? tbTable([["Mavzu", r => `${r.no}. ${esc(r.label)}`], ["Tasdiqlangan", r => `${r.n} ${r.n >= cv.min_q ? tbChip("yetarli", "ok") : tbChip(`${cv.min_q} dan kam`, "warn")}`, "num"]], b.topics) : ""}
   </div>
   <div class="card tb-card"><h3>Savollar <span class="muted">· ${n} ta</span></h3>
@@ -399,7 +402,7 @@ async function tbSettings(box) {
     <div class="card tb-card"><h3>Umumiy</h3>
       <form id="tbMq" class="tb-form"><label>«Qamrab olingan» mavzu: kamida shuncha tasdiqlangan savol<input type="number" id="tbMqv" min="1" max="100" value="${M.min_q}" ${M.caps.settings ? "" : "disabled"}></label>
         ${M.caps.settings ? `<div class="tb-acts"><button class="btn sm primary">Saqlash</button></div>` : `<p class="tb-note">O'zgartirish — Masofaviy ta'lim bo'limi boshlig'ida.</p>`}</form>
-      <h4>AI</h4><p class="muted">${M.ai.on ? `Ulangan · model ${esc(M.ai.model)} · bir foydalanuvchi uchun kuniga ${M.ai.daily} ta mavzu generatsiyasi (bugun ${M.ai.used_today})` : "Ulanmagan (ANTHROPIC_API_KEY yo'q) — savollar faqat qo'lda kiritiladi."}
+      <h4>AI</h4><p class="muted">${M.ai.on ? `Ulangan · model ${esc(M.ai.model)} · bir foydalanuvchi uchun kuniga ${M.ai.daily} ta mavzu generatsiyasi (bugun ${M.ai.used_today})` : "AI ulanmagan — administratorga murojaat qiling. Savollar hozircha qo'lda kiritiladi."}
         Claude'ga faqat fan/mavzu nomi va yuklangan mavzu matni yuboriladi.</p></div></div>
     <div class="card tb-card"><h3>Sifat nazorati qoidalari</h3><p class="muted">Har bir savol saqlanganda avtomatik tekshiriladi. Bloklovchi — tekshiruvga yuborish va tasdiqlashni to'xtatadi; ogohlantirish — tekshiruvchi e'tiboriga.</p>
       ${tbTable([["Qoida", r => esc(r[1].label)], ["Turi", r => r[1].sev === "block" ? tbChip("Bloklovchi", "bad") : tbChip("Ogohlantirish", "warn")]], Object.entries(M.rules))}</div>`;

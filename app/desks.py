@@ -15,7 +15,7 @@ from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from . import clock
-from . import db, rbac, academic_rules as AR
+from . import db, rbac, academic_rules as AR, modules as MODS
 from .rbac import AccessDenied, Ctx
 
 router = APIRouter()
@@ -80,11 +80,11 @@ def strategic(con) -> dict:
                         SUM(status NOT IN ('bajarildi','bekor','qoralama') AND COALESCE(due_at, due) < ?) late
                         FROM tasks WHERE status NOT IN ('qoralama','bekor')""", (td.isoformat(),))
     ind = [
-        _ind("talabalar", "Faol talabalar", st["n"], "", " · ".join(f"{r['f']} {r['n']:,}".replace(",", " ") for r in forms), source="HEMIS"),
-        _ind("ball", AR.SCORE_LABEL, st["gpa"], "", "oxirgi yakunlangan semestr", st["gpa_prev"], source="HEMIS",
+        _ind("talabalar", "Faol talabalar", st["n"], "", " · ".join(f"{r['f']} {r['n']:,}".replace(",", " ") for r in forms), source=MODS.sample("HEMIS")),
+        _ind("ball", AR.SCORE_LABEL, st["gpa"], "", "oxirgi yakunlangan semestr", st["gpa_prev"], source=MODS.sample("HEMIS"),
              tip="Fanlar bo'yicha 100 ballik yakuniy ballarning o'rtachasi; o'zgarish — avvalgi semestrga nisbatan"),
-        _ind("davomat", "Davomat", st["att"], "%", "faol talabalar o'rtachasi", source="HEMIS"),
-        _ind("ozlashtirmagan", "O'zlashtirmaganlar ulushi", _pct(st["below"], st["scored"]), "%", f"o'rtacha ball {AR.PASS} dan past", good="down", source="HEMIS"),
+        _ind("davomat", "Davomat", st["att"], "%", "faol talabalar o'rtachasi", source=MODS.sample("HEMIS")),
+        _ind("ozlashtirmagan", "O'zlashtirmaganlar ulushi", _pct(st["below"], st["scored"]), "%", f"o'rtacha ball {AR.PASS} dan past", good="down", source=MODS.sample("HEMIS")),
         _ind("kontrakt", "Kontrakt tushumi", _pct(ct["paid"], ct["total"]), "%", f"qarz {round(((ct['total'] or 0) - (ct['paid'] or 0)) / 1e9, 2)} mlrd so'm",
              source="Buxgalteriya (jamlangan)"),
         _ind("qabul", "Qabul: konversiya", _pct(ad["enr"], ad["n"]), "%", f"{(ad['n'] or 0):,} ariza → {(ad['enr'] or 0):,} talaba".replace(",", " "), source="Qabul bazasi"),
@@ -134,12 +134,12 @@ def quality(con) -> dict:
         syl = {"by_status": [{"status": r["status"], "label": SYL.get(r["status"], r["status"]), "n": r["n"]} for r in rows],
                "total": sum(r["n"] for r in rows),
                "overdue": db.one(con, "SELECT COUNT(*) n FROM syl_items WHERE status!='tasdiqlangan' AND due IS NOT NULL AND due < ?", (td,))["n"]}
-    ind = [_ind("ball", AR.SCORE_LABEL, tot["gpa"], "", "institut o'rtachasi", tot["gpa_prev"], source="HEMIS"),
-           _ind("davomat", "Davomat", tot["att"], "%", "faol talabalar", source="HEMIS"),
-           _ind("ozlashtirmagan", f"O'rtacha bali {AR.PASS} dan past", tot["below"], "%", f"faol talabalar ulushi · bu «{AR.RISK_LABEL}» emas", good="down", source="HEMIS",
+    ind = [_ind("ball", AR.SCORE_LABEL, tot["gpa"], "", "institut o'rtachasi", tot["gpa_prev"], source=MODS.sample("HEMIS")),
+           _ind("davomat", "Davomat", tot["att"], "%", "faol talabalar", source=MODS.sample("HEMIS")),
+           _ind("ozlashtirmagan", f"O'rtacha bali {AR.PASS} dan past", tot["below"], "%", f"faol talabalar ulushi · bu «{AR.RISK_LABEL}» emas", good="down", source=MODS.sample("HEMIS"),
                 tip=f"«{AR.RISK_LABEL}» (Talabalar markazi, bosh sahifa) boshqa ko'rsatkich: {AR.RISK_DEF}"),
-           _ind("alo", "A'lochilar ulushi", tot["excellent"], "%", f"o'rtacha ball {AR.EXCELLENT_MIN}+", source="HEMIS"),
-           _ind("pasaygan", "Keskin pasaygan guruhlar", drops, "", "o'rtacha ball 4+ ga tushgan", good="down", source="HEMIS"),
+           _ind("alo", "A'lochilar ulushi", tot["excellent"], "%", f"o'rtacha ball {AR.EXCELLENT_MIN}+", source=MODS.sample("HEMIS")),
+           _ind("pasaygan", "Keskin pasaygan guruhlar", drops, "", "o'rtacha ball 4+ ga tushgan", good="down", source=MODS.sample("HEMIS")),
            _ind("sillabus", "Tasdiqlangan sillabuslar", _pct(sum(r["n"] for r in syl["by_status"] if r["status"] == "tasdiqlangan"), syl["total"]), "%",
                 f"{syl['total']} tadan · {syl['overdue']} tasi muddati o'tgan", source="O'quv dasturlari")]
     return {"kind": "sifat", "title": "Akademik sifat ko'rsatkichlari", "indicators": ind, "by_faculty": fac, "by_course": course, "syllabus": syl,

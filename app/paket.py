@@ -72,7 +72,9 @@ STATUS = {"qoralama": "Qoralama", "tayyor": "Tayyor (tasdiq kutilmoqda)", "tasdi
 BLOCKS = {"cover": "Muqova", "sections": "Bo'lim sarlavhalari", "video": "Videodars", "plan": "Reja", "text": "Ma'ruza matni", "keypoints": "Asosiy xulosalar",
           "refs": "Foydalanilgan adabiyotlar", "slides": "Taqdimot", "files": "Qo'shimcha fayllar", "flashcards": "Kartochkalar",
           "quiz": "Test (savollar va mashqlar)", "assignment": "Topshiriq", "reflect": "O'z-o'zini baholash"}
-REQUIRED = ("text", "slides", "video", "quiz")    # «tayyor» bo'lishi uchun (sozlamada yoqilganlari)
+REQUIRED = ("text", "slides", "video", "quiz")    # «manbasi to'liq» (qamrov): sozlamada yoqilganlarining hammasi
+CORE = ("text", "slides", "video")                # bo'limga yuborish («tayyor») uchun kerak; test va mashqlar — ixtiyoriy
+LSTATE = {"bosh": "Bo'sh", "tayyorlanmoqda": "Tayyorlanmoqda", "kutilmoqda": "Tasdiq kutilmoqda", "tasdiqlangan": "Tasdiqlangan"}
 LAYOUTS = {"steps": "Qadamlar (Articulate Rise kabi)", "scroll": "Bitta sahifa (aylantirish)"}
 SECTIONS = {"video": "VIDEODARS", "text": "MA'RUZA MATNI", "slides": "DARS TAQDIMOTI", "practice": "MASHQ VA TOPSHIRIQLAR"}   # kafedra shabloni — bo'lim sarlavhalari
 REFLECT = {"title": "O'z-o'zini baholash", "question": "Darsni to'liq o'zlashtirdingizmi?",
@@ -209,6 +211,8 @@ def migrate(con) -> dict:
         con.execute("ALTER TABLE pk_topics ADD COLUMN extra TEXT"); out["columns"].append("pk_topics.extra")
     if "lesson" not in _cols(con, "pk_packages"):
         con.execute("ALTER TABLE pk_packages ADD COLUMN lesson TEXT"); out["columns"].append("pk_packages.lesson")
+    if "src_sig" not in _cols(con, "pk_packages"):   # yig'ilgan paytdagi manbalar imzosi — «tasdiqlangan versiya eskirgan» belgisi uchun
+        con.execute("ALTER TABLE pk_packages ADD COLUMN src_sig TEXT"); out["columns"].append("pk_packages.src_sig")
     out["packages"] = con.execute("""UPDATE pk_packages SET lesson = CASE WHEN topic_no=0 THEN 'kurs' ELSE 'L' || topic_no END
                                      WHERE (lesson IS NULL OR lesson='') AND topic_no BETWEEN 0 AND 999""").rowcount
     if not con.execute("SELECT 1 FROM pk_meta WHERE k='nextid_v1'").fetchone():
@@ -1013,7 +1017,7 @@ def guard(c: Ctx, action: str, roles=ALL, detail: str = ""):
     ok = c.role.key in roles and c.channel == "web"
     rbac.audit(_con, c, f"paket: {action}", RES, ok, detail)
     if not ok:
-        raise AccessDenied(f"⛔ Kontent paketlari: {action} — '{c.role.title}' lavozimi uchun ruxsat yo'q. So'rov audit jurnaliga yozildi.")
+        raise AccessDenied(f"⛔ Dars tayyorlash: {action} — '{c.role.title}' lavozimi uchun ruxsat yo'q. So'rov audit jurnaliga yozildi.")
 
 def _teacher_id(c: Ctx): return int(c.user.get("teacher_id") or 0)
 
@@ -1037,32 +1041,64 @@ def _course(c: Ctx, cid: int, write=False) -> dict:
         raise AccessDenied("⛔ Kafedra mudiri paketlarni faqat ko'radi va yuklab oladi — manba va yig'ish o'qituvchi va Masofaviy ta'lim bo'limida. So'rov audit jurnaliga yozildi.")
     return r
 
-def _titles(cid: int) -> dict:
-    return {r["topic_no"]: (r["t"] or "").strip() for r in db.rows(_con, "SELECT topic_no, MAX(topic) t FROM dl_items WHERE course_id=? GROUP BY topic_no", (cid,))}
+def _has_table(name: str) -> bool:
+    return bool(db.one(_con, "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (name,)))
+
+def _syl_titles(subject: str) -> dict:
+    """TASDIQLANGAN sillabusdagi mavzu nomlari {mavzu raqami: nom} (fan bo'yicha; yo'q bo'lsa — bo'sh)."""
+    if not subject or not _has_table("syl_items"): return {}
+    r = db.one(_con, "SELECT draft FROM syl_items WHERE subject=? AND status='tasdiqlangan' AND draft IS NOT NULL AND draft!='' ORDER BY id DESC LIMIT 1", (subject,))
+    try: ts = [str(t.get("title") or "").strip() for t in json.loads(r["draft"]).get("topics", [])] if r else []
+    except (ValueError, AttributeError, TypeError): ts = []
+    return {i: t for i, t in enumerate(ts, 1) if t}
+
+def _titles(cid: int, subject: str | None = None) -> dict:
+    """Mavzu nomlari {raqam: nom}: tasdiqlangan sillabus > kontent monitoringi (dl_items.topic). Nomi yo'q mavzu — kalit yo'q."""
+    out = {r["topic_no"]: (r["t"] or "").strip() for r in db.rows(_con, "SELECT topic_no, MAX(topic) t FROM dl_items WHERE course_id=? GROUP BY topic_no", (cid,))}
+    if subject is None:
+        subject = (db.one(_con, "SELECT subject FROM dl_courses WHERE id=?", (cid,)) or {}).get("subject") or ""
+    out.update(_syl_titles(subject))
+    return {k: v for k, v in out.items() if v}
+
+def _doc_titles(cid: int) -> dict:
+    """{dars kaliti: yuklangan Word/matn sarlavhasidan olingan nom} (pk_topics.extra.doc_title)."""
+    out = {}
+    for r in db.rows(_con, "SELECT topic_no, extra FROM pk_topics WHERE course_id=? AND extra LIKE '%doc_title%'", (cid,)):
+        try: t = str(json.loads(r["extra"] or "{}").get("doc_title") or "").strip()
+        except ValueError: t = ""
+        if t: out[r["topic_no"]] = t
+    return out
 
 def _topic_title(cid: int, no: int, titles=None) -> str:
     t = (titles if titles is not None else _titles(cid)).get(no)
-    return t or f"{lesson_code(no)}"
+    return t or f"{no}-mavzu"
 
-def _mk_lesson(key: int, r: dict | None, default: bool, topic_title: str | None) -> dict:
+def _mk_lesson(key: int, r: dict | None, default: bool, topic_title: str | None, doc: str | None = None) -> dict:
+    """Dars nomi ustuvorligi: o'qituvchi kiritgan (pk_lessons.title) > yuklangan Word sarlavhasi («3-MAVZU: …») > tasdiqlangan sillabus >
+    kontent monitoringi (dl_items.topic) > «N-mavzu». Dars kodi (L2) nom o'rnida ishlatilmaydi — kod alohida ko'rsatiladi."""
     kind, no = split_key(key)
     live = bool(r and not r.get("deleted"))
-    custom = r.get("title") if live else None
-    title = custom or (topic_title if kind == "maruza" else None) or (f"{lesson_code(no)}" if kind == "maruza" else f"{no}-{KINDS[kind][2].lower()}")
+    custom = str(r.get("title") or "").strip() if live else ""
+    auto = str(doc or "").strip()
+    base = str(topic_title or "").strip() if kind == "maruza" else ""
+    title = custom or auto or base
+    src = "qolda" if custom else "word" if auto else "reja" if base else None
+    if not title: title = f"{no}-mavzu" if kind == "maruza" else f"{no}-{KINDS[kind][2].lower()}"
     return {"key": key, "code": f"{KINDS[kind][0]}{no}", "kind": kind, "kind_label": KINDS[kind][2], "no": no, "title": title,
-            "topic": r.get("topic_ref") if live else None, "default": default, "custom": live}
+            "topic": r.get("topic_ref") if live else None, "default": default, "custom": live, "title_src": src, "untitled": src is None}
 
 def lessons(cid: int, co: dict | None = None, titles: dict | None = None) -> list[dict]:
     """Kurs darslari: standart L1..Ln (n — kursdagi mavzular, nomi dl_items'dan) + pk_lessons'dagi qo'shimchalar (A/S/Lab/MT, n dan katta L)
     va L nomini almashtirishlar. Tartib: tur (L, A, S, Lab, MT), keyin raqam."""
     co = co or db.one(_con, "SELECT id, topics FROM dl_courses WHERE id=?", (cid,)) or {"topics": 0}
     n = int(co.get("topics") or 15)
-    titles = titles if titles is not None else _titles(cid)
+    titles = titles if titles is not None else _titles(cid, co.get("subject"))
+    docs = _doc_titles(cid)
     rows = {r["lkey"]: r for r in db.rows(_con, "SELECT * FROM pk_lessons WHERE course_id=?", (cid,))}
-    out = [_mk_lesson(no, rows.get(no), True, titles.get(no)) for no in range(1, n + 1)]
+    out = [_mk_lesson(no, rows.get(no), True, titles.get(no), docs.get(no)) for no in range(1, n + 1)]
     for key, r in rows.items():
         if r.get("deleted") or (1 <= key <= n): continue
-        out.append(_mk_lesson(key, r, False, titles.get(split_key(key)[1]) if split_key(key)[0] == "maruza" else None))
+        out.append(_mk_lesson(key, r, False, titles.get(split_key(key)[1]) if split_key(key)[0] == "maruza" else None, docs.get(key)))
     out.sort(key=lambda x: (_KIND_ORDER.index(x["kind"]), x["no"]))
     return out
 
@@ -1098,9 +1134,11 @@ def lesson_info(co: dict, key: int, titles=None) -> dict:
     if kind == "maruza":
         if titles is not None: tt = titles.get(no)
         else:
-            t_ = db.one(_con, "SELECT MAX(topic) t FROM dl_items WHERE course_id=? AND topic_no=?", (co["id"], no))
-            tt = ((t_ or {}).get("t") or "").strip() or None
-    return _mk_lesson(key, r, default, tt)
+            tt = _syl_titles(co["subject"] if "subject" in co else (db.one(_con, "SELECT subject FROM dl_courses WHERE id=?", (co["id"],)) or {}).get("subject") or "").get(no)
+            if not tt:
+                t_ = db.one(_con, "SELECT MAX(topic) t FROM dl_items WHERE course_id=? AND topic_no=?", (co["id"], no))
+                tt = ((t_ or {}).get("t") or "").strip() or None
+    return _mk_lesson(key, r, default, tt, topic_extra(co["id"], key).get("doc_title"))
 
 def _check_topic(co: dict, no: int) -> dict:
     return lesson_info(co, no)
@@ -1111,8 +1149,64 @@ def _lesson_of(cid: int, no: int) -> dict:
     return lesson_info(co, no)
 
 def _lesson_heading(l: dict) -> str:
+    if l.get("untitled"):            # nomi yo'q dars: «2-MAVZU» (nom o'rnida «2-mavzu» takrorlanmaydi)
+        return f"{l['no']}-MAVZU" if l["kind"] == "maruza" else f"{l['no']}-{KINDS[l['kind']][2].upper()}"
     if l["kind"] == "maruza": return f"{l['no']}-MAVZU: {l['title'].upper()}"
     return f"{l['no']}-{KINDS[l['kind']][2].upper()}: {l['title']}"
+
+# --- dars nomi: Word sarlavhasidan («3-MAVZU: RAQAMLI IQTISODIYOT ASOSLARI», «Mavzu: …») va qo'lda -----------------------------------
+_DOC_TITLE_RX = re.compile(r"^(?:(?:\d{1,3}\s*[-–.]?\s*)?(?:mavzu|ma'ruza|мавзу|маъруза|тема|лекция)(?:\s*№?\s*\d{1,3})?|"
+                           r"\d{1,3}\s*[-–.]?\s*(?:amaliy\s+mashg'ulot(?:i)?|seminar(?:\s+mashg'uloti)?|laboratoriya\s+ishi|mustaqil\s+ta'lim))"
+                           r"\s*[:.\-–—]\s*(.*)$", re.I)
+
+def doc_title(text: str) -> str:
+    """Matn boshidagi mavzu sarlavhasidan dars nomi: «3-MAVZU: RAQAMLI IQTISODIYOT ASOSLARI», «Mavzu: …», «2-ma'ruza. …»
+    (sarlavha alohida qatorda, nomi keyingi qatorda bo'lsa ham). Birinchi 12 ta bo'sh bo'lmagan qator ichida; topilmasa — bo'sh satr."""
+    lines = [re.sub(r"\*\*|^#{1,6}\s*", "", l.translate(_APOS).strip()).strip() for l in _plain(text).split("\n")]
+    lines = [l for l in lines if l][:12]
+    for i, l in enumerate(lines):
+        m = _DOC_TITLE_RX.match(l)
+        if not m: continue
+        t = m.group(1).strip()
+        if not t and i + 1 < len(lines) and not _PLAN_RX.match(lines[i + 1]): t = lines[i + 1]
+        t = re.sub(r"\s+", " ", t).strip(" .:;–—-«»\"")
+        if 3 <= len(t) <= 200 and not _PLAN_RX.match(t): return t
+    return ""
+
+def _set_doc_title(cid: int, no: int, title: str | None) -> None:
+    """pk_topics.extra.doc_title — yuklangan matn sarlavhasidan olingan nom (None/bo'sh — olib tashlanadi). Chaqiruvchi commit qiladi."""
+    ex = topic_extra(cid, no)
+    if (ex.get("doc_title") or "") == (title or ""): return
+    if title: ex["doc_title"] = title[:200]
+    else: ex.pop("doc_title", None)
+    _con.execute("""INSERT INTO pk_topics(course_id,topic_no,extra,updated_at) VALUES(?,?,?,?)
+                    ON CONFLICT(course_id,topic_no) DO UPDATE SET extra=excluded.extra, updated_at=excluded.updated_at""",
+                 (cid, no, json.dumps(ex, ensure_ascii=False), _now()))
+
+def note_text_title(cid: int, no: int, text: str) -> str:
+    """Test bankda yuklangan mavzu matni (L dars) — paketda o'z matni bo'lmasa, sarlavhasidan dars nomi olinadi. → topilgan nom."""
+    t = doc_title(text)
+    if t and not _latest_asset(cid, no, "matn"):
+        with _lock: _set_doc_title(cid, no, t); _con.commit()
+    return t
+
+def set_title(c: Ctx, cid: int, no: int, title: str) -> dict:
+    """Dars nomini qo'lda kiritish (bo'sh — avtomatik nomga qaytadi: Word sarlavhasi > sillabus > «N-mavzu»)."""
+    co = _course(c, cid, write=True); les = _check_topic(co, no)
+    t = re.sub(r"\s+", " ", str(title or "")).strip()[:200]
+    kind, n = split_key(no)
+    with _lock:
+        r = db.one(_con, "SELECT * FROM pk_lessons WHERE course_id=? AND lkey=?", (cid, no))
+        if not t and r and les["default"] and not r.get("topic_ref"):
+            _con.execute("DELETE FROM pk_lessons WHERE course_id=? AND lkey=?", (cid, no))
+        elif r:
+            _con.execute("UPDATE pk_lessons SET title=?, ts=?, user_name=? WHERE course_id=? AND lkey=?", (t, _now(), c.user["full_name"], cid, no))
+        elif t:
+            _con.execute("INSERT INTO pk_lessons(course_id,lkey,kind,no,title,topic_ref,ts,user_name,deleted) VALUES(?,?,?,?,?,NULL,?,?,0)",
+                         (cid, no, kind, n, t, _now(), c.user["full_name"]))
+        _log(c, cid, no, "dars nomi", t or "avtomatik"); _con.commit()
+    rbac.audit(_con, c, "paket: dars nomi", RES, True, f"kurs #{cid} · {les['code']} · {t[:80] or 'avtomatik'}")
+    return {"ok": True, "lesson": lesson_info(co, no)}
 
 def _log(c: Ctx | None, cid, no, action, note="", pid=None):
     u = c.user if c else {"id": None, "full_name": "Tizim"}
@@ -1395,10 +1489,15 @@ def upload_text(c: Ctx, cid: int, no: int, raw: bytes | None, text: str | None, 
                                                            "images": media["images"], "tables": media["tables"], "refs": len(st["refs"])})
     for fn, v in imgs.items():
         _save_image_asset(c, cid, no, fn, v["data"], {"caption": v["caption"], "src": "docx", "text_asset": aid})
-    with _lock: _log(c, cid, no, "matn yuklandi", f"{name[:80]} · {len(txt)} belgi · {len(imgs)} rasm · {len(media['tables'])} jadval"); _con.commit()
+    found = doc_title(txt)                    # «3-MAVZU: …» — darsning nomi (o'qituvchi qo'lda kiritmagan bo'lsa shu ishlatiladi)
+    with _lock:
+        _set_doc_title(cid, no, found or None)
+        _log(c, cid, no, "matn yuklandi", f"{name[:80]} · {len(txt)} belgi · {len(imgs)} rasm · {len(media['tables'])} jadval"); _con.commit()
     rbac.audit(_con, c, "paket: ma'ruza matni yuklandi", RES, True, f"kurs #{cid} · {l['code']} · {name[:60]} · {len(txt)} belgi")
+    l2 = lesson_info(co, no)
     return {"ok": True, "id": aid, "chars": len(txt), "truncated": bool(trunc), "plan": st["plan"], "images": len(imgs),
-            "tables": len(media["tables"]), "refs": len(st["refs"])}
+            "tables": len(media["tables"]), "refs": len(st["refs"]), "title": l2["title"],
+            "title_set": bool(found and l2["title_src"] == "word" and l2["title"] != l["title"])}
 
 def upload_image(c: Ctx, cid: int, no: int, raw: bytes, name: str, caption: str = "") -> dict:
     """Darsning «rasmlar»iga qo'lda rasm (.png/.jpg): matnda «[RASM:fayl]» qatori bilan joylanadi; havola qilinmaganlari matn oxirida."""
@@ -1937,6 +2036,10 @@ def delete_asset(c: Ctx, aid: int) -> dict:
         _apath(a).unlink(missing_ok=True); shutil.rmtree(_img_dir(a), ignore_errors=True)
     except OSError:
         pass
+    if a["purpose"] == "matn" and a["course_id"]:
+        prev = _latest_asset(a["course_id"], a["topic_no"], "matn")
+        with _lock:
+            _set_doc_title(a["course_id"], a["topic_no"], doc_title(json.loads(prev["meta"] or "{}").get("text") or "") if prev else None); _con.commit()
     return {"ok": True}
 
 def set_video(c: Ctx, cid: int, no: int, url: str) -> dict:
@@ -2334,6 +2437,9 @@ def gather(cid: int, no: int, co: dict | None = None, settings: dict | None = No
     req = [k for k in REQUIRED if on.get(k)]
     ready["complete"] = all(ready[k]["ok"] for k in req)
     ready["missing"] = [k for k in req if not ready[k]["ok"]]
+    # bo'limga yuborish uchun asosiy uch qism (matn, taqdimot, video); test va mashqlar — ixtiyoriy
+    ready["core_missing"] = [k for k in CORE if on.get(k) and not ready[k]["ok"]]
+    ready["sendable"] = not ready["core_missing"]
     ready["blocks"] = len(blocks)
     ready["buildable"] = any(b_["type"] in ("text", "slides", "video", "file", "assignment", "quiz", "flashcards") for b_ in blocks)
     return {"content": content, "files": files, "ready": ready, "settings": st, "course": co, "lesson": les}
@@ -2790,6 +2896,31 @@ def _prune(cid: int, no: int):
         except OSError: pass
         _con.execute("DELETE FROM pk_packages WHERE id=?", (r["id"],))
 
+def source_sig(cid: int, no: int, les: dict | None = None) -> str:
+    """Dars manbalarining arzon imzosi (fayllar o'qilmaydi): yuklangan fayllar, havola/sozlama/xulosa/qo'shimchalar, dars nomi, mashqlar,
+    Test bankdagi tasdiqlangan savollar, zaxira matn/video, standart sozlama. Paket yig'ilganda yoziladi (pk_packages.src_sig); keyin
+    o'zgarsa — «tasdiqlangan versiya eskirgan». Yolg'on signal o'zini tuzatadi: qayta tayyorlashda «o'zgarish yo'q» bo'lsa imzo yangilanadi."""
+    les = les or _lesson_of(cid, no)
+    tr = _topic_row(cid, no)
+    part = {"a": [r["id"] for r in db.rows(_con, """SELECT id FROM pk_assets WHERE deleted=0 AND ((course_id=? AND topic_no IN (?,0))
+                                                    OR (course_id=0 AND topic_no=0)) ORDER BY id""", (cid, no))],
+            "t": [tr.get(k) for k in ("video_url", "deck_id", "settings", "keypoints", "extra")], "l": [les["title"], les.get("topic")],
+            "x": [[r["id"], r["updated_at"] or r["ts"]] for r in db.rows(_con, "SELECT id, ts, updated_at FROM pk_exercises WHERE course_id=? AND topic_no=? "
+                                                                                "AND deleted=0 AND status='faol' ORDER BY id", (cid, no))],
+            "d": (db.one(_con, "SELECT v FROM pk_meta WHERE k='defaults'") or {}).get("v")}
+    if tr.get("deck_id") and _has_table("pres_decks"):
+        part["k"] = (db.one(_con, "SELECT updated_at FROM pres_decks WHERE id=?", (tr["deck_id"],)) or {}).get("updated_at")
+    tno = source_topic(les)
+    if tno:
+        if _has_table("tb_questions"):
+            part["q"] = [[r["id"], r["updated_at"]] for r in db.rows(_con, "SELECT id, updated_at FROM tb_questions WHERE course_id=? AND topic_no=? "
+                                                                             "AND status='tasdiqlandi' AND deleted=0 ORDER BY id", (cid, tno))]
+        if _has_table("tb_sources"):
+            part["s"] = (db.one(_con, "SELECT MAX(id) m FROM tb_sources WHERE course_id=? AND topic_no=?", (cid, tno)) or {}).get("m")
+        if not tr.get("video_url"):
+            part["v"] = (db.one(_con, "SELECT url FROM dl_items WHERE course_id=? AND topic_no=? AND kind='video' ORDER BY id DESC LIMIT 1", (cid, tno)) or {}).get("url")
+    return hashlib.sha1(json.dumps(part, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")).hexdigest()
+
 def _file_sha(p: Path) -> str:
     h = hashlib.sha256()
     with open(p, "rb") as f:
@@ -2797,7 +2928,7 @@ def _file_sha(p: Path) -> str:
     return h.hexdigest()
 
 def _store_package(c: Ctx | None, cid: int, no: int, data, mode: str, status: str, settings: dict, fp: str, val: dict, ready: dict,
-                   version: int, src="") -> int:
+                   version: int, src="", sig: str | None = None) -> int:
     """data — baytlar yoki diskdagi tayyor zip (Path, _emit — o'sha katalogda): joyiga ko'chiriladi, sha256 oqim bilan BIR MARTA hisoblanadi.
     fp=None — barmoq izi sifatida shu sha256 yoziladi (kurs paketi: tayyor zip ikki marta o'qilmaydi)."""
     d = _pkg_dir(cid, no); d.mkdir(parents=True, exist_ok=True)
@@ -2809,10 +2940,10 @@ def _store_package(c: Ctx | None, cid: int, no: int, data, mode: str, status: st
         tmp = d / (fn + ".tmp"); tmp.write_bytes(data); os.replace(tmp, d / fn)
     if fp is None: fp = sha
     pid = _con.execute("""INSERT INTO pk_packages(course_id,topic_no,version,mode,status,settings,content_hash,built_at,built_by,built_by_name,file,size,
-                          sha256,validation,readiness,src,lesson) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                          sha256,validation,readiness,src,lesson,src_sig) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                        (cid, no, version, mode, status, json.dumps(settings), fp, _now(), c.user["id"] if c else None,
                         c.user["full_name"] if c else "Tizim", str(Path("packages") / str(cid) / str(no) / fn), size, sha,
-                        json.dumps(val, ensure_ascii=False), json.dumps(ready, ensure_ascii=False), src, lesson_code(no) if no else "kurs")).lastrowid
+                        json.dumps(val, ensure_ascii=False), json.dumps(ready, ensure_ascii=False), src, lesson_code(no) if no else "kurs", sig)).lastrowid
     return pid
 
 def _build_settings(cid: int, no: int, mode: str | None) -> dict:
@@ -2836,14 +2967,17 @@ def build_topic(c: Ctx | None, cid: int, no: int, mode: str | None = None, force
         st = _build_settings(cid, no, mode)
         g = gather(cid, no, co, st, les)
     if not g["ready"]["buildable"]:
-        raise HTTPException(400, "Paket uchun kamida bitta kontent bloki kerak: ma'ruza matni, taqdimot, video, topshiriq yoki mashq")
+        raise HTTPException(400, "Darsni tayyorlash uchun kamida bitta fayl kerak: ma'ruza matni (Word), taqdimot, video, topshiriq yoki mashq")
     les = g["lesson"]
     pf = player_files()
     fp = _fingerprint(g["content"], g["files"], st["mode"], pf)
+    sig = source_sig(cid, no, les)
     with _lock:
         last = db.one(_con, "SELECT * FROM pk_packages WHERE course_id=? AND topic_no=? ORDER BY version DESC LIMIT 1", (cid, no))
         same = db.one(_con, "SELECT * FROM pk_packages WHERE course_id=? AND topic_no=? AND mode=? ORDER BY version DESC LIMIT 1", (cid, no, st["mode"]))
         if same and not force and same["content_hash"] == fp and (store() / same["file"]).is_file():   # shu tur bo'yicha (boshqa tur yig'ilgan bo'lsa ham)
+            if same.get("src_sig") != sig:        # mazmun o'sha — «eskirgan» belgisi yolg'on chiqmasin
+                _con.execute("UPDATE pk_packages SET src_sig=? WHERE id=?", (sig, same["id"])); _con.commit(); same["src_sig"] = sig
             return {"ok": True, "unchanged": True, "package": pack_row(same)}
         version = (last["version"] if last else 0) + 1
         content = {"v": 1, "id": f"isft-{int(cid)}-{int(no)}-v{version}", **{k: v for k, v in g["content"].items() if k != "v"}, "built": _now()}
@@ -2857,9 +2991,9 @@ def build_topic(c: Ctx | None, cid: int, no: int, mode: str | None = None, force
             _log(c, cid, no, "yig'ish xatosi", "; ".join(val["errors"])[:400]); _con.commit()
             if c: rbac.audit(_con, c, "paket: tekshiruvdan o'tmadi", RES, True, f"kurs #{cid} · {lesson_code(no)} · {val['errors'][:2]}")
             raise HTTPException(422, "Paket tekshiruvdan o'tmadi: " + "; ".join(val["errors"][:3]))
-        status = "tayyor" if g["ready"]["complete"] else "qoralama"
+        status = "tayyor" if g["ready"]["sendable"] else "qoralama"      # asosiy qismlar bor — bo'limga yuboriladi (test ixtiyoriy)
         pid = _store_package(c, cid, no, data, st["mode"], status, st, fp, val, {k: (v["ok"] if isinstance(v, dict) else v) for k, v in g["ready"].items()},
-                             version, src)
+                             version, src, sig)
         _log(c, cid, no, "yig'ildi", f"v{version} · {MODES[st['mode']]} · {status}", pid)
         _prune(cid, no)
         _con.commit()
@@ -2933,22 +3067,61 @@ def _package(c: Ctx, pid: int) -> tuple[dict, dict]:
     if not r: raise HTTPException(404, "Paket topilmadi")
     return r, _course(c, r["course_id"])
 
+_MON_KINDS = (("text", "maruza"), ("slides", "taqdimot"), ("video", "video"), ("quiz", "test"))   # paket qismi → kontent monitoringi turi
+
+def _monitoring_kinds(r: dict) -> list[str]:
+    """Paketda HAQIQATDA bor qismlar (yig'ilgan paytdagi tayyorgarlik va yoqilgan bloklar bo'yicha) → dl_items.kind ro'yxati."""
+    try: rd, on = json.loads(r["readiness"] or "{}"), (json.loads(r["settings"] or "{}").get("blocks") or {})
+    except ValueError: return []
+    return [dl for k, dl in _MON_KINDS if rd.get(k) and on.get(k, True)]
+
+def _sync_monitoring(c: Ctx, r: dict, approve: bool, note: str = "") -> int:
+    """Dars paketi tasdiqlanganda — kontent monitoringidagi (dl_items) shu kurs/mavzuning paketda bor materiallari «tasdiqlandi»
+    (src='paket', tarixga yoziladi); tasdiqlangan paket qaytarilganda (boshqa tasdiqlangan versiya qolmasa) — shu yo'l bilan yopilganlari qaytadi.
+    Faqat ma'ruza (L) darslari: monitoring mavzu bo'yicha yuritiladi."""
+    kind, n = split_key(r["topic_no"])
+    if kind != "maruza" or not r["topic_no"]: return 0
+    try:
+        from . import masofaviy as DL
+        code = lesson_code(r["topic_no"])
+        if approve:
+            return DL.sync_from_package(c, r["course_id"], n, _monitoring_kinds(r), f"Dars tayyorlash: {code} v{r['version']} tasdiqlandi")
+        if db.one(_con, "SELECT 1 x FROM pk_packages WHERE course_id=? AND topic_no=? AND status='tasdiqlandi' AND id<>?", (r["course_id"], r["topic_no"], r["id"])):
+            return 0
+        return DL.unsync_from_package(c, r["course_id"], n, f"Dars tayyorlash: {code} v{r['version']} qaytarildi — {note}"[:300])
+    except Exception as e:                    # monitoring yangilanmasa ham tasdiqlash bekor bo'lmaydi
+        print("paket._sync_monitoring:", repr(e)); return 0
+
 def package_action(c: Ctx, pid: int, action: str, note: str = "") -> dict:
     r, co = _package(c, pid)
+    synced = 0
     if action == "approve":
-        if r["status"] != "tayyor": raise HTTPException(409, "Faqat «tayyor» paket tasdiqlanadi (manbalar to'liq bo'lishi kerak)")
+        if c.role.key not in DEPT: raise AccessDenied("⛔ Tasdiqlash — faqat Masofaviy ta'lim bo'limi. So'rov audit jurnaliga yozildi.")
+        if r["status"] != "tayyor": raise HTTPException(409, "Faqat bo'limga yuborilgan («tasdiq kutilmoqda») dars tasdiqlanadi")
         with _lock:
             _con.execute("UPDATE pk_packages SET status='tasdiqlandi', approved_by=?, approved_name=?, approved_at=?, note=NULL WHERE id=?",
                          (c.user["id"], c.user["full_name"], _now(), r["id"]))
             _log(c, r["course_id"], r["topic_no"], "tasdiqlandi", f"v{r['version']}", r["id"]); _con.commit()
+        synced = _sync_monitoring(c, r, True)
     elif action == "reject":
+        if c.role.key not in DEPT: raise AccessDenied("⛔ Qaytarish — faqat Masofaviy ta'lim bo'limi. So'rov audit jurnaliga yozildi.")
         if len(note.strip()) < 3: raise HTTPException(400, "Qaytarish sababini yozing")
         with _lock:
             _con.execute("UPDATE pk_packages SET status='qoralama', note=?, approved_by=NULL, approved_name=NULL, approved_at=NULL WHERE id=?", (note.strip()[:500], r["id"]))
             _log(c, r["course_id"], r["topic_no"], "qaytarildi", note, r["id"]); _con.commit()
+        if r["status"] == "tasdiqlandi": synced = _sync_monitoring(c, r, False, note.strip())
+    elif action == "submit":              # o'qituvchi/bo'lim: to'liq bo'lmagan darsni ham bo'limga yuborish (asosiy qism yetishmasa ham — o'z qarori)
+        _course(c, r["course_id"], write=True)
+        if not r["topic_no"]: raise HTTPException(400, "Kurs paketi tasdiqlashga yuborilmaydi")
+        if r["status"] != "qoralama": raise HTTPException(409, "Bu versiya allaqachon yuborilgan yoki tasdiqlangan")
+        if db.one(_con, "SELECT 1 x FROM pk_packages WHERE course_id=? AND topic_no=? AND version>?", (r["course_id"], r["topic_no"], r["version"])):
+            raise HTTPException(409, "Faqat oxirgi versiya yuboriladi — darsni qayta tayyorlang")
+        with _lock:
+            _con.execute("UPDATE pk_packages SET status='tayyor', note=NULL WHERE id=?", (r["id"],))
+            _log(c, r["course_id"], r["topic_no"], "bo'limga yuborildi", f"v{r['version']}", r["id"]); _con.commit()
     else:
         raise HTTPException(400, "Amal noma'lum")
-    return {"ok": True, "package": pack_row(db.one(_con, "SELECT * FROM pk_packages WHERE id=?", (r["id"],)))}
+    return {"ok": True, "package": pack_row(db.one(_con, "SELECT * FROM pk_packages WHERE id=?", (r["id"],))), "monitoring": synced}
 
 def download_name(co: dict, no: int, mode: str) -> str:
     """ISFT_<fan>_<dars kodi>_<tur>.zip — L01 (ma'ruza), A01 (amaliy), S01, Lab01, MT01; kurs paketi — «kurs». NEXTID'dagi L/A nomlariga mos."""
@@ -3118,15 +3291,29 @@ def readiness_map() -> dict:
         if r["kind"] in ("match", "sort"): mark("quiz", r["course_id"], r["topic_no"])
     return out
 
-def _pkg_map() -> dict:
-    """{(cid, no): {"built": oxirgi versiya qatori, "approved": bool}} (topic_no > 0)."""
+def _pkg_map(cid: int | None = None) -> dict:
+    """{(cid, no): {"last": oxirgi versiya qatori, "approved": bool, "appr": oxirgi TASDIQLANGAN versiya qatori | None}} (topic_no > 0)."""
     out = {}
-    for r in db.rows(_con, "SELECT id, course_id, topic_no, version, status, mode, built_at FROM pk_packages WHERE topic_no>0 ORDER BY version"):
+    w, a = (" AND course_id=?", (int(cid),)) if cid else ("", ())
+    for r in db.rows(_con, f"SELECT id, course_id, topic_no, version, status, mode, built_at, note, src_sig FROM pk_packages WHERE topic_no>0{w} ORDER BY version", a):
         k = (r["course_id"], r["topic_no"])
-        e = out.setdefault(k, {"last": None, "approved": False})
+        e = out.setdefault(k, {"last": None, "approved": False, "appr": None})
         e["last"] = r
-        if r["status"] == "tasdiqlandi": e["approved"] = True
+        if r["status"] == "tasdiqlandi": e["approved"] = True; e["appr"] = r
     return out
+
+def lesson_state(p_: dict | None, has_src: bool) -> str:
+    """Darsning sodda holati (LSTATE): bo'sh → tayyorlanmoqda → tasdiq kutilmoqda → tasdiqlangan (oxirgi versiya bo'yicha)."""
+    if p_ and p_["last"]:
+        st = p_["last"]["status"]
+        return "tasdiqlangan" if st == "tasdiqlandi" else "kutilmoqda" if st == "tayyor" else "tayyorlanmoqda"
+    return "tayyorlanmoqda" if has_src else "bosh"
+
+def _is_stale(p_: dict | None, cid: int, no: int, les: dict | None = None, sig: str | None = None) -> bool:
+    """Tasdiqlangan versiya oxirgisi bo'lib, undan keyin manbalar o'zgargan (yangi savol tasdiqlangan, fayl almashtirilgan …)."""
+    a = (p_ or {}).get("appr")
+    if not a or a["id"] != p_["last"]["id"] or not a.get("src_sig"): return False
+    return a["src_sig"] != (sig or source_sig(cid, no, les))
 
 def course_rows(c: Ctx) -> list[dict]:
     sw, sa = scope(c)
@@ -3137,7 +3324,7 @@ def course_rows(c: Ctx) -> list[dict]:
     for co in courses:
         keys = lk.get(co["id"]) or list(range(1, int(co["topics"] or 15) + 1))
         row = {**co, "teacher": _short(co["teacher"]), "built": 0, "approved": 0, "waiting": 0, "text": 0, "slides": 0, "video": 0, "quiz": 0, "exercises": 0, "full": 0,
-               "lessons": len(keys), "by_kind": {}}
+               "lessons": len(keys), "by_kind": {}, "waiting_no": 0}
         for no in keys:
             kind = split_key(no)[0]
             row["by_kind"][kind] = row["by_kind"].get(kind, 0) + 1
@@ -3147,7 +3334,9 @@ def course_rows(c: Ctx) -> list[dict]:
             p_ = pk.get((co["id"], no))
             if p_:
                 row["built"] += 1; row["approved"] += p_["approved"]
-                row["waiting"] += p_["last"]["status"] == "tayyor"
+                if p_["last"]["status"] == "tayyor":
+                    row["waiting"] += 1
+                    if not row["waiting_no"]: row["waiting_no"] = no      # «Ochish» — tasdiq kutayotgan birinchi darsni ochadi
         n = len(keys)
         row["pct"] = _pct(row["approved"], n); row["built_pct"] = _pct(row["built"], n)
         row["started"] = bool(row["built"] or row["text"] or row["slides"] or row["quiz"])
@@ -3177,15 +3366,19 @@ def coverage(c: Ctx) -> dict:
 
 def course_view(c: Ctx, cid: int) -> dict:
     co = _course(c, cid)
-    rd, pk = readiness_map(), _pkg_map()
+    rd, pk = readiness_map(), _pkg_map(cid)
     topics = []
     for l in lessons(cid, co):
         no = l["key"]
         r = rd.get((cid, no)) or {}
         p_ = pk.get((cid, no))
+        state = lesson_state(p_, any(r.get(k) for k in ("text", "slides", "video", "exercises")))
         topics.append({**l, "no": no, "lesson_no": l["no"], **{k: bool(r.get(k)) for k in ("text", "slides", "video", "quiz", "exercises")},
                        "last": {"id": p_["last"]["id"], "version": p_["last"]["version"], "status": p_["last"]["status"], "mode": p_["last"]["mode"],
-                                "built_at": p_["last"]["built_at"]} if p_ else None, "approved": bool(p_ and p_["approved"])})
+                                "built_at": p_["last"]["built_at"]} if p_ else None, "approved": bool(p_ and p_["approved"]),
+                       "state": state, "state_label": LSTATE[state], "stale": _is_stale(p_, cid, no, l),
+                       "returned": bool(p_ and p_["last"]["status"] == "qoralama" and p_["last"]["note"]),
+                       "nextid": {"id": p_["appr"]["id"], "version": p_["appr"]["version"]} if p_ and p_["appr"] else None})
     k = c.role.key
     own = k in DEPT or (k == TEACH and co.get("teacher_id") == _teacher_id(c))
     cp = db.rows(_con, "SELECT * FROM pk_packages WHERE course_id=? AND topic_no=0 ORDER BY version DESC", (cid,))
@@ -3205,6 +3398,11 @@ def topic_view(c: Ctx, cid: int, no: int) -> dict:
     text_html = text_html.replace('src="assets/img/', f'src="{P}/courses/{int(cid)}/topics/{int(no)}/img/')    # ilovada ko'rish uchun
     assets = db.rows(_con, "SELECT id, purpose, kind, name, size, ts, user_name, src, meta FROM pk_assets WHERE course_id=? AND topic_no=? AND deleted=0 ORDER BY id DESC", (cid, no))
     pk = db.rows(_con, "SELECT * FROM pk_packages WHERE course_id=? AND topic_no=? ORDER BY version DESC", (cid, no))
+    appr = next((r_ for r_ in pk if r_["status"] == "tasdiqlandi"), None)
+    sig = source_sig(cid, no, les)
+    p_map = {"last": pk[0], "approved": bool(appr), "appr": appr} if pk else None
+    rdy = g["ready"]
+    state = lesson_state(p_map, any(rdy[k_]["ok"] for k_ in ("text", "slides", "video", "exercises")))
     slides_b = next((b for b in g["content"]["blocks"] if b["type"] == "slides"), None)
     quiz_b = next((b for b in g["content"]["blocks"] if b["type"] == "quiz"), None)
     k = c.role.key
@@ -3231,7 +3429,147 @@ def topic_view(c: Ctx, cid: int, no: int) -> dict:
             "packages": [pack_row(r) for r in pk], "decks": decks_for(c, co) if own else [],
             "blocks": [{"type": b["type"], "title": b["title"]} for b in g["content"]["blocks"]], "layout": g["content"]["layout"],
             "file_name": download_name(co, no, st["mode"]),
-            "can": {"write": own, "approve": k in DEPT}}
+            "state": state, "state_label": LSTATE[state], "stale": _is_stale(p_map, cid, no, les, sig),
+            "changed": bool(pk and pk[0].get("src_sig") and pk[0]["src_sig"] != sig),      # oxirgi tayyorlashdan keyin manba o'zgargan
+            "nextid": {"id": appr["id"], "version": appr["version"], "mode": appr["mode"], "approved_at": appr["approved_at"]} if appr else None,
+            "source_topic": source_topic(les), "text_asset": (ts["asset"]["id"] if ts and ts.get("asset") else None),
+            "can": {"write": own, "approve": k in DEPT, "deck": own and k == TEACH and _has_table("pres_decks")}}
+
+def review_queue(c: Ctx, limit: int = 200) -> dict:
+    """Ko'rib chiqish navbati (ko'lam bo'yicha): oxirgi versiyasi tasdiq kutayotgan darslar («kutilmoqda») va tasdiqlangan versiyasi
+    eskirgan darslar («eskirgan» — manbalar tasdiqdan keyin o'zgargan; o'qituvchi qayta tayyorlashi kerak)."""
+    sw, sa = scope(c)
+    rows = db.rows(_con, f"""SELECT p.id, p.course_id, p.topic_no, p.version, p.status, p.built_at, p.built_by_name, p.src_sig, p.approved_at,
+                                    c.subject, c.direction, c.course, c.topics, t.full_name teacher
+                             FROM pk_packages p JOIN dl_courses c ON c.id=p.course_id LEFT JOIN teachers t ON t.id=c.teacher_id
+                             WHERE p.topic_no>0 AND p.status IN ('tayyor','tasdiqlandi') AND {sw}
+                               AND p.version=(SELECT MAX(version) FROM pk_packages x WHERE x.course_id=p.course_id AND x.topic_no=p.topic_no)
+                             ORDER BY p.built_at""", sa)
+    out, tcache = [], {}
+    for r in rows:
+        try: les = lesson_info({"id": r["course_id"], "topics": r["topics"], "subject": r["subject"]}, r["topic_no"],
+                               tcache.setdefault(r["course_id"], _titles(r["course_id"], r["subject"])))
+        except HTTPException: continue                                    # dars ro'yxatdan o'chirilgan
+        kind = "kutilmoqda" if r["status"] == "tayyor" else "eskirgan" if r["src_sig"] and r["src_sig"] != source_sig(r["course_id"], r["topic_no"], les) else None
+        if not kind: continue
+        out.append({"kind": kind, "package_id": r["id"], "course_id": r["course_id"], "no": r["topic_no"], "code": les["code"], "title": les["title"],
+                    "subject": r["subject"], "direction": r["direction"], "course": r["course"], "teacher": _short(r["teacher"]),
+                    "version": r["version"], "built_at": r["built_at"], "by": _short(r["built_by_name"]), "approved_at": r["approved_at"]})
+    out.sort(key=lambda x: (x["kind"] != "kutilmoqda", x["built_at"] or ""))
+    return {"waiting": sum(1 for x in out if x["kind"] == "kutilmoqda"), "stale": sum(1 for x in out if x["kind"] == "eskirgan"), "items": out[:limit]}
+
+# --- bitta yuklash nuqtasi: fayl turi tarkibidan aniqlanib, o'z joyiga yo'naltiriladi ---------------------------------------------------
+UPLOAD_AS = {"matn": "Ma'ruza matni", "taqdimot": "Taqdimot", "slayd": "Slayd rasmi", "video": "Video", "muqova": "Dars muqovasi",
+             "rasm": "Matn ichidagi rasm", "poster": "Video muqovasi", "subs": "Subtitr", "fayl": "Qo'shimcha fayl"}
+_UPLOAD_OK = {"matn": ("docx", "pdf", "txt"), "taqdimot": ("pptx", "pdf", "png", "jpg"), "slayd": ("png", "jpg"), "video": ("mp4", "webm"),
+              "muqova": ("png", "jpg"), "rasm": ("png", "jpg"), "poster": ("png", "jpg"), "subs": ("subs",), "fayl": FILE_KINDS}
+_UPLOAD_AUTO = {"docx": "matn", "txt": "matn", "pdf": "taqdimot", "pptx": "taqdimot", "mp4": "video", "webm": "video", "subs": "subs", "xlsx": "fayl"}
+UPLOAD_HELP = "Qabul qilinadi: Word (.docx), PDF, PowerPoint (.pptx), video (.mp4, .webm), rasm (.png, .jpg), subtitr (.srt, .vtt)"
+
+async def _stream_any(request) -> dict:
+    """Istalgan fayl — diskka oqim bilan (xotiraga yig'ilmaydi). Chegara turga qarab (o'zgarmagan): video (.mp4/.webm, birinchi 64 baytdan) —
+    video_max(), qolganlari — MAX_ASSET; oshgan zahoti 413 (Content-Length'siz ham). → {"path", "size", "sha256", "media", "head"}"""
+    big = max(video_max(), MAX_ASSET)
+    _len_guard(request, big)
+    try: clen = int(request.headers.get("content-length") or 0)
+    except ValueError: clen = 0
+    d = store() / "tmp"; d.mkdir(parents=True, exist_ok=True)
+    tmp = d / f"up_{secrets.token_hex(8)}.part"
+    h, size, head, limit, media = hashlib.sha256(), 0, b"", None, None
+    def decide():
+        nonlocal limit, media
+        media = sniff_media(head)
+        limit = video_max() if media in VIDEO_KINDS else MAX_ASSET
+        if clen > limit: raise HTTPException(413, f"Fayl hajmi {limit // (1024 * 1024)} MB dan oshmasin")
+    try:
+        with open(tmp, "wb") as f:
+            async for chunk in request.stream():
+                if not chunk: continue
+                size += len(chunk)
+                if limit is None:
+                    head += chunk[:64 - len(head)]
+                    if len(head) >= 64: decide()
+                if size > (limit or big): raise HTTPException(413, f"Fayl hajmi {(limit or big) // (1024 * 1024)} MB dan oshmasin")
+                h.update(chunk); f.write(chunk)
+        if not size: raise HTTPException(400, "Fayl bo'sh")
+        if limit is None: decide()
+        if size > limit: raise HTTPException(413, f"Fayl hajmi {limit // (1024 * 1024)} MB dan oshmasin")
+    except BaseException:
+        tmp.unlink(missing_ok=True); raise
+    return {"path": tmp, "size": size, "sha256": h.hexdigest(), "media": media, "head": head}
+
+def _looks_subs(raw: bytes, name: str) -> bool:
+    if len(raw) > MAX_SUBS: return False
+    try: t = decode_text(raw[:4000])
+    except Exception: return False
+    return t.lstrip("﻿ \r\n").startswith("WEBVTT") or bool(re.search(r"\d{1,2}:\d{2}[.,]\d{1,3}\s*-->", t)) or name.lower().endswith((".srt", ".vtt"))
+
+def _looks_text(raw: bytes) -> bool:
+    if b"\x00" in raw[:4096]: return False
+    try: raw[:65536].decode("utf-8")
+    except UnicodeDecodeError as e:
+        if e.start < len(raw[:65536]) - 4: return False
+    return True
+
+def route_upload(c: Ctx, cid: int, no: int, up: dict, name: str, want: str = "", lang: str = "uz", caption: str = "") -> dict:
+    """Yuklangan faylni turiga qarab o'z joyiga: Word → ma'ruza matni; PDF / PPTX → taqdimot; MP4 / WebM → video; .srt / .vtt → subtitr;
+    .txt → matn; .xlsx → qo'shimcha fayl; rasm — noaniq (muqova / matn rasmi / slayd): `want` berilmasa 409 + tanlovlar.
+    `want` (UPLOAD_AS) — foydalanuvchi tanlovi (masalan PDF — ma'ruza matni sifatida). Tur faqat tarkibdan (magic bytes) aniqlanadi."""
+    path = Path(up["path"])
+    want = (want or "").strip().lower()
+    if want and want not in UPLOAD_AS: path.unlink(missing_ok=True); raise HTTPException(400, "Fayl nima uchun ekani noma'lum")
+    def deny(msg, code=415):
+        rbac.audit(_con, c, "paket: fayl rad etildi", RES, False, f"kurs #{cid} · {lesson_code(no)} · {name[:60]} · {msg}"[:300])
+        raise HTTPException(code, msg)
+    try:
+        media = up.get("media")
+        if media in VIDEO_KINDS:
+            if want not in ("", "video"): deny(f"«{name[:60]}» — video fayl; «{UPLOAD_AS[want]}» sifatida yuklab bo'lmaydi")
+            return {**upload_video(c, cid, no, {**up, "kind": media}, name), "as": "video", "label": UPLOAD_AS["video"]}
+        if media in AUDIO_KINDS:
+            deny(f"«{name[:60]}» — audio fayl. Audio slaydga biriktiriladi: «Taqdimot» → «Slayd izohlari va audio»")
+        raw = path.read_bytes()
+    finally:
+        path.unlink(missing_ok=True)
+    kind = _sniff_asset(raw)
+    if kind == "ole": deny(f"«{name[:60]}» — eski Word/PowerPoint formati (.doc / .ppt). Faylni «.docx» yoki «.pptx» qilib saqlab, qayta yuklang")
+    if kind == "other":
+        kind = "subs" if _looks_subs(raw, name) else "txt" if _looks_text(raw) and (want == "matn" or name.lower().endswith(".txt")) else "other"
+    if kind in ("other", "zip"): deny(f"«{name[:60]}» — bu turdagi fayl qabul qilinmaydi. {UPLOAD_HELP}")
+    target = want or _UPLOAD_AUTO.get(kind)
+    if not target:                               # rasm: muqova, matn ichidagi rasm yoki slayd — foydalanuvchi tanlaydi
+        raise HTTPException(409, {"message": f"«{name[:60]}» — rasm. Nima uchun ekanini tanlang: dars muqovasi, matn ichidagi rasm yoki slayd",
+                                  "ambiguous": True, "kind": kind, "choices": {k_: UPLOAD_AS[k_] for k_ in ("muqova", "rasm", "slayd", "poster")}})
+    if kind not in _UPLOAD_OK[target]:
+        deny(f"«{name[:60]}» ({kind}) — «{UPLOAD_AS[target]}» uchun mos emas. {UPLOAD_HELP}")
+    if target == "matn": r = upload_text(c, cid, no, raw, None, name)
+    elif target in ("taqdimot", "slayd"): r = upload_slides(c, cid, no, raw, name)
+    elif target in ("muqova", "poster"): r = upload_slot_image(c, target, cid, no, raw, name)
+    elif target == "rasm": r = upload_image(c, cid, no, raw, name, caption)
+    elif target == "subs": r = upload_subs(c, cid, no, raw, name, lang)
+    else: r = upload_file(c, cid, no, raw, name)
+    return {**r, "as": target, "label": UPLOAD_AS[target], "kind": r.get("kind") or kind}
+
+def create_deck(c: Ctx, cid: int, no: int) -> dict:
+    """«ISFT shablonida taqdimot yaratish»: darsning yuklangan ma'ruza matni (Word) «Taqdimot» moduliga beriladi (qayta yuklash shart emas),
+    tuzilgan taqdimot shu darsga biriktiriladi. Ruxsat — «Taqdimot» moduli qoidasi bo'yicha (o'qituvchi)."""
+    from . import taqdimot as TQ
+    co = _course(c, cid, write=True); les = _check_topic(co, no)
+    TQ.guard(c, "darsdan taqdimot", f"kurs #{cid} · {les['code']}")
+    ts = _text_source(cid, no, les)
+    if not ts: raise HTTPException(400, "Avval ma'ruza matnini (Word) yuklang — taqdimot shu matndan tuziladi")
+    meta = {"subject": (co["subject"] or "")[:120], "topic_no": str(les["no"]), "title": "" if les.get("untitled") else les["title"][:200],
+            "audience": "", "target": None}
+    a = ts.get("asset")
+    if a and a["kind"] in ("docx", "pdf") and _apath(a).is_file() and int(a["size"] or 0) <= TQ.MAX_BYTES:
+        d = TQ.create(c, _apath(a).read_bytes(), None, a["name"], meta)
+    else:
+        d = TQ.create(c, None, _plain(ts["text"]), f"{les['code']} matni.txt", meta)
+    with _lock:
+        _con.execute("""INSERT INTO pk_topics(course_id,topic_no,deck_id,updated_at) VALUES(?,?,?,?)
+                        ON CONFLICT(course_id,topic_no) DO UPDATE SET deck_id=excluded.deck_id, updated_at=excluded.updated_at""", (cid, no, d["id"], _now()))
+        _log(c, cid, no, "taqdimot (modul)", f"deck #{d['id']} — ma'ruza matnidan yaratildi"); _con.commit()
+    return {"ok": True, "deck_id": d["id"], "title": d.get("title"), "slides": len((d.get("outline") or {}).get("slides") or []), "engine": d.get("engine_label")}
 
 def lesson_image(c: Ctx, cid: int, no: int, fn: str) -> Response:
     """Ilovada ma'ruza matnini ko'rish uchun dars rasmi (ko'lam tekshiriladi)."""
@@ -3309,7 +3647,7 @@ def ai_keypoints(c: Ctx, cid: int, no: int) -> dict:
     co = _course(c, cid, write=True); les = _check_topic(co, no)
     if not CC.has_key():
         rbac.audit(_con, c, "paket: AI xulosalar — AI ulanmagan", RES, True, f"kurs #{cid} · {les['code']}")
-        raise HTTPException(503, "AI ulanmagan: asosiy xulosalar uchun ANTHROPIC_API_KEY sozlanmagan. Administratorga murojaat qiling. "
+        raise HTTPException(503, "AI ulanmagan — administratorga murojaat qiling. "
                                  "Xulosalarni hozircha qo'lda yozishingiz mumkin.")
     ts = _text_source(cid, no, les)
     if not ts or len(_plain(ts["text"]).strip()) < 200: raise HTTPException(400, "Avval ma'ruza matnini yuklang (kamida 200 belgi)")
@@ -3403,7 +3741,7 @@ def ai_exercises(c: Ctx, cid: int, no: int, sort: bool = False) -> dict:
     co = _course(c, cid, write=True); les = _check_topic(co, no)
     if not CC.has_key():
         rbac.audit(_con, c, "paket: AI mashqlar — AI ulanmagan", RES, True, f"kurs #{cid} · {les['code']}")
-        raise HTTPException(503, "AI ulanmagan: mashqlar uchun ANTHROPIC_API_KEY sozlanmagan. Administratorga murojaat qiling. "
+        raise HTTPException(503, "AI ulanmagan — administratorga murojaat qiling. "
                                  "Mashqlarni hozircha qo'lda kiritishingiz mumkin.")
     ts = _text_source(cid, no, les)
     if not ts or len(_plain(ts["text"]).strip()) < 200: raise HTTPException(400, "Avval ma'ruza matnini yuklang (kamida 200 belgi)")
@@ -3549,15 +3887,15 @@ def pending(c: Ctx) -> list[dict]:
             r = db.one(_con, """SELECT COUNT(*) n, COUNT(DISTINCT p.course_id) nc FROM pk_packages p WHERE p.topic_no>0 AND p.status='tayyor'
                                 AND p.version=(SELECT MAX(version) FROM pk_packages x WHERE x.course_id=p.course_id AND x.topic_no=p.topic_no)""")
             if r and r["n"]:
-                out.append({"id": "approve", "kind": "ish", "title": f"Kontent paketlari: tasdiqni kutayotgan paketlar — {r['n']} ta",
+                out.append({"id": "approve", "kind": "ish", "title": f"Dars tayyorlash: tasdiqni kutayotgan darslar — {r['n']} ta",
                             "sub": f"{r['nc']} ta kursda · ko'rib, tasdiqlash yoki qaytarish kerak", "view": "paket", "tab": "mavzular"})
         elif k == TEACH and _teacher_id(c):
             r = db.one(_con, """SELECT COUNT(*) n FROM pk_packages p JOIN dl_courses c ON c.id=p.course_id WHERE c.teacher_id=? AND p.topic_no>0
                                 AND p.status='qoralama' AND p.note IS NOT NULL
                                 AND p.version=(SELECT MAX(version) FROM pk_packages x WHERE x.course_id=p.course_id AND x.topic_no=p.topic_no)""", (_teacher_id(c),))
             if r and r["n"]:
-                out.append({"id": "returned", "kind": "ish", "title": f"Kontent paketlari: qaytarilgan paketlar — {r['n']} ta",
-                            "sub": "izohni ko'rib, manbani tuzating va qayta yig'ing", "view": "paket", "tab": "mavzular"})
+                out.append({"id": "returned", "kind": "ish", "title": f"Dars tayyorlash: qaytarilgan darslar — {r['n']} ta",
+                            "sub": "izohni ko'rib, faylni tuzating va darsni qayta tayyorlang", "view": "paket", "tab": "mavzular"})
     except Exception as e:
         print("paket.pending:", repr(e))
     return out
@@ -3570,11 +3908,14 @@ def pending(c: Ctx) -> list[dict]:
 def api_meta(request: Request):
     c = C(request); guard(c, "bo'lim ochildi")
     k = c.role.key
-    tabs = ["qamrov", "mavzular", "joylash", "sozlama"] if k in AUTHORS else ["qamrov", "mavzular"] if k == KAF else ["qamrov"]
+    # o'qituvchi — to'g'ridan-to'g'ri o'z darslari (bitta yorliq); bo'lim — Holat, Darslar, Ommaviy, Sozlamalar; kafedra — Holat, Darslar
+    tabs = ["qamrov", "mavzular", "joylash", "sozlama"] if k in DEPT else ["mavzular"] if k == TEACH else ["qamrov", "mavzular"] if k == KAF else ["qamrov"]
     sw, sa = scope(c)
     demo = bool(db.one(_con, f"""SELECT 1 x FROM dl_courses c WHERE {sw} AND (EXISTS(SELECT 1 FROM pk_packages p WHERE p.course_id=c.id AND p.src='demo')
                                  OR EXISTS(SELECT 1 FROM pk_assets a WHERE a.course_id=c.id AND a.src='demo' AND a.deleted=0)) LIMIT 1""", sa))
-    return {"role": k, "tabs": tabs, "today": clock.today().isoformat(), "demo": demo, "player": player_ok(),
+    return {"role": k, "tabs": tabs, "title": "Dars tayyorlash", "lstate": LSTATE, "upload_as": UPLOAD_AS,
+            "tab_labels": {"qamrov": "Holat", "mavzular": "Darslarim" if k == TEACH else "Darslar", "joylash": "Ommaviy", "sozlama": "Sozlamalar"},
+            "today": clock.today().isoformat(), "demo": demo, "player": player_ok(),
             "modes": MODES, "completion": COMPLETION, "status": STATUS, "blocks": BLOCKS, "required": list(REQUIRED), "defaults": defaults(),
             "layouts": LAYOUTS, "sections": SECTIONS, "reflect_default": REFLECT, "assignment_default": ASSIGNMENT, "video_sources": VIDEO_SOURCES,
             "ex_kinds": EX_KINDS, "sub_langs": SUB_LANGS, "default_cover": (a_["id"] if k in WORK and (a_ := _latest_asset(0, 0, "muqova")) else None),
@@ -3631,6 +3972,32 @@ async def _read_body(request: Request, limit: int = MAX_ASSET) -> bytes:
         buf += chunk
         if len(buf) > limit: raise HTTPException(413, f"Fayl hajmi {limit // (1024 * 1024)} MB dan oshmasin")
     return bytes(buf)
+
+@router.get(P + "/queue")
+def api_queue(request: Request):
+    c = C(request); guard(c, "ko'rib chiqish navbati", WORK)
+    return review_queue(c)
+
+class TitleIn(BaseModel):
+    title: str = Field("", max_length=300)
+
+@router.post(P + "/courses/{cid}/topics/{no}/title")
+def api_title(cid: int, no: int, body: TitleIn, request: Request):
+    c = C(request); guard(c, "dars nomi", AUTHORS, f"kurs #{cid} · {lesson_code(no)}")
+    return set_title(c, cid, no, body.title)
+
+@router.post(P + "/courses/{cid}/topics/{no}/upload")
+async def api_upload_any(cid: int, no: int, request: Request, name: str = "fayl", lang: str = "uz", caption: str = ""):
+    """Bitta yuklash nuqtasi (har so'rovda bitta fayl; `?as=` — maqsad, ixtiyoriy). Ruxsat va ko'lam tana o'qilishidan OLDIN tekshiriladi."""
+    c = C(request); guard(c, "fayl yuklash", AUTHORS, f"kurs #{cid} · {lesson_code(no)} · {name[:60]}")
+    co = _course(c, cid, write=True); _check_topic(co, no)
+    up = await _stream_any(request)
+    return await run_in_threadpool(route_upload, c, cid, no, up, name[:160], request.query_params.get("as") or "", lang, caption)
+
+@router.post(P + "/courses/{cid}/topics/{no}/deck/create")
+async def api_deck_create(cid: int, no: int, request: Request):
+    c = C(request); guard(c, "darsdan taqdimot yaratish", AUTHORS, f"kurs #{cid} · {lesson_code(no)}")
+    return await run_in_threadpool(create_deck, c, cid, no)
 
 @router.post(P + "/courses/{cid}/topics/{no}/text")
 async def api_text_upload(cid: int, no: int, request: Request, name: str = "material"):
@@ -3944,7 +4311,9 @@ class ActIn(BaseModel):
 
 @router.post(P + "/packages/{pid}/action")
 def api_package_action(pid: int, body: ActIn, request: Request):
-    c = C(request); guard(c, {"approve": "paketni tasdiqlash", "reject": "paketni qaytarish"}.get(body.action, "paket amali"), DEPT, f"#{pid} {body.action}")
+    c = C(request)
+    guard(c, {"approve": "paketni tasdiqlash", "reject": "paketni qaytarish", "submit": "bo'limga yuborish"}.get(body.action, "paket amali"),
+          AUTHORS if body.action == "submit" else DEPT, f"#{pid} {body.action}")
     return package_action(c, pid, body.action, body.note)
 
 class DefaultsIn(BaseModel):

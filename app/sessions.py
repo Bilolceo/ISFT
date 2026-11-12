@@ -85,6 +85,8 @@ def revoke_all(con):
 
 class Limiter:
     """Xato urinishlar cheklovi: `window` soniya ichida `limit` ta xato → blok (jarayon xotirasida)."""
+    MAX_KEYS = 5000        # xotiradagi kalitlar soni chegarasi (hujum paytida ham o'smaydi)
+
     def __init__(self, limit: int, window: int):
         self.limit, self.window = limit, window
         self._f: dict = {}
@@ -108,8 +110,11 @@ class Limiter:
         now = time.time()
         with self._lock:
             f = self._live(key, now); f.append(now); self._f[key] = f
-            if len(self._f) > 10000:          # xotira cheksiz o'smasin
+            if len(self._f) > self.MAX_KEYS:   # xotira cheksiz o'smasin: avval muddati o'tganlar, yetmasa — eng eski kalitlar
                 for k in [k for k, v in self._f.items() if now - v[-1] >= self.window]: self._f.pop(k, None)
+                if len(self._f) > self.MAX_KEYS:
+                    for k in sorted(self._f, key=lambda k: self._f[k][-1])[:len(self._f) - self.MAX_KEYS + self.MAX_KEYS // 10]:
+                        if k != key: self._f.pop(k, None)
             return max(0, self.limit - len(f))
 
     def reset(self, key):

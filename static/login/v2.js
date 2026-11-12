@@ -66,7 +66,7 @@ window.LOGIN_HTML = `
               autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="go" aria-describedby="lv2Msg">
             <button type="button" class="k-eye" id="pwEye" aria-label="Parolni ko'rsatish" aria-pressed="false" title="Parolni ko'rsatish / yashirish"><span data-ico="eye"></span></button>
           </div>
-          <p class="k-msg" id="lv2Msg" role="status" aria-live="polite"><span data-ico="info"></span><span id="lv2MsgT">${window.ISFT_HIDE_DEMO_HINT ? "Parol katta-kichik harfni farqlaydi" : "Sinov rejimi: parol Isft2026"}</span></p>
+          <p class="k-msg" id="lv2Msg" role="status" aria-live="polite"><span data-ico="info"></span><span id="lv2MsgT">${window.ISFT_HIDE_DEMO_HINT || !(window.ISFT_FLAGS && ISFT_FLAGS.demo_pw) ? "Parol katta-kichik harfni farqlaydi" : "Sinov rejimi: parol " + ISFT_FLAGS.demo_pw}</span></p>
           <button id="loginBtn" type="button" class="btn primary block k-go" disabled><span id="loginTxt">Kirish</span> <span data-ico="arrow"></span></button>
         </div>
       </div>
@@ -79,7 +79,7 @@ window.LOGIN_AFTER = function () {
   if (!L || !L.classList.contains("lv2")) return;
   const q = s => L.querySelector(s);
   const S1 = q("#lv2S1"), S2 = q("#lv2S2"), LIST = q("#roleList"), PW = q("#password"), WRAP = q("#pwWrap"), EYE = q("#pwEye");
-  const DEMO = typeof DEMO_PW === "string" ? DEMO_PW : "Isft2026";
+  const DEMO = typeof DEMO_PW === "string" ? DEMO_PW : "";
   const reduced = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const coarse = () => window.matchMedia("(pointer: coarse)").matches;
   let STEP = 1, msgT = 0, lastEmpty = false;
@@ -222,7 +222,7 @@ window.LOGIN_AFTER = function () {
     const m = q("#lv2Msg");
     m.classList.toggle("bad", kind === "bad");
     m.classList.toggle("warn", kind === "warn");
-    q("#lv2MsgT").textContent = text || (window.ISFT_HIDE_DEMO_HINT ? "Parol katta-kichik harfni farqlaydi" : `Sinov rejimi: parol ${DEMO}`);
+    q("#lv2MsgT").textContent = text || (window.ISFT_HIDE_DEMO_HINT || !DEMO ? "Parol katta-kichik harfni farqlaydi" : `Sinov rejimi: parol ${DEMO}`);
     if (kind === "bad") msgT = setTimeout(() => msg(), 3200);
   }
   const caps = e => {

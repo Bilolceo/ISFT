@@ -141,17 +141,11 @@ def catalog_for(ctx: Ctx):
 
 # ---------------- ko'lam (scope) ----------------
 def _sscope(ctx: Ctx, alias="s"):
-    """Talaba ko'lami: lavozim ko'lami + Sirtqi bo'lim faqat sirtqi ta'lim shaklidagi talabalar bilan ishlaydi."""
-    w = ctx.student_scope(alias)
-    return f"{w} AND {alias}.study_form='sirtqi'" if ctx.role.key == "sirtqi" else w
+    """Talaba ko'lami — yagona qoida (rbac.Ctx.student_scope): tyutor — biriktirilgan guruhlar, Sirtqi bo'lim — sirtqi talabalar."""
+    return ctx.student_scope(alias)
 
 def _groups_sql(ctx: Ctx):
-    sc, u = ctx.role.scope, ctx.user
-    if ctx.role.key == "sirtqi": return "g.id IN (SELECT DISTINCT group_id FROM students WHERE study_form='sirtqi')"
-    if sc == "fakultet": return f"g.faculty_id={int(u['faculty_id'])}"
-    if sc == "kafedra": return f"g.department_id={int(u['department_id'])}"
-    if sc == "o'qituvchi": return f"g.id IN (SELECT group_id FROM teacher_groups WHERE teacher_id={int(u['teacher_id'])})"
-    return "1=1"
+    return ctx.group_scope("g")   # yagona qoida — rbac.Ctx.group_scope
 
 def lookup(con, ctx: Ctx, kind: str, q: str = "", group_id: int = 0):
     # qidiruv faqat shu turdagi maydoni bor shablonga ruxsati bo'lgan lavozimga ochiq (shaxsiy ma'lumot sizib chiqmasin)
@@ -457,26 +451,6 @@ def g_warn_letter(I, p):
     p_ = I.doc.add_paragraph(); B.run(p_, "Tanishdim: ____________________  (talaba imzosi)        Sana: «___» __________ 20___ y.", 10.5)
     I.qr()
 
-def g_reprimand(I, p):
-    """Hayfsan e'lon qilish to'g'risida taqdimnoma (Registrator ofisidan rektorga). Rektor imzolagach hayfsan qayd etiladi
-    (student_ops.discipline_on_doc). Buyruqlar — «Buyruqlar» bo'limida; bu hujjat buyruq emas."""
-    from . import student_ops as OPS
-    s = _expand_students(I.con, I.ctx, p)[0]
-    f = OPS.student_facts(I.con, s["id"])
-    reason = (p.get("reason") or "").strip() or f"joriy semestrda ({AR.SEMESTERS[AR.CURRENT_SEMESTER]}) {f['unexcused']} soat mashg'ulotni sababsiz qoldirgani"
-    I.page(s["full_name"], title="Hayfsan e'lon qilish to'g'risida taqdimnoma")
-    p_ = I.doc.add_paragraph(); p_.alignment = WD_ALIGN_PARAGRAPH.RIGHT; B.run(p_, "ISFT instituti rektoriga", 12, True)
-    B.title(I.doc, "TAQDIMNOMA", "talabaga intizomiy jazo (hayfsan) qo'llash to'g'risida")
-    B.para(I.doc, f"{s['faculty']} fakulteti {s['course']}-kurs {s['grp']}-guruh talabasi {s['full_name']} (HEMIS ID {s['hemis_id']}) "
-           f"{reason}. Institut me'yoriga ko'ra sababsiz qoldirilgan soatlar 48 dan oshganda talabaga hayfsan e'lon qilinadi; "
-           "talaba avval call-markaz orqali ogohlantirilgan va unga ogohlantirish xati berilgan.")
-    B.para(I.doc, f"Yuqoridagilarni inobatga olib, talabaga HAYFSAN e'lon qilishingizni so'rayman. Tyutor talaba bilan suhbat o'tkazadi va natijasini "
-           "Registrator ofisiga ma'lum qiladi. Rektor imzosidan keyin hayfsan talabaning shaxsiy ishiga qayd etiladi.")
-    B.signature(I.doc, *signer(I.con, I.ctx))
-    p_ = I.doc.add_paragraph(); B.run(p_, "ROZIMAN (rektor rezolyutsiyasi): ____________________   «___» __________ 20___ y.", 10.5, True)
-    _agree(I.doc, ["O'quv ishlari bo'yicha prorektor", "Yuridik bo'lim"])
-    I.qr()
-
 def g_retake_sheet(I, p):
     r = db.one(I.con, "SELECT * FROM retakes WHERE id=?", (int(p.get("retake") or 0),))
     if not r: raise ValueError("Otrabotka topilmadi")
@@ -563,7 +537,7 @@ def g_debtors_list(I, p):
     rows = db.rows(I.con, f"""SELECT f.name faculty, g.name grp, s.full_name, s.hemis_id,
         GROUP_CONCAT(gr.subject || ' (' || gr.score || ', ' || gr.semester || ')', '; ') subj, COUNT(*) n
         FROM students s JOIN groups_ g ON g.id=s.group_id JOIN faculties f ON f.id=s.faculty_id JOIN grades gr ON gr.student_id=s.id AND {AR.debt_where('gr')}
-        WHERE s.status='faol' AND {I.ctx.student_scope('s')} GROUP BY s.id ORDER BY f.name, g.name, s.full_name""")
+        WHERE s.status='faol' AND {_sscope(I.ctx, 's')} GROUP BY s.id ORDER BY f.name, g.name, s.full_name""")
     import re as _re
     sem_lbl = lambda txt: _re.sub(r", (-?\d+)\)", lambda m: f", {AR.SEMESTER_SHORT.get(int(m[1]), m[1])})", txt or "")
     I.page(I.ctx.scope_label(I.con))
@@ -704,16 +678,34 @@ def g_exam_permit(I, p):
 def g_personal_schedule(I, p):
     from . import registrar as RG; RG.gen_personal_schedule(I, p)
 
-GEN = {"exam_permit": g_exam_permit, "personal_schedule": g_personal_schedule, "warn_letter": g_warn_letter, "reprimand": g_reprimand, "retake_sheet": g_retake_sheet, "study_cert": g_study_cert, "transcript": g_transcript, "debt_letter": g_debt_letter, "practice": g_practice, "call_letter": g_call_letter,
+GEN = {"exam_permit": g_exam_permit, "personal_schedule": g_personal_schedule, "warn_letter": g_warn_letter, "retake_sheet": g_retake_sheet, "study_cert": g_study_cert, "transcript": g_transcript, "debt_letter": g_debt_letter, "practice": g_practice, "call_letter": g_call_letter,
        "leave_order": g_leave_order, "exam_sheet": g_exam_sheet, "debtors_list": g_debtors_list,
        "load": g_load, "minutes": g_minutes, "exec_notice": g_exec_notice, "memo": g_memo, "work_cert": g_work_cert, "invitation": g_invitation}
+
+# Buyruqlar va hayfsan taqdimnomasi Hujjatlar markazida TUZILMAYDI — yagona joy «Buyruqlar» (app/orders.py): hayfsan → «hayfsan» buyrug'i
+# (imzolansa intizomiy yozuv «amalda»), mehnat ta'tili → «xodim_tatil». Shablonlar katalogda faqat eski hujjatlar nomi uchun qoladi.
+MOVED_TO_ORDERS = {"reprimand": "Hayfsan"}
+
+def _leave_to_orders(con, ctx: Ctx, params: dict) -> dict | None:
+    """«leave_order» (mehnat ta'tili buyrug'i) → «Buyruqlar»dagi xodim buyrug'i loyihasi (orders.draft_staff_leave). Buyruqlar jadvali hali
+    yo'q bo'lsa (bo'sh bazani seed qilish payti) — None: eski loyiha yaratiladi va server startida orders.migrate_legacy_docs ko'chiradi."""
+    if not con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='orders'").fetchone(): return None
+    from . import orders as ORD
+    o = ORD.draft_staff_leave(con, ctx, int(params.get("staff") or 0), params.get("start") or DEFAULTS["start"], params.get("days"), source="Hujjatlar markazi")
+    return {"regs": [f"BUYRUQ#{o['id']}"], "file": None, "status": "loyiha", "order_id": o["id"], "moved": "orders",
+            "title": "Buyruq loyihasi «Buyruqlar» bo'limida yaratildi (rektor imzosini kutadi)"}
 
 def issue(con, ctx: Ctx, key: str, params: dict, base_url: str):
     tpl = CAT.get(key)
     if not tpl: raise ValueError("Noma'lum shablon")
+    if key in MOVED_TO_ORDERS:
+        raise ValueError(f"«{tpl['title']}» endi Hujjatlar markazida tuzilmaydi — «Buyruqlar» bo'limida «{MOVED_TO_ORDERS[key]}» buyrug'i loyihasini yarating")
     if ctx.role.key not in tpl["roles"]:
         audit(con, ctx, f"hujjat: {tpl['title']}", "docs", False)
         raise AccessDenied(f"⛔ «{tpl['title']}»: '{ctx.role.title}' lavozimi bu hujjatni tayyorlay olmaydi. So'rov audit jurnaliga yozildi.")
+    if key == "leave_order":
+        r = _leave_to_orders(con, ctx, params)
+        if r: return r
     I = Issuer(con, ctx, tpl, base_url)
     try:
         GEN[key](I, params)

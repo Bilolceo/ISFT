@@ -891,9 +891,7 @@ def tutor_groups_sql(c: Ctx) -> str:
 def _scope_sql(c: Ctx, alias="s"):
     k = c.role.key
     if k in FULL_VIEW: return "1=1"
-    if k in FAC_VIEW: return f"{alias}.group_id IN {tutor_groups_sql(c)}"
-    if k == "sirtqi": return f"{alias}.study_form='sirtqi'"
-    if k == "kafedra": return f"{alias}.group_id IN (SELECT id FROM groups_ WHERE department_id={int(c.user['department_id'] or 0)})"
+    if k in FAC_VIEW or k in ("sirtqi", "kafedra"): return c.student_scope(alias)   # yagona qoida — rbac.Ctx.student_scope
     if k == "buxgalteriya": return f"{alias}.payment_type='kontrakt'"
     if k == "imtihon": return "1=1"
     return "0=1"
@@ -1303,16 +1301,15 @@ def api_document(tid: int, body: Letter, request: Request):
         o = hayfsan_order(c, [t], body.reason)
         _con.commit()
         return {"ok": True, "reg_no": f"BUYRUQ#{o['id']}", "order_id": o["id"], "file": None, "status": "loyiha", "title": "Hayfsan buyrug'i loyihasi (Buyruqlar bo'limi)"}
+    if t["kind"] == "buyruq":   # buyruq loyihalari faqat «Buyruqlar» modulida (yuqoridagi ikki tur); Hujjatlar markazida buyruq/taqdimnoma tuzilmaydi
+        raise HTTPException(400, "Bu topshiriq bo'yicha buyruq loyihasi «Buyruqlar» bo'limida tuziladi")
     if t["rule"] == "kontrakt": key, params = "debt_letter", {"target": tgt}
-    elif t["kind"] == "buyruq": key, params = "reprimand", {"target": tgt, "reason": body.reason}
     else: key, params = "warn_letter", {"target": tgt, "basis": "akademik" if t["rule"] == "akademik" else "davomat"}
     try:
         r = D.issue(_con, c, key, params, SV.public_base(request))
     except ValueError as e:
         raise HTTPException(400, str(e))
     reg = r["regs"][0]
-    if key == "reprimand":   # hayfsan qayd etiladi: taqdimnoma rektor imzosini kutadi → imzolansa «amalda» (documents.set_status)
-        record_reprimand(_con, c, t["student_id"], reg, r["status"], body.reason)
     _con.execute("UPDATE ops_tasks SET status='bajarildi', outcome='bajarildi', doc_reg=?, done_at=?, done_by=?, note=? WHERE id=?",
                  (reg, _iso(_now()), c.user["id"], f"{D.CAT[key]['title']} — {reg}" + (" (rektor imzosini kutadi)" if r["status"] == "loyiha" else ""), tid))
     _log(_con, t["case_id"], tid, t["student_id"], c, "hujjat tayyorlandi", f"{D.CAT[key]['title']} · {reg}")
@@ -1374,13 +1371,39 @@ def hayfsan_order(c: Ctx, ts: list, reason="") -> dict:
     return o
 
 def sync_discipline(con) -> int:
-    """Buyruqlar modulidagi hayfsan buyrug'i holati → discipline: imzolangan — «amalda», o'chirilgan/bekor qilingan — «bekor»."""
+    """Buyruqlar modulidagi hayfsan buyrug'i holati → discipline: imzolangan — «amalda», o'chirilgan/bekor qilingan — «bekor».
+    HAR QANDAY imzolangan hayfsan buyrug'i (Talabalar markazidan emas, bevosita «Buyruqlar»da tuzilgan yoki Hujjatlar markazidan
+    ko'chirilgan bo'lsa ham) har bir talabasiga «amalda» hayfsan yozuvini beradi. Idempotent: (talaba, BUYRUQ#id) bo'yicha bitta yozuv.
+    Arxiv (historic) buyruqlar — tizimdan oldingi davr — hisobga olinmaydi. orders.sign() imzodan keyin darhol chaqiradi."""
+    n = 0
+    try:
+        signed = db.rows(con, """SELECT o.id, o.reg_no, o.source, o.signed_at, o.signed_by, o.params, i.student_id, i.data FROM orders o
+                                 JOIN order_students i ON i.order_id=o.id AND i.version=o.version
+                                 WHERE o.kind='hayfsan' AND o.status='imzolangan' AND COALESCE(o.historic,0)=0 AND i.student_id IS NOT NULL""")
+    except Exception:
+        signed = []
+    for r in signed:
+        ref = f"BUYRUQ#{r['id']}"
+        if con.execute("SELECT 1 FROM discipline WHERE student_id=? AND doc_reg=?", (r["student_id"], ref)).fetchone(): continue
+        # Hujjatlar markazidan ko'chirilgan eski taqdimnoma yozuvi (doc_reg — hujjat raqami) shu buyruqqa qayta bog'lanadi
+        old = (r["source"] or "").split("Hujjatlar markazi: ", 1)[1].strip() if "Hujjatlar markazi: " in (r["source"] or "") else None
+        if old and con.execute("UPDATE discipline SET doc_reg=? WHERE student_id=? AND doc_reg=? AND status!='bekor'", (ref, r["student_id"], old)).rowcount:
+            n += 1; continue      # holati pastdagi umumiy qadamda «amalda» bo'ladi
+        try: d = {**json.loads(r["params"] or "{}"), **json.loads(r["data"] or "{}")}
+        except Exception: d = {}
+        h = _unexcused_hours(con, r["student_id"])
+        ts = r["signed_at"] or _iso(_now())
+        con.execute("""INSERT INTO discipline(student_id,kind,reason,hours,semester,doc_reg,status,created_at,created_by,signed_at,note)
+                       VALUES(?,?,?,?,?,?,?,?,?,?,?)""", (r["student_id"], "hayfsan", str(d.get("reason") or "").strip()[:300] or
+                       f"joriy semestrda {h} soat dars sababsiz qoldirilgani", h, AR.CURRENT_SEMESTER, ref, "amalda", ts, r["signed_by"], ts, r["reg_no"]))
+        _log(con, None, None, r["student_id"], None, "hayfsan e'lon qilindi (rektor buyruqni imzoladi)", f"{ref} · {r['reg_no'] or ''}")
+        n += 1
     try:
         rows = db.rows(con, """SELECT d.id, d.student_id, d.status, d.doc_reg, o.status ostatus FROM discipline d
                                JOIN orders o ON 'BUYRUQ#' || o.id = d.doc_reg WHERE d.doc_reg LIKE 'BUYRUQ#%' AND d.status!='bekor'""")
     except Exception:
-        return 0
-    n = 0
+        if n: con.commit()
+        return n
     for r in rows:
         st = "amalda" if r["ostatus"] == "imzolangan" else "bekor" if r["ostatus"] in ("bekor", "bekor_qilingan") else None
         if st and st != r["status"]:

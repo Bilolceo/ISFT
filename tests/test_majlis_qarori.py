@@ -58,7 +58,7 @@ ok(len(itstaff.get("/api/dec/list").json()["queue"]["tasks"]) == 1, "IT muhandis
 ok(reg.post(f"/api/dec/task/{rg['id']}/update", json={"status": "bajarildi", "result": "xabar"}).status_code == 409, "Registrator IT natijasisiz yakunlay olmaydi (409)")
 ok(buxg.post(f"/api/dec/task/{it['id']}/update", json={"status": "jarayonda"}).status_code == 403, "Begona bo'lim holatni o'zgartira olmaydi")
 ok(buxg.get(f"/api/dec/{d['id']}").status_code == 403, "Begona bo'lim qarorni ko'rmaydi")
-ok(rektor.post(f"/api/tasks/{it['id']}/status", json={"status": "bajarildi"}).status_code == 403, "Eski API orqali ham chetlab o'tib bo'lmaydi")
+ok(rektor.post(f"/api/tasks/{it['id']}/status", json={"status": "bajarildi"}).status_code in (403, 404, 405), "Eski API (/api/tasks/…/status) olib tashlangan — chetlab o'tib bo'lmaydi")
 # chat
 ok(reg.post(f"/api/dec/task/{rg['id']}/msg", json={"text": "Natija chiqishi bilan yozib qo'ying, xabarni tayyorlab turaman."}).json()["ok"], "Registrator chatga yozdi")
 ok(itstaff.post(f"/api/dec/task/{it['id']}/msg", json={"text": "Tekshiryapman, 14:30 gacha aytaman."}).json()["ok"], "IT muhandisi chatga yozdi")

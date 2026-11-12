@@ -121,6 +121,16 @@ ok(stg.post(X + "/kpi?tid=99999999", json=tbody).status_code == 404, "Mavjud bo'
 ok(stg.post(X + "/kpi/99999999/delete").status_code == 404, "Mavjud bo'lmagan maqsadni o'chirish → 404")
 
 print("— KPI maqsadi: hayotiy sikl —")
+# bir ko'rsatkichga bitta maqsad: demo bazada «davomat» va «ozlashtirmagan» maqsadlari bor — takror qo'shilmaydi (409)
+SEED_COLS = "metric,title,owner_unit,target,good,deadline,note,created_by,created_at,updated_at"
+SEED = q(f"SELECT {SEED_COLS} FROM kpi_targets WHERE metric IN ('davomat','ozlashtirmagan')")
+if SEED:
+    ok(stg.post(X + "/kpi", json={**tbody, "target": 50}).status_code == 409, "Shu ko'rsatkich bo'yicha ikkinchi maqsad → 409 (takror yo'q)")
+    w("DELETE FROM kpi_targets WHERE metric IN ('davomat','ozlashtirmagan')")     # sikl sinovi uchun joy bo'shatiladi; oxirida tiklanadi
+J(stg.post(X + "/kpi", json={**tbody, "target": 101}), 400); ok(True, "Foizli ko'rsatkichga 100% dan katta maqsad → 400")
+J(stg.post(X + "/kpi", json={**tbody, "deadline": D(366 * 6)}), 400); ok(True, "Muddat 5 yildan uzoq → 400")
+J(stg.post(X + "/kpi", json={**tbody, "deadline": D(-1)}), 400); ok(True, "Yangi maqsad muddati o'tgan sana → 400")
+ok(q1("SELECT COUNT(*) FROM kpi_targets WHERE title LIKE 'TEST%'") == 0, "Rad etilgan so'rovlardan yozuv qolmadi")
 dav = ms["davomat"]["value"]
 tid = J(stg.post(X + "/kpi", json={**tbody, "target": dav - 5}))["id"]
 row = q("SELECT metric, owner_unit, target, good, deadline, created_by FROM kpi_targets WHERE id=?", (tid,))[0]
@@ -131,7 +141,11 @@ ok(t["owner_name"] == "Registrator ofisi" and t["unit"] == "%", "Mas'ul bo'lim n
 J(stg.post(X + f"/kpi?tid={tid}", json={**tbody, "target": dav + 5}))
 t = next(x for x in J(stg.get(X + "/kpi"))["targets"] if x["id"] == tid)
 ok(t["target"] == dav + 5 and t["status"] == "yolda", "Tahrir: maqsad oshirildi → «Jarayonda»")
-J(stg.post(X + f"/kpi?tid={tid}", json={**tbody, "target": dav + 5, "deadline": D(-1)}))
+ok(stg.post(X + f"/kpi?tid={tid}", json={**tbody, "target": dav + 5, "deadline": D(-1)}).status_code == 400, "Tahrirda muddatni o'tgan sanaga surib bo'lmaydi (400)")
+ok(stg.post(X + f"/kpi?tid={tid}", json={**tbody, "metric": "ozlashtirmagan", "target": 5}).status_code in (200, 409), "Tahrirda ko'rsatkichni almashtirish — takror bo'lsa 409")
+J(stg.post(X + f"/kpi?tid={tid}", json={**tbody, "target": dav + 5}))
+w("UPDATE kpi_targets SET deadline=? WHERE id=?", (D(-1), tid))      # vaqt o'tishi: muddat kecha tugadi
+J(stg.post(X + f"/kpi?tid={tid}", json={**tbody, "target": dav + 5, "deadline": D(-1)})); ok(True, "O'tgan muddatli maqsadni (muddatini o'zgartirmay) tahrirlash mumkin")
 t = next(x for x in J(stg.get(X + "/kpi"))["targets"] if x["id"] == tid)
 ok(t["status"] == "muddati_otgan" and t["status_label"] == "Muddati o'tdi", "Muddat o'tdi, erishilmagan → «Muddati o'tdi»")
 oz = ms["ozlashtirmagan"]["value"]
@@ -175,6 +189,8 @@ ok(q1("SELECT COUNT(*) FROM kpi_targets WHERE id=?", (tid,)) == 0, "Maqsad o'chi
 ok(not any(i["title"].endswith("TEST davomat maqsadi") for i in mw(stg, "rejalar")[1]), "O'chirilgan maqsad vazifalardan ketdi")
 ok(stg.post(X + f"/kpi/{tid}/delete").status_code == 404, "Qayta o'chirish → 404")
 J(stg.post(X + f"/kpi/{tid2}/delete"))
+for row in SEED:     # demo maqsadlari joyiga qaytariladi
+    w(f"INSERT INTO kpi_targets({SEED_COLS}) VALUES({','.join('?' * 10)})", row)
 
 print("— Sifat topilmasi → kafedraga topshiriq —")
 F0, T0 = q1("SELECT COUNT(*) FROM sifat_findings"), q1("SELECT COUNT(*) FROM tasks")

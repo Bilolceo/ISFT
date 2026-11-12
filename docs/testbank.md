@@ -56,6 +56,14 @@ Tasdiqlangan savolni faqat bo'lim tahrirlaydi yoki o'chiradi.
 O'qituvchi yoki bo'lim xodimi mavzu bo'yicha `.docx`, `.pdf`, `.txt` yuklaydi (fayl turi sehrli baytlar bo'yicha aniqlanadi — `app/taqdimot_extract.py`)
 yoki matnni joylashtiradi. Cheklovlar: fayl ≤ 20 MB, matn kamida 300 belgi, saqlanadi 200 000 belgigacha. Skaner qilingan PDF rad etiladi (matn yo'q).
 
+**«Dars tayyorlash» bilan umumiy matn (2026-11).** Mavzu matni ikki joydan olinadi: Test bankda yuklangan (`tb_sources`) yoki «Dars tayyorlash»da shu
+mavzuga yuklangan ma'ruza matni (`pk_assets`, `purpose='matn'`, rasm/jadval belgilarisiz) — **keyinroq yuklangani** amal qiladi (`_source()`, javobda
+`origin: paket | testbank`). Ikkalasi ham bo'lsa iqtibos tekshiruvi (QC `quote_missing`) ikkala matn bo'yicha qilinadi. Mavzu nomlari ham bir xil ustuvorlikda
+(o'qituvchi kiritgan > Word sarlavhasi > tasdiqlangan sillabus > `dl_items.topic` > «N-mavzu»); Test bankda yuklangan matn sarlavhasi («3-MAVZU: …») nomsiz
+mavzuga nom beradi. UI: «+ Savol qo'shish»; kurs tanlashda «●» o'rniga «— savollari bor»; Word eksporti oldinda, Moodle XML / GIFT / Aiken —
+«Kengaytirilgan» ichida; kalitsiz xabar — «AI ulanmagan — administratorga murojaat qiling» (texnik nomsiz). Dars ekranidagi «Mashq va test qo'shish»
+shu API'lar bilan ishlaydi — o'qituvchi Test bank bo'limiga o'tmasdan savol qo'shadi va tekshiruvga yuboradi.
+
 ## AI generatsiya
 
 - So'rov: mavzular (bir martada ≤ 5), mavzu boshiga savollar soni (1–30), turlar, qiyinlik ulushi (%). Taqsimot kodda hisoblanadi (eng katta qoldiq usuli; bir javobli test — asosiy tur).

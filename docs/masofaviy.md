@@ -118,6 +118,17 @@ Ikkalasi uchun ham:
 - namuna fayllar `/api/masofaviy/template/{activity|content}.csv` manzilida;
 - topilmagan qatorlar o'tkazib yuboriladi va sababi ko'rsatiladi (birinchi 20 tasi).
 
+- **Namuna o'zgarishsiz import qilinadi:** namuna qatorlari bazadagi haqiqiy masofaviy talaba (HEMIS ID) va kurs/material bilan, joriy qiymatlarida
+  (`template_rows()`); kontent namunasi importi hech narsani o'zgartirmaydi (bir xil havola/muddat qayta yozilmaydi).
+
+## Ommaviy tasdiqlash va «Dars tayyorlash» bilan bog'lanish
+
+- `POST /items/bulk-review` `{ids}` (bo'lim): faqat «Yuklandi (tekshiruvda)» holatidagilari tasdiqlanadi, qolganlari o'tkazib yuboriladi
+  (`approved`, `skipped`); har biri tarixga yoziladi. UI: «Materiallar» ro'yxati ustida «Ro'yxatdagi «Tekshiruvda» materiallarni tasdiqlash (N)».
+- «Dars tayyorlash»da ma'ruza darsi tasdiqlansa, shu kurs/mavzuning paketda bor materiallari bu yerda «tasdiqlandi» bo'ladi (`src='paket'`,
+  tarixda «Dars tayyorlash: L3 v1 tasdiqlandi») — o'qituvchidagi «Yuklanmagan, N kun o'tdi» yo'qoladi; tasdiqlangan dars qaytarilsa — shu yo'l bilan
+  yopilganlari «qaytarildi» (`sync_from_package` / `unsync_from_package`, docs/paket.md).
+
 ## Demo ma'lumot (sun'iy)
 
 `masofaviy.seed()` bir marta ishlaydi (`dl_meta.seed_v1`), `--force` bilan qayta yaratiladi.

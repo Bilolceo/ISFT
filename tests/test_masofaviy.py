@@ -208,7 +208,7 @@ ok(e_ == "qoida" and not c_ and d_.get("ai_error") and d_["xulosa"], "AI xatosi:
 for bad in ({"xulosa": None}, {"xulosa": "", "asosiy": [], "xavflar": [], "tavsiyalar": []}, {"xulosa": "Matn.", "asosiy": "x"}, ["x"]):
     d_, e_, _, c_ = DLm._ai_result(F, lambda f, b=bad: (b, {"in": 1, "out": 1}))
     ok(e_ == "qoida" and not c_ and d_["xulosa"], f"Buzuq/bo'sh AI javobi ({str(bad)[:30]}) — zaxira xulosa, keshlanmaydi")
-d_, e_, _, c_ = DLm._ai_result(F, lambda f: ({"xulosa": "Jami 999999 talaba.", "asosiy": ["5 ta kafedra to'xtagan."], "xavflar": [], "tavsiyalar": []}, {}))
+d_, e_, _, c_ = DLm._ai_result(F, lambda f: ({"xulosa": "Jami 999999 talaba.", "asosiy": ["888888 ta kafedra to'xtagan."], "xavflar": [], "tavsiyalar": []}, {}))
 ok(e_ == "qoida" and not c_ and len(d_["removed"]) == 2, "Hamma jumla to'qima bo'lsa — zaxira xulosa, keshlanmaydi")
 tot = F["talabalar"]["jami"]
 d_, e_, _, c_ = DLm._ai_result(F, lambda f: ({"xulosa": f"Masofaviy ta'limda {tot} nafar talaba.", "asosiy": [], "xavflar": [], "tavsiyalar": ["Kafedralar bilan 3 kun ichida uchrashish."]}, {}))
@@ -258,6 +258,27 @@ dst.execute("UPDATE dl_meta SET v=? WHERE k='anchor'", ((mon - dt.timedelta(days
 ok(DLm.redate(dst, today) == 0, "Haqiqiy import bo'lgan bazada surilmaydi")
 dst.close(); shutil.rmtree(tmp.parent, ignore_errors=True)
 ok(head.get(P + "/template/activity.csv").text.lstrip("﻿").startswith("hemis_id;hafta"), "Import namunasi (CSV) yuklab olinadi")
+
+print("== Namuna CSV o'zgarishsiz import qilinadi; ommaviy tasdiqlash; «Dars tayyorlash» bilan bog'lanish")
+for kind_ in ("activity", "content"):
+    tpl = head.get(f"{P}/template/{kind_}.csv")
+    rows_n = len([l for l in tpl.text.strip().splitlines()]) - 1
+    before = q("SELECT status, url, due, src FROM dl_items ORDER BY id") if kind_ == "content" else None
+    ri = head.post(f"{P}/import/{kind_}?name=masofaviy_{kind_}_namuna.csv", content=tpl.content).json()
+    ok(rows_n >= 1 and ri["rows"] == rows_n and ri["ok"] == rows_n and ri["skipped"] == 0 and not ri["errors"], f"Namuna ({kind_}) o'zgarishsiz import qilindi: {ri['ok']}/{rows_n} qator, xatosiz")
+    if before is not None: ok(q("SELECT status, url, due, src FROM dl_items ORDER BY id") == before, "Namuna (content) importi mavjud ma'lumotni o'zgartirmaydi")
+mine3 = q("SELECT i.id FROM dl_items i JOIN dl_courses c ON c.id=i.course_id WHERE c.teacher_id=? AND i.status='kutilmoqda' ORDER BY i.id DESC LIMIT 3", (teach_tid,))
+for x_ in mine3: teach.post(f"{P}/items/{x_['id']}/upload", json={"url": "https://lms.isft.uz/bulk"})
+ids3 = [x_["id"] for x_ in mine3]
+done_id = q("SELECT id FROM dl_items WHERE status='tasdiqlandi' ORDER BY id LIMIT 1")[0]["id"]
+ok(kaf.post(f"{P}/items/bulk-review", json={"ids": ids3}).status_code == 403 and teach.post(f"{P}/items/bulk-review", json={"ids": ids3}).status_code == 403, "Ommaviy tasdiqlash — faqat bo'lim (403)")
+rb = staff.post(f"{P}/items/bulk-review", json={"ids": ids3 + [done_id, 99999999]}).json()
+ok(rb["approved"] == len(ids3) and rb["skipped"] == 2 and all(r_["status"] == "tasdiqlandi" for r_ in q(f"SELECT status FROM dl_items WHERE id IN ({','.join('?' * len(ids3))})", ids3)),
+   f"Ommaviy tasdiqlash: {rb['approved']} ta «Tekshiruvda» tasdiqlandi, boshqa holatdagilari o'tkazib yuborildi")
+ok(all(q("SELECT action, note FROM dl_log WHERE item_id=? ORDER BY id DESC LIMIT 1", (i_,))[0] == {"action": "tasdiqlandi", "note": "ommaviy tasdiqlash"} for i_ in ids3), "Har biri tarixga yozildi")
+ok(head.post(f"{P}/items/bulk-review", json={"ids": []}).status_code == 422, "Bo'sh ro'yxat — 422")
+mjs = httpx.get(B + "/masofaviy.js").text
+ok('id="dlBulk"' in mjs and "/api/masofaviy/items/bulk-review" in mjs, "masofaviy.js: «Tekshiruvda» materiallarni ommaviy tasdiqlash tugmasi")
 
 print("\nNATIJA:", "HAMMASI O'TDI" if not fails else f"{len(fails)} TA XATO")
 sys.exit(1 if fails else 0)

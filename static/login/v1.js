@@ -21,7 +21,7 @@ window.LOGIN_HTML = `
       <div class="v1-combo" id="v1Combo">
         <button type="button" class="v1-pick" id="v1Pick" aria-haspopup="dialog" aria-expanded="false" aria-controls="v1Pop" aria-labelledby="v1Lbl v1PickT">
           <span class="avatar v1-av0" id="v1Av" aria-hidden="true"></span>
-          <span class="v1-pick-t" id="v1PickT"><b id="v1Role">Yuklanmoqda…</b><small id="v1Person">&nbsp;</small></span>
+          <span class="v1-pick-t" id="v1PickT"><b id="v1Role">Lavozimni tanlang</b><small id="v1Person">&nbsp;</small></span>
           <span class="v1-chev" aria-hidden="true"><svg class="i" viewBox="0 0 24 24" width="18" height="18"><path d="m6 9 6 6 6-6"/></svg></span>
         </button>
         <div class="v1-pop" id="v1Pop" role="dialog" aria-label="Lavozimni tanlash">
@@ -39,13 +39,13 @@ window.LOGIN_HTML = `
         <input id="password" type="password" autocomplete="current-password" placeholder="Parolingizni kiriting" spellcheck="false" autocapitalize="off" aria-describedby="v1PwHint">
         <button type="button" class="v1-eye" id="pwEye" aria-label="Parolni ko'rsatish" aria-pressed="false" aria-controls="password"><span class="v1-eye-ic" data-ico="eye"></span></button>
       </div>
-      <p class="v1-hint" id="v1PwHint"${window.ISFT_HIDE_DEMO_HINT ? ' hidden style="display:none"' : ""}><span data-ico="info"></span><span>Sinov rejimi: parol <b>Isft2026</b></span></p>
+      <p class="v1-hint" id="v1PwHint"><span data-ico="info"></span><span>${!window.ISFT_HIDE_DEMO_HINT && window.ISFT_FLAGS && ISFT_FLAGS.demo_pw ? `Sinov rejimi: parol <b>${ISFT_FLAGS.demo_pw}</b>` : "Parolni AT bo'limidan olasiz · katta-kichik harf farqlanadi"}</span></p>
     </div>
 
     <button id="loginBtn" type="button" class="v1-btn" disabled><span id="loginTxt">Kirish</span><span class="v1-btn-ic" data-ico="arrow"></span></button>
   </form>
 
-  <p class="v1-foot">Haqiqiy tizimda kirish OneID yoki HEMIS orqali · ma'lumotlar sun'iy (demo)</p>
+  <p class="v1-foot">Namuna ma'lumot — haqiqiy tizimlar (HEMIS, NEXTID) hali ulanmagan</p>
 </div>`;
 
 window.LOGIN_AFTER = function () {
@@ -62,8 +62,8 @@ window.LOGIN_AFTER = function () {
     pick.classList.toggle("empty", !u);
     if (!u) { av.className = "avatar v1-av0"; av.innerHTML = ico("user", 18); $("#v1Role").textContent = "Lavozimni tanlang"; $("#v1Person").textContent = "Ro'yxat ochiladi"; pick.removeAttribute("title"); return; }
     setAv(av, u, "avatar");
-    $("#v1Role").textContent = u.role; $("#v1Person").textContent = personOf(u);
-    pick.title = u.role + " — " + personOf(u);
+    $("#v1Role").textContent = u.role; $("#v1Person").textContent = personOf(u) || LVL_TABS[u.level] || "";
+    pick.title = [u.role, personOf(u)].filter(Boolean).join(" — ");
   }
 
   /* panel ekrandan (va pastki almashtirgichdan) chiqib ketmasin */

@@ -1,7 +1,7 @@
 """Ma'lumot servislari. Har bir funksiya avval RBAC tekshiruvidan o'tadi va faqat ruxsat etilgan ko'lamni qaytaradi."""
 import datetime as dt, sqlite3
 from . import clock
-from . import db, academic_rules as AR
+from . import db, academic_rules as AR, modules as MODS
 from .rbac import (Ctx, require, AccessDenied, KPI, ACADEMIC, STUDENTS, CONTRACTS, FINANCE, PAYROLL, HR, SCIENCE,
                    INTL, ADMISSIONS, YOUTH, MASTERS, TASKS, AUDIT)
 
@@ -374,7 +374,7 @@ def alerts(con, ctx: Ctx):
 #                "ring": [qism, butun] (ulush = qism/butun) · "progress": [joriy, maksimal] bir xil birlikda
 #   spark_labels (ixtiyoriy) — spark nuqtalari/ustunlari nomlari
 def _sync_at():
-    """HEMIS va buxgalteriya bilan kunlik sinxronlash vaqti. DEMO TAXMIN: jadval — har kuni 08:00 (demo bazada ma'lumot sun'iy)."""
+    """HEMIS va buxgalteriya bilan kunlik sinxronlash vaqti (integratsiya hali yo'q — manba yorlig'i MODS.sample()). DEMO TAXMIN: jadval — har kuni 08:00 (demo bazada ma'lumot sun'iy)."""
     now = clock.now().replace(microsecond=0)
     t = dt.datetime.combine(now.date(), dt.time(8, 0))
     return (t if now >= t else t - dt.timedelta(days=1)).isoformat()
@@ -396,7 +396,7 @@ def kpis(con, ctx: Ctx):
     sync = _sync_at()
     a = safe(academic_overview)
     if a and not a["total"]["n"]:   # masalan, institut kafedrasi (Fundamental iqtisodiy fanlar) — o'z guruhlari yo'q
-        out.append(_k("talabalar", "Talabalar", 0, "kafedraga biriktirilgan guruh yo'q", "HEMIS", sync)); a = None
+        out.append(_k("talabalar", "Talabalar", 0, "kafedraga biriktirilgan guruh yo'q", MODS.sample("HEMIS"), sync)); a = None
     if a:
         t = a["total"]
         sc = ctx.student_scope("s")
@@ -406,20 +406,20 @@ def kpis(con, ctx: Ctx):
         sub = " · ".join(f"{lbl} {k(frm[f])}" for f, lbl in forms) or a["scope"]
         att = db.rows(con, f"""SELECT g.course, ROUND(AVG(s.attendance),1) a FROM students s JOIN groups_ g ON g.id=s.group_id
                                WHERE {sc} AND s.status='faol' AND s.attendance IS NOT NULL GROUP BY g.course ORDER BY g.course""")
-        out += [_k("talabalar", "Faol talabalar", f"{t['n']:,}".replace(",", " "), sub, "HEMIS", sync,
+        out += [_k("talabalar", "Faol talabalar", f"{t['n']:,}".replace(",", " "), sub, MODS.sample("HEMIS"), sync,
                    [frm[f] for f, _ in forms], "bars", [lbl for _, lbl in forms]),
                 # o'rtacha ball (100): oxirgi yakunlangan semestr (Reyting → umumiy ko'rinish bilan bir xil son); avvalgisi — undan oldingi semestr
-                _k("ball", AR.SCORE_LABEL, t["gpa"], f"{AR.SEMESTER_SHORT[AR.RATING_SEMESTER]} · avvalgi semestr: {t['gpa_prev']}", "HEMIS (baholar)", sync,
+                _k("ball", AR.SCORE_LABEL, t["gpa"], f"{AR.SEMESTER_SHORT[AR.RATING_SEMESTER]} · avvalgi semestr: {t['gpa_prev']}", MODS.sample("HEMIS"), sync,
                    [t["gpa_prev"], t["gpa"]], "line", [AR.SEMESTER_SHORT[AR.RATING_SEMESTER - 1], AR.SEMESTER_SHORT[AR.RATING_SEMESTER]],
                    trend=round(t["gpa"] - t["gpa_prev"], 1) if t["gpa"] is not None and t["gpa_prev"] is not None else None),
-                _k("davomat", "Davomat", f"{t['attendance']}%", "kunduzgi va sirtqi (masofaviy — onlayn)", "HEMIS", sync,
+                _k("davomat", "Davomat", f"{t['attendance']}%", "kunduzgi va sirtqi (masofaviy — onlayn)", MODS.sample("HEMIS"), sync,
                    [r["a"] for r in att], "bars", [f"{r['course']}-kurs" for r in att])]
     r = safe(at_risk_students)
     if r:
         last = db.one(con, "SELECT value FROM ops_policy WHERE key='_last_run'") if db.one(con, "SELECT 1 x FROM sqlite_master WHERE name='ops_policy'") else None
         upd = clock.from_ts(last["value"]).replace(microsecond=0).isoformat() if last else sync
         out.append(_k("oqishda_xavf", RISK_LABEL, r["count"], f"{round(100*r['count']/max(1,r['of']),1)}% faol talaba · o'zlashtirish yoki davomat (kritik/jiddiy)",
-                      "Talabalar markazi qoidalari (HEMIS baholari va davomati)", upd, [r["count"], r["of"]], "ring", bad=True))
+                      "Talabalar markazi qoidalari" if MODS.real_data() else "Talabalar markazi qoidalari · namuna ma'lumot (HEMIS ulanmagan)", upd, [r["count"], r["of"]], "ring", bad=True))
     c = safe(contracts_summary)
     if c:
         out.append(_k("kontrakt", "Kontrakt tushumi", f"{c['total']['pct']}%", f"qarz {mln(c['total']['debt'])}", "Buxgalteriya (kontrakt to'lovlari)", sync,

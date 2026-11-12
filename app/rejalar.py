@@ -17,6 +17,8 @@ _ctx = None
 P = "/api/rejalar"
 KPI_EDIT, KPI_READ = ("strategik",), ("rektor", "kengash", "prorektor_oquv", "prorektor_ilmiy", "prorektor_moliya", "prorektor_yoshlar")
 SIF_EDIT, SIF_READ = ("sifat",), ("rektor", "prorektor_oquv")
+TARGET_MAX = 1_000_000_000      # maqsad qiymatning yuqori chegarasi (foizli ko'rsatkich — 100)
+DEADLINE_YEARS = 5              # maqsad muddati bundan uzoq bo'lmaydi
 AKKR_ST = {"yoq": "Boshlanmagan", "jarayonda": "Jarayonda", "tayyor": "Tayyor"}
 
 SCHEMA = """
@@ -122,10 +124,22 @@ def api_kpi_add(body: TargetIn, request: Request, tid: int = 0):
     if body.metric not in ms: raise HTTPException(400, "Ko'rsatkichni tanlang")
     if body.owner_unit not in _units(): raise HTTPException(400, "Mas'ul bo'limni tanlang")
     if not math.isfinite(body.target) or body.target < 0: raise HTTPException(400, "Maqsad qiymat noto'g'ri")
+    unit = str(ms[body.metric].get("unit") or "")
+    if "%" in unit and body.target > 100: raise HTTPException(400, "Foizli ko'rsatkich uchun maqsad 100% dan oshmaydi")
+    if body.target > TARGET_MAX: raise HTTPException(400, f"Maqsad qiymat juda katta (ko'pi bilan {TARGET_MAX:,})".replace(",", " "))
     body.deadline = _date(body.deadline)
+    td = clock.today()
+    if body.deadline > (td + dt.timedelta(days=366 * DEADLINE_YEARS)).isoformat():
+        raise HTTPException(400, f"Muddat {DEADLINE_YEARS} yildan uzoq bo'lmasin")
+    old = db.one(_con, "SELECT * FROM kpi_targets WHERE id=?", (tid,)) if tid else None
+    if tid and not old: raise HTTPException(404, "Maqsad topilmadi")
+    if body.deadline < td.isoformat() and not (old and old["deadline"] == body.deadline):   # yangi muddat o'tmishda bo'lmaydi (eski muddatni saqlab tahrirlash mumkin)
+        raise HTTPException(400, "Muddat o'tgan sana bo'lmasin")
+    dup = db.one(_con, "SELECT id, title FROM kpi_targets WHERE metric=? AND id!=?", (body.metric, tid))
+    if dup:      # bir ko'rsatkichga bitta maqsad: ikki xil maqsad qiymati hisobotda bir-biriga zid chiqadi
+        raise HTTPException(409, f"«{ms[body.metric]['label']}» ko'rsatkichi bo'yicha maqsad allaqachon bor («{dup['title']}») — uni tahrirlang")
     title = body.title.strip() or ms[body.metric]["label"]
     if tid:
-        if not db.one(_con, "SELECT 1 x FROM kpi_targets WHERE id=?", (tid,)): raise HTTPException(404, "Maqsad topilmadi")
         _con.execute("UPDATE kpi_targets SET metric=?, title=?, owner_unit=?, target=?, good=?, deadline=?, note=?, updated_at=? WHERE id=?",
                      (body.metric, title, body.owner_unit, body.target, ms[body.metric]["good"], body.deadline, body.note, _now(), tid))
     else:
@@ -138,8 +152,8 @@ def api_kpi_add(body: TargetIn, request: Request, tid: int = 0):
 @router.post(P + "/kpi/{tid}/delete")
 def api_kpi_del(tid: int, request: Request):
     c = C(request, KPI_EDIT, (), True)
-    if not _con.execute("DELETE FROM kpi_targets WHERE id=?", (tid,)).rowcount: raise HTTPException(404, "Maqsad topilmadi")
-    _con.commit()
+    if not db.one(_con, "SELECT 1 x FROM kpi_targets WHERE id=?", (tid,)): raise HTTPException(404, "Maqsad topilmadi")   # DELETE dan oldin: ochiq tranzaksiya qolmasin
+    _con.execute("DELETE FROM kpi_targets WHERE id=?", (tid,)); _con.commit()
     rbac.audit(_con, c, "KPI maqsadi o'chirildi", rbac.KPI, True, f"#{tid}")
     return {"ok": True}
 

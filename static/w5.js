@@ -11,7 +11,7 @@ async function w5(path, body, method) {
     headers: body instanceof Blob ? {} : {"Content-Type": "application/json"}, body: body === undefined ? undefined : body instanceof Blob ? body : JSON.stringify(body)});
   if (r.status === 401) { showLogin(); throw new Error("auth"); }
   if (!r.ok) {
-    let m = "Xatolik"; try { const j = await r.json(); m = j.message || (typeof j.detail === "string" ? j.detail : (j.detail?.[0]?.msg || m)); } catch (e) {}
+    let m = "Xatolik"; try { const j = await r.json(); m = j.message || (typeof j.detail === "string" ? j.detail : (Array.isArray(j.detail) ? "Maydonlar to'liq yoki to'g'ri to'ldirilmagan — tekshirib, qayta urinib ko'ring" : m)); } catch (e) {}
     toast(m); const e = new Error("denied"); e.msg = m; throw e;
   }
   return r.headers.get("content-type")?.includes("json") ? r.json() : r;
@@ -43,7 +43,7 @@ async function renderKiruvchi() {
   const m = DV.meta, c = m.counts || {};
   if (!DV.st && !m.can.register) DV.st = "royxatda";
   const segs = [["", "Hammasi"], ["royxatda", "Rezolyutsiya kutilmoqda", c.royxatda], ["ijroda", "Ijroda", c.ijroda], ["muddati", "Muddati o'tgan"], ["javob", "Javob berildi"], ["yopildi", "Yopildi"]];
-  el.innerHTML = w5head("Kiruvchi xatlar", m.can.register ? "Tashqi tashkilotlardan kelgan xatlar: ro'yxatga olish → rezolyutsiya → ijro → javob" : "Sizga rezolyutsiya uchun yo'naltirilgan xatlar",
+  el.innerHTML = w5head("Kiruvchi xatlar", esc(m.subtitle || (m.can.register ? "Tashqi tashkilotlardan kelgan xatlar: ro'yxatga olish → rezolyutsiya → ijro → javob" : "Sizga rezolyutsiya uchun yo'naltirilgan xatlar")),   /* devon.py: lavozimga xos izoh */
       m.can.register ? `<button class="btn primary sm" id="dvNew">${ico("plus", 15)} Xatni ro'yxatga olish</button>` : "") +
     `<div class="card"><div class="w5-bar">${w5seg(segs, DV.st, "st")}<label class="w5-search">${ico("search", 15)}<input id="dvQ" placeholder="Raqam, jo'natuvchi yoki mavzu" value="${esc(DV.q)}"></label></div><div id="dvList"><p class="muted">Yuklanmoqda…</p></div></div>`;
   hydrateIcons(el);
@@ -71,6 +71,14 @@ async function dvList() {
   box.querySelectorAll("[data-close]").forEach(b => b.onclick = () => dvClose(+b.dataset.close));
   box.querySelectorAll("[data-file]").forEach(b => b.onclick = () => dvFile(+b.dataset.file));
 }
+/* majburiy matn maydonlari: [id, eng kam uzunlik, xabar] — birinchi xato maydonga fokus, o'zbekcha xabar */
+function w5need(bg, rules) {
+  for (const [id, min, msg] of rules) {
+    const el = bg.querySelector("#" + id), v = (el?.value || "").trim();
+    if (v.length < min) { toast(msg); if (el) { el.focus(); el.setAttribute("aria-invalid", "true"); el.addEventListener("input", () => el.removeAttribute("aria-invalid"), {once: true}); } return false; }
+  }
+  return true;
+}
 function dvNew() {
   const m = DV.meta;
   w5Modal("Kiruvchi xatni ro'yxatga olish", `<div class="w5-grid">
@@ -81,6 +89,11 @@ function dvNew() {
     <label class="w5-full">Qisqa mazmun<textarea id="f6" rows="2" maxlength="2000"></textarea></label>
     <label class="w5-full">Rezolyutsiya uchun<select id="f7">${Object.entries(m.resolvers).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("")}</select></label>
     <label class="w5-full">Skan (PDF/JPG/PNG/DOCX, ixtiyoriy)<input id="f8" type="file" accept=".pdf,.jpg,.jpeg,.png,.docx"></label></div>`, async bg => {
+    /* server tekshiruvi inglizcha xabar qaytarmasligi uchun — maydonlar shu yerda tekshiriladi */
+    if (!w5need(bg, [["f1", 2, "Jo'natuvchi tashkilot nomini yozing (kamida 2 ta belgi)"], ["f5", 3, "Xat mavzusini yozing (kamida 3 ta belgi)"]])) return false;
+    if (!w5v(bg, "f2")) { toast("Kiruvchi sanani tanlang"); bg.querySelector("#f2").focus(); return false; }
+    if (w5v(bg, "f2") > w5today()) { toast("Kiruvchi sana kelajakda bo'lishi mumkin emas"); bg.querySelector("#f2").focus(); return false; }
+    if (w5v(bg, "f4") && w5v(bg, "f4") > w5v(bg, "f2")) { toast("Jo'natuvchi sanasi kiruvchi sanadan keyin bo'lishi mumkin emas"); bg.querySelector("#f4").focus(); return false; }
     const r = await w5("/api/devon/letters", {sender: w5v(bg, "f1"), in_date: w5v(bg, "f2"), sender_no: w5v(bg, "f3"), sender_date: w5v(bg, "f4"),
       subject: w5v(bg, "f5"), summary: w5v(bg, "f6"), resolver_role: w5v(bg, "f7")});
     const f = bg.querySelector("#f8").files[0];
@@ -102,8 +115,10 @@ function dvRes(x) {
     <label class="w5-full">Rezolyutsiya matni *<textarea id="f1" rows="2" maxlength="1000">Ijro uchun. Muddatida javob loyihasi tayyorlansin.</textarea></label>
     <label>Ijrochi bo'lim *<select id="f2"><option value="">Tanlang…</option>${m.units.map(u => `<option value="${u.key}">${esc(u.name)}</option>`).join("")}</select></label>
     <label>Ijro muddati *<input id="f3" type="date" value="${w5plus(10)}" min="${w5today()}"></label></div>
-    <p class="tiny muted">Ijrochi bo'limga Portal orqali topshiriq xati avtomatik yuboriladi.</p>`, async bg => {
+    <p class="tiny muted">Ijrochi bo'limga «Yozishmalar» orqali topshiriq xati avtomatik yuboriladi.</p>`, async bg => {
+    if (!w5need(bg, [["f1", 3, "Rezolyutsiya matnini yozing (kamida 3 ta belgi)"]])) return false;
     if (!w5v(bg, "f2")) { toast("Ijrochi bo'limni tanlang"); return false; }
+    if (!w5v(bg, "f3")) { toast("Ijro muddatini tanlang"); return false; }
     await w5(`/api/devon/letters/${x.id}/resolution`, {resolution: w5v(bg, "f1"), executor_unit: w5v(bg, "f2"), due: w5v(bg, "f3")});
     toast("Rezolyutsiya qo'yildi, ijrochiga yuborildi"); renderKiruvchi();
   }, "Rezolyutsiya berish");
@@ -136,10 +151,11 @@ async function renderQabul() {
   el.innerHTML = w5head("Qabul", "Abituriyentlar oqimi: ariza → hujjatlar → imtihon / suhbat → shartnoma → qabul buyrug'i loyihasi",
       m.can_edit ? `<button class="btn primary sm" id="qbNew">${ico("plus", 15)} Yangi ariza</button>` : "") +
     `<div class="w5-funnel">${order.map(k => `<button type="button" class="w5-step ${QB.stage === k ? "on" : ""} ${k === "rad" ? "rad" : ""}" data-stage="${k}"><b>${fmt(s[k] || 0)}</b><span>${esc(m.stages[k])}</span></button>`).join("")}</div>
-    <div class="grid g2"><div class="card"><div class="w5-bar"><select id="qbDir"><option value="">Barcha yo'nalishlar</option>${m.directions.map(d => `<option${QB.dir === d ? " selected" : ""}>${esc(d)}</option>`).join("")}</select>
+    <div class="w5-qb"><div class="card"><div class="w5-bar"><select id="qbDir"><option value="">Barcha yo'nalishlar</option>${m.directions.map(d => `<option${QB.dir === d ? " selected" : ""}>${esc(d)}</option>`).join("")}</select>
       <label class="w5-search">${ico("search", 15)}<input id="qbQ" placeholder="F.I.Sh. yoki shartnoma №" value="${esc(QB.q)}"></label>${QB.stage ? `<button class="btn sm ghost" id="qbAll">Barcha bosqichlar</button>` : ""}</div><div id="qbList"></div></div>
     <div class="card"><h3 style="margin-top:0">Yo'nalishlar bo'yicha</h3>${tbl(["Yo'nalish", "#Jami", "#Ariza", "#Hujjat", "#Imtihon", "#Shartnoma", "#Buyruq", ""],
-      m.by_direction.map(r => [esc(r.direction), r.n, r.ariza, r.hujjat, r.imtihon, r.shartnoma, r.buyruq, m.can_edit && r.shartnoma ? `<button class="btn sm" data-order="${esc(r.direction)}">Buyruq loyihasi</button>` : ""]), {nw: [0]})}</div></div>
+      m.by_direction.map(r => [esc(r.direction), r.n, r.ariza, r.hujjat, r.imtihon, r.shartnoma, r.buyruq, m.can_edit && r.shartnoma ? `<button class="btn sm" data-order="${esc(r.direction)}" title="Faqat .docx loyiha tayyorlanadi — bosqich o'zgarmaydi; pastdagi «Buyruq loyihalari»da tasdiqlanadi">Buyruq loyihasi</button>` : ""]), {nw: [0]})}</div>
+      <div class="card" id="qbBatches"></div></div>
     ${(m.by_payment || []).length ? `<div class="card"><h3 style="margin-top:0">To'lov turi bo'yicha (rad etilmaganlar)</h3>${tbl(["To'lov turi", "#Faol arizalar", "#Shartnoma tuzilgan"], m.by_payment.map(r => [esc(({kontrakt: "Kontrakt", grant: "Grant"})[r.payment_type] || r.payment_type || "—"), r.n, r.shartnoma]))}</div>` : ""}
     ${m.desk && m.desk.indicators && m.desk.indicators.length ? `<details class="pg-info"><summary>${ico("chart", 14)}Qabul tahlili (o'tgan kampaniya, jamlangan)</summary><div class="grid g3 desk-inds">${m.desk.indicators.map(deskInd).join("")}</div></details>` : ""}`;
   hydrateIcons(el);
@@ -150,9 +166,10 @@ async function renderQabul() {
   if ($("#qbNew")) $("#qbNew").onclick = qbNew;
   el.querySelectorAll("[data-order]").forEach(b => b.onclick = () => { if (!arm(b, "Ha, loyiha")) return; busy(b, async () => {
     const r = await w5("/api/qabul/order?" + new URLSearchParams({direction: b.dataset.order}), {});
-    const bl = await r.blob(), a = document.createElement("a"); a.href = URL.createObjectURL(bl); a.download = "qabul-buyrugi-loyihasi.docx"; a.click();
-    toast("Buyruq loyihasi yuklab olindi"); renderQabul(); }); });
-  qbList();
+    const bid = r.headers.get("X-Qabul-Batch");
+    w5save(await r.blob(), "qabul-buyrugi-loyihasi.docx");
+    toast(`Buyruq loyihasi${bid ? ` №${bid}` : ""} yuklab olindi — bosqichlar o'zgarmadi. Tekshirib, «Buyruq loyihalari»da tasdiqlang`); renderQabul(); }); });
+  qbList(); qbBatches();
 }
 async function qbList() {
   const d = await w5("/api/qabul/applicants?" + new URLSearchParams({stage: QB.stage, direction: QB.dir, q: QB.q})), m = QB.meta, box = $("#qbList");
@@ -161,7 +178,7 @@ async function qbList() {
     <td>${esc(x.full_name)}<div class="tiny muted">${esc(x.study_form || "")} · ${esc(x.payment_type || "")}${x.contract_no ? " · " + esc(x.contract_no) : ""}</div></td>
     <td class="tiny">${esc(x.direction)}</td><td><span class="tag ${x.stage === "rad" ? "high" : x.stage === "buyruq" ? "low" : ""}">${esc(x.stage_label)}</span>${x.note ? `<div class="tiny muted">${esc(x.note)}</div>` : ""}</td>
     <td>${x.exam_score ?? "—"}</td>
-    <td class="nw">${m.can_edit && m.next[x.stage] ? `<button class="btn sm primary" data-adv="${x.id}">${esc({ariza: "Hujjatlar tekshirildi", hujjat: "Imtihon bali", imtihon: "Shartnoma tuzildi"}[x.stage])}</button>
+    <td class="w5-acts-c">${m.can_edit && m.next[x.stage] ? `<button class="btn sm primary" data-adv="${x.id}">${esc({ariza: "Hujjatlar tekshirildi", hujjat: "Imtihon bali", imtihon: "Shartnoma tuzildi"}[x.stage])}</button>
       <button class="btn sm ghost" data-rej="${x.id}">Rad</button>` : ""}</td></tr>`).join("")}</tbody></table>${d.items.length > 150 ? `<p class="tiny muted">Birinchi 150 ta · filtrdan foydalaning</p>` : ""}`;
   box.querySelectorAll("[data-adv]").forEach(b => b.onclick = () => {
     const x = d.items.find(i => i.id === +b.dataset.adv);
@@ -172,12 +189,35 @@ async function qbList() {
   box.querySelectorAll("[data-rej]").forEach(b => b.onclick = () => w5Modal("Arizani rad etish", `<label>Sabab *<input id="f1" maxlength="300"></label>`, async bg => {
     await w5(`/api/qabul/applicants/${b.dataset.rej}/reject`, {note: w5v(bg, "f1")}); toast("Rad etildi"); renderQabul(); }, "Rad etish"));
 }
+function w5save(blob, name) { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000); }
+/* Buyruq loyihalari (qb_batches): loyiha → [Tasdiqlash] kiritilgan → [Yakunlash: reg. raqami] imzolangan; imzolanmaguncha [Bekor qilish] */
+async function qbBatches() {
+  const box = $("#qbBatches"); if (!box) return;
+  let d; try { d = await w5("/api/qabul/batches"); } catch (e) { box.remove(); return; }
+  const m = QB.meta, items = d.items || [], stc = {loyiha: "mid", kiritilgan: "", imzolangan: "low", bekor: "gray"};
+  box.innerHTML = `<h3 style="margin-top:0">Buyruq loyihalari</h3>` + (items.length ? `<table class="tbl w5-tbl"><thead><tr><th>№</th><th>Yo'nalish</th><th>Abituriyent</th><th>Holat</th><th></th></tr></thead><tbody>${items.slice(0, 30).map(b => `<tr>
+      <td>${b.id}<div class="tiny muted">${dmy(String(b.created_at || "").slice(0, 10))}</div></td><td class="tiny">${esc(b.direction)}${b.created_by_name ? `<div class="muted">${esc(String(b.created_by_name).split(":")[0])}</div>` : ""}</td><td>${fmt(b.n)}</td>
+      <td><span class="tag ${stc[b.status] ?? ""}">${esc(b.status_label)}</span>${b.reg_no ? `<div class="tiny muted">${esc(b.reg_no)}</div>` : ""}${b.note ? `<div class="tiny muted">${esc(b.note)}</div>` : ""}</td>
+      <td class="w5-acts-c">${b.can_download ? `<button class="btn sm ghost" data-bdl="${b.id}">Qayta yuklab olish</button>` : ""}${m.can_edit && b.can_confirm ? `<button class="btn sm primary" data-bok="${b.id}">Tasdiqlash</button>` : ""}${m.can_edit && b.can_finalize ? `<button class="btn sm primary" data-bfin="${b.id}">Yakunlash</button>` : ""}${m.can_edit && b.can_rollback ? `<button class="btn sm ghost" data-bno="${b.id}">Bekor qilish</button>` : ""}</td></tr>`).join("")}</tbody></table>
+      <p class="tiny muted" style="margin:8px 0 0">«Tasdiqlash» — abituriyentlar «buyruq» bosqichiga o'tadi. «Yakunlash» — rektor imzolagan buyruq raqami kiritiladi (keyin qaytarib bo'lmaydi). «Bekor qilish» — abituriyentlar «shartnoma» bosqichiga qaytadi.</p>`
+    : `<p class="muted" style="margin:0">Hali buyruq loyihasi yo'q. Yuqoridagi jadvalda yo'nalish qatoridagi «Buyruq loyihasi» tugmasi .docx tayyorlaydi — bosqichlar faqat tasdiqdan keyin o'zgaradi.</p>`);
+  const re = () => renderQabul();
+  box.querySelectorAll("[data-bdl]").forEach(b => b.onclick = () => busy(b, async () => { const r = await w5(`/api/qabul/batches/${b.dataset.bdl}/docx`); w5save(await r.blob(), `qabul-buyrugi-loyihasi-${b.dataset.bdl}.docx`); }));
+  box.querySelectorAll("[data-bok]").forEach(b => b.onclick = () => { if (!arm(b, "Ha, tasdiqlash")) return; busy(b, async () => { await w5(`/api/qabul/batches/${b.dataset.bok}/confirm`, {}); toast("Tasdiqlandi — abituriyentlar «buyruq» bosqichiga o'tdi"); re(); }); });
+  box.querySelectorAll("[data-bno]").forEach(b => b.onclick = () => w5Modal(`Buyruq loyihasi №${b.dataset.bno} ni bekor qilish`, `<label>Sabab (ixtiyoriy)<input id="f1" maxlength="300"></label><p class="tiny muted">Tasdiqlangan bo'lsa, abituriyentlar «shartnoma» bosqichiga qaytadi.</p>`, async bg => {
+    const r = await w5(`/api/qabul/batches/${b.dataset.bno}/rollback`, {note: w5v(bg, "f1")}); toast(r.returned ? `Bekor qilindi — ${r.returned} ta abituriyent «shartnoma» bosqichiga qaytdi` : "Loyiha bekor qilindi"); re(); }, "Bekor qilish"));
+  box.querySelectorAll("[data-bfin]").forEach(b => b.onclick = () => w5Modal(`Buyruq loyihasi №${b.dataset.bfin} ni yakunlash`, `<label>Imzolangan buyruq raqami *<input id="f1" maxlength="40" placeholder="Masalan: 245-T"></label><p class="tiny muted">Shundan keyin to'plamni qaytarib bo'lmaydi.</p>`, async bg => {
+    if (!w5need(bg, [["f1", 3, "Imzolangan buyruq raqamini kiriting (kamida 3 ta belgi)"]])) return false;
+    await w5(`/api/qabul/batches/${b.dataset.bfin}/finalize`, {reg_no: w5v(bg, "f1")}); toast("Yakunlandi — buyruq raqami yozildi"); re(); }, "Yakunlash"));
+}
 function qbNew() {
   const m = QB.meta;
   w5Modal("Yangi ariza", `<div class="w5-grid"><label class="w5-full">F.I.Sh. *<input id="f1" maxlength="120"></label><label>Telefon<input id="f2" maxlength="30"></label>
     <label>Yo'nalish *<select id="f3">${m.directions.map(d => `<option>${esc(d)}</option>`).join("")}</select></label>
-    <label>Ta'lim shakli<select id="f4"><option>kunduzgi</option><option>sirtqi</option></select></label><label>To'lov<select id="f5"><option>kontrakt</option><option>grant</option></select></label></div>`,
-    async bg => { await w5("/api/qabul/applicants", {full_name: w5v(bg, "f1"), phone: w5v(bg, "f2"), direction: w5v(bg, "f3"), study_form: w5v(bg, "f4"), payment_type: w5v(bg, "f5")});
+    <label>Ta'lim shakli<select id="f4">${(m.forms || ["kunduzgi", "sirtqi", "kechki", "masofaviy"]).map(f => `<option>${esc(f)}</option>`).join("")}</select></label><label>To'lov<select id="f5">${(m.payments || ["kontrakt", "grant"]).map(p => `<option>${esc(p)}</option>`).join("")}</select></label></div>`,
+    async bg => { if (!w5need(bg, [["f1", 5, "Abituriyentning F.I.Sh.ni to'liq yozing (kamida 5 ta belgi)"]])) return false;
+      if (!w5v(bg, "f3")) { toast("Yo'nalishni tanlang"); return false; }
+      await w5("/api/qabul/applicants", {full_name: w5v(bg, "f1"), phone: w5v(bg, "f2"), direction: w5v(bg, "f3"), study_form: w5v(bg, "f4"), payment_type: w5v(bg, "f5")});
       toast("Ariza qabul qilindi"); renderQabul(); }, "Qabul qilish");
 }
 

@@ -183,8 +183,8 @@ document.addEventListener("scroll", () => acMenuClose(), true);
 
 /* ---------- qator ostidagi panel: tasdiqlash, natija, tahrirlash ---------- */
 const AC_CONFIRM = {
-  "reset-password": u => [`<b>${esc(acPerson(u))}</b> uchun yangi vaqtinchalik parol yaratiladi. Eski parol ishlamay qoladi, barcha ochiq sessiyalari yopiladi.${u.protected ? " <b>Rahbariyat akkaunti</b> — amal audit jurnaliga alohida yoziladi." : ""}`, "Parolni tiklash", ""],
-  "demo-password": u => [`<b>${esc(acPerson(u))}</b> paroli sinov paroliga (<code>Isft2026</code>) qaytariladi va sessiyalari yopiladi. Faqat sinov rejimida mavjud.`, "Sinov parolini tiklash", ""],
+  "reset-password": u => [`<b>${esc(acPerson(u))}</b> uchun yangi vaqtinchalik parol yaratiladi. Eski parol ishlamay qoladi, barcha ochiq sessiyalari yopiladi${u.telegram ? " va Telegram ulanishi uziladi" : ""}.${u.protected ? " <b>Rahbariyat akkaunti</b> — amal audit jurnaliga alohida yoziladi." : ""}`, "Parolni tiklash", ""],
+  "demo-password": u => [`<b>${esc(acPerson(u))}</b> paroli sinov paroliga (<code>Isft2026</code>) qaytariladi, sessiyalari yopiladi${u.telegram ? " va Telegram ulanishi uziladi" : ""}. Faqat sinov rejimida mavjud.`, "Sinov parolini tiklash", ""],
   "unlock": u => [`<b>${esc(acPerson(u))}</b> uchun noto'g'ri urinishlar cheklovi tozalanadi — darhol qayta kira oladi.`, "Blokdan chiqarish", ""],
   "revoke": u => [`<b>${esc(acPerson(u))}</b>ning barcha qurilmalardagi ${u.sessions} ta ochiq sessiyasi yopiladi${u.self ? " (joriy brauzeringiz bundan mustasno)" : ""}. Qayta kirish uchun parol kerak bo'ladi.`, "Sessiyalarni yopish", ""],
   "unlink-telegram": u => [`<b>${esc(acPerson(u))}</b>ning Telegram ulanishi uziladi. Qayta ulash uchun xodim kod va parolni botga yuboradi.`, "Telegram'ni uzish", ""],
@@ -269,7 +269,7 @@ function acPanelBind() {
   if (doB) doB.onclick = () => (AC_ARM[doB.dataset.do] && typeof arm === "function" && !arm(doB, AC_ARM[doB.dataset.do])) ? null : acRun(doB, async () => {
     const k = doB.dataset.do, r = await acApi(`/api/accounts/${id}/${k}`, {});
     if (r.password) {
-      AC.open.result = `<div class="ac-done" role="status">${ico("checkc", 18)}<div><b>${esc(acPerson(u))}: yangi parol yaratildi</b>${r.revoked ? `<span class="muted tiny">${r.revoked} ta sessiya yopildi</span>` : ""}${acPwBox(r.password)}
+      AC.open.result = `<div class="ac-done" role="status">${ico("checkc", 18)}<div><b>${esc(acPerson(u))}: yangi parol yaratildi</b>${r.revoked ? `<span class="muted tiny">${r.revoked} ta sessiya yopildi</span>` : ""}${r.telegram_unlinked ? `<span class="muted tiny">Telegram ulanishi uzildi — xodim botga kod va yangi parolni qayta yuboradi</span>` : ""}${acPwBox(r.password)}
         <button type="button" class="btn sm" data-cancel>Yopish</button></div></div>`;
       await acReload(false, true);
       return;

@@ -70,7 +70,7 @@ def main():
     html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
     js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
     ok('data-v="accounts"' in html and 'id="v-accounts"' in html and 'src="accounts.js"' in html, "index.html: menyu, bo'lim va skript ulangan")
-    ok("renderAccounts" in js and '["it_head", "rektor"].includes(ME.role_key)' in js, "app.js: ko'rinish xaritasi va menyu cheklovi (it_head, rektor)")
+    ok("renderAccounts" in js and '["accounts", "rbac", "audit"].forEach' in js and 'ME.role_key !== "it_head"' in js, "app.js: ko'rinish xaritasi; tizim sahifalari menyuda faqat AT bo'limi boshlig'ida")
     ok(anon.get("/api/accounts").status_code == 401, "kirmagan foydalanuvchi: 401")
 
     # ---------- ruxsatlar ----------
