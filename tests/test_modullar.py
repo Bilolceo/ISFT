@@ -38,7 +38,7 @@ def q(sql, args=()):
     finally: con.close()
 
 REKTOR, IT, TEACHER, REG, XOJ = 2, 21, 15, 17, 16
-ON = {"panel", "mywork", "tasks", "portal", "documents", "orders", "ops", "masofaviy", "paket", "studio", "testbank", "taqdimot", "service", "accounts", "audit", "rbac", "modullar", "chat", "agents", "cams", "spaces"}   # chat, agents, kameralar — rahbariyat so'rovi bilan qaytarildi
+ON = {"panel", "mywork", "tasks", "portal", "documents", "orders", "ops", "masofaviy", "paket", "kurs", "studio", "testbank", "taqdimot", "service", "accounts", "audit", "rbac", "modullar", "chat", "agents", "cams", "spaces"}   # chat, agents, kameralar — rahbariyat so'rovi bilan qaytarildi
 OFF = {"moliya", "kadrlar", "staffabs", "yoshlar", "syllabus", "flows", "reyting", "amaliyot", "ilmiy", "xalqaro", "rejalar", "tekshiruv",
        "qabul", "docs", "reports", "kiruvchi"}
 

@@ -22,16 +22,18 @@ def ok(cond, msg):
 print("== 1. Pleyer fayllari va hajm")
 files = [p for p in PL.rglob("*") if p.is_file() and p.name != ".DS_Store"]
 names = {str(p.relative_to(PL)) for p in files}
-ok({"index.html", "player.js", "player.css"} <= names, "index.html, player.js, player.css mavjud")
+ok({"index.html", "player.js", "player.css", "lms.js"} <= names, "index.html, player.js, player.css, lms.js (LMS adapterlari — kurs pleyeri bilan umumiy) mavjud")
 size = sum(p.stat().st_size for p in files)
 ok(size <= 260 * 1024, f"Pleyer hajmi {size / 1024:.1f} KB ≤ 260 KB (shriftlar bilan)")
 ok(all(p.suffix in {".html", ".js", ".css", ".woff2"} for p in files), "Faqat html/js/css/woff2 fayllar: " + ", ".join(sorted(names)))
 
 html = (PL / "index.html").read_text(encoding="utf-8")
-js = (PL / "player.js").read_text(encoding="utf-8")
+pjs = (PL / "player.js").read_text(encoding="utf-8")
+ljs = (PL / "lms.js").read_text(encoding="utf-8")
+js = pjs + "\n" + ljs          # standartlar kalit so'zlari — ikkala faylda (adapterlar lms.js da)
 css = (PL / "player.css").read_text(encoding="utf-8") + "".join(p.read_text(encoding="utf-8") for p in PL.rglob("*.css") if p.name != "player.css")
 srcs = re.findall(r'<script[^>]*\bsrc="([^"]+)"', html)
-ok(srcs == ["content.js", "player.js"], f"index.html avval content.js, keyin player.js ni yuklaydi ({srcs})")
+ok(srcs == ["content.js", "lms.js", "player.js"], f"index.html: content.js, lms.js (LMS adapterlari), keyin player.js ({srcs})")
 ok('href="player.css"' in html and '<meta name="viewport"' in html and 'lang="uz"' in html, "index.html: player.css, viewport, lang=uz")
 ok(not re.search(r'(src|href)="(/|[a-z]+:)', html), "index.html: faqat nisbiy manzillar")
 
@@ -43,13 +45,18 @@ ok(not bad, f"Tashqi URL lar faqat YouTube va ADL xAPI IRI ({len(urls)} ta topil
 ok(not re.search(r"\beval\s*\(|new\s+Function\s*\(|setTimeout\s*\(\s*['\"]|document\.write", js), "eval / new Function / satrli setTimeout / document.write yo'q")
 ok(not re.search(r"@import|url\((['\"]?)(https?:|//)", css), "CSS da tashqi @import/url yo'q")
 inner = re.findall(r"\.innerHTML\s*=\s*([^;]+)", js)
+ok(not re.search(r"innerHTML|eval\s*\(|new\s+Function", ljs), "lms.js: innerHTML / eval yo'q")
 ok(len(inner) == 1 and inner[0].strip().startswith("'<svg '"), f"innerHTML bitta joyda — staticSvg() ({len(inner)} joy)")
 svg_args = re.findall(r"staticSvg\('[^']*', '[^']*', ([^)]+?)\)", js)
 ok(len(svg_args) >= 2 and all(x.strip() in ("ICONS[name] || ''", "AVATAR") for x in svg_args) and js.count("staticSvg(") == len(svg_args) + 1,
    f"staticSvg() faqat statik ICONS / AVATAR bilan chaqiriladi ({svg_args})")
 ok("DOMParser" in js and "noopener" in js, "Kontent HTML DOMParser + oq ro'yxat sanitizeri orqali, havolalar rel=noopener")
-glb = set(re.findall(r"\bW\.([A-Za-z_$][\w$]*)\s*=(?!=)", js))
-ok(glb == {"ISFTPaket"}, f"Global obyekt faqat window.ISFTPaket ({sorted(glb)})")
+glb = set(re.findall(r"\bW\.([A-Za-z_$][\w$]*)\s*=(?!=)", pjs))
+ok(glb == {"ISFTPaket"}, f"player.js: global obyekt faqat window.ISFTPaket ({sorted(glb)})")
+lglb = set(re.findall(r"\bW\.([A-Za-z_$][\w$]*)\s*=(?!=)", ljs))
+ok(lglb == {"ISFTLms"} and ljs.lstrip().startswith("/*") and "'use strict'" in ljs[:3000], f"lms.js: IIFE + 'use strict', global faqat window.ISFTLms ({sorted(lglb)})")
+ok("LMS.setLog(note)" in pjs and "W.ISFTLms" in pjs and "Pleyer fayli yetishmaydi" in pjs, "player.js adapterlarni window.ISFTLms dan oladi (lms.js yo'q bo'lsa — aniq xato)")
+ok("opts.unit" in ljs and "'block'" in ljs and "opts.prefix" in ljs, "xAPI ichki faoliyat yo'li sozlanadi (paket — /block/, kurs — /lesson/), Preview kaliti prefiksi")
 ok(js.lstrip().startswith("/*") and "'use strict'" in js[:4000], "IIFE + 'use strict'")
 
 print("== 3. Standartlar (kalit elementlar)")
@@ -115,7 +122,7 @@ ok(all((FX / r).is_file() for r in refs), f"Paketdagi barcha asset havolalari ma
 print("== 5. JS sintaksisi")
 node = shutil.which("node")
 if node:
-    for f in [PL / "player.js", ROOT / "tools" / "paket_player_check.js", FX / "content.js"]:
+    for f in [PL / "player.js", PL / "lms.js", ROOT / "tools" / "paket_player_check.js", FX / "content.js"]:
         r = subprocess.run([node, "--check", str(f)], capture_output=True, text=True)
         ok(r.returncode == 0, f"node --check {f.relative_to(ROOT)}" + ("" if r.returncode == 0 else ": " + r.stderr.strip()[:200]))
 else:

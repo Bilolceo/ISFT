@@ -147,6 +147,7 @@ ICONS.inbox = '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 
 ICONS.users = '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>';
 ICONS.package = '<path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="m7.5 4.27 9 5.15"/>';   /* paket.js: Dars tayyorlash */
 ICONS.video = '<rect x="3" y="5" width="13" height="14" rx="2"/><path d="m16 10 5-3v10l-5-3z"/>';   /* studio.js: Studiya */
+ICONS.layers = '<path d="m12 2 10 5-10 5L2 7z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/>';   /* kurs.js: Kurs muharriri */
 const ico = (n, sz = 18) => `<svg class="i" viewBox="0 0 24 24" width="${sz}" height="${sz}" aria-hidden="true">${ICONS[n] || ""}</svg>`;
 function hydrateIcons(root = document) {
   root.querySelectorAll("[data-ico]").forEach(el => { if (!el.dataset.done) { el.innerHTML = ico(el.dataset.ico); el.dataset.done = 1; } });
@@ -272,6 +273,7 @@ function navApply() {
   document.querySelector('#nav a[data-v="masofaviy"]')?.classList.toggle("hidden", !["masofaviy", "masofaviy_xodim", "rektor", "prorektor_oquv", "kafedra", "oqituvchi"].includes(ME.role_key));   /* masofaviy.js: Masofaviy ta'lim (ruxsat — app/masofaviy.py) */
   document.querySelector('#nav a[data-v="testbank"]')?.classList.toggle("hidden", !["masofaviy", "masofaviy_xodim", "rektor", "prorektor_oquv", "kafedra", "oqituvchi"].includes(ME.role_key));   /* testbank.js: Test bank — mavzu testlari va oraliq banklari (ruxsat — app/testbank.py) */
   document.querySelector('#nav a[data-v="paket"]')?.classList.toggle("hidden", !["masofaviy", "masofaviy_xodim", "rektor", "prorektor_oquv", "kafedra", "oqituvchi"].includes(ME.role_key));   /* paket.js: Dars tayyorlash — SCORM / xAPI (ruxsat — app/paket.py) */
+  document.querySelector('#nav a[data-v="kurs"]')?.classList.toggle("hidden", !["masofaviy", "masofaviy_xodim", "oqituvchi"].includes(ME.role_key));   /* kurs.js: Kurs muharriri — bloklardan kurs (ruxsat — app/kurs.py; rahbariyat — jamlangan sonlar «Masofaviy ta'lim» sahifasidagi tugma orqali) */
   document.querySelector('#nav a[data-v="studio"]')?.classList.toggle("hidden", !["masofaviy", "masofaviy_xodim", "montaj_operator", "rektor", "prorektor_oquv", "oqituvchi", "it_head"].includes(ME.role_key));   /* studio.js: Studiya — syomka, AI montaj, YouTube (ruxsat — app/studio.py) */
   if (modOn("cams") && typeof camsNav === "function") camsNav();   /* cams.js: navbat zonasi mas'ullari (qabul, kassa) o'z navbatini ko'radi */
   /* lavozimga keraksiz bandlar (UX tahlili): ruxsat matritsasi — faqat AT boshlig'i va rektor (qolganlar — profilda «Sizning ruxsatlaringiz»);

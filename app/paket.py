@@ -2707,8 +2707,13 @@ _IMG_SRC_RX = re.compile(r"<img\b[^>]*\ssrc=\"([^\"]*)\"", re.I)
 def _bad_path(n: str) -> bool:
     return n.startswith("/") or "\\" in n or re.match(r"^[A-Za-z]:", n) is not None or any(p in ("..",) for p in n.split("/"))
 
+# Boshqa kontent turlari (masalan, «Kurs muharriri» — window.KURS, app/kurs.py): {prefiks: tekshiruvchi(t, base, names, errors, where) → dict | None}
+CONTENT_KINDS: dict = {}
+
 def _check_content(raw: bytes, base: str, names: set, errors: list, where: str) -> dict | None:
     t = raw.decode("utf-8", "replace").strip()
+    for pre, fn in CONTENT_KINDS.items():
+        if t.startswith(pre) and t.endswith(";"): return fn(t, base, names, errors, where)
     if not t.startswith("window.PAKET = ") or not t.endswith(";"):
         errors.append(f"{where}: «window.PAKET = {{...}};» ko'rinishida emas"); return None
     try: c = json.loads(t[len("window.PAKET = "):-1])
@@ -2842,15 +2847,21 @@ def validate_zip(data) -> dict:
                 if not acts: errors.append("tincan.xml: activity yo'q")
                 ids = [a.get("id") for a in acts]
                 if len(ids) != len(set(ids)): errors.append("tincan.xml: activity id takrorlangan")
+                # ishga tushiriladigan faoliyat — «course» turidagi (yoki launch'li); qolganlari (dars, test savoli — kurs muharriri) — ichki
+                # faoliyatlar: launch'siz, id — ishga tushiriladigan faoliyat id'si bilan boshlanadi
+                top = [a for a in acts if a.find(f"{{{_TC}}}launch") is not None or (a.get("type") or "").endswith("/course") or not a.get("type")]
                 for a in acts:
                     if not re.match(r"^https?://", a.get("id") or ""): errors.append("tincan.xml: activity id IRI emas")
+                    if a in top: continue
+                    if not any((a.get("id") or "").startswith((t_.get("id") or "") + "/") for t_ in top): errors.append(f"tincan.xml: ichki faoliyat {a.get('id')!r} kurs faoliyatiga tegishli emas")
+                for a in top:
                     la = a.find(f"{{{_TC}}}launch")
                     if la is None or not (la.text or "").strip(): errors.append("tincan.xml: launch yo'q")
                     else:
                         launches.append(la.text.strip())
                         if la.text.strip() not in names: errors.append(f"tincan.xml: launch {la.text.strip()} zip ichida yo'q")
-                out["scos"] = len(acts)
-                out["activities"] = ids
+                out["scos"] = len(top)
+                out["activities"] = [a.get("id") for a in top]
         else:
             out["mode"] = "none"
             launches.append("index.html")

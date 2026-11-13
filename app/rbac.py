@@ -53,6 +53,8 @@ PAKET = "paket"                   # kontent paketlari: mavzu manbalari → SCORM
 LABELS[PAKET] = "Kontent paketlari: SCORM / xAPI paket yig'ish"
 STUDIO = "studio"                 # studiya: syomka bandi, AI montaj navbati, YouTube, dars ishlab chiqarish holati (app/studio.py) — kirish moduldagi jadval bo'yicha
 LABELS[STUDIO] = "Studiya: syomka, montaj va dars ishlab chiqarish"
+KURS = "kurs"                     # kurs muharriri: bloklardan kurs (Rise 360 o'rniga), eksport, Rise importi, tasdiq (app/kurs.py) — kirish moduldagi jadval bo'yicha
+LABELS[KURS] = "Kurs muharriri: bloklardan kurs, eksport, Rise importi"
 
 @dataclass(frozen=True)
 class Role:

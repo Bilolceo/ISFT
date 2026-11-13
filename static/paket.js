@@ -126,12 +126,15 @@ async function renderPaket(tab) {
   /* o'qituvchi — to'g'ridan-to'g'ri o'z darslari; bo'lim — avval ko'rib chiqish navbati turgan «Darslar» */
   const first = M.tabs.includes("mavzular") && (M.role === "oqituvchi" || M.caps.approve) ? "mavzular" : M.tabs[0];
   PK.tab = tab && M.tabs.includes(tab) ? tab : (PK.tab && M.tabs.includes(PK.tab) ? PK.tab : first);
-  v.innerHTML = `<div class="pk-head"><div><h2>${esc(M.title || "Dars tayyorlash")}</h2><span class="muted">${esc(M.scope)} · fayllarni yuklang, «Tayyorlash»ni bosing — NEXTID uchun tayyor dars fayli chiqadi</span></div></div>
+  const kuLink = typeof renderKurs === "function" && M.caps.write && !document.querySelector('#nav a[data-v="kurs"]')?.classList.contains("hidden");   /* kurs.js: bloklardan (Rise kabi) kurs */
+  v.innerHTML = `<div class="pk-head"><div><h2>${esc(M.title || "Dars tayyorlash")}</h2><span class="muted">${esc(M.scope)} · fayllarni yuklang, «Tayyorlash»ni bosing — NEXTID uchun tayyor dars fayli chiqadi</span></div>
+      ${kuLink ? `<button type="button" class="btn sm ghost" id="pkToKu" title="Darsni bloklardan yig'ish: akkordeon, kartochkalar, bilimni tekshirish — Rise 360 kabi">${ico("layers", 15)} Kurs muharriri</button>` : ""}</div>
     ${M.demo && M.caps.approve ? `<div class="pk-demo">${ico("info", 15)}<span><b>Namuna.</b> «Mikroiqtisodiyot» 1–2-mavzulari: ma'ruza matni, taqdimot va video havola — sun'iy (demo); video mavjud emas. Haqiqiy dars uchun o'z fayllaringizni yuklang.</span></div>` : ""}
     ${!M.player && M.caps.build ? `<div class="pk-warnbox">${ico("alert", 15)}<span>Dars oynasi o'rnatilmagan — «Tayyorlash» vaqtincha ishlamaydi (administratorga murojaat qiling). Fayllarni yuklab qo'yish mumkin.</span></div>` : ""}
     ${M.tabs.length > 1 ? `<div class="pk-tabs" role="tablist">${M.tabs.map(t => `<button type="button" role="tab" aria-selected="${t === PK.tab}" class="${t === PK.tab ? "on" : ""}" data-t="${t}">${esc(TL[t])}</button>`).join("")}</div>` : ""}
     <div id="pkBox"><div class="pk-empty">Yuklanmoqda…</div></div>`;
   v.querySelectorAll(".pk-tabs [data-t]").forEach(b => b.onclick = () => renderPaket(b.dataset.t));
+  v.querySelector("#pkToKu")?.addEventListener("click", () => go("kurs"));
   const box = $("#pkBox");
   try {
     await ({qamrov: pkCoverage, mavzular: pkTopics, joylash: pkBulk, sozlama: pkSettings})[PK.tab](box);
