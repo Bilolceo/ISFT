@@ -52,7 +52,7 @@ MODULES = [
     _m("audit", "Audit jurnali", "Kim, qachon, nimani so'ragani.", 1, lock=True, group="tizim"),
     _m("modullar", "Bo'limlar", "Shu sahifa: bo'limlarni yoqish va o'chirish.", 1, lock=True, group="tizim"),
     # ---- faqat menyu bandi (sahifa boshqa joydan ochiladi) ----
-    _m("chat", "ISFT Core bilan suhbat", "Alohida menyu bandi. Panel ichidagi savol-javob oynasi baribir ishlaydi.", 0,
+    _m("chat", "ISFT Core bilan suhbat", "Alohida menyu bandi. Panel ichidagi savol-javob oynasi baribir ishlaydi.", 1,
        "Alohida band kerak emas — suhbat paneldan ochiladi", soft=True, group="menyu"),
     _m("kiruvchi", "Kiruvchi xatlar", "Devonxona reyestri. Devonxona uchun doim ochiq; rezolyutsiya kutayotgan xat «Mening vazifalarim»dan ochiladi.", 0,
        "Devonxona (reyestrni yuritadi)", soft=True, group="menyu"),
@@ -63,8 +63,8 @@ MODULES = [
     _m("kadrlar", "Kadrlar", "Shaxsiy ish, ishga qabul, shtat jadvali.", 0, "Kadrlar bo'limi · manba: kadrlar bazasi", group="kutilmoqda"),
     _m("staffabs", "Xodimlar ta'tili", "Safar, ta'til, kasallik varaqasi va dars jadvaliga ta'siri.", 0, "Kadrlar bo'limi · manba: dars jadvali (HEMIS)", group="kutilmoqda"),
     _m("yoshlar", "Yoshlar ishlari", "Turar joy, ijara monitoringi, tadbirlar (shu jumladan «Tadbir qatnashuvi»).", 0, "Yoshlar ishlari bo'yicha prorektor", group="kutilmoqda"),
-    _m("spaces", "Auditoriyalar", "Xonalar bandligi (kamera sanog'i).", 0, "Xo'jalik bo'limi · manba: o'rnatilgan Hikvision kameralari", group="kutilmoqda"),
-    _m("cams", "Kameralar va xavfsizlik", "Xavfsizlik voqealari, kamera salomatligi, navbatlar, Face ID.", 0, "AT bo'limi · manba: o'rnatilgan Hikvision kameralari", group="kutilmoqda"),
+    _m("spaces", "Auditoriyalar", "Xonalar bandligi (kamera sanog'i).", 1, "Xo'jalik bo'limi · manba: o'rnatilgan Hikvision kameralari", group="kutilmoqda"),
+    _m("cams", "Kameralar va xavfsizlik", "Xavfsizlik voqealari, kamera salomatligi, navbatlar, Face ID.", 1, "AT bo'limi · manba: o'rnatilgan Hikvision kameralari", group="kutilmoqda"),
     _m("syllabus", "O'quv dasturlari", "Sillabus oqimi va yuklama kalkulyatori.", 0, "Akademik faoliyat bo'limi", group="kutilmoqda"),
     _m("flows", "Akademik jarayonlar", "Sessiya, apellyatsiya, qayta o'qish, ko'chirish, bitiruv.", 0, "Registrator ofisi · manba: HEMIS", group="kutilmoqda"),
     _m("reyting", "Reyting", "Talabalar o'zlashtirish reytingi.", 0, "Registrator ofisi · manba: HEMIS baholari", group="kutilmoqda"),
@@ -75,7 +75,7 @@ MODULES = [
     _m("tekshiruv", "Ishlarni tekshirish", "Talaba ishlarini AI yordamida tekshirish.", 0, "Kafedralar · talaba ishlari uchun rozilik tartibi", group="kutilmoqda"),
     _m("qabul", "Qabul", "Abituriyentlar arizalari.", 0, "Qabul bo'limi · manba: qabul bazasi", group="kutilmoqda"),
     _m("docs", "Tarjima va shartnoma", "Xat tarjimasi, shartnoma bandlari tahlili.", 0, "Yuridik bo'lim, Xalqaro bo'lim", group="kutilmoqda"),
-    _m("agents", "AI takliflari", "AI agentlar takliflari va kunlik brifing.", 0, "Rektorat · takliflarni kim tasdiqlashi belgilanmagan", group="kutilmoqda"),
+    _m("agents", "AI takliflari", "AI agentlar takliflari va kunlik brifing.", 1, "Rektorat · takliflarni kim tasdiqlashi belgilanmagan", group="kutilmoqda"),
 ]
 BY_KEY = {m["key"]: m for m in MODULES}
 EDITORS = ("it_head", "rektor")

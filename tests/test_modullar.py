@@ -38,9 +38,9 @@ def q(sql, args=()):
     finally: con.close()
 
 REKTOR, IT, TEACHER, REG, XOJ = 2, 21, 15, 17, 16
-ON = {"panel", "mywork", "tasks", "portal", "documents", "orders", "ops", "masofaviy", "paket", "testbank", "taqdimot", "service", "accounts", "audit", "rbac", "modullar"}
-OFF = {"moliya", "kadrlar", "staffabs", "yoshlar", "spaces", "cams", "syllabus", "flows", "reyting", "amaliyot", "ilmiy", "xalqaro", "rejalar", "tekshiruv",
-       "qabul", "docs", "agents", "chat", "reports", "kiruvchi"}
+ON = {"panel", "mywork", "tasks", "portal", "documents", "orders", "ops", "masofaviy", "paket", "testbank", "taqdimot", "service", "accounts", "audit", "rbac", "modullar", "chat", "agents", "cams", "spaces"}   # chat, agents, kameralar — rahbariyat so'rovi bilan qaytarildi
+OFF = {"moliya", "kadrlar", "staffabs", "yoshlar", "syllabus", "flows", "reyting", "amaliyot", "ilmiy", "xalqaro", "rejalar", "tekshiruv",
+       "qabul", "docs", "reports", "kiruvchi"}
 
 # ===================================================================== A
 print("— A. Birlik: standartlar va muhit sintaksisi —")
@@ -58,7 +58,7 @@ ok(not M.cam_sim() and not M.cam_sim_active() and not M.real_data() and not M.sh
 ok(M.sample("HEMIS") == "Namuna ma'lumot (HEMIS ulanmagan)", "Manba yorlig'i: «Namuna ma'lumot (HEMIS ulanmagan)»")
 os.environ["ISFT_CORE_REAL_DATA"] = "1"; ok(M.sample("HEMIS") == "HEMIS", "ISFT_CORE_REAL_DATA=1 — manba nomi o'zi"); os.environ.pop("ISFT_CORE_REAL_DATA")
 os.environ["ISFT_CORE_CAM_SIM"] = "1"
-ok(M.cam_sim() and not M.cam_sim_active(), "ISFT_CORE_CAM_SIM=1, lekin bo'lim o'chiq — simulyator faol emas")
+os.environ["ISFT_CORE_MODULES"] = "-cams,-spaces"; ok(M.cam_sim() and not M.cam_sim_active(), "ISFT_CORE_CAM_SIM=1, lekin bo'lim o'chiq — simulyator faol emas"); os.environ.pop("ISFT_CORE_MODULES")
 os.environ["ISFT_CORE_MODULES"] = "+cams"; ok(M.cam_sim_active(), "… bo'lim ham yoqilsa — faol"); os.environ.pop("ISFT_CORE_MODULES"); os.environ.pop("ISFT_CORE_CAM_SIM")
 
 # ===================================================================== D (bazasiz — xotiradagi sqlite)
@@ -100,7 +100,9 @@ ok(c.execute("SELECT COUNT(*) FROM occupancy").fetchone()[0] == 3, f"Simulyator 
 os.environ.pop("ISFT_CORE_CAM_SIM")
 import asyncio
 OC._con = mk(); before = OC._con.execute("SELECT COUNT(*) FROM occupancy").fetchone()[0]
+os.environ["ISFT_CORE_MODULES"] = "-cams,-spaces"; M._cache = None
 asyncio.run(OC.poll_once())
+os.environ.pop("ISFT_CORE_MODULES"); M._cache = None
 ok(OC._con.execute("SELECT COUNT(*) FROM occupancy").fetchone()[0] == before and OC._con.execute("SELECT COUNT(*) FROM tickets").fetchone()[0] == 6,
    "Bo'lim o'chiq: fon so'rovchisi hech narsa yozmaydi (sanoq ham, ariza ham)")
 OC._con = None
@@ -121,9 +123,9 @@ print("\n— B. API: /api/me va /api/modules —")
 rk, it, oq, reg = S(REKTOR), S(IT), S(TEACHER), S(REG)
 def mods(c): return c.get("/api/me").json()["modules"]
 m0 = mods(it)
-touched = {k: m0[k] for k in ("moliya", "cams", "reyting")}
+touched = {k: m0[k] for k in ("moliya", "cams", "spaces", "reyting")}
 try:
-    for k in touched: it.post(f"/api/modules/{k}", json={"enabled": False})
+    for k in touched: it.post(f"/api/modules/{k}", json={"enabled": k in ON})
     me = oq.get("/api/me").json()
     ok(set(me["modules"]) == ON | OFF and all(me["modules"][k] for k in ON) and not any(me["modules"][k] for k in OFF),
        "/api/me: modules — standart holat (o'qituvchi ham ko'radi: menyu shundan quriladi)")
@@ -154,6 +156,7 @@ try:
     # ================================================================= C
     print("\n— C. Kamera simulyatori va panel —")
     sim = rk.get("/api/me").json()["flags"]["cam_sim"]
+    for k in ("cams", "spaces"): it.post(f"/api/modules/{k}", json={"enabled": False})   # «bo'lim o'chiq» holatini tekshirish uchun
     dash = rk.get("/api/dashboard").json()
     areas = {a["area"] for a in dash["alerts"]}
     ok(not any(k.get("key") == "kameralar" for k in dash["kpis"]), "Bo'lim o'chiq: panelda «Kameralar» KPI yo'q")

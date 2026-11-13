@@ -74,7 +74,7 @@ ROLES = {r.key: r for r in [
          aggregate_only=R(STUDENTS, PAYROLL, OPS, HR_STATS), deny_note="Xom hujjatlar, individual kartochkalar (maxsus so'rovsiz), xodimlar shaxsiy ma'lumoti"),
     Role("prorektor_oquv", "O'quv ishlari bo'yicha prorektor", 2, R(KPI, ACADEMIC, STUDENTS, ADMISSIONS, MASTERS, TASKS, REPORTS, REQUESTS, SPACES, OPS),
          deny_note="Moliyaviy hisobotlar, xodimlar maoshi"),
-    Role("prorektor_ilmiy", "Ilmiy ishlar va innovatsiyalar bo'yicha prorektor", 2, R(KPI, SCIENCE, INTL, MASTERS, TASKS, REPORTS),
+    Role("prorektor_ilmiy", "Ilmiy ishlar va innovatsiyalar bo'yicha prorektor", 2, R(KPI, SCIENCE, INTL, MASTERS, TASKS, REPORTS, SPACES),
          deny_note="Talaba baholari, moliyaviy tafsilotlar"),
     # tuzilma (04.09.2024): Buxgalteriya, Xarid, Marketing, Xo'jalik va texnik bo'lim — moliya-iqtisod prorektori kuratorligida
     Role("prorektor_moliya", "Moliya-iqtisod ishlari bo'yicha prorektor", 2, R(KPI, FINANCE, CONTRACTS, PAYROLL, TASKS, REPORTS, FACILITIES, SPACES, ADMISSIONS, PROCUREMENT),
