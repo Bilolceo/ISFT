@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ISFT montaj worker — macOS launchd shabloni (studiya Mac'i).
+  O'rnatish (docs/montaj.md → "Studiya Mac'ini sozlash"):
+    sed -e "s#__REPO__#$HOME/isft/jarvis-mvp#g" -e "s#__HOME__#$HOME#g" \
+        tools/montaj/launchd/uz.isft.montaj.worker.plist > ~/Library/LaunchAgents/uz.isft.montaj.worker.plist
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/uz.isft.montaj.worker.plist
+  Token va API manzili plist ichida EMAS — ~/.config/isft-montaj/worker.env faylida (chmod 600).
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>uz.isft.montaj.worker</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/sh</string>
+        <string>__REPO__/tools/montaj/launchd/run_worker.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__REPO__</string>
+
+    <!-- Kirish paytida ishga tushadi va yiqilsa qayta ko'tariladi -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <!-- qayta ishga tushirishlar orasida kamida 30 s -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+    <!-- launchctl bootout → SIGTERM: joriy ish /fail bilan yopiladi; 60 s dan keyin SIGKILL -->
+    <key>ExitTimeOut</key>
+    <integer>60</integer>
+
+    <key>ProcessType</key>
+    <string>Standard</string>
+    <key>LowPriorityIO</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/isft-montaj-worker.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/isft-montaj-worker.log</string>
+</dict>
+</plist>

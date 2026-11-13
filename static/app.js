@@ -146,6 +146,7 @@ ICONS.trophy = '<path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2
 ICONS.inbox = '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>';
 ICONS.users = '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>';
 ICONS.package = '<path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="m7.5 4.27 9 5.15"/>';   /* paket.js: Dars tayyorlash */
+ICONS.video = '<rect x="3" y="5" width="13" height="14" rx="2"/><path d="m16 10 5-3v10l-5-3z"/>';   /* studio.js: Studiya */
 const ico = (n, sz = 18) => `<svg class="i" viewBox="0 0 24 24" width="${sz}" height="${sz}" aria-hidden="true">${ICONS[n] || ""}</svg>`;
 function hydrateIcons(root = document) {
   root.querySelectorAll("[data-ico]").forEach(el => { if (!el.dataset.done) { el.innerHTML = ico(el.dataset.ico); el.dataset.done = 1; } });
@@ -271,6 +272,7 @@ function navApply() {
   document.querySelector('#nav a[data-v="masofaviy"]')?.classList.toggle("hidden", !["masofaviy", "masofaviy_xodim", "rektor", "prorektor_oquv", "kafedra", "oqituvchi"].includes(ME.role_key));   /* masofaviy.js: Masofaviy ta'lim (ruxsat — app/masofaviy.py) */
   document.querySelector('#nav a[data-v="testbank"]')?.classList.toggle("hidden", !["masofaviy", "masofaviy_xodim", "rektor", "prorektor_oquv", "kafedra", "oqituvchi"].includes(ME.role_key));   /* testbank.js: Test bank — mavzu testlari va oraliq banklari (ruxsat — app/testbank.py) */
   document.querySelector('#nav a[data-v="paket"]')?.classList.toggle("hidden", !["masofaviy", "masofaviy_xodim", "rektor", "prorektor_oquv", "kafedra", "oqituvchi"].includes(ME.role_key));   /* paket.js: Dars tayyorlash — SCORM / xAPI (ruxsat — app/paket.py) */
+  document.querySelector('#nav a[data-v="studio"]')?.classList.toggle("hidden", !["masofaviy", "masofaviy_xodim", "montaj_operator", "rektor", "prorektor_oquv", "oqituvchi", "it_head"].includes(ME.role_key));   /* studio.js: Studiya — syomka, AI montaj, YouTube (ruxsat — app/studio.py) */
   if (modOn("cams") && typeof camsNav === "function") camsNav();   /* cams.js: navbat zonasi mas'ullari (qabul, kassa) o'z navbatini ko'radi */
   /* lavozimga keraksiz bandlar (UX tahlili): ruxsat matritsasi — faqat AT boshlig'i va rektor (qolganlar — profilda «Sizning ruxsatlaringiz»);
      Tarjima va shartnoma — hujjat bilan ishlaydiganlarga; Auditoriyalar — xo'jalik, akademik, AT; Registrator — talaba kartasidagi bo'limlar menyuda emas */
@@ -605,6 +607,7 @@ async function renderPanel() {
   const full = !(ME.level >= 3 || ME.role_key === "kotib"), safe = p => Promise.resolve(p).catch(() => null);
   const desk = DESK_ROLES.includes(ME.role_key);
   /* o'chirilgan bo'limlarga tegishli so'rovlar yuborilmaydi; «Sizdan kutilmoqda» — to'liq ro'yxatdan (o'chirilgan bo'lim ishlari chiqarilgach, eng yaqin 5 tasi) */
+  const stK = modOn("studio") && ["rektor", "prorektor_oquv"].includes(ME.role_key) ? safe(J("/api/studio/kpi")) : null;   /* studio.js: «Dars ishlab chiqarish» KPI */
   const [dash, briefH, decL, opsS, agD, deskD, mw, BG0, MWD] = await Promise.all([J("/api/dashboard"),
     modOn("agents") && typeof briefCardHtml === "function" ? safe(briefCardHtml()) : "",
     modOn("tasks") && full && ME.level <= 2 ? safe(J("/api/dec/list")) : null,
@@ -638,6 +641,7 @@ async function renderPanel() {
   if (deskD && deskD.kind) h += deskHtml(deskD);
   else if (ownK) h += `<div class="grid g4 pn-kpis pn-own">${ownK.map((k, i) => `<button type="button" class="card kpi pn-ok-k ${k.tone ? "t-" + k.tone : ""}" data-ok="${i}"><span class="kpi-l">${esc(k.label)}</span><b class="kpi-v">${typeof k.value === "number" ? fmt(k.value) : esc(String(k.value))}</b>${k.sub ? `<small class="muted">${esc(k.sub)}</small>` : ""}</button>`).join("")}</div>`;
   else h += `<div class="grid g4 pn-kpis">${head.map(kh).join("")}</div>`;
+  { const sk = await stK; if (sk && sk.key) h += `<div class="grid g4 pn-kpis pn-own pn-studio"><button type="button" class="card kpi pn-ok-k ${sk.red ? "t-bad" : "t-good"}" onclick="go('studio')"><span class="kpi-l">${esc(sk.label)}</span><b class="kpi-v">${fmt(sk.value)} ta</b><small class="muted">muddati o'tgan · ${fmt(sk.active)} ta dars jarayonda · ${fmt(sk.done)} tasi NEXTID'da</small></button></div>`; }
   if (rest.length && !(deskD && deskD.kind) && !ownK) h += `<details class="pn-kmore"${PNL.kpi ? " open" : ""} ontoggle="PNL.kpi=this.open"><summary>${ico("chart", 16)}<span>Barcha ko'rsatkichlar</span><span class="muted">+${rest.length}</span></summary><div class="grid g4 pn-kpis">${rest.map(kh).join("")}</div></details>`;
 
   /* --- ISFT Core savollari + eng yuqoridagi AI agent taklifi (login sahifasidagi va'da) --- */

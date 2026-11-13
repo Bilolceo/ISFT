@@ -1641,16 +1641,21 @@ def sniff_media(head: bytes) -> str | None:
     if head[:3] == b"ID3" or (len(head) >= 2 and head[0] == 0xFF and head[1] & 0xE6 == 0xE2): return "mp3"   # MPEG audio, Layer III kadri
     return None
 
-async def _stream_upload(request, limit: int, kinds: tuple, what: str) -> dict:
+async def _stream_upload(request, limit: int, kinds: tuple, what: str, *, sniff=None, tmp_dir: Path | None = None, prefix: str = "up_",
+                         too_big: str | None = None) -> dict:
     """Katta fayl (video): tana oqim bilan vaqtinchalik faylga yoziladi — xotiraga yig'ilmaydi. Hajm yo'l-yo'lakay sanaladi (chegaradan oshsa
     darhol 413, Content-Length'siz/yolg'on bo'lsa ham), sha256 ham; turi birinchi 64 baytdan aniqlanadi (noto'g'ri — 415, qolgan tana o'qilmaydi).
-    Xatoda vaqtinchalik fayl o'chiriladi. → {"path", "size", "sha256", "kind"}"""
-    _len_guard(request, limit)
-    d = store() / "tmp"; d.mkdir(parents=True, exist_ok=True)
-    tmp = d / f"up_{secrets.token_hex(8)}.part"
+    Xatoda vaqtinchalik fayl o'chiriladi. → {"path", "size", "sha256", "kind"}
+    Studiya (xom video) ham shuni ishlatadi: sniff — tur aniqlagich (standart sniff_media), tmp_dir — vaqtinchalik katalog (standart paket
+    store/tmp; os.replace uchun maqsad bilan bir diskda bo'lsin), prefix — vaqtinchalik fayl nomi boshi, too_big — 413 matni."""
+    sniff = sniff or sniff_media
+    big = too_big or f"Fayl hajmi {limit // (1024 * 1024)} MB dan oshmasin"
+    _len_guard(request, limit, big)
+    d = tmp_dir or (store() / "tmp"); d.mkdir(parents=True, exist_ok=True)
+    tmp = d / f"{prefix}{secrets.token_hex(8)}.part"
     h, size, kind, head = hashlib.sha256(), 0, None, b""
     def check():
-        k = sniff_media(head)
+        k = sniff(head)
         if k not in kinds: raise HTTPException(415, what)
         return k
     try:
@@ -1658,7 +1663,7 @@ async def _stream_upload(request, limit: int, kinds: tuple, what: str) -> dict:
             async for chunk in request.stream():
                 if not chunk: continue
                 size += len(chunk)
-                if size > limit: raise HTTPException(413, f"Fayl hajmi {limit // (1024 * 1024)} MB dan oshmasin")
+                if size > limit: raise HTTPException(413, big)
                 if kind is None:
                     head += chunk[:64 - len(head)]
                     if len(head) >= 64: kind = check()
@@ -2315,7 +2320,7 @@ def gather(cid: int, no: int, co: dict | None = None, settings: dict | None = No
     ready["video"] = {"ok": bool(vf or (v and v["ok"])), "src": "fayl" if use_file else v["src"] if v else None, "url": (v.get("url") or v.get("raw")) if v else None,
                       "provider": "file" if use_file else v.get("provider") if v else None, "video_id": v.get("video_id") if v else None,
                       "error": v.get("error") if v and not v["ok"] else None, "demo": bool(v and v.get("demo")), "link_src": v["src"] if v else None,
-                      "file": {"id": vf["id"], "name": vf["name"], "kind": vf["kind"], "size": vf["size"]} if vf else None,
+                      "file": {"id": vf["id"], "name": vf["name"], "kind": vf["kind"], "size": vf["size"], "studio": vf.get("src") == "studio"} if vf else None,
                       "captions": [{"id": a["id"], "lang": m_.get("lang"), "label": m_.get("label"), "cues": m_.get("cues")} for a, m_ in subs],
                       "poster": poster["id"] if poster else None, "both": bool(vf and v and v["ok"])}
     # qo'shimcha fayllar (+ asl ma'ruza fayli)
@@ -3231,20 +3236,27 @@ def preview_file(c: Ctx, pid: int, path: str, rng: str | None = None) -> Respons
     ct = _CT.get(ext, "application/octet-stream")
     if span is None: return Response(data, media_type=ct, headers=hd)
     off, size = span
-    hd["Accept-Ranges"] = "bytes"
+    return range_response(f, ct, rng, hd, off=off, size=size)
+
+def range_response(f: Path, ct: str, rng: str | None, hd: dict, off: int = 0, size: int | None = None, chunk: int = 256 * 1024) -> Response:
+    """Diskdagi fayl (yoki uning [off, off+size) bo'lagi — masalan, zip ichidagi siqilmagan a'zo) HTTP Range bilan: 206 + Content-Range;
+    noto'g'ri / qondirib bo'lmaydigan oraliq — 416. Fayl xotiraga to'liq o'qilmaydi. Studiya (app/studio.py) ham shuni ishlatadi."""
+    size = Path(f).stat().st_size - off if size is None else size
+    hd = {**hd, "Accept-Ranges": "bytes"}
     a, b, status = 0, size - 1, 200
     if rng:
         pr = parse_range(rng, size)
         if pr is None: return Response(status_code=416, headers={**hd, "Content-Range": f"bytes */{size}"})
         a, b = pr; status = 206; hd["Content-Range"] = f"bytes {a}-{b}/{size}"
+    if size <= 0: return Response(b"", media_type=ct, headers=hd)
     hd["Content-Length"] = str(b - a + 1)
     def body():
         with open(f, "rb") as fh:
             fh.seek(off + a); left = b - a + 1
             while left > 0:
-                chunk = fh.read(min(256 * 1024, left))
-                if not chunk: break
-                left -= len(chunk); yield chunk
+                piece = fh.read(min(chunk, left))
+                if not piece: break
+                left -= len(piece); yield piece
     return StreamingResponse(body(), status_code=status, media_type=ct, headers=hd)
 
 
@@ -3902,6 +3914,116 @@ def pending(c: Ctx) -> list[dict]:
 
 
 # =============================================================================================
+# «Studiya» ilgaklari (app/studio.py, docs/studio.md) — dars ishlab chiqarish oqimi paketga shu funksiyalar orqali yozadi.
+# Ruxsat studiya modulida tekshiriladi (operator / bo'lim); bu yerda faqat dars mavjudligi. c=None — tizim (YouTube yuklovchisi).
+# =============================================================================================
+def _course_row(cid: int) -> dict:
+    co = db.one(_con, "SELECT c.*, d.name dept, t.full_name teacher FROM dl_courses c LEFT JOIN departments d ON d.id=c.department_id "
+                      "LEFT JOIN teachers t ON t.id=c.teacher_id WHERE c.id=?", (int(cid),))
+    if not co: raise HTTPException(404, "Kurs topilmadi")
+    return co
+
+def studio_lesson(cid: int, no: int) -> dict:
+    """Montaj ishchisi uchun dars ma'lumoti: kurs, dars kaliti/kodi/turi, nomi, fan, o'qituvchi va ma'ruza rejasi (matndan, bo'lsa)."""
+    co = _course_row(cid); les = lesson_info(co, no)
+    plan = []
+    ts = _text_source(cid, no, les)
+    if ts and ts.get("text"):
+        try: plan = [str(x) for x in structure_text(ts["text"], les["title"])["plan"]][:40]
+        except Exception: plan = []
+    return {"course_id": int(cid), "no": int(no), "code": les["code"], "kind": les["kind"], "title": les["title"],
+            "subject": co.get("subject") or "", "teacher": _short(co.get("teacher") or ""), "dept": co.get("dept") or "", "plan": plan}
+
+def studio_slides_pdf(cid: int, no: int) -> Path | None:
+    """Darsning PDF taqdimoti (oxirgi yuklangani) — montajda slaydlar shu fayldan olinadi; yo'q bo'lsa None."""
+    a = _latest_asset(int(cid), int(no), "taqdimot", ("pdf",))
+    return _apath(a) if a else None
+
+def studio_logo() -> Path | None:
+    return _logo_path()
+
+def _set_video_source(cid: int, no: int, src: str) -> None:
+    """Dars sozlamasidagi video_source (fayl / YouTube) — faqat shu kalit o'zgaradi; standart bilan teng bo'lsa — o'zgartirish olib tashlanadi."""
+    _, over = topic_settings(cid, no)
+    over = dict(over)
+    if src == defaults().get("video_source"): over.pop("video_source", None)
+    else: over["video_source"] = src
+    _con.execute("""INSERT INTO pk_topics(course_id,topic_no,settings,updated_at) VALUES(?,?,?,?)
+                    ON CONFLICT(course_id,topic_no) DO UPDATE SET settings=excluded.settings, updated_at=excluded.updated_at""",
+                 (cid, no, json.dumps(over), _now()))
+
+def studio_set_video(c: Ctx | None, cid: int, no: int, video: Path, captions: bytes | None = None, poster: bytes | None = None,
+                     name: str = "studiya") -> dict:
+    """Tasdiqlangan montaj natijasi → darsning video FAYLI (provider file): video (asl fayl o'chirilmaydi — qattiq havola yoki nusxa),
+    subtitr (WebVTT, o'zbekcha) va poster (rasm → JPEG). Eski video/subtitr/poster almashtiriladi; video_source = fayl."""
+    co = _course_row(cid); les = lesson_info(co, no)
+    video = Path(video)
+    if not video.is_file(): raise HTTPException(410, "Montaj natijasi (video) diskda topilmadi")
+    with open(video, "rb") as f: kind = sniff_media(f.read(64))
+    if kind not in VIDEO_KINDS: raise HTTPException(415, "Montaj natijasi .mp4 / .webm emas")
+    d = _asset_dir(cid, no); d.mkdir(parents=True, exist_ok=True)
+    size, sha = video.stat().st_size, _file_sha(video)
+    u = c.user if c else {"id": None, "full_name": "Tizim"}
+    with _lock:
+        aid = _con.execute("""INSERT INTO pk_assets(course_id,topic_no,purpose,kind,name,path,size,sha256,meta,user_id,user_name,ts,src)
+                              VALUES(?,?,'video',?,?,'',?,?,?,?,?,?,'studio')""",
+                           (cid, no, kind, f"{name[:150]}.{kind}", size, sha, json.dumps({"studio": True}), u.get("id"), u.get("full_name"), _now())).lastrowid
+        fn = f"{aid}_studiya.{kind}"
+        tmp = d / (fn + ".tmp")
+        tmp.unlink(missing_ok=True)
+        try: os.link(video, tmp)               # o'sha diskda — nusxasiz
+        except OSError: shutil.copyfile(video, tmp)
+        os.replace(tmp, d / fn)
+        _con.execute("UPDATE pk_assets SET path=? WHERE id=?", (str(Path("assets") / str(cid) / str(no) / fn), aid))
+        _con.commit()
+    _replace_assets(cid, no, "video", aid)
+    out = {"ok": True, "id": aid, "kind": kind, "size": size, "captions": None, "poster": None}
+    if captions:
+        try:
+            r = to_vtt(captions)
+            sid = _save_asset(c, cid, no, "subs", "vtt", "studiya.vtt", r["vtt"].encode("utf-8"), {"lang": "uz", "label": SUB_LANGS["uz"], "cues": r["cues"], "from": "studio"}, src="studio")
+            _replace_assets(cid, no, "subs", sid, lambda m: m.get("lang") == "uz"); out["captions"] = r["cues"]
+        except HTTPException as e:
+            out["captions_error"] = str(e.detail)
+    if poster:
+        try:
+            pid = _save_asset(c, cid, no, "poster", "jpg", "studiya.jpg", _jpeg(poster, COVER_MAX_PX), {"orig": "studio"}, src="studio")
+            _replace_assets(cid, no, "poster", pid); out["poster"] = pid
+        except HTTPException as e:
+            out["poster_error"] = str(e.detail)
+    with _lock:
+        _set_video_source(cid, no, "file")
+        _log(c, cid, no, "studiya: video fayl", f"{name[:80]} · {kind} · {size // (1024 * 1024)} MB"); _con.commit()
+    if c: rbac.audit(_con, c, "paket: studiya videosi qo'yildi", RES, True, f"kurs #{cid} · {les['code']} · {size} bayt")
+    return out
+
+def studio_set_youtube(c: Ctx | None, cid: int, no: int, url: str) -> dict:
+    """YouTube'ga yuklangan video havolasi → darsning video havolasi; video_source = YouTube (video fayl zaxira sifatida qoladi)."""
+    co = _course_row(cid); les = lesson_info(co, no)
+    v = parse_video(url)
+    if not v["ok"] or v.get("provider") != "youtube": raise HTTPException(400, v.get("error") or "YouTube havolasi emas")
+    by = (c.user["full_name"] if c else "Tizim (YouTube)")
+    with _lock:
+        _con.execute("""INSERT INTO pk_topics(course_id,topic_no,video_url,video_at,video_by,updated_at) VALUES(?,?,?,?,?,?)
+                        ON CONFLICT(course_id,topic_no) DO UPDATE SET video_url=excluded.video_url, video_at=excluded.video_at,
+                        video_by=excluded.video_by, updated_at=excluded.updated_at, src=''""",
+                     (cid, no, v["url"], _now(), by, _now()))
+        _set_video_source(cid, no, "youtube")
+        _log(c, cid, no, "studiya: YouTube havola", v["url"]); _con.commit()
+    if c: rbac.audit(_con, c, "paket: studiya YouTube havolasi", RES, True, f"kurs #{cid} · {les['code']}")
+    return {"ok": True, "url": v["url"], "video_id": v["video_id"]}
+
+def studio_build(cid: int, no: int) -> dict:
+    """Avtomatik paket (tizim nomidan): ma'ruza matni va taqdimot bo'lsa — build_topic; bo'lmasa {"ok": False, "missing": [...]}."""
+    co = _course_row(cid); les = lesson_info(co, no)
+    st = _build_settings(cid, no, None)
+    g = gather(cid, no, co, st, les)
+    miss = [k for k in ("text", "slides") if not g["ready"][k]["ok"]]
+    if miss: return {"ok": False, "missing": miss}
+    return build_topic(None, cid, no, co=co, les=les, pre=(st, g))
+
+
+# =============================================================================================
 # API
 # =============================================================================================
 @router.get(P + "/meta")
@@ -3958,10 +4080,10 @@ def api_topic(cid: int, no: int, request: Request):
     c = C(request); guard(c, "mavzu", WORK, f"kurs #{cid} · {lesson_code(no)}")
     return topic_view(c, cid, no)
 
-def _len_guard(request: Request, limit: int = MAX_ASSET):
+def _len_guard(request: Request, limit: int = MAX_ASSET, msg: str | None = None):
     try: n = int(request.headers.get("content-length") or 0)
     except ValueError: n = 0
-    if n > limit: raise HTTPException(413, f"Fayl hajmi {limit // (1024 * 1024)} MB dan oshmasin")
+    if n > limit: raise HTTPException(413, msg or f"Fayl hajmi {limit // (1024 * 1024)} MB dan oshmasin")
 
 async def _read_body(request: Request, limit: int = MAX_ASSET) -> bytes:
     """Yuklangan fayl tanasi — oqim bilan, hisoblagich bilan: Content-Length bo'lmasa (chunked) yoki yolg'on bo'lsa ham

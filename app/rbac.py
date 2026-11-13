@@ -51,6 +51,8 @@ HR_STATS = "hr_stats"             # kadrlar bo'yicha FAQAT jamlangan sonlar: sht
 LABELS[HR_STATS] = "Kadrlar: jamlangan ko'rsatkichlar (shtat, yo'qliklar soni)"
 PAKET = "paket"                   # kontent paketlari: mavzu manbalari → SCORM 1.2 / SCORM 2004 / xAPI paket, tasdiq, qamrov (app/paket.py) — kirish moduldagi jadval bo'yicha
 LABELS[PAKET] = "Kontent paketlari: SCORM / xAPI paket yig'ish"
+STUDIO = "studio"                 # studiya: syomka bandi, AI montaj navbati, YouTube, dars ishlab chiqarish holati (app/studio.py) — kirish moduldagi jadval bo'yicha
+LABELS[STUDIO] = "Studiya: syomka, montaj va dars ishlab chiqarish"
 
 @dataclass(frozen=True)
 class Role:
@@ -92,6 +94,9 @@ ROLES = {r.key: r for r in [
          deny_note="Moliya va kadrlar ma'lumoti · talabalar — faqat masofaviy ta'lim shakli (LMS faolligi, o'zlashtirish, buyruq holati)"),
     Role("masofaviy_xodim", "Masofaviy ta'lim bo'limi xodimi", 3, R(DISTANCE, TASKS),
          deny_note="Moliya va kadrlar ma'lumoti · talabalar — faqat masofaviy ta'lim shakli; kafedraga topshiriq va qoidalar — bo'lim boshlig'ida"),
+    # Studiya operatori (Masofaviy ta'lim bo'limi tarkibida): syomka kun rejasi, xom videoni yuklash, AI montaj natijasini ko'rib chiqish (app/studio.py)
+    Role("montaj_operator", "Studiya operatori (montaj)", 3, R(STUDIO, TASKS),
+         deny_note="Talabalar, moliya va kadrlar ma'lumoti · faqat studiya: syomka, montaj va video natijasi; paketni bo'lim tasdiqlaydi"),
     Role("malumotlar_bazasi", "Ma'lumotlar bazasi bo'limi", 3, R(KPI, ACADEMIC, STUDENTS, TASKS),
          deny_note="Moliya, kontrakt va kadrlar ma'lumoti"),
     Role("imtihon", "Imtihon bo'limi", 3, R(ACADEMIC, STUDENTS, TASKS, OPS), deny_note="Moliya, kontrakt va kadrlar ma'lumoti · Talabalar markazi — o'zlashtirish va otrabotka"),

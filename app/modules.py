@@ -44,6 +44,7 @@ MODULES = [
     _m("masofaviy", "Masofaviy ta'lim", "LMS faolligi va o'quv kontenti monitoringi.", 1, "Masofaviy ta'lim bo'limi · manba: NEXTID LMS"),
     _m("testbank", "Test bank", "Mavzu testlari va oraliq nazorat banklari.", 1, "Masofaviy ta'lim bo'limi"),
     _m("paket", "Dars tayyorlash", "Bir ekranda dars: mavzu manbalari, taqdimot, video va test → SCORM / xAPI paket.", 1, "Masofaviy ta'lim bo'limi"),
+    _m("studio", "Studiya", "Dars ishlab chiqarish: syomka bandi, AI montaj, YouTube va avtomatik paket — bitta oqim.", 1, "Masofaviy ta'lim bo'limi (studiya)"),
     _m("taqdimot", "Taqdimot", "O'qituvchi materialidan ISFT shablonida taqdimot.", 1, "Kafedralar"),
     _m("service", "Nosozliklar va murojaatlar", "QR orqali nosozlik arizalari va xarid so'rovlari; «Murojaatlar» yorlig'i — «Talabalar navbati», «Tadbir qatnashuvi» — «Yoshlar ishlari» yoqilganda.", 1, "Xo'jalik bo'limi, AT bo'limi, Xarid bo'limi"),
     # ---- tizim (faqat AT bo'limi boshlig'i menyusida) ----

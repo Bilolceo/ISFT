@@ -59,6 +59,8 @@ async def _warm():
     asyncio.create_task(OC.poller())
     asyncio.create_task(OC.events_supervisor())   # Hikvision voqealar oqimi tinglovchilari
     asyncio.create_task(OPSM.poller())   # qoidalar har 10 daqiqada qayta hisoblanadi
+    from . import studio as _STU
+    asyncio.create_task(_STU.poller())   # studiya: lease muddati o'tgan montajlar va YouTube navbati («studio» bo'limi o'chiq bo'lsa — hech narsa)
 
 @app.on_event("startup")
 async def _bot_start():   # Telegram bot shu jarayonda (TELEGRAM_BOT_TOKEN bo'lsa); token yo'q — faqat log
@@ -472,6 +474,10 @@ from . import paket as PK   # Kontent paketlari: mavzu manbalari (matn+reja, taq
 PK.init(con)   # jadvallar va namuna (TB.init dan keyin — Test bank namuna matni va savollari ishlatiladi)
 PK.bind(con, ctx)
 app.include_router(PK.router)
+from . import studio as STU   # Studiya: dars ishlab chiqarish — syomka bandi, AI montaj navbati (ishchi API /api/montaj), YouTube, avtomatik paket (docs/studio.md)
+STU.init(con)   # jadvallar, standart «Studiya» xonasi, operator demo akkaunti, namuna bandlar (PK.init dan keyin)
+STU.bind(con, ctx)
+app.include_router(STU.router)
 from . import moliya as MOL   # Moliya: to'lovlar reyestri (qo'lda), kunlik solishtirish, byudjet ijrosi, xarajat tasdig'i, xarid moliyalashtirish, oylik hisobotlar
 MOL.init(con)
 MOL.bind(con, ctx)

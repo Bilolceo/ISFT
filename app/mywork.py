@@ -34,7 +34,7 @@ def bind(con, ctx_fn):
     from . import pending as PD; PD.bind(con)   # yangi modullar (moliya, kadrlar, ilmiy, xalqaro, yoshlar, amaliyot, harakat, tekshiruv, talaba)
 
 SOURCES = ("majlis", "portal", "markaz", "buyruq", "murojaat", "xodim", "agent", "sillabus",
-           "moliya", "kadrlar", "ilmiy", "xalqaro", "yoshlar", "amaliyot", "harakat", "tekshiruv", "talaba", "devon", "qabul", "rejalar", "it_req", "masofaviy", "testbank", "paket")
+           "moliya", "kadrlar", "ilmiy", "xalqaro", "yoshlar", "amaliyot", "harakat", "tekshiruv", "talaba", "devon", "qabul", "rejalar", "it_req", "masofaviy", "testbank", "paket", "studio")
 OPS_ROLES = ("call_center", "tyutor", "talabalar", "sirtqi")     # Talabalar markazida o'z navbati bor lavozimlar (student_ops._can_act; sirtqi — sirtqi talabalar xatlari)
 OPS_LIST_MAX = 5                                      # bundan ko'p bo'lsa — tur bo'yicha jamlanadi
 DOC_LIST_MAX = 12

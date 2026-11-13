@@ -369,8 +369,11 @@ async function pkTopicPanel(el) {
          ${can.deck && tx.ok && sl.src !== "deck" ? `<button type="button" class="btn sm ${sl.ok ? "ghost" : ""}" id="pkDkNew" title="Yuklangan ma'ruza matnidan ISFT shablonida taqdimot tuziladi">${ico("spark", 15)} ISFT shablonida taqdimot yaratish</button>` : ""}`)}
     ${tile("video", "video", "Video", vd.ok, vd.ok ? (vd.provider === "file" ? vFile : vLink) : vErr ? `<span class="pk-bad">${esc(vd.error)}</span>` : "MP4 fayl tashlang yoki YouTube havolasini kiriting",
         [vd.both ? `yana ${vd.provider === "file" ? "YouTube havolasi" : "video fayl"} ham bor — darsga «${esc(M.video_sources[S.video_source])}» kiradi` : "",
-         vd.file ? `subtitr: ${vd.captions.length ? vd.captions.map(x => esc(x.lang)).join(", ") : "yo'q"}${vd.poster ? " · muqovasi bor" : ""}` : ""],
-        vd.ok || vErr ? `<label class="btn sm ghost pk-file">Almashtirish<input type="file" accept=".mp4,.webm,video/mp4,video/webm" hidden data-up="video"></label>${vd.file || vd.link_src === "paket" ? `<button type="button" class="btn sm ghost" data-rm="video">Olib tashlash</button>` : ""}` : "")}
+         vd.file ? `subtitr: ${vd.captions.length ? vd.captions.map(x => esc(x.lang)).join(", ") : "yo'q"}${vd.poster ? " · muqovasi bor" : ""}` : "",
+         vd.file && vd.file.studio ? "studiyada yozilgan, AI montaj qilingan" : ""],
+        (vd.ok || vErr ? `<label class="btn sm ghost pk-file">Almashtirish<input type="file" accept=".mp4,.webm,video/mp4,video/webm" hidden data-up="video"></label>${vd.file || vd.link_src === "paket" ? `<button type="button" class="btn sm ghost" data-rm="video">Olib tashlash</button>` : ""}` : "")
+        + (!vd.ok && typeof modOn === "function" && modOn("studio") && ["oqituvchi", "masofaviy", "masofaviy_xodim"].includes(M.role) && ["maruza", "amaliy"].includes(L.kind)
+           ? `<button type="button" class="btn sm ghost" onclick="go('studio')" title="Studiyada syomka → AI montaj → video darsga o'zi qo'yiladi">${ico("video", 15)} Studiyada yozish</button>` : ""))}
     ${tile("quiz", "checkc", "Test va mashqlar", !!(nQ || nX), nQ || nX ? `${nQ} savol · ${nX} mashq` : "Test savollari va mashqlar — xohlasangiz qo'shing",
         [nQ && qz.used !== nQ ? `darsga ${qz.used} ta savol kiradi` : "", xr.draft ? `${xr.draft} ta mashq qoralamasi — ko'rib saqlang` : ""],
         `<button type="button" class="btn sm ghost" id="pkPrOpen">${ico("plus", 15)} Qo'shish</button>`, true)}
