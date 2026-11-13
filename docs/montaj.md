@@ -142,10 +142,10 @@ hostiga yuboriladi, boshqa hostdagi imzolangan URL'larga yuborilmaydi):
 
 | So'rov | Tana / javob |
 |--------|--------------|
-| `POST /api/montaj/jobs/claim` | so'rov: `{}`; javob `200 {"job_id","template","lesson":{"course_id","no","code","kind","title","subject","teacher","plan":[...]},"raw_url","slides_url"\|null,"logo_url"}` yoki `204` |
+| `POST /api/montaj/jobs/claim` | so'rov: `{}`; javob `200 {"job_id","template","lesson":{"course_id","no","code","kind","title","subject","teacher","plan":[...]},"raw_url","raw_ext","raw_name","slides_url"\|null,"logo_url"}` yoki `204` |
 | `GET raw_url / slides_url / logo_url` | imzolangan URL (nisbiy bo'lsa `--api` ga qo'shiladi); uzilsa `Range: bytes=N-` bilan davom ettiriladi (6 urinish, eksponensial kutish) |
 | `POST /api/montaj/jobs/{id}/progress` | `{"stage","pct","message"}` — kamida har 3 s da bir (bosqich almashganda darhol) |
-| `POST /api/montaj/jobs/{id}/result` | `multipart/form-data`: `video` (final.mp4, video/mp4), `captions` (captions.vtt, text/vtt), `thumbnail` (thumbnail.jpg, image/jpeg), `report` (report.json, application/json); fayl xotiraga o'qilmay oqim bilan yuboriladi, `Content-Length` aniq; 5xx/uzilishda 4 urinish |
+| `POST /api/montaj/jobs/{id}/result` | `multipart/form-data`: `video` (final.mp4, video/mp4), `captions` (captions.vtt, text/vtt), `thumbnail` (thumbnail.jpg, image/jpeg), `report` (report.json, application/json); fayl xotiraga o'qilmay oqim bilan yuboriladi, `Content-Length` aniq; 5xx/uzilishda (va 409 «… yuklanmoqda») 4 urinish. Har urinishdan oldin `progress` («yuborish», 97), yuklash davomida parallel oqim har 60 s da yana `progress` (server lease'ni uzaytiradi) |
 | `POST /api/montaj/jobs/{id}/fail` | `{"error": "…"}` (o'zbekcha matn, ≤ 4000 belgi) |
 
 `stage` qiymatlari va `pct` oralig'i: `yuklash` 0–2 → `tayyorlash` 2–5 → `audio` 5–10 → `nutq` 10–45 →
@@ -157,6 +157,8 @@ intro/miniatyurada "L3 · Mavzu" ko'rinishida chiqadi. `logo_url` yuklanmasa sta
 `static/brand/logo.png` ishlatiladi.
 
 Xatti-harakat:
+- Xom video kengaytmasi: `raw_ext` (server) → yuklab olish `Content-Type` / `Content-Disposition` → baytlar (`ftyp` — mp4/mov, EBML — mkv/webm) → `.mp4`.
+  Imzolangan havola nomi (`17.raw.<muddat>.<lease>.<imzo>`) kengaytma sifatida ishlatilmaydi.
 - Navbat bo'sh (`204`) yoki tarmoq xatosi — kutish 5 s dan 60 s gacha asta-sekin uzayadi.
 - `progress` javobi `404/409/410` bo'lsa — server ishni bekor qilgan deb hisoblanadi, render to'xtatiladi va `/fail` yuboriladi.
 - Claim javobida `lease` bo'lsa — `progress` / `result` / `fail` `X-Worker-Lease` sarlavhasi bilan yuboriladi (eskirgan lease → 409 → ish bekor); eski serverda `lease` yo'q — sarlavha yuborilmaydi.

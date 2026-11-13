@@ -35,6 +35,7 @@ class MockCore:
         self.leases: list = []        # (yo'l, X-Worker-Lease) — har POST
         self.dropped = set()
         self.bad_token = 0
+        self.result_delay = 0.0       # natija javobini kechiktirish (uzoq yuklash taqlidi — parallel progress ping'lari)
         core = self
 
         class H(BaseHTTPRequestHandler):
@@ -110,6 +111,9 @@ class MockCore:
                         name = part.get_param("name", header="content-disposition")
                         parts[name] = (part.get_filename(), part.get_content_type(), part.get_payload(decode=True))
                     core.results[jid] = parts
+                    if core.result_delay:
+                        import time as _t
+                        _t.sleep(core.result_delay)
                     return self._json(200, {"ok": True})
                 return self._json(404)
 
@@ -135,9 +139,11 @@ class WorkerTests(unittest.TestCase):
     def setUp(self):
         self.meta = fixtures.make_all()
         from pipeline.common import DEFAULT_LOGO
-        self.core = MockCore({"/files/raw.mp4": Path(self.meta["teacher"]), "/files/slides.pdf": Path(self.meta["slides"]),
-                              "/files/logo.png": DEFAULT_LOGO},
-                             [{**job("j1"), "lease": "aa11bb22cc33dd44"}, job("j2", raw="/files/missing.mp4?sig=zzz", slides=None)])
+        # j1 — eski server kabi raw_ext'siz, imzolangan havola nomida «kengaytma» yo'q (17.raw.<muddat>.<imzo>): kengaytma baytlardan
+        self.core = MockCore({"/files/raw.mp4": Path(self.meta["teacher"]), "/files/17.raw.1763030000.deadbeef": Path(self.meta["teacher"]),
+                              "/files/slides.pdf": Path(self.meta["slides"]), "/files/logo.png": DEFAULT_LOGO},
+                             [{**job("j1", raw="/files/17.raw.1763030000.deadbeef"), "lease": "aa11bb22cc33dd44"},
+                              job("j2", raw="/files/missing.mp4?sig=zzz", slides=None)])
         self.work = fixtures.SCRATCH / "worker_work"
 
     def tearDown(self):
@@ -147,8 +153,22 @@ class WorkerTests(unittest.TestCase):
         sleeps = []
         w = Wk.Worker(Wk.Api(self.core.url, TOKEN), self.work, poll_min=0.01, poll_max=0.02,
                       sleep=lambda s: sleeps.append(s))
+        w.upload_ping_s = 0.1
+        self.core.result_delay = 0.6
+        inputs = []
+        orig_run = Wk.R.run
+
+        def run_spy(cfg, **kw):
+            inputs.append(Path(cfg.input))
+            return orig_run(cfg, **kw)
+        Wk.R.run = run_spy
         # 1-ish: muvaffaqiyatli
-        w.loop(once=True)
+        try:
+            w.loop(once=True)
+        finally:
+            Wk.R.run = orig_run
+        # xom video kengaytmasi imzolangan havola nomidan («.deadbeef») emas — baytlardan (ftyp → .mp4)
+        self.assertEqual([x.suffix for x in inputs], [".mp4"], inputs)
         self.assertIn("j1", self.core.results, self.core.fails)
         parts = self.core.results["j1"]
         self.assertEqual(set(parts), {"video", "captions", "thumbnail", "report"})
@@ -160,7 +180,7 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(list(rep), ["duration_in", "duration_out", "cuts", "chapters", "slide_changes",
                                      "warnings", "timings"])
         # Range bilan davom ettirildi
-        self.assertTrue(any(p == "/files/raw.mp4" and r.startswith("bytes=") and r != "bytes=0-"
+        self.assertTrue(any(p == "/files/17.raw.1763030000.deadbeef" and r.startswith("bytes=") and r != "bytes=0-"
                             for p, r in self.core.range_requests), self.core.range_requests)
         # progress: bosqichlar va foiz o'sib boradi
         pr = [p for j, p in self.core.progress if j == "j1"]
@@ -169,6 +189,10 @@ class WorkerTests(unittest.TestCase):
             self.assertIn(st, stages)
         pcts = [p["pct"] for p in pr if p["stage"] != "yuklash"]
         self.assertEqual(pcts, sorted(pcts))
+        # natija yuborilayotganda: oldin majburiy ping («yuborish», 97), uzoq yuklashda parallel oqimdan yana ping'lar (lease uzaytiriladi)
+        sends = [p for p in pr if p["stage"] == "yuborish"]
+        self.assertGreaterEqual(len(sends), 3, sends)
+        self.assertTrue(all(p["pct"] == 97 for p in sends))
         self.assertTrue(all(set(p) == {"stage", "pct", "message"} for p in pr))
         # vaqtinchalik fayllar tozalangan
         self.assertEqual(list(self.work.glob("job_j1_*")), [])
@@ -206,6 +230,30 @@ class WorkerTests(unittest.TestCase):
         w.loop()
         self.assertGreaterEqual(self.core.bad_token, 3)
         self.assertNotIn("j1", self.core.results)
+
+    def test_raw_suffix(self):
+        """Xom video kengaytmasi: raw_ext (server) → Content-Type / Content-Disposition → baytlar → .mp4; token nomidan EMAS."""
+        from email.message import Message
+
+        def hdr(**kw):
+            m = Message()
+            for k, v in kw.items():
+                m[k.replace("_", "-")] = v
+            return m
+        mp4 = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00"
+        mov = b"\x00\x00\x00\x14ftypqt  \x00\x00\x00\x00"
+        mkv = b"\x1a\x45\xdf\xa3\x9f\x42\x86\x81\x01" + b"matroska"
+        webm = b"\x1a\x45\xdf\xa3\x9f\x42\x86\x81\x01" + b"webm"
+        self.assertEqual(Wk.raw_suffix({"raw_ext": ".mov"}, hdr(Content_Type="video/mp4"), mp4), ".mov")
+        self.assertEqual(Wk.raw_suffix({"raw_ext": "MKV"}), ".mkv")
+        self.assertEqual(Wk.raw_suffix({"raw_ext": ".exe"}, None, webm), ".webm")          # yaroqsiz raw_ext — e'tiborsiz
+        self.assertEqual(Wk.raw_suffix({}, hdr(Content_Type="video/quicktime"), mp4), ".mov")
+        self.assertEqual(Wk.raw_suffix({}, hdr(Content_Type="application/octet-stream",
+                                               Content_Disposition='attachment; filename="dars 3.MKV"'), mp4), ".mkv")
+        self.assertEqual(Wk.raw_suffix({}, hdr(Content_Type="application/octet-stream"), mov), ".mov")
+        self.assertEqual(Wk.raw_suffix({}, None, mkv), ".mkv")
+        self.assertEqual(Wk.raw_suffix({}, None, b"\x00" * 64), ".mp4")
+        self.assertEqual(Wk.raw_suffix({"raw_url": "/api/montaj/files/17.raw.1763030000.9f2c4a1b7e30d685.abc"}, None, b""), ".mp4")
 
     def test_multipart_stream(self):
         tmp = fixtures.SCRATCH / "mp_test.bin"

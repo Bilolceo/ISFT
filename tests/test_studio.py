@@ -206,7 +206,10 @@ ok(r.status_code == 200, "Operator xom video yukladi (8-dars)")
 ok(O.post(f"{P}/lessons/{CID}/8/raw?name=big.mp4", content=fake_mp4(600_000)).status_code == 413, "ISFT_CORE_RAW_MAX_GB chegarasidan katta — 413")
 ok(not list((tmp / "studio" / "tmp").glob("raw_*.part")), "Rad etilgan yuklashdan vaqtinchalik fayl qolmadi")
 r = WC.post(W + "/jobs/claim", headers=WH); cj = J(r)
-ok(set(cj) == {"job_id", "template", "lesson", "lease", "raw_url", "slides_url", "logo_url"} and cj["template"] == "faqat_oqituvchi", "claim javobi — kontrakt kalitlari aniq (+ lease)")
+ok(set(cj) == {"job_id", "template", "lesson", "lease", "raw_url", "raw_ext", "raw_name", "slides_url", "logo_url"} and cj["template"] == "faqat_oqituvchi",
+   "claim javobi — kontrakt kalitlari aniq (+ lease, raw_ext, raw_name)")
+ok(cj["raw_ext"] == ".mp4" and cj["raw_name"] == "l8.mp4" and not cj["raw_url"].endswith(".mp4"),
+   "[4] claim: raw_ext / raw_name — serverdan (st_raw), imzolangan havola nomidan emas")
 ok(re.fullmatch(r"[0-9a-f]{16}", cj["lease"] or "") and cj["lease"] in cj["raw_url"], "claim: lease identifikatori javobda va imzolangan havola ichida")
 ok(set(cj["lesson"]) == {"course_id", "no", "code", "kind", "title", "subject", "teacher", "plan"} and cj["lesson"]["code"] == "L8" and cj["lesson"]["no"] == 8
    and cj["lesson"]["subject"] == own["subject"] and isinstance(cj["lesson"]["plan"], list), "lesson: course_id, no, code, kind, title, subject, teacher, plan")
@@ -448,6 +451,7 @@ ok(not any(it["source"] == "studio" and it["id"].startswith("st-b") for it in J(
 print("-- B9. Holat paneli va KPI raqamlari")
 X("UPDATE st_bookings SET start=?, end=?, created_at=? WHERE id=?", ((nowp - dt.timedelta(days=4)).isoformat(), (nowp - dt.timedelta(days=4, minutes=-90)).isoformat(),
                                                                    (nowp - dt.timedelta(days=6)).isoformat(), b_tom))
+STU.invalidate()                           # bazaga to'g'ridan-to'g'ri yozildi — holat keshi (STATES_TTL) tozalanadi (ilova yozuvlari o'zi tozalaydi)
 bd = J(H.get(P + "/board"))
 ok(sum(bd["totals"].values()) == bd["total"] == sum(r_["total"] for r_ in bd["rows"]), f"Jami: bosqichlar yig'indisi = qatorlar yig'indisi = {bd['total']}")
 ok(bd["red_total"] == len(bd["red"]) == sum(r_["red"] for r_ in bd["rows"]) and bd["red_total"] >= 1, f"Qizil: {bd['red_total']} = ro'yxat = qatorlar")
@@ -778,6 +782,177 @@ ok(raw_of(j11)["path"] and (STU.store() / raw_of(j11)["path"]).is_file(), "[9] Y
 # [10] umumiy yordamchilar paketdan
 ok(STU._short is PK._short and STU._ascii is PK._ascii and STU._stream_upload is PK._stream_upload and STU.range_response is PK.range_response,
    "[10] _short, _ascii, oqimli yuklash va Range javobi — app/paket.py dan (nusxa emas)")
+
+print("-- B14. Kod tekshiruvi tuzatishlari (2-tur, regressiya)")
+import errno, inspect  # noqa: E402
+X("UPDATE st_jobs SET status='bekor' WHERE status IN ('navbatda','ishlanmoqda')"); STU._mw_invalidate()
+def assets(no, purpose=None):
+    return Q("SELECT * FROM pk_assets WHERE course_id=? AND topic_no=? AND deleted=0" + (" AND purpose=?" if purpose else "") + " ORDER BY id",
+             (CID, no) + ((purpose,) if purpose else ()))
+def adir_files(no): return sorted(p.name for p in PK._asset_dir(CID, no).iterdir())
+# [1] studio_set_video: link + nusxa yiqilsa — yetim pk_assets qatori ham, vaqtinchalik fayl ham qolmaydi; eski video joyida
+src12 = STU._job_dir(j12) / "video.mp4"
+v_old = assets(12, "video"); n_old = len(Q("SELECT id FROM pk_assets WHERE course_id=? AND topic_no=12", (CID,))); files_old = adir_files(12)
+_ol, _oc = PK.os.link, PK.shutil.copyfile
+def _no_link(*a, **k): raise OSError(errno.EXDEV, "Invalid cross-device link (sinov)")
+def _no_copy(*a, **k): raise OSError(errno.ENOSPC, "No space left on device (sinov)")
+PK.os.link, PK.shutil.copyfile = _no_link, _no_copy
+try:
+    try: PK.studio_set_video(None, CID, 12, src12, VTT, JPG, name="sinov"); code = 200
+    except OSError as e: code = e.errno
+finally:
+    PK.os.link, PK.shutil.copyfile = _ol, _oc
+ok(code == errno.ENOSPC and len(Q("SELECT id FROM pk_assets WHERE course_id=? AND topic_no=12", (CID,))) == n_old and adir_files(12) == files_old,
+   "[1] link (EXDEV) va nusxa yiqildi → yangi pk_assets qatori yo'q (yetim yo'q), vaqtinchalik fayl qolmadi")
+ok(assets(12, "video") == v_old and (PK.store() / v_old[0]["path"]).is_file(), "[1] Darsning oldingi videosi (qator va fayl) joyida")
+PK.os.link = _no_link                     # boshqa disk: EXDEV → nusxa (qattiq havola emas)
+try: res1 = PK.studio_set_video(None, CID, 12, src12, VTT, JPG, name="exdev")
+finally: PK.os.link = _ol
+va12 = assets(12, "video")
+ok(len(va12) == 1 and va12[0]["id"] == res1["id"] and va12[0]["path"].endswith("_studiya.mp4") and va12[0]["path"] != ""
+   and (PK.store() / va12[0]["path"]).read_bytes() == src12.read_bytes() and not os.path.samefile(PK.store() / va12[0]["path"], src12),
+   "[1] EXDEV → nusxa: bitta faol video, yakuniy yo'l bilan yozilgan, baytlar bir xil")
+ok(not (PK.store() / v_old[0]["path"]).exists() and Q("SELECT deleted FROM pk_assets WHERE id=?", (v_old[0]["id"],))[0]["deleted"] == 2,
+   "[1] Eski video faqat yangisi ro'yxatga olingach almashtirildi (deleted=2, fayl o'chirildi)")
+ok(not [f for f in adir_files(12) if f.endswith(".tmp")], "[1] Asset katalogida .tmp qolmadi")
+# [2] tasdiqlash tranzaksiyaviy: subtitr/poster/video_source bosqichida kutilmagan (HTTP bo'lmagan) xato → hammasi orqaga, eski video joyida
+VID2 = fake_mp4(500_000, seed=21)
+c16 = montage(CID, 12, video=VID2); j16 = c16["job_id"]
+keep = {p_: assets(12, p_) for p_ in ("video", "subs", "poster")}; files_b = adir_files(12)
+n_all = len(Q("SELECT id FROM pk_assets WHERE course_id=? AND topic_no=12", (CID,)))
+src_b = PK.topic_settings(CID, 12)[1]
+_osv = PK._set_video_source
+def _boom_vs(*a, **k): raise RuntimeError("disk xatosi (sinov)")
+PK._set_video_source = _boom_vs
+try: r = O.post(f"{P}/jobs/{j16}/approve")
+finally: PK._set_video_source = _osv
+jr16 = Q("SELECT * FROM st_jobs WHERE id=?", (j16,))[0]
+ok(r.status_code == 500 and "Video darsga qo'yilmadi" in r.json().get("detail", "") and "RuntimeError" in r.json()["detail"],
+   f"[2] Kutilmagan xato → 500, o'zbekcha matn: {r.json().get('detail', '')[:90]}")
+ok(jr16["status"] == "tayyor" and jr16["decided_by"] is None and "Video darsga qo'yilmadi" in (jr16["error"] or ""), "[2] Vazifa «tayyor»ga qaytdi, xato vazifada (error)")
+ok(all(assets(12, p_) == keep[p_] for p_ in keep) and (PK.store() / keep["video"][0]["path"]).read_bytes() == src12.read_bytes(),
+   "[2] Oldingi video, subtitr va poster (qatorlar va fayl) tegilmadi")
+ok(len(Q("SELECT id FROM pk_assets WHERE course_id=? AND topic_no=12", (CID,))) == n_all and adir_files(12) == files_b and PK.topic_settings(CID, 12)[1] == src_b,
+   "[2] Yangi qatorlar ham, yangi fayllar ham qolmadi (rollback), dars sozlamasi o'zgarmadi")
+ok(not Q("SELECT 1 x FROM st_yt WHERE job_id=?", (j16,)), "[2] YouTube navbatiga qo'yilmadi")
+rr = J(O.post(f"{P}/jobs/{j16}/approve"))
+va = assets(12, "video")
+ok(rr["ok"] and len(va) == 1 and (PK.store() / va[0]["path"]).read_bytes() == VID2 and not (PK.store() / keep["video"][0]["path"]).exists()
+   and Q("SELECT error FROM st_jobs WHERE id=?", (j16,))[0]["error"] is None, "[2] Qayta tasdiqlash — yangi video, eskisi endi almashtirildi, xato tozalandi")
+# [5] imzolangan havola: lease bilan amal qiladi (progress uzaytiradi), absolyut chegara — 48 soat
+J(O.post(f"{P}/lessons/{CID}/13/raw?name=dars13.MOV", content=b"\x00\x00\x00\x14ftypqt  \x00\x00\x00\x00qt  " + b"\x02" * 5000))
+J(O.post(f"{P}/lessons/{CID}/13/jobs", json={"template": "faqat_oqituvchi"}))
+cx = J(WC.post(W + "/jobs/claim", headers=WH)); JX, LX = cx["job_id"], cx["lease"]
+ok(cx["raw_ext"] == ".mov" and cx["raw_name"] == "dars13.MOV", "[4] claim: raw_ext «.mov» (baytlardan aniqlangan tur), raw_name — asl nom")
+tokx = cx["raw_url"].rsplit("/", 1)[1]; rux = W + "/files/" + tokx
+ok(int(tokx.split(".")[2]) - time.time() > 47 * 3600, "[5] Lease'li havola: absolyut chegara ≈ 48 soat (2 soat emas)")
+_rt, _rmono, _otime = time.time, time.monotonic, STU.time
+class _Later:                              # «3 soatdan keyin» — eski 2 soatlik havola 403 bo'lardi
+    time = staticmethod(lambda: _rt() + 3 * 3600); monotonic = staticmethod(_rmono)
+STU.time = _Later
+try: c3h = WC.get(rux).status_code
+finally: STU.time = _otime
+ok(c3h == 200, "[5] 3 soatdan keyin ham (lease amal qilayotgan bo'lsa) havola ishlaydi — 200")
+X("UPDATE st_jobs SET lease_until=? WHERE id=?", ((STU._now() - dt.timedelta(minutes=1)).isoformat(), JX))
+ok(WC.get(rux).status_code == 410, "[5] Lease muddati o'tgan (navbatga hali qaytmagan) — havola 410")
+J(WC.post(f"{W}/jobs/{JX}/progress", headers={**WH, "X-Worker-Lease": LX}, json={"stage": "audio", "pct": 8}))
+ok(WC.get(rux).status_code == 200, "[5] progress lease'ni uzaytirdi → havola yana 200")
+# [3] / [6] natija: so'rovga xos katalog, parallel takroriy — 409, lease uzaytiriladi, yuklanayotgan vazifa navbatga qaytmaydi
+VID3 = fake_mp4(400_000, seed=31)
+body3 = part("video", "v.mp4", "video/mp4", VID3) + part("captions", "c.vtt", "text/vtt", VTT) + part("thumbnail", "t.jpg", "image/jpeg", JPG) + \
+        part("report", "r.json", "application/json", json.dumps(REPORT).encode()) + f"--{bnd}--\r\n".encode()
+class _MRq:
+    def __init__(self, body, lease, hook=None, chunk=16384, delay=0.0):
+        self.body, self.hook, self.chunk, self.delay = body, hook, chunk, delay
+        self.headers = {"x-worker-token": TOKEN, "x-worker-lease": lease, "content-type": f"multipart/form-data; boundary={bnd}", "content-length": str(len(body))}
+    async def stream(self):
+        for i in range(0, len(self.body), self.chunk):
+            if self.hook: self.hook(i)
+            await asyncio.sleep(self.delay)
+            yield self.body[i:i + self.chunk]
+seen = {}
+X("UPDATE st_jobs SET lease_until=? WHERE id=?", ((STU._now() + dt.timedelta(seconds=60)).isoformat(), JX))
+def hookA(i):
+    lu = lambda: dt.datetime.fromisoformat(Q("SELECT lease_until FROM st_jobs WHERE id=?", (JX,))[0]["lease_until"])
+    if i == 0:
+        seen["start"] = (lu() - STU._now()).total_seconds()
+        inc = STU._job_dir(JX) / ".incoming"
+        seen["dirs"] = [p_.name for p_ in inc.iterdir()] if inc.is_dir() else []
+    if i == 16384 * 2:                      # lease «o'tib ketdi» — lekin natija yuklanmoqda: navbatga qaytmasligi kerak
+        X("UPDATE st_jobs SET lease_until=? WHERE id=?", ((STU._now() - dt.timedelta(minutes=5)).isoformat(), JX))
+        seen["requeued"] = STU.requeue_expired(); seen["st"] = Q("SELECT status FROM st_jobs WHERE id=?", (JX,))[0]["status"]
+        seen["fail"] = WC.post(f"{W}/jobs/{JX}/fail", headers={**WH, "X-Worker-Lease": LX}, json={"error": "x"}).status_code
+    if i == 16384 * 10: seen["mid"] = (lu() - STU._now()).total_seconds()
+_orb = STU.RESULT_PING_BYTES; STU.RESULT_PING_BYTES = 64 * 1024
+async def _both():
+    ta = asyncio.create_task(STU.result(_MRq(body3, LX, hookA, delay=0.003), JX))
+    await asyncio.sleep(0.02)
+    try: await STU.result(_MRq(body3, LX), JX); b_ = (200, "")
+    except PK.HTTPException as e: b_ = (e.status_code, str(e.detail))
+    return b_, await ta
+try: (cb, mb), ra = asyncio.run(_both())
+finally: STU.RESULT_PING_BYTES = _orb
+dx = STU._job_dir(JX)
+ok(cb == 409 and "yuklanmoqda" in mb, f"[3] Parallel takroriy natija (o'sha vazifa + lease) — 409: {mb[:60]}")
+ok(ra["ok"] and (dx / "video.mp4").read_bytes() == VID3 and (dx / "thumb.jpg").read_bytes() == JPG and Q("SELECT status FROM st_jobs WHERE id=?", (JX,))[0]["status"] == "tayyor",
+   "[3] Birinchi yuklash buzilmadi: fayllar baytma-bayt, vazifa «tayyor»")
+ok(len(seen["dirs"]) == 1 and re.fullmatch(r"[0-9a-f]{32}", seen["dirs"][0]) and not (dx / ".incoming").exists(),
+   "[3] So'rovga xos katalog (.incoming/<uuid>), tugagach faqat o'zi tozalandi")
+ok(seen["start"] > 7000, f"[6] /result boshlanganda lease uzaytirildi (≈ {seen['start'] / 3600:.1f} soat)")
+ok(seen["requeued"] == 0 and seen["st"] == "ishlanmoqda", "[6] requeue_expired natijasi yuklanayotgan vazifani navbatga qaytarmadi")
+ok(seen["fail"] == 409, "[6] Natija yuklanayotganda /fail — 409 (vazifa navbatga tushib ketmaydi)")
+ok(seen["mid"] > 7000, "[6] Yuklash davomida (har RESULT_PING_BYTES) lease yana uzaytirildi")
+ok(JX not in STU._UPLOADS, "[3] Yuklash belgisi tozalandi")
+def hookC(i):
+    if i + 16384 >= len(body3): shutil.rmtree(dx, ignore_errors=True)    # disk/katalog yo'qoldi (masalan, parallel tozalov)
+try: asyncio.run(STU.result(_MRq(body3, LX, hookC), JX)); cc, mc = 200, ""
+except PK.HTTPException as e: cc, mc = e.status_code, str(e.detail)
+except Exception as e: cc, mc = -1, type(e).__name__
+ok(cc == 500 and "saqlab bo'lmadi" in mc and JX not in STU._UPLOADS, f"[3] Kutilmagan xato (FileNotFoundError) → aniq matnli HTTPException 500, xom 500 emas: {mc[:70]}")
+# [7] retry: tekshirish-o'rnatish atomar — parallel «bekor qilish» yutgan bo'lsa 409
+X("UPDATE st_jobs SET status='operator', error='sinov' WHERE id=?", (JX,))
+X("UPDATE st_jobs SET status='bekor' WHERE id=?", (JX,))      # «bekor qilish» o'qishdan keyin, yozishdan oldin yutdi
+_oj = STU._job
+STU._job = lambda c, jid: {**_oj(c, jid), "status": "operator"}
+try: r7 = O.post(f"{P}/jobs/{JX}/retry")
+finally: STU._job = _oj
+ok(r7.status_code == 409 and Q("SELECT status FROM st_jobs WHERE id=?", (JX,))[0]["status"] == "bekor", "[7] retry ↔ cancel poygasi: retry 409, vazifa «bekor» qoldi (navbatga tushmadi)")
+# [8] readiness_map — faqat kerakli kurslar; holat keshi board / kpi / bugun / mywork uchun bitta hisob
+full = PK.readiness_map(); part2 = PK.readiness_map([CID, MIK])
+ok(part2 == {k_: v_ for k_, v_ in full.items() if k_[0] in (CID, MIK)} and PK.readiness_map([]) == {}, "[8] readiness_map(course_ids) = to'liq xaritaning shu kurslar qismi")
+calls = []; _orm = PK.readiness_map
+def _rm(course_ids=None):
+    calls.append(None if course_ids is None else sorted(course_ids)); return _orm(course_ids)
+PK.readiness_map = _rm
+try:
+    STU._mw_invalidate()
+    J(H.get(P + "/board")); J(RK.get(P + "/kpi")); J(O.get("/api/bugun")); J(O.get("/api/mywork")); J(H.get(P + "/board", params={"group": "teacher"}))
+    st_calls = [x for x in calls if x is not None]
+    ok(len(st_calls) == 1 and st_calls[0] == sorted(STU.tracked_courses()), f"[8] board + kpi + bugun + mywork — bitta hisob (readiness_map {len(st_calls)} marta, faqat kuzatiladigan kurslar)")
+    J(H.post(P + "/plan", json={"course_id": MIK, "on": True}))   # studiya yozuvi — kesh tozalanadi
+    J(H.get(P + "/board"))
+    ok(len([x for x in calls if x is not None]) == 2, "[8] Studiya yozuvidan keyin holat qayta hisoblandi")
+finally:
+    PK.readiness_map = _orm
+# [9] day_plan / my_bookings — c.topics asosiy so'rovda (har band uchun alohida SELECT yo'q)
+sqls = []
+con._c().set_trace_callback(sqls.append)
+try:
+    dpl = STU.day_plan(octx, nowp.date().isoformat()); mb_ = STU.my_bookings(tctx)
+finally:
+    con._c().set_trace_callback(None)
+ok(dpl["items"] and mb_ and not [x for x in sqls if "SELECT topics FROM dl_courses" in x], f"[9] N+1 yo'q: {len(dpl['items'])} band + {len(mb_)} ta o'qituvchi bandi, alohida topics so'rovi 0")
+# [10] _course: o'lik «write» parametri yo'q; kurs so'rovi — paket.course_rows_where (yagona)
+kctx = RB.Ctx(Q("SELECT * FROM users WHERE id=?", (uid("kafedra"),))[0], RB.ROLES["kafedra"], "web")
+rctx = RB.Ctx(Q("SELECT * FROM users WHERE id=?", (uid("rektor"),))[0], RB.ROLES["rektor"], "web")
+def _deny(cx_, cid):
+    try: STU._course(cx_, cid); return False
+    except RB.AccessDenied: return True
+ok(list(inspect.signature(STU._course).parameters) == ["c", "cid"], "[10] _course(c, cid) — «write» parametri olib tashlandi")
+ok(_deny(kctx, CID) and _deny(rctx, CID) and _deny(tctx, MIK) and STU._course(tctx, CID)["id"] == CID and STU._course(octx, MIK) == PK._course_row(MIK),
+   "[10] Dars darajasi: kafedra, rektor, begona o'qituvchi — rad; o'z o'qituvchisi va operator — ruxsat")
+stu_src = (ROOT / "app" / "studio.py").read_text(encoding="utf-8")
+ok("LEFT JOIN departments" not in stu_src and stu_src.count("course_rows_where") >= 2, "[10] Studiyada takroriy kurs SQL yo'q — paket.course_rows_where / _course_row")
 
 print("-- B12. Fayllar va JS")
 sj = (ROOT / "static" / "studio.js").read_text(encoding="utf-8")

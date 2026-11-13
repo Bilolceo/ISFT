@@ -90,11 +90,13 @@ Tana yo'q. Javob **204** (navbat bo'sh) yoki **200**:
 {"job_id": 17, "template": "maruza_slayd", "lease": "9f2c4a1b7e30d685",
  "lesson": {"course_id": 94, "no": 3, "code": "L3", "kind": "maruza", "title": "Bozor muvozanati",
             "subject": "Mikroiqtisodiyot", "teacher": "Ism Familiya", "plan": ["1. …", "2. …"]},
- "raw_url": "https://core.isft.uz/api/montaj/files/17.raw.1763030000.<imzo>",
+ "raw_url": "https://core.isft.uz/api/montaj/files/17.raw.1763030000.<lease>.<imzo>",
+ "raw_ext": ".mp4", "raw_name": "L3_syomka.MP4",                      // xom video turi (baytlardan aniqlangan: .mp4/.mov/.mkv/.webm) va asl nomi
  "slides_url": "https://…/api/montaj/files/17.slides.….<imzo>",   // darsning PDF taqdimoti; yo'q bo'lsa null
  "logo_url": "https://…/api/montaj/files/17.logo.….<imzo>",       // yo'q bo'lsa null
  "note": "Kirishdagi sukutni qoldiring"}                          // FAQAT «Qayta montaj» izohi bo'lsa
 ```
+* `raw_ext` — xom video kengaytmasi (serverda baytlardan aniqlangan tur). Ishchi uni ishlatadi; imzolangan havola nomi kengaytma EMAS.
 * `lesson.no` — paket dars kaliti: L*n* → *n*, A*n* → 1000+*n* (`code` — odam o'qiydigan kod).
 * `template`: `maruza_slayd` («Ma'ruza: o'qituvchi + slayd»), `faqat_oqituvchi` («Faqat o'qituvchi»), `ekran` («Ekran yozuvi + o'qituvchi burchakda»).
 * `lease` — shu claim'ning identifikatori (har claim'da yangi). Ishchi uni `progress` / `result` / `fail` ga **`X-Worker-Lease`** sarlavhasi
@@ -105,11 +107,15 @@ Tana yo'q. Javob **204** (navbat bo'sh) yoki **200**:
   urinish va lease sarflanmaydi, navbatdagi keyingi vazifa beriladi.
 * Claim vazifani qulflaydi: **lease 2 soat**. Har `progress` lease'ni yana 2 soatga uzaytiradi (heartbeat) — uzun montajda kamida har
   ~30 daqiqada progress yuboring. Lease muddati o'tsa (ishchi o'chdi) — vazifa navbatga qaytadi (urinish sanaladi).
+  `result` yuklanayotganda lease boshida va har 64 MB da uzaytiriladi; natijasi yuklanayotgan vazifa navbatga qaytarilmaydi
+  (`/fail` ham — 409).
 * Urinish claim'da sanaladi; 3 urinishdan keyin vazifa «operator kerak» holatiga o'tadi.
 * Absolyut manzillar `ISFT_CORE_PUBLIC_URL` (bo'lsa) yoki so'rov manzilidan quriladi.
 
 ### `GET /api/montaj/files/{token}` (imzolangan havola, sarlavhasiz ham ishlaydi)
-* HMAC-SHA256 imzo (kalit — `st_meta.url_key`, bazada), muddati **2 soat**; vazifa `ishlanmoqda` bo'lmasa — **410**; imzo/muddat noto'g'ri — **403**.
+* HMAC-SHA256 imzo (kalit — `st_meta.url_key`, bazada). Lease'li havola **lease amal qilguncha** ishlaydi (progress uzaytiradi; lease muddati
+  o'tgan — **410**), absolyut yuqori chegara — **48 soat**; lease'siz (eski) havola — 2 soat. Vazifa `ishlanmoqda` bo'lmasa — **410**;
+  imzo/muddat noto'g'ri — **403**.
 * **HTTP Range**: `bytes=a-b`, `bytes=a-`, `bytes=-n` → **206** + `Content-Range`; qondirib bo'lmaydigan — **416**. Fayl xotiraga o'qilmaydi.
 * Content-Type: xom video — `video/mp4|quicktime|x-matroska|webm`, slaydlar — `application/pdf`, logo — `image/png|jpeg`.
 
@@ -138,6 +144,8 @@ Tana yo'q. Javob **204** (navbat bo'sh) yoki **200**:
   ko'rik oynasida o'zbekcha: Sukut, Shovqin/pauza, «Ee/hmm», Qayta olingan, «Qaytadan» buyrug'i, Qisqa bo'lak.
 * Noma'lum yoki takroriy maydon — 400; majburiy maydon yo'q — 400; tur noto'g'ri — 415; chegaradan oshdi — 413 (oqimda darhol).
 * Muvaffaqiyat: **200** `{"ok": true, "status": "tayyor", "warnings": [...]}`; vazifa `ishlanmoqda` bo'lmasa — 409.
+* Har so'rov o'z vaqtinchalik katalogida (`jobs/<id>/.incoming/<uuid>`). Shu vazifaga natija hali yuklanayotgan bo'lsa, ikkinchi so'rov —
+  **409** «… hozir yuklanmoqda» (ishchi kutib qayta yuboradi). Kutilmagan ichki xato — **500** aniq o'zbekcha matn bilan.
 
 ### `POST /api/montaj/jobs/{id}/fail`
 `{"error": "ffmpeg: …"}` → `{"ok": true, "status": "navbatda" | "operator", "attempts": n, "retry": bool}`.
@@ -155,7 +163,11 @@ ogohlantirishlar, davomiylik. Ikki amal:
 * **Tasdiqlash** → `paket.studio_set_video`: video darsning video FAYLI (`pk_assets.src='studio'`, qattiq havola — nusxasiz), subtitr (o'zbekcha
   WebVTT), poster (thumbnail → JPEG), `video_source = file`. YouTube sozlangan bo'lsa — `st_yt` navbatiga; aks holda — darhol avtomatik paket.
   Holat o'tishi atomar (`UPDATE … WHERE status='tayyor'`) va har qanday yon ta'sirdan oldin: parallel ikkinchi tasdiq — 409 (takroriy video /
-  YouTube qatori yo'q); video darsga qo'yilmasa — vazifa yana «tayyor».
+  YouTube qatori yo'q); video darsga qo'yilmasa — vazifa yana «tayyor» (xato matni bilan; kutilmagan xato — 500).
+  `studio_set_video` tranzaksiyaviy: fayllar avval paket omborida vaqtinchalik nom bilan (qattiq havola, boshqa disk — nusxa), keyin bitta
+  tranzaksiyada qatorlar yakuniy yo'l bilan; eski video/subtitr/poster faqat yangilari to'liq ro'yxatga olingach o'chiriladi. Xatoda — rollback,
+  yangi fayllar o'chiriladi, darsning oldingi videosi joyida.
+* **Qayta urinish** (`retry`) — atomar (`… WHERE status='operator'`): parallel «bekor qilish» yutgan bo'lsa — 409.
 * **Qayta montaj** (izoh majburiy, shablonni almashtirish mumkin) → eski vazifa `qayta`, yangisi navbatda (bitta tranzaksiyada, tekshiruvlardan
   keyin: xom video yo'q yoki montaj bajarilmoqda — 409, eski natija «tayyor» qoladi); ishchi izohni `note` da oladi.
 
@@ -206,6 +218,7 @@ uchun YouTube'ni ulang.
 
 ## Holat paneli
 
+Raqamlar (`board`, `kpi`, operator «Bugun», «Mening vazifalarim» qizil qatorlari) — bitta hisob, 30 s keshlanadi (studiya yozuvlari tozalaydi).
 Studiya → Holat (bo'lim, operator, rahbariyat): Jarayonda / Muddati o'tgan / NEXTID'ga yuklandi; bosqichlar bo'yicha sonlar (egasi bilan);
 kesim — kurs / kafedra / o'qituvchi (rangli chiziq); muddati o'tgan darslar ro'yxati (kechikish kunlari, egasi, keyingi qadam).
 Rahbariyat — o'sha raqamlar, video/fayl havolalarisiz. Bosh panelda (rektor, o'quv prorektori, bo'lim yoqiq bo'lsa):

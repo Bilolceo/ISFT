@@ -22,7 +22,7 @@ Ruxsat (moduldagi jadval, har so'rov audit jurnalida — rbac.STUDIO):
   oqituvchi — o'z darslari: bosqich, band qilish / ko'chirish / bekor qilish;  it_head — faqat YouTube sozlamasi.
 """
 from __future__ import annotations
-import asyncio, datetime as dt, hashlib, hmac, json, os, re, secrets, shutil, threading, time
+import asyncio, datetime as dt, hashlib, hmac, json, os, re, secrets, shutil, threading, time, uuid
 from pathlib import Path
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import Response, StreamingResponse
@@ -79,7 +79,10 @@ RAW_KINDS = ("mp4", "mov", "mkv", "webm")
 SWEEP_S = 3600                                                              # saqlash muddati tozalovi — soatiga bir marta
 SLOT_CHOICES = (30, 45, 60, 90, 120)
 LEASE = 2 * 3600
-URL_TTL = 2 * 3600
+URL_TTL = 2 * 3600                        # lease'siz (eski) imzolangan havola muddati
+URL_CAP = 48 * 3600                       # lease'li havola: amal qilish lease bilan (progress uzaytiradi), absolyut yuqori chegara — 48 soat
+RESULT_PING_BYTES = 64 * 1024 * 1024      # natija yuklanayotganda har shuncha baytda lease uzaytiriladi
+STATES_TTL = 30.0                         # kuzatiladigan darslar holati keshi (board / kpi / bugun / mywork), studiya yozuvlarida tozalanadi
 MAX_ATTEMPTS = 3
 YT_MAX_RETRY = 8
 HORIZON_DAYS = 90
@@ -160,7 +163,16 @@ def _log(c: Ctx | None, cid, lkey, action: str, note: str = "", job_id=None, boo
     _con.execute("INSERT INTO st_log(ts,course_id,lkey,action,note,user_id,user_name,job_id,booking_id) VALUES(?,?,?,?,?,?,?,?,?)",
                  (_iso(_now()), cid, lkey, action, (note or "")[:500], u.get("id"), u.get("full_name"), job_id, booking_id))
 
+_st_cache = {"t": 0.0, "v": None, "gen": 0}
+_st_lock = threading.Lock()
+
+def invalidate() -> None:
+    """Kuzatiladigan darslar holati keshini tozalash (studiya yozuvlaridan keyin; testlarda — bazaga to'g'ridan-to'g'ri yozilgach)."""
+    with _st_lock:
+        _st_cache.update(v=None, gen=_st_cache["gen"] + 1)
+
 def _mw_invalidate():
+    invalidate()
     try:
         from . import mywork as MW
         MW.invalidate()
@@ -258,15 +270,16 @@ def guard(c: Ctx, action: str, roles=ALL, detail: str = ""):
 
 def _tid(c: Ctx) -> int: return int(c.user.get("teacher_id") or 0)
 
-def _course(c: Ctx, cid: int, write: bool = False) -> dict:
-    co = db.one(_con, """SELECT c.*, d.name dept, t.full_name teacher FROM dl_courses c LEFT JOIN departments d ON d.id=c.department_id
-                         LEFT JOIN teachers t ON t.id=c.teacher_id WHERE c.id=?""", (int(cid),))
-    if not co: raise HTTPException(404, "Kurs topilmadi")
+def _course(c: Ctx, cid: int) -> dict:
+    """Dars darajasidagi kirish (o'qish ham, yozish ham) — faqat OPS (bo'lim, operator) va kursning O'Z o'qituvchisi. Kafedra / rahbariyat dars
+    darajasiga umuman kirmaydi (ular faqat jamlangan Holat — board/kpi), shuning uchun alohida «yozish» tekshiruvi yo'q: o'qish = yozish doirasi.
+    Qaysi amal kimga — har funksiyadagi guard() (masalan, montaj/xom video — faqat OPS)."""
+    co = _PK()._course_row(cid)
     k = c.role.key
     if k == TEACH and co["teacher_id"] != _tid(c):
         rbac.audit(_con, c, "studiya: begona kurs", RES, False, f"kurs #{cid}")
         raise AccessDenied("⛔ Bu kurs sizniki emas. So'rov audit jurnaliga yozildi.")
-    if k not in OPS + (TEACH,) or (write and k not in OPS + (TEACH,)):
+    if k not in OPS + (TEACH,):
         rbac.audit(_con, c, "studiya: dars darajasi rad etildi", RES, False, f"kurs #{cid}")
         raise AccessDenied("⛔ Studiya: dars tafsiloti — faqat bo'lim, operator va o'qituvchi. So'rov audit jurnaliga yozildi.")
     return co
@@ -367,8 +380,7 @@ def tracked_courses() -> list[int]:
 def _courses(cids) -> list[dict]:
     if not cids: return []
     w, a = _in(cids)
-    return db.rows(_con, f"""SELECT c.*, d.name dept, t.full_name teacher FROM dl_courses c LEFT JOIN departments d ON d.id=c.department_id
-                             LEFT JOIN teachers t ON t.id=c.teacher_id WHERE c.{w.replace('course_id', 'id')} ORDER BY c.subject, c.id""", a)
+    return _PK().course_rows_where("c." + w.replace("course_id", "id"), a)
 
 def states(courses: list[dict], only_keys: dict | None = None) -> list[dict]:
     """[{course…, lesson…, state…}] — kurslarning L/A darslari bo'yicha. only_keys: {cid: {lkey,…}} — faqat shular."""
@@ -377,7 +389,7 @@ def states(courses: list[dict], only_keys: dict | None = None) -> list[dict]:
     cids = [co["id"] for co in courses]
     w, a = _in(cids)
     now, sla_, yt_on = _now(), sla(), YT.configured()
-    rm = PK.readiness_map()
+    rm = PK.readiness_map(cids)
     plan = {r["course_id"]: r["ts"] for r in db.rows(_con, f"SELECT course_id, ts FROM st_plan WHERE active=1 AND {w}", a)}
     bk, bdone, rec = {}, {}, set()
     for r in db.rows(_con, f"SELECT * FROM st_bookings WHERE {w} ORDER BY start", a):
@@ -424,11 +436,21 @@ def states(courses: list[dict], only_keys: dict | None = None) -> list[dict]:
 # =============================================================================================
 # Holat paneli (board), KPI, darslar
 # =============================================================================================
+def tracked_states() -> list[dict]:
+    """Kuzatiladigan darslar holati (states, faqat tracked) — STATES_TTL (30 s) keshlanadi; studiya yozuvlari (_mw_invalidate) tozalaydi.
+    board / kpi / bugun / «Mening vazifalarim» shuni ishlatadi (bitta hisob). Natija o'qish uchun — o'zgartirmang."""
+    with _st_lock:
+        if _st_cache["v"] is not None and time.monotonic() - _st_cache["t"] < STATES_TTL: return _st_cache["v"]
+        gen = _st_cache["gen"]
+    v = [s for s in states(_courses(tracked_courses())) if s["tracked"]]
+    with _st_lock:
+        if _st_cache["gen"] == gen: _st_cache.update(t=time.monotonic(), v=v)      # hisob davomida yozuv bo'lsa — keshlanmaydi
+    return v
+
 def board(c: Ctx, group: str = "course") -> dict:
     guard(c, "holat paneli", BOARD, group)
     if group not in ("course", "kafedra", "teacher"): group = "course"
-    S = states(_courses(tracked_courses()))
-    S = [s for s in S if s["tracked"]]
+    S = tracked_states()
     keyf = {"course": lambda s: (s["course_id"], f"{s['subject']} ({s['direction'] or ''}, {s['course'] or ''}-kurs)"),
             "kafedra": lambda s: (s["department_id"] or 0, s["dept"] or "Kafedra ko'rsatilmagan"),
             "teacher": lambda s: (s["teacher_id"] or 0, s["teacher"] or "O'qituvchi ko'rsatilmagan")}[group]
@@ -448,7 +470,7 @@ def board(c: Ctx, group: str = "course") -> dict:
 
 def kpi(c: Ctx) -> dict:
     guard(c, "KPI", BOARD)
-    S = [s for s in states(_courses(tracked_courses())) if s["tracked"]]
+    S = tracked_states()
     red = sum(1 for s in S if s["over"])
     act = sum(1 for s in S if s["stage"] != "nextid")
     return {"key": "studio", "label": "Dars ishlab chiqarish", "value": red, "sub": f"ta muddati o'tgan · {act} ta dars jarayonda",
@@ -457,8 +479,7 @@ def kpi(c: Ctx) -> dict:
 def lessons_list(c: Ctx, course_id: int = 0) -> dict:
     guard(c, "darslar", OPS + (TEACH,), f"kurs #{course_id}" if course_id else "")
     if c.role.key == TEACH:
-        cos = db.rows(_con, """SELECT c.*, d.name dept, t.full_name teacher FROM dl_courses c LEFT JOIN departments d ON d.id=c.department_id
-                               LEFT JOIN teachers t ON t.id=c.teacher_id WHERE c.teacher_id=? ORDER BY c.subject, c.id""", (_tid(c),))
+        cos = _PK().course_rows_where("c.teacher_id=?", (_tid(c),))
         if course_id: cos = [co for co in cos if co["id"] == int(course_id)]
     elif course_id:
         cos = [_course(c, course_id)]
@@ -477,10 +498,9 @@ def course_search(c: Ctx, q: str = "") -> list[dict]:
     w, a = "1=1", []
     if q:
         w = "(c.subject LIKE ? OR c.direction LIKE ? OR t.full_name LIKE ?)"; a = [f"%{q}%"] * 3
-    rows = db.rows(_con, f"""SELECT c.id, c.subject, c.direction, c.course, d.name dept, t.full_name teacher FROM dl_courses c
-                             LEFT JOIN departments d ON d.id=c.department_id LEFT JOIN teachers t ON t.id=c.teacher_id WHERE {w}
-                             ORDER BY c.subject, c.id LIMIT 40""", a)
-    return [{**r, "teacher": _short(r["teacher"] or ""), "planned": r["id"] in plan} for r in rows]
+    rows = _PK().course_rows_where(w, a, limit=40)
+    return [{**{k: r[k] for k in ("id", "subject", "direction", "course", "dept")}, "teacher": _short(r["teacher"] or ""), "planned": r["id"] in plan}
+            for r in rows]
 
 def set_plan(c: Ctx, cid: int, on: bool) -> dict:
     guard(c, "ishlab chiqarish rejasi", DEPT, f"kurs #{cid} · {'qo`shildi' if on else 'olindi'}")
@@ -571,7 +591,7 @@ def _conflict(room_id: int, start: dt.datetime, end: dt.datetime, teacher_id, ci
 
 def book(c: Ctx, cid: int, lkey: int, room_id: int, start: str, note: str = "") -> dict:
     guard(c, "syomkaga yozilish", OPS + (TEACH,), f"kurs #{cid} · {lkey} · {start}")
-    co = _course(c, cid, write=True); les = _lesson(co, lkey)
+    co = _course(c, cid); les = _lesson(co, lkey)
     room = _room(room_id or (_rooms() or [{"id": 0}])[0]["id"])
     t0 = _pdt(start)
     if not t0: raise HTTPException(400, "Vaqt noto'g'ri (YYYY-MM-DDTHH:MM)")
@@ -588,7 +608,7 @@ def book(c: Ctx, cid: int, lkey: int, room_id: int, start: str, note: str = "") 
                             c.user["id"], c.user["full_name"], now)).lastrowid
         _log(c, co["id"], les["key"], "syomka belgilandi", f"{room['name']} · {_iso(t0)[:16].replace('T', ' ')}", booking_id=bid); _con.commit()
     _mw_invalidate()
-    rr = _PK().readiness_map().get((co["id"], les["key"])) or {}
+    rr = _PK().readiness_map([co["id"]]).get((co["id"], les["key"])) or {}
     warn = "" if rr.get("text") and rr.get("slides") else "Diqqat: ma'ruza matni yoki taqdimot hali «Dars tayyorlash»ga yuklanmagan"
     return {"ok": True, "booking": _bk_row(db.one(_con, "SELECT * FROM st_bookings WHERE id=?", (bid,))), "warning": warn}
 
@@ -652,14 +672,13 @@ def day_plan(c: Ctx, day: str = "", room_id: int = 0) -> dict:
     ops, tid, now = c.role.key in OPS, _tid(c), _now()
     rooms = [r for r in _rooms() if not room_id or r["id"] == int(room_id)]
     a, z = _iso(dt.datetime.combine(d, dt.time(0))), _iso(dt.datetime.combine(d + dt.timedelta(days=1), dt.time(0)))
-    rows = db.rows(_con, """SELECT b.*, c.subject, c.direction, c.course, t.full_name teacher FROM st_bookings b JOIN dl_courses c ON c.id=b.course_id
+    rows = db.rows(_con, """SELECT b.*, c.subject, c.direction, c.course, c.topics, t.full_name teacher FROM st_bookings b JOIN dl_courses c ON c.id=b.course_id
                             LEFT JOIN teachers t ON t.id=b.teacher_id WHERE b.start<? AND b.end>? AND b.status!='bekor' ORDER BY b.start""", (z, a))
     titles = {}
     def les_title(r):
         k = (r["course_id"], r["lkey"])
         if k not in titles:
-            try: titles[k] = _PK().lesson_info({"id": r["course_id"], "topics": (db.one(_con, "SELECT topics FROM dl_courses WHERE id=?", (r["course_id"],)) or {}).get("topics"),
-                                                "subject": r["subject"]}, r["lkey"])
+            try: titles[k] = _PK().lesson_info({"id": r["course_id"], "topics": r["topics"], "subject": r["subject"]}, r["lkey"])
             except HTTPException: titles[k] = {"code": "?", "title": "(dars o'chirilgan)"}
         return titles[k]
     jobs = {}
@@ -693,12 +712,11 @@ def day_plan(c: Ctx, day: str = "", room_id: int = 0) -> dict:
 def my_bookings(c: Ctx) -> list[dict]:
     """O'qituvchi: o'z kelgusi (va bugungi) bandlari."""
     if c.role.key != TEACH: return []
-    rows = db.rows(_con, """SELECT b.*, c.subject, r.name room FROM st_bookings b JOIN dl_courses c ON c.id=b.course_id LEFT JOIN st_rooms r ON r.id=b.room_id
+    rows = db.rows(_con, """SELECT b.*, c.subject, c.topics, r.name room FROM st_bookings b JOIN dl_courses c ON c.id=b.course_id LEFT JOIN st_rooms r ON r.id=b.room_id
                             WHERE c.teacher_id=? AND b.status='band' AND b.end>? ORDER BY b.start""", (_tid(c), _iso(_now() - dt.timedelta(hours=12))))
     out = []
     for r in rows:
-        try: L = _PK().lesson_info({"id": r["course_id"], "topics": (db.one(_con, "SELECT topics FROM dl_courses WHERE id=?", (r["course_id"],)) or {}).get("topics"),
-                                    "subject": r["subject"]}, r["lkey"])
+        try: L = _PK().lesson_info({"id": r["course_id"], "topics": r["topics"], "subject": r["subject"]}, r["lkey"])
         except HTTPException: continue
         out.append({**_bk_row(r), "subject": r["subject"], "room": r["room"], "code": L["code"], "title": L["title"]})
     return out
@@ -725,7 +743,7 @@ async def _stream_raw(request: Request, limit: int) -> dict:
 
 def save_raw(c: Ctx, cid: int, lkey: int, up: dict, name: str, template: str = "", booking_id: int = 0) -> dict:
     try:
-        co = _course(c, cid, write=True); les = _lesson(co, lkey)
+        co = _course(c, cid); les = _lesson(co, lkey)
         if template and template not in TEMPLATES: raise HTTPException(400, "Montaj shabloni noma'lum")
         d = store() / "raw" / str(co["id"]) / str(les["key"]); d.mkdir(parents=True, exist_ok=True)
         with _lock:
@@ -767,7 +785,7 @@ def create_job(c: Ctx, cid: int, lkey: int, template: str, raw_id: int = 0, note
     """Yangi montaj vazifasi. redo_of — «Qayta montaj»: eski vazifa «qayta» holatiga YANGI vazifa bilan BITTA tranzaksiyada (_lock ostida, hamma
     tekshiruvdan keyin) o'tadi — tekshiruv yiqilsa (xom video yo'q, montaj bajarilmoqda) ko'rib chiqilgan natija «tayyor» bo'lib qoladi."""
     guard(c, "montajga yuborish", OPS, f"kurs #{cid} · {lkey} · {template}")
-    co = _course(c, cid, write=True); les = _lesson(co, lkey)
+    co = _course(c, cid); les = _lesson(co, lkey)
     if template not in TEMPLATES: raise HTTPException(400, "Montaj shabloni noma'lum")
     gone = []
     with _lock:
@@ -846,7 +864,9 @@ def serve_file(f: Path, ct: str, rng: str | None, extra: dict | None = None) -> 
 
 def approve(c: Ctx, jid: int) -> dict:
     """Tasdiqlash: holat _lock ostida atomar o'tadi (UPDATE … WHERE status='tayyor', rowcount == 1) — HAR QANDAY yon ta'sirdan (video darsga,
-    YouTube navbati, paket) OLDIN; parallel ikkinchi tasdiq — 409, takroriy asset / YouTube qatori bo'lmaydi. Video qo'yilmasa — «tayyor»ga qaytadi."""
+    YouTube navbati, paket) OLDIN; parallel ikkinchi tasdiq — 409, takroriy asset / YouTube qatori bo'lmaydi. Video qo'yilmasa (har qanday xato,
+    HTTP bo'lmagani ham) — paket.studio_set_video o'zini orqaga qaytaradi (darsning oldingi videosi joyida), vazifa «tayyor»ga qaytadi, xato
+    matni vazifada (error) va javobda: HTTP xato — o'z kodi bilan, kutilmagani — 500 (o'zbekcha)."""
     guard(c, "montajni tasdiqlash", OPS, f"#{jid}")
     j = _job(c, jid); co = _course(c, j["course_id"]); les = _lesson(co, j["lkey"])
     if j["status"] != "tayyor": raise HTTPException(409, "Faqat ko'rib chiqish kutayotgan montaj tasdiqlanadi")
@@ -854,7 +874,7 @@ def approve(c: Ctx, jid: int) -> dict:
     if not (d / "video.mp4").is_file(): raise HTTPException(410, "Montaj videosi diskda topilmadi")
     now = _iso(_now())
     with _lock:
-        n = _con.execute("UPDATE st_jobs SET status='tasdiqlandi', decided_at=?, decided_by=?, decided_name=?, updated_at=? WHERE id=? AND status='tayyor'",
+        n = _con.execute("UPDATE st_jobs SET status='tasdiqlandi', error=NULL, decided_at=?, decided_by=?, decided_name=?, updated_at=? WHERE id=? AND status='tayyor'",
                          (now, c.user["id"], c.user["full_name"], now, j["id"])).rowcount
         _con.commit()
     if n != 1: raise HTTPException(409, "Bu montaj allaqachon tasdiqlangan yoki holati o'zgargan")
@@ -862,11 +882,17 @@ def approve(c: Ctx, jid: int) -> dict:
         cap = (d / "captions.vtt").read_bytes() if (d / "captions.vtt").is_file() else None
         thumb = (d / "thumb.jpg").read_bytes() if (d / "thumb.jpg").is_file() else None
         res = _PK().studio_set_video(c, co["id"], les["key"], d / "video.mp4", cap, thumb, name=f"{les['code']} studiya montaji #{j['id']}")
-    except BaseException:
+    except BaseException as e:
+        http = isinstance(e, HTTPException)
+        msg = (f"Video darsga qo'yilmadi: {e.detail}" if http else
+               f"Video darsga qo'yilmadi (ichki xato: {type(e).__name__}: {e}) — darsning oldingi videosi o'zgarmadi, qayta tasdiqlab ko'ring")[:500]
         with _lock:
-            _con.execute("UPDATE st_jobs SET status='tayyor', decided_at=NULL, decided_by=NULL, decided_name=NULL, updated_at=? WHERE id=? AND status='tasdiqlandi'",
-                         (_iso(_now()), j["id"])); _con.commit()
-        raise
+            _con.execute("""UPDATE st_jobs SET status='tayyor', error=?, decided_at=NULL, decided_by=NULL, decided_name=NULL, updated_at=?
+                            WHERE id=? AND status='tasdiqlandi'""", (msg, _iso(_now()), j["id"]))
+            _log(c, co["id"], les["key"], "montaj tasdiqlanmadi", msg, job_id=j["id"]); _con.commit()
+        _mw_invalidate()
+        if http or not isinstance(e, Exception): raise
+        raise HTTPException(500, msg) from e
     yt_id, pkg = None, None
     with _lock:
         _log(c, co["id"], les["key"], "montaj tasdiqlandi", "video darsga qo'yildi (fayl)" + (f" · subtitr {res['captions']} yozuv" if res.get("captions") else ""), job_id=j["id"])
@@ -892,8 +918,11 @@ def retry(c: Ctx, jid: int) -> dict:
     guard(c, "montajni qayta urinish", OPS, f"#{jid}")
     j = _job(c, jid)
     if j["status"] != "operator": raise HTTPException(409, "Faqat xatolik bergan vazifa qayta navbatga qo'yiladi")
-    with _lock:
-        _con.execute("UPDATE st_jobs SET status='navbatda', attempts=0, not_before=NULL, lease_until=NULL, updated_at=? WHERE id=?", (_iso(_now()), j["id"]))
+    with _lock:                           # tekshirish va o'rnatish atomar: parallel «bekor qilish» yutgan bo'lsa — 409
+        if _con.execute("""UPDATE st_jobs SET status='navbatda', attempts=0, not_before=NULL, lease_until=NULL, updated_at=? WHERE id=?
+                           AND status='operator'""", (_iso(_now()), j["id"])).rowcount != 1:
+            _con.rollback()
+            raise HTTPException(409, "Vazifa holati o'zgargan (bekor qilingan yoki qayta navbatga qo'yilgan) — qayta urinish mumkin emas")
         _log(c, j["course_id"], j["lkey"], "montaj qayta navbatga qo'yildi", j["error"] or "", job_id=j["id"]); _con.commit()
     _mw_invalidate()
     return {"ok": True}
@@ -938,8 +967,9 @@ def _url_key() -> bytes:
 
 def sign(jid: int, kind: str, exp: int | None = None, lease: str | None = None) -> str:
     """Imzolangan fayl havolasi: «jid.kind.exp[.lease].imzo». lease — claim'da berilgan identifikator: havola faqat SHU lease davomida ishlaydi
-    (lease muddati o'tib vazifa boshqa ishchiga berilsa — eski havola 409)."""
-    msg = f"{int(jid)}.{kind}.{int(exp or time.time() + URL_TTL)}" + (f".{lease}" if lease else "")
+    (lease muddati o'tib vazifa boshqa ishchiga berilsa — eski havola 409). Lease'li havolaning amal qilishi — joriy lease (progress uni
+    uzaytiradi) bilan tekshiriladi (worker_file), exp — faqat absolyut yuqori chegara (URL_CAP, 48 soat); lease'siz (eski) — URL_TTL (2 soat)."""
+    msg = f"{int(jid)}.{kind}.{int(exp or time.time() + (URL_CAP if lease else URL_TTL))}" + (f".{lease}" if lease else "")
     return msg + "." + hmac.new(_url_key(), msg.encode(), hashlib.sha256).hexdigest()[:40]
 
 def unsign(token: str) -> tuple[int, str, str | None]:
@@ -959,14 +989,25 @@ def _check_lease(j: dict, lease: str | None) -> None:
     if lease and not hmac.compare_digest(lease.encode("utf-8", "replace"), (j.get("lease") or "").encode()):
         raise HTTPException(409, "Lease eskirgan — vazifa boshqa ishchiga berilgan yoki qayta navbatga qo'yilgan (ishni to'xtating)")
 
+_UPLOADS: dict[int, str] = {}              # {vazifa id: yuklash id} — natijasi hozir yuklanayotgan vazifalar (_lock ostida)
+
+def _touch_lease(jid: int) -> None:
+    """Natija yuklanayotganda lease uzaytiriladi (faqat «ishlanmoqda» vazifada)."""
+    now = _now()
+    with _lock:
+        _con.execute("UPDATE st_jobs SET lease_until=?, updated_at=? WHERE id=? AND status='ishlanmoqda'", (_iso(now + dt.timedelta(seconds=LEASE)), _iso(now), int(jid)))
+        _con.commit()
+
 def _base(request: Request) -> str:
     return (os.getenv("ISFT_CORE_PUBLIC_URL") or str(request.base_url)).rstrip("/")
 
 def requeue_expired(now: dt.datetime | None = None) -> int:
-    """Lease muddati o'tgan («ishlanmoqda», ishchi javob bermadi) — navbatga qaytadi (3-urinishdan keyin — operator)."""
+    """Lease muddati o'tgan («ishlanmoqda», ishchi javob bermadi) — navbatga qaytadi (3-urinishdan keyin — operator). Natijasi hozir
+    yuklanayotgan vazifa (_UPLOADS) qaytarilmaydi — yuklash lease'ni o'zi uzaytiradi."""
     now, n = now or _now(), 0
     with _lock:
         for j in db.rows(_con, "SELECT * FROM st_jobs WHERE status='ishlanmoqda' AND lease_until<?", (_iso(now),)):
+            if j["id"] in _UPLOADS: continue
             st = "operator" if int(j["attempts"] or 0) >= MAX_ATTEMPTS else "navbatda"
             _con.execute("UPDATE st_jobs SET status=?, lease_until=NULL, lease=NULL, error=?, updated_at=? WHERE id=? AND status='ishlanmoqda'",
                          (st, "Ishchi javob bermadi (lease muddati o'tdi)", _iso(now), j["id"]))
@@ -1019,6 +1060,7 @@ def claim(request: Request) -> dict | None:
     base = _base(request)
     f = lambda kind: f"{base}{W}/files/{sign(j['id'], kind, lease=lease)}"
     out = {"job_id": j["id"], "template": j["template"], "lesson": lesson, "lease": lease, "raw_url": f("raw"),
+           "raw_ext": "." + (raw["kind"] if raw["kind"] in RAW_KINDS else "mp4"), "raw_name": (raw["name"] or "")[:160],
            "slides_url": f("slides") if has_slides else None, "logo_url": f("logo") if has_logo else None}
     if j.get("note"): out["note"] = j["note"]
     rbac.audit(_con, wc, "montaj ishchisi: claim", RES, True, f"#{j['id']} · kurs #{j['course_id']} · {lesson['code']} · {j['template']}")
@@ -1030,6 +1072,8 @@ def worker_file(token: str, rng: str | None, lease_hdr: str = "") -> Response:
     j = db.one(_con, "SELECT * FROM st_jobs WHERE id=?", (jid,))
     if not j or j["status"] != "ishlanmoqda": raise HTTPException(410, "Vazifa faol emas (lease tugagan yoki yakunlangan)")
     _check_lease(j, lease); _check_lease(j, lease_hdr)
+    if lease and (_pdt(j["lease_until"]) or _now()) < _now():     # lease muddati o'tgan (navbatga hali qaytmagan) — havola ham amal qilmaydi
+        raise HTTPException(410, "Lease muddati o'tgan — vazifa navbatga qaytariladi")
     if kind == "raw":
         raw = db.one(_con, "SELECT * FROM st_raw WHERE id=?", (j["raw_id"],))
         f = store() / raw["path"] if raw else None
@@ -1075,6 +1119,7 @@ def fail(request: Request, jid: int, error: str) -> dict:
     lease = _lease_hdr(request)
     with _lock:
         j = _active_job(jid, lease=lease)
+        if j["id"] in _UPLOADS: raise HTTPException(409, "Bu vazifa natijasi hozir yuklanmoqda — xato qabul qilinmaydi")
         att = int(j["attempts"] or 0)
         if stop:                              # ishchi to'xtatildi — navbatga, urinish qaytariladi
             att = max(0, att - 1)
@@ -1100,9 +1145,9 @@ def fail(request: Request, jid: int, error: str) -> dict:
     return {"ok": True, "status": st, "attempts": att, "retry": st == "navbatda"}
 
 # --- natija: multipart/form-data oqim bilan (python-multipart'siz) --------------------------------------------------------
-async def stream_multipart(request: Request, limits: dict, d: Path) -> dict:
+async def stream_multipart(request: Request, limits: dict, d: Path, on_bytes=None) -> dict:
     """multipart/form-data → {maydon: {"path", "size", "sha256", "head", "filename"}}. Har maydon o'z chegarasi bilan (oshsa — 413 darhol),
-    noma'lum yoki takroriy maydon — 400. Fayllar d ichida vaqtinchalik nom bilan; xatoda o'chiriladi."""
+    noma'lum yoki takroriy maydon — 400. Fayllar d ichida vaqtinchalik nom bilan; xatoda o'chiriladi. on_bytes(jami) — har bo'lakdan keyin."""
     ct = request.headers.get("content-type") or ""
     m = re.search(r'boundary="?([^";]{1,200})"?', ct)
     if not ct.lower().startswith("multipart/form-data") or not m: raise HTTPException(400, "multipart/form-data kutilmoqda")
@@ -1120,6 +1165,7 @@ async def stream_multipart(request: Request, limits: dict, d: Path) -> dict:
             if not chunk: continue
             total += len(chunk)
             if total > total_lim: raise HTTPException(413, "So'rov hajmi chegaradan katta")
+            if on_bytes: on_bytes(total)
             buf += chunk
             while True:
                 if state == "pre":
@@ -1196,42 +1242,67 @@ def clean_report(raw: bytes) -> dict:
     return out
 
 async def result(request: Request, jid: int) -> dict:
+    """Natija: har so'rov O'Z vaqtinchalik katalogida (jobs/<id>/.incoming/<uuid>), faqat o'zini tozalaydi. Bitta vazifaga parallel ikkinchi
+    natija (masalan, ishchi javobni kutmay qayta yubordi) — 409, birinchisi buzilmaydi. Yuklash boshlanganda va har RESULT_PING_BYTES (64 MB)
+    da lease uzaytiriladi; yuklanayotgan vazifani requeue_expired navbatga qaytarmaydi. Kutilmagan xato — aniq matnli HTTPException."""
     wc = worker_auth(request, "result")
     lease = _lease_hdr(request)
-    _active_job(jid, result=True, lease=lease)                   # eskirgan lease — tana o'qilmasdan 409
+    jid, up_id = int(jid), uuid.uuid4().hex
+    with _lock:
+        j0 = _active_job(jid, result=True, lease=lease)            # eskirgan lease — tana o'qilmasdan 409
+        if jid in _UPLOADS: raise HTTPException(409, "Bu vazifa natijasi hozir yuklanmoqda — tugashini kuting (takroriy so'rov)")
+        _UPLOADS[jid] = up_id
     d = _job_dir(jid)
-    up_dir = d / ".incoming"
-    lim = {"video": result_max(), "captions": MAX_CAPTIONS, "thumbnail": MAX_THUMB, "report": MAX_REPORT}
-    parts = await stream_multipart(request, lim, up_dir)
+    up_dir = d / ".incoming" / up_id
     try:
-        miss = [k for k in ("video", "thumbnail", "report") if k not in parts or not parts[k]["size"]]
-        if miss: raise HTTPException(400, "Majburiy maydon yo'q: " + ", ".join(miss))
-        if sniff_raw(parts["video"]["head"]) != "mp4": raise HTTPException(415, "video — mp4 (ftyp) bo'lishi kerak")
-        if parts["thumbnail"]["head"][:3] != b"\xff\xd8\xff": raise HTTPException(415, "thumbnail — JPEG bo'lishi kerak")
-        try: rep = clean_report(Path(parts["report"]["path"]).read_bytes())
-        except ValueError as e: raise HTTPException(400, str(e))
-        warn = []
-        cap_ok = False
-        if "captions" in parts and parts["captions"]["size"]:
-            try: _PK().to_vtt(Path(parts["captions"]["path"]).read_bytes()); cap_ok = True
-            except HTTPException as e: warn.append(f"Subtitr qabul qilinmadi: {e.detail}")
-        with _lock:
-            j = _active_job(jid, result=True, lease=lease)   # yuklash davomida lease boshqa ishchiga o'tmaganmi
-            for nm, fn in (("video", "video.mp4"), ("thumbnail", "thumb.jpg"), ("report", "report.json")):
-                os.replace(parts[nm]["path"], d / fn)
-            if cap_ok: os.replace(parts["captions"]["path"], d / "captions.vtt")
-            else: (d / "captions.vtt").unlink(missing_ok=True)
-            rep["warnings"] = (rep["warnings"] + warn)[:100]
-            files = {"video": {"size": parts["video"]["size"], "sha256": parts["video"]["sha256"]}, "captions": cap_ok, "thumbnail": True}
-            now = _iso(_now())
-            _con.execute("""UPDATE st_jobs SET status='tayyor', stage='tayyor', pct=100, lease_until=NULL, report=?, files=?, result_at=?, error=NULL, updated_at=?
-                            WHERE id=?""", (json.dumps(rep, ensure_ascii=False), json.dumps(files), now, now, j["id"]))
-            dur = f"{int(rep['duration_in'] // 60)}:{int(rep['duration_in'] % 60):02d} → {int(rep['duration_out'] // 60)}:{int(rep['duration_out'] % 60):02d}"
-            _log(None, j["course_id"], j["lkey"], "montaj tayyor — ko'rib chiqish kutmoqda", f"{dur} · {len(rep['cuts'])} ta kesish · {len(rep['chapters'])} ta bo'lim",
-                 job_id=j["id"], who=WORKER_NAME)
-            _con.commit()
+        if j0["status"] == "ishlanmoqda": _touch_lease(jid)
+        mark = {"n": 0}
+        def on_bytes(total: int):
+            if total - mark["n"] >= RESULT_PING_BYTES:
+                mark["n"] = total; _touch_lease(jid)
+        lim = {"video": result_max(), "captions": MAX_CAPTIONS, "thumbnail": MAX_THUMB, "report": MAX_REPORT}
+        try:
+            parts = await stream_multipart(request, lim, up_dir, on_bytes)
+            miss = [k for k in ("video", "thumbnail", "report") if k not in parts or not parts[k]["size"]]
+            if miss: raise HTTPException(400, "Majburiy maydon yo'q: " + ", ".join(miss))
+            if sniff_raw(parts["video"]["head"]) != "mp4": raise HTTPException(415, "video — mp4 (ftyp) bo'lishi kerak")
+            if parts["thumbnail"]["head"][:3] != b"\xff\xd8\xff": raise HTTPException(415, "thumbnail — JPEG bo'lishi kerak")
+            try: rep = clean_report(Path(parts["report"]["path"]).read_bytes())
+            except ValueError as e: raise HTTPException(400, str(e))
+            warn = []
+            cap_ok = False
+            if "captions" in parts and parts["captions"]["size"]:
+                try: _PK().to_vtt(Path(parts["captions"]["path"]).read_bytes()); cap_ok = True
+                except HTTPException as e: warn.append(f"Subtitr qabul qilinmadi: {e.detail}")
+            with _lock:
+                j = _active_job(jid, result=True, lease=lease)   # yuklash davomida lease boshqa ishchiga o'tmaganmi
+                d.mkdir(parents=True, exist_ok=True)
+                for nm, fn in (("video", "video.mp4"), ("thumbnail", "thumb.jpg"), ("report", "report.json")):
+                    os.replace(parts[nm]["path"], d / fn)
+                if cap_ok: os.replace(parts["captions"]["path"], d / "captions.vtt")
+                else: (d / "captions.vtt").unlink(missing_ok=True)
+                rep["warnings"] = (rep["warnings"] + warn)[:100]
+                files = {"video": {"size": parts["video"]["size"], "sha256": parts["video"]["sha256"]}, "captions": cap_ok, "thumbnail": True}
+                now = _iso(_now())
+                _con.execute("""UPDATE st_jobs SET status='tayyor', stage='tayyor', pct=100, lease_until=NULL, report=?, files=?, result_at=?, error=NULL, updated_at=?
+                                WHERE id=?""", (json.dumps(rep, ensure_ascii=False), json.dumps(files), now, now, j["id"]))
+                dur = f"{int(rep['duration_in'] // 60)}:{int(rep['duration_in'] % 60):02d} → {int(rep['duration_out'] // 60)}:{int(rep['duration_out'] % 60):02d}"
+                _log(None, j["course_id"], j["lkey"], "montaj tayyor — ko'rib chiqish kutmoqda", f"{dur} · {len(rep['cuts'])} ta kesish · {len(rep['chapters'])} ta bo'lim",
+                     job_id=j["id"], who=WORKER_NAME)
+                _con.commit()
+        except HTTPException:
+            raise
+        except Exception as e:
+            try: _con.rollback()
+            except Exception: pass
+            print("studio.result:", type(e).__name__, e)
+            raise HTTPException(500, f"Montaj natijasini saqlab bo'lmadi ({type(e).__name__}: {str(e)[:200]}) — ishchi qayta yuboradi") from e
     finally:
         shutil.rmtree(up_dir, ignore_errors=True)
+        try: (d / ".incoming").rmdir()                           # bo'sh bo'lsa (boshqa so'rov katalogi bo'lsa — qoladi)
+        except OSError: pass
+        with _lock:
+            if _UPLOADS.get(jid) == up_id: _UPLOADS.pop(jid, None)
     rbac.audit(_con, wc, "montaj ishchisi: result", RES, True, f"#{jid} · video {parts['video']['size']} bayt")
     _mw_invalidate()
     return {"ok": True, "status": "tayyor", "warnings": warn}
@@ -1252,6 +1323,7 @@ def _yt_upd(yid: int, **kw) -> None:
     kw["updated_at"] = _iso(_now())
     with _lock:
         _con.execute(f"UPDATE st_yt SET {', '.join(k + '=?' for k in kw)} WHERE id=?", (*kw.values(), yid)); _con.commit()
+    invalidate()
 
 def _yt_backoff(att: int) -> int: return min(3600, 30 * 2 ** att)
 
@@ -1674,13 +1746,10 @@ def mywork_items(c: Ctx, I) -> list:
     if k == TEACH:
         rows = db.rows(_con, """SELECT b.*, c.subject, c.topics, r.name room FROM st_bookings b JOIN dl_courses c ON c.id=b.course_id LEFT JOIN st_rooms r ON r.id=b.room_id
                                 WHERE c.teacher_id=? AND b.status='band' AND b.start>? AND b.start<? ORDER BY b.start""", (_tid(c), _iso(now), hz))
-        cos = db.rows(_con, "SELECT c.*, d.name dept, t.full_name teacher FROM dl_courses c LEFT JOIN departments d ON d.id=c.department_id "
-                            "LEFT JOIN teachers t ON t.id=c.teacher_id WHERE c.teacher_id=?", (_tid(c),))
     else:
         rows = db.rows(_con, """SELECT b.*, c.subject, c.topics, r.name room, t.full_name teacher FROM st_bookings b JOIN dl_courses c ON c.id=b.course_id
                                 LEFT JOIN st_rooms r ON r.id=b.room_id LEFT JOIN teachers t ON t.id=b.teacher_id
                                 WHERE b.status='band' AND b.start>? AND b.start<? ORDER BY b.start""", (_iso(now), hz))
-        cos = _courses(tracked_courses())
     soon = [r for r in rows if _pdt(r["start"]) - now <= dt.timedelta(hours=1)]
     for r in rows:
         t0 = _pdt(r["start"])
@@ -1712,8 +1781,8 @@ def mywork_items(c: Ctx, I) -> list:
             out.append(I("studio", "youtube", f"st-yt{y['id']}", "YouTube'ga yuklashda xato" if y["status"] == "xato" else "YouTube videosi darsga bog'lanmadi",
                          (y["error"] or "")[:160], None,
                          {"view": "studio", "tab": "montaj"}, "bolimga", "xato", "high", icon="alert"))
-    S = states(cos)
-    if k == TEACH: out += _red_items(c, I, TEACH, S)
+    S = tracked_states()                     # qizil (over) faqat kuzatiladigan darslarda — kesh (board / kpi / bugun bilan umumiy)
+    if k == TEACH: out += _red_items(c, I, TEACH, [s for s in S if s["teacher_id"] == _tid(c)])
     elif k == OPER: out += _red_items(c, I, OPER, S)
     elif k in DEPT: out += _red_items(c, I, HEAD, S)
     return out
@@ -1726,7 +1795,7 @@ def bugun(c: Ctx) -> list[dict]:
     today = (db.one(_con, "SELECT COUNT(*) n FROM st_bookings WHERE status IN ('band','otdi') AND start>=? AND start<?", (a, z)) or {}).get("n") or 0
     left = (db.one(_con, "SELECT COUNT(*) n FROM st_bookings WHERE status='band' AND start>=? AND start<?", (_iso(now), z)) or {}).get("n") or 0
     q = {r["status"]: r["n"] for r in db.rows(_con, "SELECT status, COUNT(*) n FROM st_jobs WHERE status IN ('navbatda','ishlanmoqda','tayyor','operator') GROUP BY status")}
-    S = [s for s in states(_courses(tracked_courses())) if s["tracked"]]
+    S = tracked_states()
     red = sum(1 for s in S if s["over"] and s["owner"] == OPER)
     L = lambda tab: {"view": "studio", "tab": tab}
     return [{"label": "Bugungi syomkalar", "value": today, "sub": f"yana {left} ta oldinda", "tone": "", "link": L("kun")},
@@ -1801,7 +1870,7 @@ def api_lesson(cid: int, lkey: int, request: Request): return lesson_detail(C(re
 async def api_raw(cid: int, lkey: int, request: Request, name: str = "video", template: str = "", booking_id: int = 0):
     c = C(request)
     guard(c, "xom video yuklash", OPS, f"kurs #{cid} · {lkey}")
-    _lesson(_course(c, cid, write=True), lkey)              # kurs, ruxsat va dars (mavjud, L/A) — tana o'qilishidan OLDIN (aks holda GB'lab behuda)
+    _lesson(_course(c, cid), lkey)              # kurs, ruxsat va dars (mavjud, L/A) — tana o'qilishidan OLDIN (aks holda GB'lab behuda)
     if template and template not in TEMPLATES: raise HTTPException(400, "Montaj shabloni noma'lum")
     up = await _stream_raw(request, raw_max())
     return save_raw(c, cid, lkey, up, name, template, booking_id)

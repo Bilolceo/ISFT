@@ -1,12 +1,14 @@
 """Worker rejimi: ISFT Core navbatidan montaj ishlarini olib bajaradi (faqat standart kutubxona — urllib).
 
 Shartnoma (ISFT Core tomonida amalga oshirilgan):
-  POST /api/montaj/jobs/claim            → 200 {job_id, template, lesson{...}, lease, raw_url, slides_url|null, logo_url} | 204
+  POST /api/montaj/jobs/claim            → 200 {job_id, template, lesson{...}, lease, raw_url, raw_ext, raw_name, slides_url|null, logo_url} | 204
   POST /api/montaj/jobs/{id}/progress    {"stage","pct","message"}
   POST /api/montaj/jobs/{id}/result      multipart: video (mp4), captions (vtt), thumbnail (jpg), report (json)
   POST /api/montaj/jobs/{id}/fail        {"error"}
 Sarlavha: X-Worker-Token: $ISFT_CORE_WORKER_TOKEN. Yuklab olish URL'lari imzolangan, Range qo'llab-quvvatlanadi.
 Claim javobida «lease» bo'lsa — progress/result/fail'ga X-Worker-Lease sarlavhasi bilan qaytariladi (eskirgan lease → 409 → ish bekor).
+Xom video kengaytmasi: «raw_ext» (server, st_raw.kind) → yuklab olish Content-Type / Content-Disposition → baytlar (ftyp / EBML) → «.mp4».
+Natija yuborilayotganda (katta fayl, uzoq) parallel oqim har UPLOAD_PING_S soniyada progress («yuborish», 97) yuboradi — server lease'ni uzaytiradi.
 
 Signal: 1-SIGINT — joriy ish tugagach chiqish; 2-SIGINT yoki SIGTERM — joriy ishni to'xtatish, /fail, chiqish.
 """
@@ -16,10 +18,12 @@ import http.client
 import json
 import os
 import random
+import re
 import shutil
 import signal
 import socket
 import tempfile
+import threading
 import time
 import traceback
 import urllib.error
@@ -34,6 +38,40 @@ from .graphics import Lesson
 
 UA = "isft-montaj-worker/1.0"
 CHUNK = 1 << 20
+UPLOAD_PING_S = 60.0
+RAW_EXTS = (".mp4", ".mov", ".mkv", ".webm")
+_CT_EXT = {"video/mp4": ".mp4", "video/quicktime": ".mov", "video/x-matroska": ".mkv", "video/webm": ".webm"}
+
+
+def sniff_ext(head: bytes) -> str | None:
+    """Video kengaytmasi birinchi baytlardan: ISO BMFF (ftyp; «qt  » → .mov), QuickTime atomlari → .mov, Matroska EBML (webm / matroska)."""
+    if len(head) >= 12 and head[4:8] == b"ftyp":
+        return ".mov" if head[8:12] == b"qt  " else ".mp4"
+    if len(head) >= 8 and head[4:8] in (b"moov", b"mdat", b"wide", b"free", b"skip"):
+        return ".mov"
+    if head[:4] == b"\x1a\x45\xdf\xa3":
+        return ".webm" if b"webm" in head[:64] else ".mkv"
+    return None
+
+
+def raw_suffix(job: dict, headers=None, head: bytes = b"") -> str:
+    """Xom video kengaytmasi: 1) server bergan «raw_ext»; 2) yuklab olish javobining Content-Type yoki Content-Disposition (filename);
+    3) baytlar (sniff_ext); 4) «.mp4». Imzolangan havola (token) nomidan OLINMAYDI — «17.raw.1763….<imzo>» kengaytma emas."""
+    ext = str((job or {}).get("raw_ext") or "").strip().lower()
+    if ext and not ext.startswith("."):
+        ext = "." + ext
+    if ext in RAW_EXTS:
+        return ext
+    if headers is not None:
+        ct = (headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if ct in _CT_EXT:
+            return _CT_EXT[ct]
+        m = re.search(r'filename\*?=(?:UTF-8\'\')?"?([^";]+)"?', headers.get("Content-Disposition") or "", re.I)
+        if m:
+            e = Path(urllib.parse.unquote(m.group(1))).suffix.lower()
+            if e in RAW_EXTS:
+                return e
+    return sniff_ext(head or b"") or ".mp4"
 
 
 class HttpError(Exception):
@@ -48,6 +86,7 @@ class Api:
         self.token = token
         self.timeout = timeout
         self.host = urllib.parse.urlsplit(self.base).netloc
+        self.last_headers = None              # oxirgi download() javobining sarlavhalari (kengaytma aniqlash uchun)
 
     def url(self, path: str) -> str:
         return urllib.parse.urljoin(self.base, path.lstrip("/") if not path.startswith("http") else path)
@@ -95,8 +134,8 @@ class Api:
         return self.request("POST", f"/api/montaj/jobs/{job_id}/fail", json_body={"error": error[:4000]},
                             headers=self._lease(lease))
 
-    def result(self, job_id, files: dict, lease=None):
-        mp = Multipart(files)
+    def result(self, job_id, files: dict, lease=None, mp=None):
+        mp = mp or Multipart(files)
         return self.request("POST", f"/api/montaj/jobs/{job_id}/result", data=mp,
                             headers={"Content-Type": mp.content_type, "Content-Length": str(mp.length), **self._lease(lease)},
                             timeout=600)
@@ -111,6 +150,7 @@ class Api:
             hdr = self._headers(url, {"Range": f"bytes={have}-"} if have else None)
             try:
                 with urllib.request.urlopen(urllib.request.Request(url, headers=hdr), timeout=self.timeout) as r:
+                    self.last_headers = r.headers
                     if have and r.status == 200:  # server Range'ni e'tiborsiz qoldirdi — boshidan
                         have = 0
                     total = None
@@ -164,6 +204,7 @@ class Multipart:
         self._i = 0
         self._fh = None
         self._buf = b""
+        self.sent = 0                         # yuborilgan baytlar (progress ping uchun)
 
     def read(self, n: int = -1) -> bytes:
         if n is None or n < 0:
@@ -189,6 +230,7 @@ class Multipart:
                 self._buf = self._buf[len(take):]
                 if not self._buf:
                     self._i += 1
+        self.sent += len(out)
         return bytes(out)
 
 
@@ -206,6 +248,7 @@ class Worker:
         self.cancel = CancelToken()
         self.sleep = sleep
         self.current_job = None
+        self.upload_ping_s = UPLOAD_PING_S
 
     def install_signals(self):
         def on_int(sig, frm):
@@ -272,8 +315,13 @@ class Worker:
         try:
             log.info("Ish #%s: %s / %s", jid, job.get("template"), (job.get("lesson") or {}).get("title"))
             progress("yuklash", 0, "Fayllar yuklanmoqda")
-            raw_name = Path(urllib.parse.urlsplit(job["raw_url"]).path).name or "raw.mp4"
-            raw = self.api.download(job["raw_url"], tmp / ("raw" + (Path(raw_name).suffix or ".mp4")), self.cancel)
+            if str(job.get("raw_ext") or "").lower().lstrip(".") in [e[1:] for e in RAW_EXTS]:
+                raw = self.api.download(job["raw_url"], tmp / ("raw" + raw_suffix(job)), self.cancel)
+            else:                             # eski server: kengaytma javob sarlavhasidan yoki baytlardan
+                got = self.api.download(job["raw_url"], tmp / "raw.download", self.cancel)
+                with open(got, "rb") as fh:
+                    head = fh.read(64)
+                raw = got.rename(tmp / ("raw" + raw_suffix(job, self.api.last_headers, head)))
             slides = None
             if job.get("slides_url"):
                 slides = self.api.download(job["slides_url"], tmp / "slides.pdf", self.cancel)
@@ -295,16 +343,17 @@ class Worker:
             # foizlar: yuklash 0–2, quvur 2–97, natijani yuborish 97–99 (100 — server tomonida)
             R.run(cfg, progress_cb=lambda st, pct, msg: progress(st, round(2 + pct * 0.95, 1), msg),
                   cancel=self.cancel)
-            progress("yuborish", 97, "Natija yuborilmoqda")
             files = {"video": (out / "final.mp4", "video/mp4"), "captions": (out / "captions.vtt", "text/vtt"),
                      "thumbnail": (out / "thumbnail.jpg", "image/jpeg"),
                      "report": (out / "report.json", "application/json")}
             for attempt in range(4):
+                self._ping(jid, lease, "Natija yuborilmoqda")   # yuborishdan OLDIN: server lease'ni uzaytiradi (har urinishda)
                 try:
-                    self.api.result(jid, files, lease=lease)
+                    self._upload(jid, files, lease)
                     break
                 except HttpError as e:
-                    if 400 <= e.status < 500:
+                    busy = e.status == 409 and "yuklanmoqda" in str(e)   # oldingi urinish serverda hali yozilmoqda — kutib qayta (idempotent)
+                    if 400 <= e.status < 500 and not busy:
                         raise
                     if attempt == 3:
                         raise
@@ -329,6 +378,30 @@ class Worker:
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
             self.current_job = None
+
+    def _ping(self, jid, lease, msg: str):
+        """progress («yuborish», 97) — majburiy (cheklovsiz); xato yuborishni to'xtatmaydi."""
+        try:
+            self.api.progress(jid, "yuborish", 97, msg, lease=lease)
+        except Exception as e:
+            log.warning("progress (yuborish) xatosi: %s", e)
+
+    def _upload(self, jid, files: dict, lease):
+        """Natija oqim bilan (Multipart — xotiraga o'qilmaydi); uzoq yuklashda parallel oqim har upload_ping_s soniyada progress yuboradi."""
+        mp = Multipart(files)
+        done = threading.Event()
+
+        def pinger():
+            while not done.wait(self.upload_ping_s):
+                self._ping(jid, lease, f"Natija yuborilmoqda: {mp.sent / 1e6:.0f} / {mp.length / 1e6:.0f} MB")
+
+        th = threading.Thread(target=pinger, name=f"montaj-ping-{jid}", daemon=True)
+        th.start()
+        try:
+            return self.api.result(jid, files, lease=lease, mp=mp)
+        finally:
+            done.set()
+            th.join(5)
 
     def _ensure_dir(self) -> Path:
         self.work_dir.mkdir(parents=True, exist_ok=True)

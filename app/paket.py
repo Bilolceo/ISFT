@@ -35,7 +35,7 @@ Ruxsat (modul jadvali, har bir so'rov audit jurnalida — rbac.PAKET):
   rektor, prorektor_oquv — faqat jamlangan qamrov.
 """
 from __future__ import annotations
-import contextlib, datetime as dt, hashlib, hmac, html, io, json, os, random, re, secrets, shutil, struct, threading, time, unicodedata, zipfile
+import contextlib, datetime as dt, errno, hashlib, hmac, html, io, json, os, random, re, secrets, shutil, struct, threading, time, unicodedata, zipfile
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urlsplit, parse_qs, quote
@@ -1688,18 +1688,29 @@ def _save_asset_file(c: Ctx | None, cid: int, no: int, purpose: str, kind: str, 
         _con.commit()
     return aid
 
+def _retire_assets(cid: int, no: int, purpose: str, keep: int, match=None) -> list[Path]:
+    """Eskilarini «almashtirildi» (deleted=2) deb belgilaydi — COMMIT'SIZ va fayllarini O'CHIRMASDAN; o'chiriladigan fayllar ro'yxatini qaytaradi.
+    Chaqiruvchi _lock ostida, o'z tranzaksiyasida ishlatadi: commit muvaffaqiyatli bo'lgandan KEYIN fayllarni o'chiradi (_unlink_all)."""
+    out = []
+    for a in db.rows(_con, "SELECT * FROM pk_assets WHERE course_id=? AND topic_no=? AND purpose=? AND deleted=0 AND id<>?", (cid, no, purpose, keep)):
+        if match and not match(json.loads(a["meta"] or "{}")): continue
+        _con.execute("UPDATE pk_assets SET deleted=2 WHERE id=?", (a["id"],))
+        if a["path"]: out.append(_apath(a))
+    return out
+
+def _unlink_all(paths) -> None:
+    for f in paths:
+        try: Path(f).unlink(missing_ok=True)
+        except OSError: pass
+
 def _replace_assets(cid: int, no: int, purpose: str, keep: int, match=None) -> int:
     """Yangi fayl yuklanganda shu joydagi (kurs, dars, maqsad) eskilari «almashtirildi» (deleted=2) va fayli diskdan o'chiriladi — video
     200 MB gacha bo'lishi mumkin; yig'ilgan paketlar o'z zipida to'liq. match(meta) — faqat mos keladiganlari (subtitr tili, slayd raqami)."""
-    n = 0
     with _lock:
-        for a in db.rows(_con, "SELECT * FROM pk_assets WHERE course_id=? AND topic_no=? AND purpose=? AND deleted=0 AND id<>?", (cid, no, purpose, keep)):
-            if match and not match(json.loads(a["meta"] or "{}")): continue
-            _con.execute("UPDATE pk_assets SET deleted=2 WHERE id=?", (a["id"],)); n += 1
-            try: _apath(a).unlink(missing_ok=True)
-            except OSError: pass
+        gone = _retire_assets(cid, no, purpose, keep, match)
         _con.commit()
-    return n
+    _unlink_all(gone)
+    return len(gone)
 
 def upload_video(c: Ctx, cid: int, no: int, up: dict, name: str) -> dict:
     """Video fayl (.mp4 / .webm) — _stream_upload natijasi (diskda). Darsda bitta video fayl: yangisi eskisini almashtiradi."""
@@ -3263,21 +3274,28 @@ def range_response(f: Path, ct: str, rng: str | None, hd: dict, off: int = 0, si
 # =============================================================================================
 # Qamrov va kurs ko'rinishi
 # =============================================================================================
-def readiness_map() -> dict:
+def readiness_map(course_ids=None) -> dict:
     """{(cid, no): {"text", "slides", "video", "quiz"}} — butun institut bo'yicha, tez (matn tahlilisiz).
-    Zaxira manbalar (Test bank matni/savollari, monitoring videosi) — mavzu bo'yicha; mavzuga bog'langan (topic_ref) darslarga ham o'tadi (gather kabi)."""
+    Zaxira manbalar (Test bank matni/savollari, monitoring videosi) — mavzu bo'yicha; mavzuga bog'langan (topic_ref) darslarga ham o'tadi (gather kabi).
+    course_ids — faqat shu kurslar (studiya: kuzatiladigan kurslar; bog'lanish — topic_ref — kurs ichida, natija to'liq kabi aniq)."""
     out = {}
+    if course_ids is not None:
+        ids = sorted({int(x) for x in course_ids})
+        if not ids: return out
+        cw, ca = f" AND course_id IN ({','.join('?' * len(ids))})", tuple(ids)
+    else:
+        cw, ca = "", ()
     def mark(k, cid, no):
         out.setdefault((cid, no), {"text": False, "slides": False, "video": False, "quiz": False, "exercises": False})[k] = True
     has = lambda t: bool(db.one(_con, "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (t,)))
-    tb_text = {(r["course_id"], r["topic_no"]) for r in db.rows(_con, "SELECT DISTINCT course_id, topic_no FROM tb_sources")} if has("tb_sources") else set()
-    tb_quiz = ({(r["course_id"], r["topic_no"]) for r in db.rows(_con, "SELECT DISTINCT course_id, topic_no FROM tb_questions WHERE status='tasdiqlandi' AND deleted=0")}
+    tb_text = {(r["course_id"], r["topic_no"]) for r in db.rows(_con, "SELECT DISTINCT course_id, topic_no FROM tb_sources WHERE 1=1" + cw, ca)} if has("tb_sources") else set()
+    tb_quiz = ({(r["course_id"], r["topic_no"]) for r in db.rows(_con, "SELECT DISTINCT course_id, topic_no FROM tb_questions WHERE status='tasdiqlandi' AND deleted=0" + cw, ca)}
                if has("tb_questions") else set())
     mon = {}
-    for r in db.rows(_con, "SELECT course_id, topic_no, url FROM dl_items WHERE kind='video' AND url IS NOT NULL AND url!=''"): mon[(r["course_id"], r["topic_no"])] = r["url"]
+    for r in db.rows(_con, "SELECT course_id, topic_no, url FROM dl_items WHERE kind='video' AND url IS NOT NULL AND url!=''" + cw, ca): mon[(r["course_id"], r["topic_no"])] = r["url"]
     # dars → manba mavzusi: L — o'zi (bog'lanmagan bo'lsa); bog'langan dars — topic_ref; boshqalari — yo'q
     link = {}
-    for r in db.rows(_con, "SELECT course_id, lkey, topic_ref, deleted FROM pk_lessons"):
+    for r in db.rows(_con, "SELECT course_id, lkey, topic_ref, deleted FROM pk_lessons WHERE 1=1" + cw, ca):
         if r["deleted"]: continue
         if r["topic_ref"]: link[(r["course_id"], r["lkey"])] = (r["course_id"], int(r["topic_ref"]))
         elif r["lkey"] >= 1000: link[(r["course_id"], r["lkey"])] = None
@@ -3290,15 +3308,15 @@ def readiness_map() -> dict:
         if t_ in tb_text: mark("text", *k)
         if t_ in tb_quiz: mark("quiz", *k)
         if t_ in mon: vids[k] = mon[t_]
-    for r in db.rows(_con, "SELECT DISTINCT course_id, topic_no, purpose FROM pk_assets WHERE deleted=0 AND purpose IN ('matn','taqdimot','slayd')"):
+    for r in db.rows(_con, "SELECT DISTINCT course_id, topic_no, purpose FROM pk_assets WHERE deleted=0 AND purpose IN ('matn','taqdimot','slayd')" + cw, ca):
         mark("text" if r["purpose"] == "matn" else "slides", r["course_id"], r["topic_no"])
-    for r in db.rows(_con, "SELECT course_id, topic_no, video_url, deck_id FROM pk_topics"):
+    for r in db.rows(_con, "SELECT course_id, topic_no, video_url, deck_id FROM pk_topics WHERE 1=1" + cw, ca):
         if r["video_url"]: vids[(r["course_id"], r["topic_no"])] = r["video_url"]
         if r["deck_id"]: mark("slides", r["course_id"], r["topic_no"])
     for k, u in vids.items():
         if parse_video(u)["ok"]: mark("video", *k)
-    for r in db.rows(_con, "SELECT DISTINCT course_id, topic_no FROM pk_assets WHERE deleted=0 AND purpose='video'"): mark("video", r["course_id"], r["topic_no"])
-    for r in db.rows(_con, "SELECT DISTINCT course_id, topic_no, kind FROM pk_exercises WHERE deleted=0 AND status='faol'"):   # gather kabi: moslashtirish/saralash — test
+    for r in db.rows(_con, "SELECT DISTINCT course_id, topic_no FROM pk_assets WHERE deleted=0 AND purpose='video'" + cw, ca): mark("video", r["course_id"], r["topic_no"])
+    for r in db.rows(_con, "SELECT DISTINCT course_id, topic_no, kind FROM pk_exercises WHERE deleted=0 AND status='faol'" + cw, ca):   # gather kabi: moslashtirish/saralash — test
         mark("exercises", r["course_id"], r["topic_no"])
         if r["kind"] in ("match", "sort"): mark("quiz", r["course_id"], r["topic_no"])
     return out
@@ -3917,11 +3935,17 @@ def pending(c: Ctx) -> list[dict]:
 # «Studiya» ilgaklari (app/studio.py, docs/studio.md) — dars ishlab chiqarish oqimi paketga shu funksiyalar orqali yozadi.
 # Ruxsat studiya modulida tekshiriladi (operator / bo'lim); bu yerda faqat dars mavjudligi. c=None — tizim (YouTube yuklovchisi).
 # =============================================================================================
+COURSE_SQL = ("SELECT c.*, d.name dept, t.full_name teacher FROM dl_courses c LEFT JOIN departments d ON d.id=c.department_id "
+              "LEFT JOIN teachers t ON t.id=c.teacher_id")
+
+def course_rows_where(where: str = "1=1", args=(), order: str = "c.subject, c.id", limit: int = 0) -> list[dict]:
+    """Kurs qatorlari (c.*, kafedra nomi «dept», o'qituvchi F.I.Sh. «teacher») — studiya va paket ilgaklari uchun YAGONA so'rov."""
+    return db.rows(_con, f"{COURSE_SQL} WHERE {where} ORDER BY {order}" + (f" LIMIT {int(limit)}" if limit else ""), tuple(args))
+
 def _course_row(cid: int) -> dict:
-    co = db.one(_con, "SELECT c.*, d.name dept, t.full_name teacher FROM dl_courses c LEFT JOIN departments d ON d.id=c.department_id "
-                      "LEFT JOIN teachers t ON t.id=c.teacher_id WHERE c.id=?", (int(cid),))
+    co = course_rows_where("c.id=?", (int(cid),), "c.id")
     if not co: raise HTTPException(404, "Kurs topilmadi")
-    return co
+    return co[0]
 
 def studio_lesson(cid: int, no: int) -> dict:
     """Montaj ishchisi uchun dars ma'lumoti: kurs, dars kaliti/kodi/turi, nomi, fan, o'qituvchi va ma'ruza rejasi (matndan, bo'lsa)."""
@@ -3952,10 +3976,24 @@ def _set_video_source(cid: int, no: int, src: str) -> None:
                     ON CONFLICT(course_id,topic_no) DO UPDATE SET settings=excluded.settings, updated_at=excluded.updated_at""",
                  (cid, no, json.dumps(over), _now()))
 
+_LINK_FALLBACK = {errno.EXDEV, errno.EPERM, errno.EMLINK, errno.ENOTSUP, errno.EOPNOTSUPP}   # qattiq havola mumkin emas (boshqa disk, FS) → nusxa
+
+def _link_or_copy(src: Path, dst: Path) -> None:
+    """dst — src ning qattiq havolasi (o'sha diskda, nusxasiz); boshqa disk (EXDEV) yoki havola qo'llab-quvvatlanmasa — nusxa."""
+    try:
+        os.link(src, dst)
+    except OSError as e:
+        if e.errno not in _LINK_FALLBACK: raise
+        shutil.copyfile(src, dst)
+
 def studio_set_video(c: Ctx | None, cid: int, no: int, video: Path, captions: bytes | None = None, poster: bytes | None = None,
                      name: str = "studiya") -> dict:
     """Tasdiqlangan montaj natijasi → darsning video FAYLI (provider file): video (asl fayl o'chirilmaydi — qattiq havola yoki nusxa),
-    subtitr (WebVTT, o'zbekcha) va poster (rasm → JPEG). Eski video/subtitr/poster almashtiriladi; video_source = fayl."""
+    subtitr (WebVTT, o'zbekcha) va poster (rasm → JPEG). Eski video/subtitr/poster almashtiriladi; video_source = fayl.
+    Tranzaksiyaviy: 1) hamma fayl paket omborida VAQTINCHALIK nom bilan tayyorlanadi (video — os.link, EXDEV → nusxa); 2) _lock ostida BITTA
+    tranzaksiyada fayllar yakuniy nomiga o'tkaziladi, qatorlar yakuniy yo'l bilan yoziladi, eskilari deleted=2, video_source, tarix → commit;
+    3) faqat shundan KEYIN eski fayllar diskdan o'chiriladi. Istalgan bosqichda xato (HTTP bo'lmagan ham) — rollback, yangi fayllar o'chiriladi,
+    darsning oldingi videosi (qator va fayl) tegilmaydi."""
     co = _course_row(cid); les = lesson_info(co, no)
     video = Path(video)
     if not video.is_file(): raise HTTPException(410, "Montaj natijasi (video) diskda topilmadi")
@@ -3964,36 +4002,52 @@ def studio_set_video(c: Ctx | None, cid: int, no: int, video: Path, captions: by
     d = _asset_dir(cid, no); d.mkdir(parents=True, exist_ok=True)
     size, sha = video.stat().st_size, _file_sha(video)
     u = c.user if c else {"id": None, "full_name": "Tizim"}
-    with _lock:
-        aid = _con.execute("""INSERT INTO pk_assets(course_id,topic_no,purpose,kind,name,path,size,sha256,meta,user_id,user_name,ts,src)
-                              VALUES(?,?,'video',?,?,'',?,?,?,?,?,?,'studio')""",
-                           (cid, no, kind, f"{name[:150]}.{kind}", size, sha, json.dumps({"studio": True}), u.get("id"), u.get("full_name"), _now())).lastrowid
-        fn = f"{aid}_studiya.{kind}"
-        tmp = d / (fn + ".tmp")
-        tmp.unlink(missing_ok=True)
-        try: os.link(video, tmp)               # o'sha diskda — nusxasiz
-        except OSError: shutil.copyfile(video, tmp)
-        os.replace(tmp, d / fn)
-        _con.execute("UPDATE pk_assets SET path=? WHERE id=?", (str(Path("assets") / str(cid) / str(no) / fn), aid))
-        _con.commit()
-    _replace_assets(cid, no, "video", aid)
-    out = {"ok": True, "id": aid, "kind": kind, "size": size, "captions": None, "poster": None}
+    out = {"ok": True, "id": None, "kind": kind, "size": size, "captions": None, "poster": None}
+    # subtitr va poster — avval xotirada tekshiriladi (yaroqsiz bo'lsa — ogohlantirish, video baribir qo'yiladi)
+    cap = pst = None
     if captions:
-        try:
-            r = to_vtt(captions)
-            sid = _save_asset(c, cid, no, "subs", "vtt", "studiya.vtt", r["vtt"].encode("utf-8"), {"lang": "uz", "label": SUB_LANGS["uz"], "cues": r["cues"], "from": "studio"}, src="studio")
-            _replace_assets(cid, no, "subs", sid, lambda m: m.get("lang") == "uz"); out["captions"] = r["cues"]
-        except HTTPException as e:
-            out["captions_error"] = str(e.detail)
+        try: cap = to_vtt(captions)
+        except HTTPException as e: out["captions_error"] = str(e.detail)
     if poster:
-        try:
-            pid = _save_asset(c, cid, no, "poster", "jpg", "studiya.jpg", _jpeg(poster, COVER_MAX_PX), {"orig": "studio"}, src="studio")
-            _replace_assets(cid, no, "poster", pid); out["poster"] = pid
-        except HTTPException as e:
-            out["poster_error"] = str(e.detail)
-    with _lock:
-        _set_video_source(cid, no, "file")
-        _log(c, cid, no, "studiya: video fayl", f"{name[:80]} · {kind} · {size // (1024 * 1024)} MB"); _con.commit()
+        try: pst = _jpeg(poster, COVER_MAX_PX)
+        except HTTPException as e: out["poster_error"] = str(e.detail)
+    tag = secrets.token_hex(6)
+    rel = lambda fn: str(Path("assets") / str(cid) / str(no) / fn)
+    # (purpose, kind, nomi, yakuniy fayl nomi, hajm, sha256, meta, vaqtinchalik fayl)
+    staged, made, gone = [], [], []
+    try:
+        vfn = f"{tag}_studiya.{kind}"
+        tmp = d / f".{vfn}.tmp"; made.append(tmp)
+        _link_or_copy(video, tmp)
+        staged.append(("video", kind, f"{name[:150]}.{kind}", vfn, size, sha, {"studio": True}, tmp))
+        if cap:
+            raw = cap["vtt"].encode("utf-8"); fn = f"{tag}_studiya.vtt"; tmp = d / f".{fn}.tmp"; made.append(tmp); tmp.write_bytes(raw)
+            staged.append(("subs", "vtt", "studiya.vtt", fn, len(raw), _sha(raw), {"lang": "uz", "label": SUB_LANGS["uz"], "cues": cap["cues"], "from": "studio"}, tmp))
+        if pst:
+            fn = f"{tag}_studiya.jpg"; tmp = d / f".{fn}.tmp"; made.append(tmp); tmp.write_bytes(pst)
+            staged.append(("poster", "jpg", "studiya.jpg", fn, len(pst), _sha(pst), {"orig": "studio"}, tmp))
+        with _lock:
+            try:
+                ids = {}
+                for purpose, k_, nm, fn, sz, sh, meta, tmp in staged:
+                    os.replace(tmp, d / fn); made.append(d / fn)
+                    ids[purpose] = _con.execute("""INSERT INTO pk_assets(course_id,topic_no,purpose,kind,name,path,size,sha256,meta,user_id,user_name,ts,src)
+                                                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'studio')""",
+                                                (cid, no, purpose, k_, nm[:160], rel(fn), sz, sh, json.dumps(meta, ensure_ascii=False),
+                                                 u.get("id"), u.get("full_name"), _now())).lastrowid
+                gone += _retire_assets(cid, no, "video", ids["video"])
+                if "subs" in ids: gone += _retire_assets(cid, no, "subs", ids["subs"], lambda m: m.get("lang") == "uz")
+                if "poster" in ids: gone += _retire_assets(cid, no, "poster", ids["poster"])
+                _set_video_source(cid, no, "file")
+                _log(c, cid, no, "studiya: video fayl", f"{name[:80]} · {kind} · {size // (1024 * 1024)} MB")
+                _con.commit()
+            except BaseException:
+                _con.rollback(); raise
+    except BaseException:
+        _unlink_all(made)
+        raise
+    _unlink_all(gone)                         # eski video/subtitr/poster — yangilari to'liq ro'yxatga olingach
+    out.update(id=ids["video"], captions=cap["cues"] if "subs" in ids else None, poster=ids.get("poster"))
     if c: rbac.audit(_con, c, "paket: studiya videosi qo'yildi", RES, True, f"kurs #{cid} · {les['code']} · {size} bayt")
     return out
 
