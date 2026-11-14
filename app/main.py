@@ -6,6 +6,11 @@ from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from . import clock
+# Eski nom (JARVIS_*) bilan berilgan muhit o'zgaruvchilari ISFT_CORE_* nomiga ko'chiriladi (yangisi berilgan bo'lsa — u ustun).
+# Masalan, Railway'da JARVIS_PUBLIC_URL qolgan bo'lsa ham eslatma va QR havolalari sozlangan manzildan olinadi.
+for _k, _v in list(os.environ.items()):
+    if _k.startswith("JARVIS_") and _v and not os.environ.get("ISFT_CORE_" + _k[7:]):
+        os.environ["ISFT_CORE_" + _k[7:]] = _v
 from . import db, rbac, services as S, ai, reports, documents as D, service as SV, occupancy as OC, decisions as DEC, student_ops as OPSM, agent as AG
 from . import modules as MODS   # bo'limlar kaliti (yoqilgan/o'chirilgan) — docs/modullar.md
 from .rbac import AccessDenied
