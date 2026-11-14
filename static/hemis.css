@@ -1,0 +1,21 @@
+/* «HEMIS almashinuvi» (static/hemis.js) — masofaviy.css (dl-*) ustiga qo'shimchalar */
+.hm-warn{border:1px solid var(--line-2);border-left:4px solid #d97706;border-radius:12px;padding:10px 12px;margin:8px 0;font-size:13px;background:var(--surface)}
+.hm-bad{border-left-color:#dc2626}
+.hm-map{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px;margin:8px 0}
+.hm-map label{display:flex;flex-direction:column;gap:4px;font-size:12.5px;min-width:0}
+.hm-map label span{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hm-map select,.hm-form input,.hm-form select,.hm-form textarea{height:34px;padding:0 8px;border:1px solid var(--line-2);border-radius:10px;background:var(--surface);color:var(--ink);font:inherit;font-size:13px;min-width:0;max-width:100%}
+.hm-form textarea{height:auto;min-height:64px;padding:8px}
+.hm-form{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;margin:8px 0}
+.hm-form label{display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--muted);min-width:0}
+.hm-form label.chk{flex-direction:row;align-items:center;gap:8px;color:var(--ink)}
+.hm-vals{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:13px}
+.hm-vals s{color:var(--muted)}
+.hm-code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;word-break:break-all}
+.hm-dec{display:flex;flex-direction:column;gap:8px;margin:8px 0}
+.hm-dec label{display:flex;gap:8px;align-items:flex-start;font-size:13.5px}
+.hm-log{font-size:12.5px;color:var(--muted);margin:6px 0 0;padding-left:18px}
+.hm-q{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+.hm-q b{font-size:20px}
+.hm-sample{font-size:12.5px;color:var(--muted);margin:6px 0 0;padding-left:18px;max-height:160px;overflow:auto}
+@media (max-width:640px){.hm-map,.hm-form{grid-template-columns:1fr}}
