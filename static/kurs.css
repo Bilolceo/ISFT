@@ -319,3 +319,36 @@ textarea.ku-in{resize:vertical;line-height:1.5}
   .ku-blk-b{padding:6px 10px 12px}
 }
 @media (prefers-reduced-motion:reduce){.ku-card,.ku-ins button,.ku-panel,.ku-pvw iframe{transition:none}.ku-mk.mv{animation:none}}
+
+/* ---------- «Dars tayyorlash» bilan bog'lanish, izohlar paneli (kurs.js → app/dars.py) ---------- */
+.ku-link{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:9px 14px;border-radius:14px;background:var(--surface);border:1px solid var(--line);font-size:13px;margin:0 0 10px}
+.ku-link>svg{color:var(--teal);flex:none}
+.ku-link>span{flex:1 1 260px;min-width:0}
+.ku-cmb{display:inline-flex;align-items:center;gap:3px;height:24px;padding:0 7px;border-radius:99px;border:1px solid transparent;background:transparent;color:var(--muted);cursor:pointer;font:inherit;font-size:11px;font-weight:800}
+.ku-cmb:hover{background:var(--hover);color:var(--ink)}
+.ku-cmb.on{background:var(--teal-soft);color:var(--teal)}
+.ku-cmb.bad{background:var(--bad-soft);color:var(--bad)}
+.ku-cmb:focus-visible,.ku-cm-go:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+.ku-cmn{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:99px;background:var(--teal-soft);color:var(--teal);font-size:11px}
+.ku-cmn.bad{background:var(--bad-soft);color:var(--bad)}
+.ku-bad{color:var(--bad);font-weight:700}
+.ku-cm{position:fixed;right:16px;top:76px;bottom:16px;width:min(380px,calc(100vw - 32px));z-index:60;background:var(--bg,var(--surface));border:1px solid var(--line);border-radius:18px;
+  box-shadow:0 12px 40px rgba(0,0,0,.18);padding:12px 14px;overflow:auto;display:flex;flex-direction:column;gap:10px}
+.ku-cm[hidden]{display:none}
+.ku-cm-h{display:flex;align-items:center;gap:8px}.ku-cm-h b{font-size:15px}.ku-cm-h .muted{flex:1;font-size:12.5px}
+.ku-cm-new{display:flex;flex-direction:column;gap:6px;padding:10px;border-radius:14px;background:var(--surface);border:1px solid var(--line)}
+.ku-cm-new textarea{width:100%;box-sizing:border-box;resize:vertical}
+.ku-cm-o,.ku-cm-f{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;font-size:12.5px}
+.ku-cm-o .btn{margin-left:auto}
+.ku-cm-l{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.ku-cm-t{padding:10px;border-radius:14px;background:var(--surface);border:1px solid var(--line);font-size:13px;overflow-wrap:anywhere}
+.ku-cm-t.blk{border-color:var(--bad)}
+.ku-cm-t.done{opacity:.72}
+.ku-cm-t p{margin:6px 0;line-height:1.45}
+.ku-cm-r{margin-left:12px!important;padding-left:10px;border-left:2px solid var(--line-2)}
+.ku-cm-m{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+.ku-cm-go{border:0;background:none;padding:0;color:var(--teal);font:inherit;font-size:12px;font-weight:700;cursor:pointer;text-decoration:underline}
+.ku-cm-a{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:6px}
+.ku-cm-a input{flex:1 1 140px;min-width:0}
+.ku-ul{margin:8px 0;padding-left:18px;font-size:13px;line-height:1.55}
+@media (max-width:640px){.ku-cm{right:8px;left:8px;width:auto;top:64px;bottom:8px}}

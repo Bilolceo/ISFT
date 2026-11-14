@@ -3132,9 +3132,13 @@ def _unchanged_msg(rj: dict) -> str:
     return (f"Dars v{rj['version']} bo'lim tomonidan qaytarilgan va shundan beri o'zgartirilmagan — bir xil mazmun qayta yuborilmaydi. "
             f"Avval qaytarish sababiga ko'ra materiallarni tuzating va darsni qayta yig'ing. Qaytarish sababi: «{(rj['note'] or '').strip()[:200]}»")
 
-def package_action(c: Ctx, pid: int, action: str, note: str = "") -> dict:
+def package_action(c: Ctx, pid: int, action: str, note: str = "", override: str = "") -> dict:
     r, co = _package(c, pid)
     synced = 0
+    if action in ("approve", "submit") and r["topic_no"] and r["status"] == ("tayyor" if action == "approve" else "qoralama") \
+            and (action == "submit" or c.role.key in DEPT):
+        from . import dars as DS      # darsning muharrirdagi nusxasida ochiq to'xtatuvchi izohlar bo'lsa — 409 (yoki sabab bilan aylanib o'tish, audit)
+        DS.gate_package(c, r["course_id"], r["topic_no"], action, override)
     if action == "approve":
         if c.role.key not in DEPT: raise AccessDenied("⛔ Tasdiqlash — faqat Masofaviy ta'lim bo'limi. So'rov audit jurnaliga yozildi.")
         if r["status"] != "tayyor": raise HTTPException(409, "Faqat bo'limga yuborilgan («tasdiq kutilmoqda») dars tasdiqlanadi")
@@ -3489,7 +3493,18 @@ def topic_view(c: Ctx, cid: int, no: int) -> dict:
             "changed": bool(pk and pk[0].get("src_sig") and pk[0]["src_sig"] != sig),      # oxirgi tayyorlashdan keyin manba o'zgargan
             "nextid": {"id": appr["id"], "version": appr["version"], "mode": appr["mode"], "approved_at": appr["approved_at"]} if appr else None,
             "source_topic": source_topic(les), "text_asset": (ts["asset"]["id"] if ts and ts.get("asset") else None),
+            "kurs_link": _kurs_link(cid, no),
             "can": {"write": own, "approve": k in DEPT, "deck": own and k == TEACH and _has_table("pres_decks")}}
+
+def _kurs_link(cid: int, no: int) -> dict | None:
+    """«Muharrirda tahrirlash» bilan bog'langan Kurs muharriri kursi (app/dars.py): id, holat, eksport uchun ustun manba, ochiq izohlar."""
+    try:
+        from . import dars as DS
+        ln = DS._link(cid, no)
+        return {"id": ln["ku_course_id"], "status": ln["ku_status"], "authority": ln["authority"], "src": ln["src"],
+                "blocking": DS.blocking_open(ln["ku_course_id"])} if ln else None
+    except Exception:
+        return None
 
 def review_queue(c: Ctx, limit: int = 200) -> dict:
     """Ko'rib chiqish navbati (ko'lam bo'yicha): oxirgi versiyasi tasdiq kutayotgan darslar («kutilmoqda») va tasdiqlangan versiyasi
@@ -3954,6 +3969,11 @@ def pending(c: Ctx) -> list[dict]:
                             "sub": "izohni ko'rib, faylni tuzating va darsni qayta tayyorlang", "view": "paket", "tab": "mavzular"})
     except Exception as e:
         print("paket.pending:", repr(e))
+    try:
+        from . import dars as DS      # ko'rib chiquvchi izohlari (muharrir) — bildirishnoma
+        out += DS.pending_items(c)
+    except Exception as e:
+        print("paket.pending (izohlar):", repr(e))
     return out
 
 
@@ -4111,12 +4131,14 @@ def api_meta(request: Request):
     c = C(request); guard(c, "bo'lim ochildi")
     k = c.role.key
     # o'qituvchi — to'g'ridan-to'g'ri o'z darslari (bitta yorliq); bo'lim — Holat, Darslar, Ommaviy, Sozlamalar; kafedra — Holat, Darslar
-    tabs = ["qamrov", "mavzular", "joylash", "sozlama"] if k in DEPT else ["mavzular"] if k == TEACH else ["qamrov", "mavzular"] if k == KAF else ["qamrov"]
+    # «Fanlar» (app/dars.py, static/dars.js) — birlashgan bo'limning kirish sahifasi: fan → NEXTID darslar to'ri (shablon bo'yicha yig'ish + muharrir)
+    tabs = (["fanlar", "qamrov", "mavzular", "joylash", "sozlama"] if k in DEPT else ["fanlar", "mavzular"] if k == TEACH else
+            ["fanlar", "qamrov", "mavzular"] if k == KAF else ["qamrov"])
     sw, sa = scope(c)
     demo = bool(db.one(_con, f"""SELECT 1 x FROM dl_courses c WHERE {sw} AND (EXISTS(SELECT 1 FROM pk_packages p WHERE p.course_id=c.id AND p.src='demo')
                                  OR EXISTS(SELECT 1 FROM pk_assets a WHERE a.course_id=c.id AND a.src='demo' AND a.deleted=0)) LIMIT 1""", sa))
     return {"role": k, "tabs": tabs, "title": "Dars tayyorlash", "lstate": LSTATE, "upload_as": UPLOAD_AS,
-            "tab_labels": {"qamrov": "Holat", "mavzular": "Darslarim" if k == TEACH else "Darslar", "joylash": "Ommaviy", "sozlama": "Sozlamalar"},
+            "tab_labels": {"fanlar": "Fanlar", "qamrov": "Holat", "mavzular": "Darslarim" if k == TEACH else "Darslar", "joylash": "Ommaviy", "sozlama": "Sozlamalar"},
             "today": clock.today().isoformat(), "demo": demo, "player": player_ok(),
             "modes": MODES, "completion": COMPLETION, "status": STATUS, "blocks": BLOCKS, "required": list(REQUIRED), "defaults": defaults(),
             "layouts": LAYOUTS, "sections": SECTIONS, "reflect_default": REFLECT, "assignment_default": ASSIGNMENT, "video_sources": VIDEO_SOURCES,
@@ -4510,13 +4532,14 @@ def api_preview_signed(token: str, path: str, request: Request):
 class ActIn(BaseModel):
     action: str
     note: str = Field("", max_length=500)
+    override: str = Field("", max_length=500)
 
 @router.post(P + "/packages/{pid}/action")
 def api_package_action(pid: int, body: ActIn, request: Request):
     c = C(request)
     guard(c, {"approve": "paketni tasdiqlash", "reject": "paketni qaytarish", "submit": "bo'limga yuborish"}.get(body.action, "paket amali"),
           AUTHORS if body.action == "submit" else DEPT, f"#{pid} {body.action}")
-    return package_action(c, pid, body.action, body.note)
+    return package_action(c, pid, body.action, body.note, body.override)
 
 class DefaultsIn(BaseModel):
     layout: str = "steps"

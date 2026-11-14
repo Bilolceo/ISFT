@@ -86,6 +86,19 @@ ok(head.get(f"{P}/courses/{tc}").status_code == 200 and any(x["id"] == tc for x 
 if own_dl:
     lc = head.post(P + "/courses", json={"title": "Bo'lim yaratgan, o'qituvchi faniga bog'langan", "dl_course_id": own_dl[0]["id"]}).json()["id"]
     ok(teach.get(f"{P}/courses/{lc}").status_code == 200, "O'qituvchi o'zi o'qitadigan masofaviy kursga bog'langan kursni ko'radi")
+if own_dl:   # kafedra mudiri («Dars tayyorlash» birlashuvi, app/dars.py): o'z kafedrasi fanlariga bog'langan kurslarni faqat ko'radi va izoh qoldiradi
+    dep = q("SELECT department_id FROM dl_courses WHERE id=?", (own_dl[0]["id"],))[0]["department_id"]
+    kr = q("SELECT id FROM users WHERE role='kafedra' AND active=1 AND department_id=? ORDER BY id LIMIT 1", (dep,))
+    if kr:
+        kaf = S(kr[0]["id"])
+        km = kaf.get(P + "/meta").json()
+        kl = kaf.get(P + "/courses").json()["items"]
+        ok(not km["caps"]["write"] and km["caps"]["review"] and "blocks" in km and {x["id"] for x in kl} >= {tc, lc} and hc not in {x["id"] for x in kl},
+           "Kafedra: faqat ko'rish va izoh — o'z kafedrasi fanlariga bog'langan kurslar ro'yxatda, bog'lanmagani yo'q")
+        ok(kaf.get(f"{P}/courses/{lc}").status_code == 200 and kaf.get(f"{P}/courses/{hc}").status_code == 403, "Kafedra: bog'langan kursni ochadi (200), begonasini — 403")
+        kls = kaf.get(f"{P}/courses/{lc}").json()["lessons_list"][0]["id"]
+        ok(kaf.post(f"{P}/lessons/{kls}", json={"rev": 1, "blocks": []}).status_code == 403 and kaf.post(f"{P}/courses/{lc}/export", json={"mode": "xapi"}).status_code == 403
+           and kaf.post(f"{P}/courses/{lc}/action", json={"action": "approve"}).status_code == 403, "Kafedra: tahrirlash, eksport va tasdiqlash — 403")
 den = q("SELECT COUNT(*) n FROM audit_log WHERE resource='kurs' AND allowed=0")[0]["n"]
 ok(den >= 8 and q("SELECT COUNT(*) n FROM audit_log WHERE resource='kurs' AND allowed=1")[0]["n"] > 0, f"Rad etilgan va ruxsat berilgan so'rovlar audit jurnalida ({den} ta rad)")
 

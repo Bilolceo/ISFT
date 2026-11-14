@@ -41,11 +41,12 @@ _lock = threading.RLock()
 P = "/api/kurs"
 RES = rbac.KURS
 
-HEAD, STAFF, TEACH = "masofaviy", "masofaviy_xodim", "oqituvchi"
+HEAD, STAFF, TEACH, KAF = "masofaviy", "masofaviy_xodim", "oqituvchi", "kafedra"
 DEPT = (HEAD, STAFF)
 LEAD = ("rektor", "prorektor_oquv")
 AUTHORS = DEPT + (TEACH,)
-ALL = AUTHORS + LEAD
+READERS = AUTHORS + (KAF,)            # kafedra mudiri — o'z kafedrasi fanlariga bog'langan kurslarni faqat ko'radi va izoh qoldiradi (app/dars.py)
+ALL = AUTHORS + LEAD + (KAF,)
 
 PLAYER_DIR = Path(__file__).resolve().parent / "kurs_player"     # testlarda almashtiriladi
 STORE: Path | None = None                                         # None → <DATA_DIR>/kurs
@@ -403,6 +404,8 @@ def scope(c: Ctx, alias="k") -> tuple[str, tuple]:
         return (f"({alias}.author_id=? OR {alias}.dl_course_id IN (SELECT id FROM dl_courses WHERE teacher_id=? AND teacher_id>0))",
                 (int(c.user["id"]), _tid(c)))
     if c.role.key in DEPT: return "1=1", ()
+    if c.role.key == KAF:
+        return (f"{alias}.dl_course_id IN (SELECT id FROM dl_courses WHERE department_id=? AND department_id>0)", (int(c.user.get("department_id") or 0),))
     return "0=1", ()
 
 def _course(c: Ctx, cid: int, write: bool = False) -> dict:
@@ -586,9 +589,19 @@ def course_view(c: Ctx, cid: int) -> dict:
             "approved_at": co["approved_at"], "approved_name": co["approved_name"], "submitted_at": co["submitted_at"],
             "import_report": _jload(co["import_report"], None) if co["src"] == "rise" else None,
             "exports": [{**e, "validation": {"ok": _jload(e["validation"], {}).get("ok")}} for e in ex],
+            "dars": _dars_link(cid),
             "caps": {"write": c.role.key in AUTHORS, "approve": c.role.key in DEPT, "submit": c.role.key in AUTHORS and co["status"] == "qoralama",
                      "delete": c.role.key in DEPT or (co["author_id"] == c.user["id"] and co["status"] == "qoralama")},
             "log": db.rows(_con, "SELECT ts, user_name, action, note FROM ku_log WHERE course_id=? ORDER BY id DESC LIMIT 30", (cid,))}
+
+def _dars_link(cid: int) -> dict | None:
+    """«Dars tayyorlash» bilan bog'lanish (app/dars.py): fan, dars kodi, eksport uchun ustun manba, ochiq to'xtatuvchi izohlar."""
+    try:
+        from . import dars as DS
+        ln = DS.link_of_kurs(cid)
+        return {**(ln or {}), "linked": bool(ln), "blocking": DS.blocking_open(cid)}
+    except Exception:
+        return None
 
 def update_course(c: Ctx, cid: int, body: dict) -> dict:
     co = _course(c, cid, write=True)
@@ -899,9 +912,12 @@ def course_issues(cid: int) -> dict:
                 (errs if lvl == "xato" else warns).append(f"{n}. {l['title']} · {k}-blok ({BLOCKS[b['type']][0]}): {m}")
     return {"errors": errs, "warnings": warns}
 
-def action(c: Ctx, cid: int, act: str, note: str = "") -> dict:
+def action(c: Ctx, cid: int, act: str, note: str = "", override: str = "") -> dict:
     co = _course(c, cid, write=True)
     note = _line(note, 500)
+    if (act == "submit" and co["status"] == "qoralama") or (act == "approve" and c.role.key in DEPT and co["status"] != "tasdiqlangan"):
+        from . import dars as DS          # ochiq to'xtatuvchi izohlar (ko'rib chiqish) — 409 yoki sabab bilan aylanib o'tish (audit)
+        DS.gate(c, cid, act, override)
     if act == "submit":
         if co["status"] != "qoralama": raise HTTPException(400, "Kurs allaqachon ko'rib chiqishda yoki tasdiqlangan")
         iss = course_issues(cid)
@@ -1178,7 +1194,7 @@ def preview_file(token: str, path: str, rng: str | None) -> Response:
     if not hmac.compare_digest(hmac.new(_pv_key(), msg.encode(), hashlib.sha256).hexdigest()[:40], m[4]) or int(m[3]) < time.time(): raise bad
     try: c = rbac.ctx_for(_con, int(m[2]))
     except AccessDenied: raise bad
-    if c.user.get("active") == 0 or c.role.legacy or c.role.key not in AUTHORS: raise bad
+    if c.user.get("active") == 0 or c.role.legacy or c.role.key not in READERS: raise bad
     cid = int(m[1]); _course(c, cid)
     path = (path or "index.html").strip() or "index.html"
     if PK._bad_path(path) or "\x00" in path or "%" in path: raise HTTPException(400, "Yo'l noto'g'ri")
@@ -1841,9 +1857,10 @@ def api_meta(request: Request):
     c = C(request); guard(c, "bo'lim ochildi")
     k = c.role.key
     out = {"role": k, "title": "Kurs muharriri", "status": STATUS,
-           "caps": {"write": k in AUTHORS, "approve": k in DEPT, "import": k in AUTHORS, "summary_only": k in LEAD},
-           "scope": "Masofaviy ta'lim — barcha kurslar" if k in DEPT else "O'z kurslaringiz" if k == TEACH else "Jamlangan ko'rsatkichlar", "player": player_ok()}
-    if k in AUTHORS:
+           "caps": {"write": k in AUTHORS, "approve": k in DEPT, "import": k in AUTHORS, "summary_only": k in LEAD, "review": k in DEPT + (KAF,), "ai": k in AUTHORS},
+           "scope": ("Masofaviy ta'lim — barcha kurslar" if k in DEPT else "O'z kurslaringiz" if k == TEACH else
+                     "O'z kafedrangiz darslari (ko'rish va izoh)" if k == KAF else "Jamlangan ko'rsatkichlar"), "player": player_ok()}
+    if k in READERS:
         out.update(blocks={t: {"label": v[0], "cat": v[1], "desc": v[2], "default": default_block(t)} for t, v in BLOCKS.items()}, categories=CATEGORIES,
                    lesson_blocks=LESSON_BLOCKS, palette=PALETTE, modes=MODES, completion=COMPLETION, reveal=REVEAL, labels=LABELS, settings=SETTINGS, quiz=QUIZ,
                    q_kinds=Q_KINDS, sub_langs=PK.SUB_LANGS, asset_kinds=ASSET_KINDS, dl_courses=dl_options(c),
@@ -1858,7 +1875,7 @@ def api_summary(request: Request):
 
 @router.get(P + "/courses")
 def api_courses(request: Request, q: str = "", status: str = ""):
-    c = C(request); guard(c, "kurslar ro'yxati", AUTHORS, f"{q[:30]}/{status}")
+    c = C(request); guard(c, "kurslar ro'yxati", READERS, f"{q[:30]}/{status}")
     return course_list(c, q, status)
 
 class CourseIn(BaseModel):
@@ -1873,7 +1890,7 @@ def api_course_new(body: CourseIn, request: Request):
 
 @router.get(P + "/courses/{cid}")
 def api_course(cid: int, request: Request):
-    c = C(request); guard(c, "kurs", AUTHORS, f"kurs #{cid}")
+    c = C(request); guard(c, "kurs", READERS, f"kurs #{cid}")
     return course_view(c, cid)
 
 @router.post(P + "/courses/{cid}/settings")
@@ -1908,13 +1925,13 @@ def api_order(cid: int, body: OrderIn, request: Request):
 
 @router.get(P + "/courses/{cid}/issues")
 def api_issues(cid: int, request: Request):
-    c = C(request); guard(c, "tekshiruv", AUTHORS, f"kurs #{cid}")
+    c = C(request); guard(c, "tekshiruv", READERS, f"kurs #{cid}")
     _course(c, cid)
     return course_issues(cid)
 
 @router.get(P + "/lessons/{lid}")
 def api_lesson(lid: int, request: Request):
-    c = C(request); guard(c, "dars", AUTHORS, f"dars #{lid}")
+    c = C(request); guard(c, "dars", READERS, f"dars #{lid}")
     return lesson_view(c, lid)
 
 async def _json(request: Request, limit: int) -> dict:
@@ -1942,7 +1959,7 @@ def api_lesson_dup(lid: int, request: Request):
 
 @router.get(P + "/courses/{cid}/assets")
 def api_assets(cid: int, request: Request):
-    c = C(request); guard(c, "fayllar", AUTHORS, f"kurs #{cid}")
+    c = C(request); guard(c, "fayllar", READERS, f"kurs #{cid}")
     return {"items": assets_list(c, cid)}
 
 _LIMITS = {"image": MAX_IMAGE, "vtt": MAX_VTT, "file": MAX_FILE}
@@ -1964,7 +1981,7 @@ async def api_asset_upload(cid: int, request: Request, kind: str = "image", name
 
 @router.get(P + "/assets/{aid}")
 def api_asset(aid: int, request: Request):
-    c = C(request); guard(c, "fayl", AUTHORS, f"#{aid}")
+    c = C(request); guard(c, "fayl", READERS, f"#{aid}")
     return serve_asset(c, aid, request.headers.get("range"))
 
 @router.get(P + "/courses/{cid}/versions")
@@ -1988,13 +2005,14 @@ def api_version_restore(cid: int, vid: int, request: Request):
 class ActIn(BaseModel):
     action: str
     note: str = Field("", max_length=500)
+    override: str = Field("", max_length=500)
 
 @router.post(P + "/courses/{cid}/action")
 def api_action(cid: int, body: ActIn, request: Request):
     c = C(request)
     guard(c, {"submit": "ko'rib chiqishga yuborish", "approve": "kursni tasdiqlash", "return": "kursni qaytarish"}.get(body.action, "kurs amali"),
           AUTHORS if body.action == "submit" else DEPT, f"kurs #{cid} · {body.action}")
-    return action(c, cid, body.action, body.note)
+    return action(c, cid, body.action, body.note, body.override)
 
 class ExportIn(BaseModel):
     mode: str = "xapi"
@@ -2011,7 +2029,7 @@ def api_export_download(eid: int, request: Request):
 
 @router.get(P + "/courses/{cid}/preview-url")
 def api_preview_url(cid: int, request: Request):
-    c = C(request); guard(c, "ko'rish", AUTHORS, f"kurs #{cid}")
+    c = C(request); guard(c, "ko'rish", READERS, f"kurs #{cid}")
     return preview_url(c, cid)
 
 @router.get(P + "/pv/{token}/{path:path}")
@@ -2021,7 +2039,7 @@ def api_preview_file(token: str, path: str, request: Request):
 
 @router.get(P + "/courses/{cid}/quality")
 def api_quality(cid: int, request: Request):
-    c = C(request); guard(c, "sifat hisoboti", AUTHORS, f"kurs #{cid}")
+    c = C(request); guard(c, "sifat hisoboti", READERS, f"kurs #{cid}")
     return quality(c, cid)
 
 class FixIn(BaseModel):

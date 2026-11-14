@@ -24,7 +24,7 @@ if (typeof ICONS === "object") {
 }
 if (!document.querySelector('link[href="paket.css"]')) document.head.insertAdjacentHTML("beforeend", '<link rel="stylesheet" href="paket.css">');
 
-const PK_TABS = {qamrov: "Holat", mavzular: "Darslar", joylash: "Ommaviy", sozlama: "Sozlamalar"};
+const PK_TABS = {fanlar: "Fanlar", qamrov: "Holat", mavzular: "Darslar", joylash: "Ommaviy", sozlama: "Sozlamalar"};
 const PK_ST = {qoralama: ["Bo'limga yuborilmagan", ""], tayyor: ["Tasdiq kutilmoqda", "info"], tasdiqlandi: ["Tasdiqlangan", "ok"]};
 const PK_LS = {bosh: "", tayyorlanmoqda: "warn", kutilmoqda: "info", tasdiqlangan: "ok"};      /* darsning sodda holati → rang */
 const PK_NAMES = {text: "Matn", slides: "Taqdimot", video: "Video", quiz: "Test"};
@@ -124,11 +124,12 @@ async function renderPaket(tab) {
   if (!PK.meta) { const m = await pkApi("/api/paket/meta"); if (PK.who !== who) return; PK.meta = m; }
   const M = PK.meta, TL = {...PK_TABS, ...(M.tab_labels || {})};
   /* o'qituvchi — to'g'ridan-to'g'ri o'z darslari; bo'lim — avval ko'rib chiqish navbati turgan «Darslar» */
-  const first = M.tabs.includes("mavzular") && (M.role === "oqituvchi" || M.caps.approve) ? "mavzular" : M.tabs[0];
+  /* kirish sahifasi — «Fanlar» (dars.js: fan → NEXTID darslar to'ri); u bo'lmasa — avvalgidek */
+  const first = M.tabs.includes("fanlar") && typeof dsSubjects === "function" ? "fanlar" : M.tabs.includes("mavzular") && (M.role === "oqituvchi" || M.caps.approve) ? "mavzular" : M.tabs.filter(t => t !== "fanlar")[0];
   PK.tab = tab && M.tabs.includes(tab) ? tab : (PK.tab && M.tabs.includes(PK.tab) ? PK.tab : first);
-  const kuLink = typeof renderKurs === "function" && M.caps.write && !document.querySelector('#nav a[data-v="kurs"]')?.classList.contains("hidden");   /* kurs.js: bloklardan (Rise kabi) kurs */
+  const kuLink = typeof renderKurs === "function" && M.caps.write;   /* kurs.js: bloklar muharriri — barcha kurslar ro'yxati (alohida menyu bandi yo'q) */
   v.innerHTML = `<div class="pk-head"><div><h2>${esc(M.title || "Dars tayyorlash")}</h2><span class="muted">${esc(M.scope)} · fayllarni yuklang, «Tayyorlash»ni bosing — NEXTID uchun tayyor dars fayli chiqadi</span></div>
-      ${kuLink ? `<button type="button" class="btn sm ghost" id="pkToKu" title="Darsni bloklardan yig'ish: akkordeon, kartochkalar, bilimni tekshirish — Rise 360 kabi">${ico("layers", 15)} Kurs muharriri</button>` : ""}</div>
+      ${kuLink ? `<button type="button" class="btn sm ghost" id="pkToKu" title="Bloklar muharriri: barcha kurslar, Rise importi — Rise 360 kabi">${ico("layers", 15)} Muharrir: barcha kurslar</button>` : ""}</div>
     ${M.demo && M.caps.approve ? `<div class="pk-demo">${ico("info", 15)}<span><b>Namuna.</b> «Mikroiqtisodiyot» 1–2-mavzulari: ma'ruza matni, taqdimot va video havola — sun'iy (demo); video mavjud emas. Haqiqiy dars uchun o'z fayllaringizni yuklang.</span></div>` : ""}
     ${!M.player && M.caps.build ? `<div class="pk-warnbox">${ico("alert", 15)}<span>Dars oynasi o'rnatilmagan — «Tayyorlash» vaqtincha ishlamaydi (administratorga murojaat qiling). Fayllarni yuklab qo'yish mumkin.</span></div>` : ""}
     ${M.tabs.length > 1 ? `<div class="pk-tabs" role="tablist">${M.tabs.map(t => `<button type="button" role="tab" aria-selected="${t === PK.tab}" class="${t === PK.tab ? "on" : ""}" data-t="${t}">${esc(TL[t])}</button>`).join("")}</div>` : ""}
@@ -137,7 +138,7 @@ async function renderPaket(tab) {
   v.querySelector("#pkToKu")?.addEventListener("click", () => go("kurs"));
   const box = $("#pkBox");
   try {
-    await ({qamrov: pkCoverage, mavzular: pkTopics, joylash: pkBulk, sozlama: pkSettings})[PK.tab](box);
+    await ({fanlar: typeof dsSubjects === "function" ? dsSubjects : pkTopics, qamrov: pkCoverage, mavzular: pkTopics, joylash: pkBulk, sozlama: pkSettings})[PK.tab](box);
   } catch (e) {
     if (e?.message === "auth") return;
     box.innerHTML = e?.message === "denied" ? locked("Bu bo'lim") : `<div class="card pk-card"><p>${esc(e?.msg || "Ma'lumotni yuklab bo'lmadi")}</p></div>`;
@@ -438,6 +439,7 @@ async function pkTopicPanel(el) {
       <div class="pk-item-h pk-lh"><h3 id="pkTh"><span class="pk-code">${esc(L.code)}</span> <span id="pkTn" class="${L.untitled ? "pk-un" : ""}">${L.untitled ? "Dars nomi kiritilmagan" : esc(d.topic.title)}</span>
           ${W ? `<button type="button" class="btn sm ghost pk-ic" id="pkTe" aria-label="Dars nomini o'zgartirish" title="Dars nomini o'zgartirish">${ico("pen", 15)}</button>` : ""}</h3>
         <span class="pk-lst">${pkChip(d.state_label, PK_LS[d.state])}${d.stale ? pkChip("eskirgan", "warn") : ""}</span></div>
+      ${typeof dsTopicBar === "function" ? dsTopicBar(d, W) : ""}
       <p class="muted">${esc(L.kind_label)}${L.topic ? ` · ${L.topic}-mavzuga bog'langan` : ""}${L.untitled && W ? " · nomni qalam tugmasi bilan kiriting yoki Word yuklang — sarlavhasidan («3-MAVZU: …») o'zi olinadi" : L.title_src === "word" ? " · nom Word sarlavhasidan olindi" : ""}</p>
       ${W ? `<div class="pk-drop" id="pkDrop"><div class="pk-drop-ic">${ico("upload", 28)}</div>
           <div class="pk-drop-t"><b>Fayllarni shu yerga tashlang</b>
@@ -591,8 +593,10 @@ async function pkTopicPanel(el) {
   });
   const repaint = async () => { PK.meta = await pkApi("/api/paket/meta"); renderPaket("mavzular"); };
   el.querySelectorAll("[data-prev]").forEach(b => b.onclick = () => pkPreview(d.packages.find(p => p.id === +b.dataset.prev), `${L.code} — ${d.topic.title}`));
-  el.querySelector("#pkSubmit")?.addEventListener("click", async () => { const r = await pkApi(`/api/paket/packages/${p0.id}/action`, {action: "submit"}); if (r) { toast("Bo'limga yuborildi"); reload(); } });
-  el.querySelectorAll("[data-ok]").forEach(b => b.onclick = async () => { b.disabled = true; const r = await pkApi(`/api/paket/packages/${b.dataset.ok}/action`, {action: "approve"});
+  if (typeof dsTopicBind === "function") dsTopicBind(el, d);
+  const gAct = typeof dsGateFetch === "function" ? dsGateFetch : pkApi;     /* to'xtatuvchi izohlar to'sig'i (dars.js) — sabab bilan aylanib o'tish */
+  el.querySelector("#pkSubmit")?.addEventListener("click", async () => { const r = await gAct(`/api/paket/packages/${p0.id}/action`, {action: "submit"}); if (r) { toast("Bo'limga yuborildi"); reload(); } });
+  el.querySelectorAll("[data-ok]").forEach(b => b.onclick = async () => { b.disabled = true; const r = await gAct(`/api/paket/packages/${b.dataset.ok}/action`, {action: "approve"});
     if (r) { toast(`Tasdiqlandi${r.monitoring ? ` · kontent monitoringida ${r.monitoring} ta material yopildi` : ""}`); repaint(); } else b.disabled = false; });
   el.querySelectorAll("[data-rej]").forEach(b => b.onclick = () => pkModal("Darsni qaytarish", `<label>Sabab (o'qituvchiga ko'rinadi)<textarea id="pkRn" rows="4" style="min-height:90px" placeholder="Masalan: 3-slayddagi jadval o'qilmaydi; videoda ovoz yo'q"></textarea></label>`, async m => {
     const r = await pkApi(`/api/paket/packages/${b.dataset.rej}/action`, {action: "reject", note: m.querySelector("#pkRn").value.trim()});

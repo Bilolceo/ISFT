@@ -12,6 +12,10 @@ bo'lim: **Holat** (avvalgi «Qamrov») · **Darslar** (yuqorida ko'rib chiqish n
 «Hammasini tayyorlash») · **Sozlamalar**; kafedra: Holat, Darslar (faqat ko'rish); rahbariyat: Holat. API'dagi yorliq kalitlari o'zgarmagan
 (`qamrov`, `mavzular`, `joylash`, `sozlama`); nomlari — `meta.tab_labels`.
 
+**2026-11: «Fanlar» yorlig'i — birlashgan bo'limning kirish sahifasi** (`app/dars.py`, `static/dars.js`, `docs/dars.md`): fan → NEXTID darslar to'ri, har darsda
+«Avtomatik yig'ish (shablon)» (shu modulning `build_topic`) va «Muharrirda tahrirlash» (Kurs muharriri). Dars panelida muharrir bog'lanishi (`topic_view.kurs_link`).
+Tasdiqlash / yuborish: darsning muharrirdagi nusxasida ochiq to'xtatuvchi izoh bo'lsa — 409 (`override` — sabab bilan, audit). `meta.tabs` boshida `fanlar`.
+
 **Dars ekrani:** darslar ro'yxati (haqiqiy nom + sodda holat: Bo'sh / Tayyorlanmoqda / Tasdiq kutilmoqda / Tasdiqlangan; telefonda — ro'yxat `select`) →
 **bitta yuklash maydoni** («Fayllarni shu yerga tashlang» + «Fayl tanlash», bir nechta fayl, har biriga jarayon va o'zbekcha xato) + YouTube havolasi →
 to'rtta holat kartasi (Matn, Taqdimot, Video, Test va mashqlar — «Almashtirish» / «Olib tashlash»; reja, rasm, jadval, adabiyot, topshiriq soni Matn

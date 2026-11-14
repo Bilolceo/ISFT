@@ -58,8 +58,7 @@ Shu ikkisi bo'lmasa bo'lim namuna ma'lumotni «jonli» qilib ko'rsatadi — rahb
 | `ops` | Talabalar navbati | Talabalar markazi: qoidalar bo'yicha holatlar va ijrochilar navbati. | Registrator ofisi · manba: HEMIS (hali ulanmagan) |
 | `masofaviy` | Masofaviy ta'lim | LMS faolligi va o'quv kontenti monitoringi. | Masofaviy ta'lim bo'limi · manba: NEXTID LMS |
 | `testbank` | Test bank | Mavzu testlari va oraliq nazorat banklari. | Masofaviy ta'lim bo'limi |
-| `paket` | Dars tayyorlash | Bir ekranda dars: mavzu manbalari, taqdimot, video va test → SCORM / xAPI paket. | Masofaviy ta'lim bo'limi |
-| `kurs` | Kurs muharriri | Bloklardan kurs (Articulate Rise o'rniga): darslar, interaktiv bloklar, test → xAPI / SCORM; Rise importi. | Masofaviy ta'lim bo'limi |
+| `paket` | Dars tayyorlash | Fan → NEXTID darslari (L/A): shablon bo'yicha avtomatik yig'ish va bloklar muharriri (Rise o'rniga), izohlar, AI → SCORM / xAPI. «Kurs muharriri» (`kurs`) — shu bo'limning qismi: alohida kalit yo'q, `ALIASES = {"kurs": "paket"}` (docs/dars.md). | Masofaviy ta'lim bo'limi |
 | `taqdimot` | Taqdimot | O'qituvchi materialidan ISFT shablonida taqdimot. | Kafedralar |
 | `service` | Nosozliklar va murojaatlar | QR orqali nosozlik arizalari va xarid so'rovlari; «Murojaatlar» yorlig'i — «Talabalar navbati», «Tadbir qatnashuvi» — «Yoshlar ishlari» yoqilganda. | Xo'jalik bo'limi, AT bo'limi, Xarid bo'limi |
 
