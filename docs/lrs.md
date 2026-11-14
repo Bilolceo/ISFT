@@ -73,7 +73,7 @@ Rad etilgan yozish urinishlari (401/403/409) audit jurnaliga yoziladi (`resource
    («Ortda qolganlar» → talaba darslari → «Havola»).
    - Paket uchun — `course_ref="dl:<masofaviy kurs id>"`, `lesson_ref="L3"` / `"A12"`.
    - Kurs muharriri uchun — `course_ref="ku:<id>"`, dars ko'rsatilmaydi.
-2. Havola `/xapi/l/<kod>` — imzolangan, 150 kun. Ichida faqat taxallus va kurs bor. Eslatma xabarida keyingi darsga havola shu formatda.
+2. Havola `/xapi/l/<kod>` — imzolangan, 150 kun (talaba kabinetidan ochilganda — 2 soat). Ichida faqat taxallus va kurs bor. Eslatma xabariga bunday havola YOZILMAYDI (kirishsiz ochiladi) — xabarda kabinetdagi «Mening darslarim» havolasi.
 3. Ochilganda — yangi token va 302:
    `/xapi/pkg/<kod>/index.html?endpoint=<server>/xapi/&auth=Basic…&actor={account}&registration=<uuid5>&activity_id=<IRI>`.
 4. Fayllar eksport zip'i ichidan beriladi:
@@ -196,7 +196,7 @@ Har so'rov audit jurnaliga yoziladi (`resource='lrs'`), rad etilganlari ham.
 
 - **Tyutorga biriktirish.** «Topshiriqlar» tizimida (`app/directives.py`, `src='lrs:<amal id>'`) tyutorga vazifa yaratiladi: muddat — 3 ish
   kuni, yuqori xavfda «muhim». Vazifa tyutorning «Mening vazifalarim»ida chiqadi, kartasi `/api/dir/<id>`.
-- **Eslatma.** Talabalar markazining chiqish navbatiga (`ops_notices`, «navbatda») yoziladi. SMS / Telegram shlyuzi ulanganda yuboriladi.
+- **Eslatma.** Talabalar markazining chiqish navbatiga (`ops_notices`) yoziladi va Telegram kanalida darhol bot orqali yetkaziladi (`app/talaba_darslar.deliver`): talaba kabinetda Telegram'ni ulagan bo'lsa — «yuborildi»; ulanmagan — «navbatda» («Telegram ulanmagan», talaba ulanganda yuboriladi); `TELEGRAM_BOT_TOKEN` yo'q — «navbatda» (bot o'chiq); xato — «xato». Har urinish `notice_delivery` jurnalida, holat `lrs_actions.note`da va «Ortda qolganlar» ro'yxatida. Xodim qisqa shaxsiy izoh qo'shishi mumkin (≤ 300 belgi). SMS — shlyuz ulanganda.
   Matnda — kechikish va (paket bo'lsa) keyingi darsga shaxsiy havola.
 - Hammasi `lrs_actions` va audit jurnalida.
 
@@ -226,9 +226,9 @@ bir xil noto'g'ri variantni tanlaydi.
 
 - NEXTID launch parametrlarini bermaguncha, NEXTID ichida ochilgan darslar natijasi kelmaydi — so'rov yuborilishi kerak
   (`docs/nextid_xapi_sorov.md`).
-- Talaba kabinetida (`/talaba`) havolalar ro'yxati hali yo'q — havolani bo'lim beradi yoki eslatma xabarida keladi.
+- Talaba kabinetida «Mening darslarim» (`/talaba#darslarim`) — faqat tasdiqlangan paketlar (yoki muharrirda tasdiqlangan va eksport qilingan kurs) ochiladi (`docs/talaba-kabineti.md`).
 - Statement oqimi: `more` (sahifalash) yo'q — `limit` ≤ 500.
 - Agent profili va Activity profili API'lari yo'q.
 - Cheklovlar jarayon xotirasida — bir nechta server nusxasida umumiy emas.
-- Eslatma — navbatga yoziladi, haqiqiy SMS/Telegram yuborish shlyuz ulanganda.
+- Eslatma: Telegram — bot orqali (talaba ulagan bo'lsa); SMS shlyuzi hali yo'q — navbatda qoladi.
 - Tyutorlar hozir faqat kunduzgi guruhlarga biriktirilgan (`tutor_groups`). Masofaviy talabalar tyutorga bo'lim biriktirgandan keyin ko'rinadi.

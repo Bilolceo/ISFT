@@ -126,8 +126,41 @@ def user_by_tg(tg_id):
     u = db.one(con, "SELECT * FROM users WHERE telegram_id=?", (tg_id,))
     return u if still_linked(u) else None
 
-async def start(update: Update, _: ContextTypes.DEFAULT_TYPE):
+# ---------- talabalar: bir martalik kod bilan ulanish (app/talaba_darslar.py) ----------
+_STUDENT_CODE = re.compile(r"^[A-Za-z0-9]{8}$")
+
+async def student_link(update: Update, code: str) -> bool:
+    """Talaba kabinetidagi bir martalik kod (8 belgi, 10 daqiqa, bitta ishlatish). Xato urinishlar — TG_LIMIT bilan cheklangan."""
+    from . import talaba_darslar as TD
+    tg = update.effective_user.id
+    wait = TG_LIMIT.wait_min(tg)
+    if wait:
+        await update.message.reply_text(f"⛔ Juda ko'p noto'g'ri urinish. {wait} daqiqadan keyin qayta urinib ko'ring."); return True
+    r = await asyncio.to_thread(TD.link_student, con, tg, code)
+    if not r["ok"]:
+        TG_LIMIT.fail(tg)
+        await update.message.reply_text("Kod noto'g'ri, muddati o'tgan yoki allaqachon ishlatilgan. Talaba kabinetida («Mening darslarim» → Telegram eslatmalari) yangi kod oling.")
+        return True
+    TG_LIMIT.reset(tg)
+    n = await asyncio.to_thread(TD.flush_student, con, r["student_id"])
+    await update.message.reply_text("✅ Talaba kabineti Telegram'ga ulandi. Masofaviy darslar bo'yicha eslatmalar shu yerga keladi."
+                                    + (f"\nNavbatdagi eslatmalar yuborildi: {n} ta." if n else "") + "\nUzish: /chiqish")
+    return True
+
+async def student_reply(update: Update, sid: int):
+    from . import talaba_darslar as TD
+    await update.message.reply_text("Siz talaba sifatida ulangansiz — bu yerga masofaviy darslar bo'yicha eslatmalar keladi.\n"
+                                    f"Darslaringiz: {TD.cabinet_url()} (talaba kabineti → «Mening darslarim»).\nUzish: /chiqish")
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = getattr(context, "args", None) or []
+    if args and _STUDENT_CODE.match(args[0] or ""):          # t.me/<bot>?start=<KOD> — talaba kabinetidan
+        await student_link(update, args[0]); return
     u = user_by_tg(update.effective_user.id)
+    if not u:
+        from . import talaba_darslar as TD
+        sid = TD.student_by_tg(con, update.effective_user.id)
+        if sid: return await student_reply(update, sid)
     if u:
         await update.message.reply_text(f"Siz {rbac.ROLES[u['role']].title} sifatida ulangansiz.\nSavol bering yoki /brifing, /topshiriqlar buyruqlaridan foydalaning.")
         return
@@ -136,7 +169,9 @@ async def start(update: Update, _: ContextTypes.DEFAULT_TYPE):
                                     "(Parol o'zgartirilgan yoki tiklangan bo'lsa, ulanish uziladi — yangi parol bilan qayta ulaning.)")
 
 async def logout(update: Update, _):
+    from . import talaba_darslar as TD
     con.execute("UPDATE users SET telegram_id=NULL WHERE telegram_id=?", (update.effective_user.id,)); con.commit()
+    TD.unlink_tg(con, update.effective_user.id)
     await update.message.reply_text("Hisob uzildi. Qayta ulanish uchun kod va parol yuboring.")
 
 async def try_link(update: Update, text: str) -> bool:
@@ -172,6 +207,11 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text or ""
     u = user_by_tg(update.effective_user.id)
     if not u:
+        from . import talaba_darslar as TD
+        sid = TD.student_by_tg(con, update.effective_user.id)
+        if sid: return await student_reply(update, sid)          # talaba — AI yordamchi va xodim buyruqlari yo'q
+        if _STUDENT_CODE.match(text.strip()):
+            await student_link(update, text.strip()); return
         if not await try_link(update, text):
             await update.message.reply_text("Avval ulaning: lavozim kodi va parolni bitta xabarda yuboring (KOD parol).")
         return

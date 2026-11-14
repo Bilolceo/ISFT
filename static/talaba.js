@@ -75,7 +75,7 @@
     { k: "malumotnoma", t: "Ma'lumotnoma so'rash", s: "Ma'lumotnoma", i: "cert", f: pCert },
     { k: "profil", t: "Profil", s: "Profil", i: "profile", f: pProfile },
   ];
-  const BOTTOM = ["bosh", "baholar", "davomat", "imtihonlar"];
+  let BOTTOM = ["bosh", "baholar", "davomat", "imtihonlar"];
   let ME = null, timers = [];
 
   // ---------------------------------------------------------------- kirish
@@ -143,8 +143,9 @@
   function renderShell() {
     $("#tk-who").innerHTML = `${esc(ME.name)}<small>${esc(ME.group)} · ${esc(ME.course)}-kurs · HEMIS ${esc(ME.hemis_id)}</small>`;
     $("#tk-side-sub").textContent = ME.group + " · " + ME.course + "-kurs";
+    BOTTOM = ME.study_form === "masofaviy" && PAGES.some((x) => x.k === "darslarim") ? ["bosh", "darslarim", "baholar", "imtihonlar"] : ["bosh", "baholar", "davomat", "imtihonlar"];
     /* menyu guruhlari: O'qish · Hujjat va to'lov · Hayot · Profil (kengaytma sahifalar ham k bo'yicha joylashadi) */
-    const GRP = [["", ["bosh"]], ["O'qish", ["baholar", "reyting", "davomat", "otrabotka", "imtihonlar", "apellyatsiya"]],
+    const GRP = [["", ["bosh"]], ["O'qish", ["darslarim", "baholar", "reyting", "davomat", "otrabotka", "imtihonlar", "apellyatsiya"]],
                  ["Hujjat va to'lov", ["malumotnoma", "kontrakt"]], ["Hayot", ["turarjoy", "tadbirlar", "amaliyot", "xalqaro"]], ["Profil", ["profil"]]];
     const known = new Set(GRP.flatMap((g) => g[1]));
     const link = (p) => `<a href="#${p.k}" data-p="${p.k}">${ico(p.i)}<span>${esc(p.t)}</span></a>`;

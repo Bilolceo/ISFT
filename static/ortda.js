@@ -92,10 +92,11 @@ async function orStudents(box) {
 function orActs(a) {
   if (!a || !Object.keys(a).length) return "";
   const L = {tyutor: "tyutorga biriktirilgan", eslatma: "eslatma yuborilgan", boglanildi: "bog'lanildi"};
-  return `<div class="or-hist">${Object.entries(a).map(([k, x]) => `<span title="${esc(x.n)} marta">${esc(L[k] || k)} ${dlD(x.ts)}</span>`).join("")}</div>`;
+  const DV = {yuborildi: "Telegram'ga yetkazildi", ulanmagan: "Telegram ulanmagan — navbatda", bot_ochiq: "bot ulanmagan — navbatda", xato: "yuborishda xato — navbatda"};
+  return `<div class="or-hist">${Object.entries(a).map(([k, x]) => `<span title="${esc(x.n)} marta">${esc(L[k] || k)} ${dlD(x.ts)}${x.delivery ? ` · <i class="${x.delivery === "yuborildi" ? "" : "dl-bad"}">${esc(DV[x.delivery] || x.delivery)}</i>` : ""}</span>`).join("")}</div>`;
 }
 function orRowBtns(r) {
-  const M = OQ.meta, k = `data-sid="${r.student_id}" data-c="${esc(r.course_ref)}" data-n="${esc(r.full_name)}"`;
+  const M = OQ.meta, k = `data-sid="${r.student_id}" data-c="${esc(r.course_ref)}" data-n="${esc(r.full_name)}" data-tg="${r.telegram ? 1 : r.telegram === false ? 0 : ""}"`;
   return `<div class="or-btns">${M.caps.assign ? `<button type="button" class="btn sm" data-as ${k}>Tyutorga</button>` : ""}
     ${M.caps.remind ? `<button type="button" class="btn sm ghost" data-rm ${k}>Eslatma</button>` : ""}
     ${M.caps.contacted ? `<button type="button" class="btn sm ghost" data-ct ${k}>Bog'lanildi</button>` : ""}</div>`;
@@ -104,13 +105,16 @@ function orBindActs(root, items, after) {
   const done = () => after ? after() : renderOrtda(OQ.tab);
   root.querySelectorAll("[data-as]").forEach(b => b.onclick = () => orAssign(+b.dataset.sid, b.dataset.c, b.dataset.n, done));
   root.querySelectorAll("[data-rm]").forEach(b => b.onclick = () => dlModal(`Eslatma: ${b.dataset.n}`, `
-      <p class="muted">Xabar Talabalar markazining chiqish navbatiga yoziladi (SMS / Telegram shlyuzi ulanganda yuboriladi). Bitta talabaga ${OQ.meta.policy.remind_cooldown_days} kunda
-      bir marta; xabarda keyingi darsga shaxsiy havola bo'ladi (paket eksport qilingan bo'lsa).</p>
-      <label>Kanal<select id="orCh">${Object.entries(OQ.meta.channels).map(([k, l]) => `<option value="${k}">${esc(l)}</option>`).join("")}</select></label>`,
+      <p class="muted">Telegram: talaba kabinetda Telegram'ni ulagan bo'lsa — bot orqali darhol yuboriladi; ulanmagan bo'lsa — xabar navbatda qoladi va talaba
+      ulanganda yuboriladi. SMS — shlyuz ulanganda. Bitta talabaga ${OQ.meta.policy.remind_cooldown_days} kunda bir marta. Xabarda «Mening darslarim» (talaba kabineti)
+      havolasi bo'ladi — kirishsiz ochiladigan havola yuborilmaydi.</p>
+      ${b.dataset.tg === "0" ? `<p class="dl-bad">Telegram ulanmagan — xabar navbatda qoladi.</p>` : b.dataset.tg === "1" ? `<p class="muted">Telegram ulangan ✓</p>` : ""}
+      <label>Kanal<select id="orCh">${Object.entries(OQ.meta.channels).map(([k, l]) => `<option value="${k}">${esc(l)}</option>`).join("")}</select></label>
+      <label>Shaxsiy izoh (ixtiyoriy, xabarga qo'shiladi)<textarea id="orRn" rows="2" maxlength="300" placeholder="Masalan: shu hafta L4 va A7 ni tugating, savol bo'lsa yozing"></textarea></label>`,
     async m => {
-      const r = await dlApi("/api/ortda/remind", {student_id: +b.dataset.sid, course_ref: b.dataset.c, channel: m.querySelector("#orCh").value});
+      const r = await dlApi("/api/ortda/remind", {student_id: +b.dataset.sid, course_ref: b.dataset.c, channel: m.querySelector("#orCh").value, note: m.querySelector("#orRn").value});
       if (!r) return false;
-      toast(`Eslatma navbatga yozildi (${r.channel})`); done(); return true;
+      toast(`Eslatma: ${r.delivery_label || r.channel}`); done(); return true;
     }, "Yuborish"));
   root.querySelectorAll("[data-ct]").forEach(b => b.onclick = () => dlModal(`Bog'lanildi: ${b.dataset.n}`, `
       <label>Izoh (ixtiyoriy)<textarea id="orNt" rows="3" maxlength="500" placeholder="Masalan: telefon orqali gaplashildi, kasal bo'lgan — hafta oxirigacha yetib oladi"></textarea></label>`,
@@ -152,7 +156,7 @@ async function orStudent(sid, cref) {
       ${d.actions.length ? `<h4>Amallar tarixi</h4><ul class="or-log">${d.actions.map(a => `<li>${dlD(a.ts)} ${esc(String(a.ts).slice(11, 16))} — <b>${esc({tyutor: "tyutorga biriktirildi", eslatma: "eslatma", boglanildi: "bog'lanildi"}[a.kind] || a.kind)}</b>
           · ${esc(a.user_name || "")}${a.note ? ` · ${esc(a.note)}` : ""}${a.task_id ? ` · topshiriq #${a.task_id}` : ""}</li>`).join("")}</ul>` : ""}
       <div id="orLink"></div>
-      ${M.caps.remind || M.caps.assign ? orRowBtns({student_id: sid, course_ref: cref, full_name: d.student.full_name}) : ""}`, null, "", true);
+      ${M.caps.remind || M.caps.assign ? orRowBtns({student_id: sid, course_ref: cref, full_name: d.student.full_name, telegram: d.student.telegram}) : ""}`, null, "", true);
   orBindActs(bg, [], () => { bg.remove(); renderOrtda(OQ.tab); });
   bg.querySelectorAll("[data-ln]").forEach(b => b.onclick = async () => {
     const r = await dlApi("/api/lrs/launch-link", {student_id: sid, course_ref: cref, lesson_ref: cref.startsWith("dl:") ? b.dataset.ln : ""});

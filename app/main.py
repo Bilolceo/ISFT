@@ -521,6 +521,10 @@ LRS.bind(con, ctx)
 app.include_router(LRS.router)
 ORT.bind(con, ctx)
 app.include_router(ORT.router)
+from . import talaba_darslar as TDR   # Talaba kabineti: «Mening darslarim» (launch), talaba Telegram ulanishi, eslatmani bot orqali yetkazish
+TDR.init(con)
+TDR.bind(con)
+app.include_router(TDR.router)
 from . import moliya as MOL   # Moliya: to'lovlar reyestri (qo'lda), kunlik solishtirish, byudjet ijrosi, xarajat tasdig'i, xarid moliyalashtirish, oylik hisobotlar
 MOL.init(con)
 MOL.bind(con, ctx)

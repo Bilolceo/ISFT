@@ -42,3 +42,7 @@
   .ds-a{grid-column:1 / -1;justify-content:flex-start}
 }
 @media (prefers-reduced-motion:reduce){.ds-prog i{transition:none}}
+/* paket → muharrir qayta sinxronlash: «Yangi fayllar bor» */
+.ds-rs{border-color:color-mix(in srgb,var(--teal) 45%,var(--line));background:color-mix(in srgb,var(--teal) 8%,var(--surface))}
+.ds-rs[hidden]{display:none}
+.ds-rs-l{margin:10px 0 0;padding-left:18px;font-size:13px;line-height:1.6}

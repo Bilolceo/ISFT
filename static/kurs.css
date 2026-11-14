@@ -352,3 +352,30 @@ textarea.ku-in{resize:vertical;line-height:1.5}
 .ku-cm-a input{flex:1 1 140px;min-width:0}
 .ku-ul{margin:8px 0;padding-left:18px;font-size:13px;line-height:1.55}
 @media (max-width:640px){.ku-cm{right:8px;left:8px;width:auto;top:64px;bottom:8px}}
+/* kurslar ro'yxati: fan bo'yicha guruhlar («Dars tayyorlash» bilan bog'langan) va «Mustaqil kurslar» */
+.ku-filt{display:flex;flex-wrap:wrap;gap:8px;align-items:center;min-width:0;max-width:100%}
+.ku-filt .ku-in{width:auto;max-width:min(100%,320px)}
+.ku-grps{display:flex;flex-direction:column;gap:10px}
+.ku-grps-h{margin:0 0 2px;font-size:14px;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.ku-grps-h small{font-weight:500;font-size:12.5px}
+.ku-grp{border:1px solid var(--card-brd);border-radius:16px;background:var(--surface);overflow:hidden}
+.ku-grp-h{display:flex;align-items:center;gap:10px;width:100%;border:0;background:transparent;font:inherit;color:inherit;text-align:left;padding:12px 14px;cursor:pointer;flex-wrap:wrap}
+.ku-grp-h:focus-visible{outline:2px solid var(--teal);outline-offset:-2px}
+.ku-grp-c{display:inline-grid;place-items:center;transition:transform .15s;transform:rotate(-90deg);color:var(--muted)}
+.ku-grp.open .ku-grp-c{transform:none}
+.ku-grp-t{flex:1 1 180px;min-width:0;display:flex;flex-direction:column;gap:2px}
+.ku-grp-t b{font-size:15px;line-height:1.3}
+.ku-grp-t small{font-size:12px}
+.ku-grp-n{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+.ku-grp-b{display:none;padding:0 12px 12px}
+.ku-grp.open .ku-grp-b{display:block}
+.ku-rows{display:flex;flex-direction:column;gap:6px}
+.ku-row-c{display:flex;align-items:center;gap:10px;width:100%;text-align:left;border:1px solid var(--line);border-left:4px solid var(--acc);border-radius:12px;background:var(--surface-2);font:inherit;color:inherit;padding:8px 10px;cursor:pointer;min-width:0}
+.ku-row-c:hover{background:var(--surface)}
+.ku-row-c:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+.ku-row-code{font-weight:800;font-size:13px;min-width:38px;color:var(--acc)}
+.ku-row-t{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.ku-row-t b{font-size:14px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ku-row-t small{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media (max-width:640px){.ku-filt,.ku-filt .ku-in,.ku-filt .ku-search{width:100%;max-width:100%}.ku-grp-n{width:100%;padding-left:26px}.ku-row-c{flex-wrap:wrap}.ku-row-t{flex-basis:calc(100% - 50px)}}
+@media (prefers-reduced-motion:reduce){.ku-grp-c{transition:none}}

@@ -226,7 +226,8 @@ function dsTopicBar(d, W) {
   return `<div class="ds-bar">${ico("layers", 15)}<span>${k ? `Muharrirda nusxasi bor (${esc(k.status === "tasdiqlangan" ? "tasdiqlangan" : k.status === "korib_chiqishda" ? "ko'rib chiqishda" : "qoralama")}) ·
       eksport uchun ustun manba — <b>${k.authority === "kurs" ? "muharrir" : "shu yerdagi shablon (paket)"}</b>${k.blocking ? ` · <b class="pk-bad">${k.blocking} ta to'xtatuvchi izoh</b>` : ""}`
       : "Darsni bloklardan erkin tahrirlash: akkordeon, kartochkalar, bilimni tekshirish — Rise kabi"}</span>
-    <button type="button" class="btn sm ${k ? "" : "primary"}" id="dsTk">${k ? "Muharrirda ochish" : "Muharrirda tahrirlash"}</button></div>`;
+    <button type="button" class="btn sm ${k ? "" : "primary"}" id="dsTk">${k ? "Muharrirda ochish" : "Muharrirda tahrirlash"}</button></div>
+    ${k && W ? `<div class="ds-bar ds-rs" id="dsRs" hidden></div>` : ""}`;
 }
 function dsTopicBind(el, d) {
   el.querySelector("#dsTk")?.addEventListener("click", async e => {
@@ -235,4 +236,30 @@ function dsTopicBind(el, d) {
     const r = await pkApi(`/api/dars/subjects/${PK.cid}/lessons/${PK.topic}/convert`, {});
     if (r) go("kurs", {cid: r.ku_course_id}); else e.currentTarget && (e.currentTarget.disabled = false);
   });
+  if (el.querySelector("#dsRs")) dsResyncCheck(el, PK.cid, PK.topic);
+}
+/* paket → muharrir qayta sinxronlash: o'tkazilgandan keyin paketga yangi / o'zgargan fayllar — «Yangi fayllar bor» → «Muharrirga qo'shish» */
+async function dsResyncCheck(el, cid, key) {
+  const box = el.querySelector("#dsRs"); if (!box) return;
+  const url = `/api/dars/subjects/${cid}/lessons/${key}/resync`;
+  const r = await pkApi(url).catch(() => null);
+  if (!r || !box.isConnected || PK.cid !== cid || PK.topic !== key) return;
+  if (!r.pending) { box.hidden = true; return; }
+  const parts = [r.add ? `${r.add} ta blok qo'shiladi` : "", r.update ? `${r.update} ta yangilanadi` : "", r.remove ? `${r.remove} ta ortiqcha shablon bloki olinadi` : ""].filter(Boolean);
+  box.innerHTML = `${ico("upload", 15)}<span><b>Yangi fayllar bor</b> — muharrirga o'tkazilgandan keyin paket o'zgargan
+      (${esc(r.slots.map(s => s.label).join(", "))}): ${esc(parts.join(", "))}; muallif bloklari (${r.author} ta) tegilmaydi${r.conflict ? ` · muharrirda o'zgartirilgan bandlar ham tegilmaydi: ${esc(r.conflicts.join(", "))}` : ""}</span>
+    <button type="button" class="btn sm primary" id="dsRsGo">Muharrirga qo'shish</button>`;
+  box.hidden = false;
+  box.querySelector("#dsRsGo").onclick = () => {
+    pkModal("Muharrirga qo'shish", `<p class="pk-note" style="margin-top:0">Paketdagi yangi / o'zgargan mazmun muharrir kursidagi shablon bloklariga yoziladi. Oldin kurs versiyaga saqlanadi («Versiyalar»dan qaytarish mumkin).</p>
+      <ul class="ds-rs-l">${r.slots.map(s => `<li><b>${esc(s.label)}</b> — ${[s.add ? `+${s.add} qo'shiladi` : "", s.update ? `~${s.update} yangilanadi` : "", s.remove ? `−${s.remove} olinadi` : ""].filter(Boolean).join(", ")}</li>`).join("")}</ul>
+      <p class="pk-note"><b>Jami:</b> ${r.add} ta blok qo'shiladi, ${r.update} ta yangilanadi${r.remove ? `, ${r.remove} ta olinadi` : ""}. <b>Muallif bloklari (${r.author} ta) o'zgarmaydi.</b>
+      ${r.conflict ? `<br>Muharrirda qo'lda o'zgartirilgan bandlar ustidan yozilmaydi: ${esc(r.conflicts.join(", "))}.` : ""}</p>`,
+      async () => {
+        const x = await pkApi(url, {preview: false});
+        if (!x) return false;
+        toast(x.applied ? `Muharrirga qo'shildi: +${x.add} ~${x.update}${x.remove ? ` −${x.remove}` : ""} · muallif bloklari tegilmadi` : "Yangilanadigan narsa yo'q");
+        box.hidden = true; return true;
+      }, "Muharrirga qo'shish");
+  };
 }

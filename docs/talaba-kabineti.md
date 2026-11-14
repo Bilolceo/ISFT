@@ -36,6 +36,24 @@ Kod: `app/student_portal.py`, `static/talaba.html|js|css`, test: `tests/test_tal
 | Ma'lumotnoma | o'qish joyidan ma'lumotnoma (o'zbek yoki ingliz tilida) so'rash, holatini ko'rish, tayyor bo'lgach yuklab olish |
 | Profil | ma'lumotlar (telefon qisman yashirilgan), parolni almashtirish, faol sessiyalar va ularni yopish |
 
+## Mening darslarim (`app/talaba_darslar.py`, `static/talaba_darslar.js`)
+
+Masofaviy talaba uchun (guruh — masofaviy, kurs yo'nalishi va bosqichi guruhniki bilan bir xil — «Ortda qolganlar» bilan bir xil qoida):
+
+- Kurslar va darslar NEXTID tartibida (L, keyin A, S, Lab, MT). Har darsda holat (`lrs_progress`: boshlanmagan / jarayonda N % / testdan o'tmadi /
+  yakunlandi / o'tdi · ball), taqvim belgisi («Kechikkan» — taqvim bo'yicha kutilgan, lekin bajarilmagan; «Bu hafta» — shu hafta chiqarilgan), jami
+  progress (bajarilgan / kutilgan / ortda) va keyingi tavsiya etilgan dars.
+- «Ochish» / «Davom etish» — `POST /api/talaba/darslar/launch {course_ref, lesson}` → `/xapi/l/<kod>` (2 soatlik havola, keyin mavjud launch tokeni).
+  Faqat o'z kursidagi **tasdiqlangan** paket (yoki ustun manbasi muharrir bo'lsa — muharrirda tasdiqlangan va eksport qilingan kurs) ochiladi; aks
+  holda 404 va audit. Tasdiqlanmagan va boshlanmagan darslar ro'yxatda ko'rinmaydi; birorta dars tasdiqlanmagan kurs — «Tayyorlanmoqda».
+- Resume: registration talaba × kurs bo'yicha barqaror — State API holati keyingi ochilishda tiklanadi.
+- Telegram eslatmalari: «Ulash kodini olish» → bir martalik kod (8 belgi, 10 daqiqa, bitta ishlatish, soatiga 5 ta, bazada faqat xesh) → botga
+  `/start KOD` (yoki `t.me/<bot>?start=KOD`) yoki kodning o'zi. Parol almashtirilsa ulanish uziladi (xodimlar kabi). Ulangan talabaga bot faqat
+  eslatma yuboradi (AI yordamchi va xodim buyruqlari yo'q); `/chiqish` — uzish. Ulanganda navbatdagi (14 kun) eslatmalar yuboriladi.
+- API: `GET /api/talaba/darslar`, `POST /api/talaba/darslar/launch`, `GET /api/talaba/telegram`, `POST /api/talaba/telegram/code`,
+  `POST /api/talaba/telegram/unlink`. Jadvallar: `student_tg`, `student_tg_codes`, `notice_delivery`. Test: `tests/test_talaba_darslar.py`
+  (brauzer — `tools/talaba_darslar_check.js`).
+
 ## Murojaatlar (`student_requests`)
 
 Ikki turdagi murojaat bor. Kunduzgi va masofaviy talabalarniki **Registrator ofisi** navbatiga tushadi (boshliq #17, xodim #43),

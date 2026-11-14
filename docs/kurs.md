@@ -65,7 +65,10 @@ kursning mos turdagi fayli; noto'g'ri qiymatlar standartga keltiriladi (avtosaql
 
 ## Muharrir (`static/kurs.js`)
 
-Kurslar ro'yxati (holat bo'yicha, qidiruv) → kurs: chapda darslar (sudrab yoki ↑ ↓ bilan tartiblash, «+ Dars», «+ Test»), markazda dars — bloklar
+Kurslar ro'yxati (holat bo'yicha, qidiruv — kurs, muallif yoki fan nomi; fan tanlash) — «Dars tayyorlash» bilan bog'langan kurslar (`ds_links`: fan skeleti,
+paketdan o'tkazish) **fan bo'yicha yig'iladigan guruhlarda** (sarlavhada kurslar soni va holatlar bo'yicha sonlar; ichida dars kodi tartibida — L1..Ln, A1..),
+bog'lanmaganlari — **«Mustaqil kurslar»** bo'limida; guruh ochiq/yopiqligi har foydalanuvchi uchun brauzerda (`localStorage`) eslab qolinadi, filtr
+qo'llanganda guruhlar ochiladi (`GET /courses?q&status&fan` → `items`, `groups`, `standalone`, `fans`; ko'lam o'zgarmagan) → kurs: chapda darslar (sudrab yoki ↑ ↓ bilan tartiblash, «+ Dars», «+ Test»), markazda dars — bloklar
 orasidagi **«+»** → blok kutubxonasi (toifalar, qidiruv), joyida tahrirlash (boy matn paneli: qalin, kursiv, havola, ro'yxat), blok asboblari
 (↑ ↓ sudrash, sozlamalar, nusxa, o'chirish → «Bekor qilish»), o'ngda tanlangan blok sozlamalari (1280 px dan tor ekranda — chiquvchi panel).
 Test darsi: o'tish bali, urinishlar, savollar banki (N ta), aralashtirish, to'g'ri javobni ko'rsatish siyosati, «Test bankdan» (faqat tasdiqlangan).

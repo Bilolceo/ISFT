@@ -58,6 +58,8 @@ CREATE INDEX IF NOT EXISTS ix_ds_tpl ON ds_templates(tkey, version);
 CREATE TABLE IF NOT EXISTS ds_links(dl_course_id INT, lkey INT, ku_course_id INT, authority TEXT DEFAULT 'kurs', tpl_id INT, src TEXT,
   created_at TEXT, created_by TEXT, updated_at TEXT, PRIMARY KEY(dl_course_id, lkey));
 CREATE INDEX IF NOT EXISTS ix_ds_links_k ON ds_links(ku_course_id);
+CREATE TABLE IF NOT EXISTS ds_sync(dl_course_id INT, lkey INT, ku_course_id INT, sig TEXT, slots TEXT, synced_at TEXT, synced_by TEXT, n INT DEFAULT 0,
+  PRIMARY KEY(dl_course_id, lkey));
 CREATE TABLE IF NOT EXISTS ds_comments(id INTEGER PRIMARY KEY, course_id INT, lesson_id INT, block_uid TEXT, parent_id INT, user_id INT, user_name TEXT,
   role TEXT, text TEXT, blocking INT DEFAULT 0, mention_author INT DEFAULT 0, status TEXT DEFAULT 'ochiq', ts TEXT, resolved_by TEXT, resolved_at TEXT,
   deleted INT DEFAULT 0);
@@ -570,6 +572,10 @@ def convert_lesson(c: Ctx, dl_cid: int, key: int) -> dict:
     g = PK.gather(dl_cid, key, co, st, les)
     tpl = template_for(co.get("department_id"))
     r = _create_linked(c, co, les, tpl, "paket", built=lambda kcid: blocks_from_gather(g, _Copier(c, kcid, g["files"])))
+    try:      # o'tkazish vaqtidagi paket holati (bandlar barmoq izi) — keyingi «Yangi fayllar bor» shu bilan solishtiriladi
+        _record_sync(c, dl_cid, key, r["ku_course_id"], les, g, tpl, n=0)
+    except Exception as e:
+        print("dars.convert: sync yozuvi:", repr(e))
     _audit(c, "paket muharrirga o'tkazildi", f"kurs #{dl_cid} · {les['code']} → ku #{r['ku_course_id']} · {r['blocks']} blok")
     return {"ok": True, "created": True, "authority": "kurs", **r}
 
@@ -581,6 +587,206 @@ def set_authority(c: Ctx, dl_cid: int, key: int, authority: str) -> dict:
         _con.execute("UPDATE ds_links SET authority=?, updated_at=? WHERE dl_course_id=? AND lkey=?", (authority, _now(), dl_cid, key)); _con.commit()
     _audit(c, "eksport manbai", f"kurs #{dl_cid} · {PK.lesson_code(key)} → {authority}")
     return {"ok": True, "authority": authority}
+
+
+# =============================================================================================
+# 2b. Paket → muharrir: qayta sinxronlash («Yangi fayllar bor» → «Muharrirga qo'shish»)
+#     O'tkazish (va har sinxronlash) vaqtida har shablon bandi uchun ds_sync.slots[kalit] = {fp: paket mazmuni barmoq izi, ed: muharrirdagi shablon
+#     bloklari xeshi} yoziladi. Keyin paket o'zgarsa: bandning bloklari yo'q / bo'sh (to'ldirilmagan) — «fill»; muharrirda o'zgartirilmagan — «update»
+#     (o'sha uid'lar joyida yangilanadi, yetmagani shablon o'rnida qo'shiladi); muallif o'zgartirgan — «conflict» (tegilmaydi). Muallif bloklari
+#     (shablon uid'i emas) hech qachon o'zgarmaydi / o'chmaydi. Yakuniy test darsi savollari va statik bandlar (bo'lim sarlavhasi …) — sinxronlanmaydi.
+# =============================================================================================
+SYNC_SKIP = STATIC + ("quiz",)
+SYNC_ACT = ("fill", "update")
+
+def _h(x) -> str: return hashlib.sha1(json.dumps(x, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")).hexdigest()[:24]
+def _gh(group: list[dict]) -> str: return _h([[b["type"], b["data"]] for b in group])
+
+class _FpCopier(_Copier):
+    """Barmoq izi uchun: fayl ko'chirilmaydi — o'rniga barqaror belgi «fp:<zip yo'li>|<fayl nomi:o'lcham:vaqt | sha>»."""
+    def __init__(self, files: dict): super().__init__(None, 0, files)
+    def _tok(self, rel):
+        v = self.files.get(rel)
+        if v is None: return None
+        if isinstance(v, PK.BigFile): ident = f"{v.path.name}:{v.sha256 or v.size}"
+        elif isinstance(v, (bytes, bytearray)): ident = hashlib.sha1(bytes(v)).hexdigest()
+        else:
+            try: p = Path(v); st = p.stat(); ident = f"{p.name}:{st.st_size}:{st.st_mtime_ns}"
+            except (OSError, TypeError): ident = str(v)
+        return f"fp:{rel}|{ident}"
+    def image(self, rel: str, name: str = "") -> str | None: return self._tok(rel)
+    def file(self, rel: str, kind: str, name: str = "") -> str | None: return self._tok(rel)
+
+class _PickCopier(_Copier):
+    """Faqat yangilanadigan bandlar fayllari ko'chiriladi (qolganlari — None; ular ishlatilmaydi)."""
+    def __init__(self, c, kcid, files, allow: set): super().__init__(c, kcid, files); self.allow = allow
+    def image(self, rel: str, name: str = "") -> int | None: return super().image(rel, name) if rel in self.allow else None
+    def file(self, rel: str, kind: str, name: str = "") -> int | None: return super().file(rel, kind, name) if rel in self.allow else None
+
+def _toks(x) -> set:
+    out = set()
+    if isinstance(x, str):
+        if x.startswith("fp:"): out.add(x[3:].rsplit("|", 1)[0])
+    elif isinstance(x, dict): [out.update(_toks(v)) for v in x.values()]
+    elif isinstance(x, (list, tuple)): [out.update(_toks(v)) for v in x]
+    return out
+
+def _fp_build(g: dict) -> tuple[dict, dict]:
+    built = blocks_from_gather(g, _FpCopier(g["files"]))
+    return built, {kind: _h(v) for kind, v in built["slots"].items() if v}
+
+def _is_placeholder(group: list[dict], item: dict, heading: str) -> bool:
+    ph = [(t, _clean(t, d)) for t, d in placeholder(item, heading)]
+    return len(group) == len(ph) and all(b["type"] == t and _same(b["data"], d) for b, (t, d) in zip(group, ph))
+
+def resync_actions(blocks: list[dict], items: list[dict], fps: dict, rec: dict | None, heading: str = "") -> dict:
+    """Sof funksiya: har shablon bandi (kalit) uchun amal — fill | update | conflict | same | kept | empty.
+    fps — {band turi: hozirgi paket mazmuni barmoq izi} (mazmuni yo'q tur — yo'q); rec — oxirgi sinxronlash {kalit: {fp, ed}} yoki None (kuzatilmagan)."""
+    out = {}
+    for item in items:
+        k, kind = item["key"], item["kind"]
+        if kind in SYNC_SKIP: continue
+        fp = fps.get(kind)
+        if not fp: out[k] = "empty"; continue
+        group = [b for b in blocks if tpl_key(b["id"]) == k]
+        r = (rec or {}).get(k)
+        if r and r.get("fp") == fp: out[k] = "same"                     # paketda o'zgarish yo'q (muallif bloklarni o'chirgan bo'lsa ham — qayta qo'shilmaydi)
+        elif not group or _is_placeholder(group, item, heading): out[k] = "fill"
+        elif not r: out[k] = "kept"                                       # kuzatuv yozuvi yo'q, muharrirda mazmun bor — tegilmaydi
+        elif _gh(group) == r.get("ed"): out[k] = "update"
+        else: out[k] = "conflict"                                         # muallif shablon blokini o'zgartirgan — ustidan yozilmaydi
+    return out
+
+def resync_apply(blocks: list[dict], items: list[dict], slots: dict, actions: dict) -> tuple[list[dict], dict]:
+    """Sof funksiya: fill/update bandlarining shablon bloklari yangilanadi — mavjud uid'lar joyida almashtiriladi, yetmagani o'sha bandning oxirgi
+    blokidan keyin (bandda blok bo'lmasa — shablon tartibidagi keyingi mavjud band oldiga, bo'lmasa oxiriga) «tp<kalit><nn>…» bilan qo'shiladi,
+    ortiqchasi olib tashlanadi. Muallif bloklari va boshqa bandlar — aynan o'zi. → (yangi bloklar, {added, updated, removed, author, slots})."""
+    act = {x["key"]: x for x in items if actions.get(x["key"]) in SYNC_ACT and x["kind"] not in SYNC_SKIP}
+    used = {b["id"] for b in blocks}
+    def uid(k, j):
+        while True:
+            u = tpl_uid(k, j)
+            if u not in used: used.add(u); return u
+    groups = {}
+    for b in blocks:
+        k = tpl_key(b["id"])
+        if k is not None: groups.setdefault(k, []).append(b)
+    new = {k: list(slots.get(x["kind"]) or []) for k, x in act.items()}
+    per = {k: {"key": k, "kind": x["kind"], "label": SLOT_KINDS.get(x["kind"], x["kind"]), "action": actions[k], "add": 0, "update": 0, "remove": 0} for k, x in act.items()}
+    order = [x["key"] for x in items]
+    before, tail = {}, []
+    for k in act:
+        if groups.get(k) or not new[k]: continue
+        i = order.index(k)
+        nxt = next((k2 for k2 in order[i + 1:] if groups.get(k2)), None)
+        nb = [{"id": uid(k, j), "type": t, "data": d} for j, (t, d) in enumerate(new[k])]
+        per[k]["add"] += len(nb)
+        (before.setdefault(nxt, []) if nxt else tail).extend(nb)
+    out, seen = [], {}
+    for b in blocks:
+        k = tpl_key(b["id"])
+        if k is not None and k in before: out.extend(before.pop(k))
+        if k in act and groups.get(k):
+            i = seen.get(k, 0); seen[k] = i + 1
+            g, nw = groups[k], new[k]
+            if i < len(nw):
+                t, d = nw[i]; out.append({"id": b["id"], "type": t, "data": d}); per[k]["update"] += 1
+                if i == len(g) - 1 and len(nw) > len(g):
+                    extra = [{"id": uid(k, j), "type": t2, "data": d2} for j, (t2, d2) in enumerate(nw[len(g):], len(g))]
+                    out.extend(extra); per[k]["add"] += len(extra)
+            else:
+                per[k]["remove"] += 1
+            continue
+        out.append(b)
+    for rest in before.values(): out.extend(rest)
+    out.extend(tail)
+    diff = {"added": sum(p["add"] for p in per.values()), "updated": sum(p["update"] for p in per.values()), "removed": sum(p["remove"] for p in per.values()),
+            "author": sum(1 for b in blocks if tpl_key(b["id"]) is None), "slots": [per[k] for k in order if k in per]}
+    return out, diff
+
+def _sync_rec(dl_cid: int, key: int, kcid: int) -> dict | None:
+    r = db.one(_con, "SELECT * FROM ds_sync WHERE dl_course_id=? AND lkey=?", (int(dl_cid), int(key)))
+    if not r or r["ku_course_id"] != kcid: return None
+    return {**r, "slots": _j(r["slots"], {})}
+
+def _record_sync(c: Ctx, dl_cid: int, key: int, kcid: int, les: dict, g: dict, tpl: dict, n: int = 0, fps: dict | None = None,
+                 old: dict | None = None, acts: dict | None = None, sig: str | None = None) -> None:
+    """ds_sync yozuvi: fill/update bo'lgan va hali yozuvi yo'q bandlar — yangi {fp, ed}; qolganlari (same, conflict, empty) — eski yozuv saqlanadi
+    (aks holda muallif o'zgartirgan shablon bloki keyingi safar «o'zgartirilmagan» deb ustidan yozilardi)."""
+    if fps is None: fps = _fp_build(g)[1]
+    main = _main_lesson(kcid)
+    blocks = KU._blocks(main["id"]) if main else []
+    old, acts = old or {}, acts or {}
+    slots = {}
+    for item in _items(tpl["layout"], ltype_of(les["kind"])):
+        k = item["key"]
+        if item["kind"] in SYNC_SKIP: continue
+        if k in old and acts.get(k) not in SYNC_ACT: slots[k] = old[k]; continue
+        slots[k] = {"fp": fps.get(item["kind"]), "ed": _gh([b for b in blocks if tpl_key(b["id"]) == k])}
+    sig = sig or PK.source_sig(dl_cid, key, les)
+    with _lock:
+        _con.execute("""INSERT INTO ds_sync(dl_course_id,lkey,ku_course_id,sig,slots,synced_at,synced_by,n) VALUES(?,?,?,?,?,?,?,?)
+                        ON CONFLICT(dl_course_id,lkey) DO UPDATE SET ku_course_id=excluded.ku_course_id, sig=excluded.sig, slots=excluded.slots,
+                        synced_at=excluded.synced_at, synced_by=excluded.synced_by, n=excluded.n""",
+                     (int(dl_cid), int(key), int(kcid), sig, json.dumps(slots, ensure_ascii=False), _now(), c.user["full_name"], int(n)))
+        _con.commit()
+
+def resync(c: Ctx, dl_cid: int, key: int, preview: bool = True) -> dict:
+    """«Yangi fayllar bor» → «Muharrirga qo'shish»: o'tkazilgandan keyin paketga qo'shilgan / o'zgargan mazmun (video, taqdimot, matn, fayllar …)
+    muharrir kursidagi shablon bloklariga qo'shiladi / yangilanadi; muallif bloklari tegilmaydi. preview=True — faqat sonlar (baza o'zgarmaydi);
+    aks holda kurs oldin versiyaga saqlanadi, yoziladi, rev oshadi, ds_sync yangilanadi (bayroq o'chadi)."""
+    co = PK._course(c, dl_cid, write=True); les = PK._check_topic(co, key)
+    ln = _link(dl_cid, key)
+    if not ln: raise HTTPException(404, "Dars muharrirga o'tkazilmagan")
+    kcid = ln["ku_course_id"]
+    rec = _sync_rec(dl_cid, key, kcid)
+    sig = PK.source_sig(dl_cid, key, les)
+    main = _main_lesson(kcid)
+    cur = KU._blocks(main["id"]) if main else []
+    res = {"ok": True, "ku_course_id": kcid, "code": les["code"], "tracked": bool(rec), "synced_at": rec["synced_at"] if rec else None,
+           "synced_by": rec["synced_by"] if rec else None, "applied": False, "pending": False, "add": 0, "update": 0, "remove": 0,
+           "author": sum(1 for b in cur if tpl_key(b["id"]) is None), "conflict": 0, "conflicts": [], "slots": []}
+    if not main or (rec and rec["sig"] == sig): return res                # manbalar oxirgi sinxronlashdan beri o'zgarmagan — tez yo'l
+    st = PK.topic_settings(dl_cid, key)[0]
+    g = PK.gather(dl_cid, key, co, st, les)
+    tpl = template_by_id(ln["tpl_id"]) or template_for(co.get("department_id"))
+    items = _items(tpl["layout"], ltype_of(les["kind"]))
+    heading = PK._lesson_heading(les)
+    built, fps = _fp_build(g)
+    old = rec["slots"] if rec else None
+    acts = resync_actions(cur, items, fps, old, heading)
+    _, diff = resync_apply(cur, items, built["slots"], acts)
+    conf = [SLOT_KINDS.get(x["kind"], x["kind"]) for x in items if acts.get(x["key"]) == "conflict"]
+    res.update(pending=bool(diff["added"] or diff["updated"] or diff["removed"]), add=diff["added"], update=diff["updated"], remove=diff["removed"],
+               conflict=len(conf), conflicts=conf, slots=diff["slots"])
+    if preview: return res
+    if not res["pending"]:            # yangilanadigan narsa yo'q — faqat kuzatuv yozuvi (keyingi o'zgarishlar shundan solishtiriladi)
+        _record_sync(c, dl_cid, key, kcid, les, g, tpl, n=(rec or {}).get("n") or 0, fps=fps, old=old, acts=acts, sig=sig)
+        return res
+    need = {k for k, a in acts.items() if a in SYNC_ACT}
+    allow = set()
+    for x in items:
+        if x["key"] in need: allow |= _toks(built["slots"].get(x["kind"]) or [])
+    KU.snapshot(c, kcid, "auto", f"Paketdan yangilashdan oldin ({les['code']})")
+    real = blocks_from_gather(g, _PickCopier(c, kcid, g["files"], allow))
+    with KU._lock:
+        cur = KU._blocks(main["id"])          # avtosaqlash orada o'zgartirgan bo'lishi mumkin — amallar yangi holat bo'yicha qayta hisoblanadi
+        acts = {k: (a if k in need or a not in SYNC_ACT else "same") for k, a in resync_actions(cur, items, fps, old, heading).items()}
+        nb, diff = resync_apply(cur, items, real["slots"], acts)
+        A = KU._Assets(kcid)
+        _write_lesson_blocks(main["id"], nb, A)
+        _con.execute("UPDATE ku_lessons SET rev=rev+1, updated_at=?, updated_by=? WHERE id=?", (_now(), c.user["full_name"], main["id"]))
+        if real.get("cover") and any(x["kind"] == "cover" and acts.get(x["key"]) in SYNC_ACT for x in items):
+            _con.execute("UPDATE ku_courses SET cover_asset=?, cover_alt=? WHERE id=?", (real["cover"], f"Dars muqovasi: {les['title']}"[:300], kcid))
+        KU._bump(kcid, c)
+        KU._log(c, kcid, "paketdan yangilandi", f"{les['code']} · +{diff['added']} ~{diff['updated']} −{diff['removed']} · muallif bloklari {diff['author']} (tegilmadi)"
+                + (f" · o'zgartirilgan bandlar tegilmadi: {', '.join(conf)}" if conf else ""))
+        _con.commit()
+    _record_sync(c, dl_cid, key, kcid, les, g, tpl, n=((rec or {}).get("n") or 0) + 1, fps=fps, old=old, acts=acts, sig=sig)
+    _audit(c, "paketdan muharrirga qo'shildi", f"kurs #{dl_cid} · {les['code']} → ku #{kcid} · +{diff['added']} ~{diff['updated']} −{diff['removed']} · muallif {diff['author']}")
+    res.update(applied=True, pending=False, add=diff["added"], update=diff["updated"], remove=diff["removed"], author=diff["author"], slots=diff["slots"],
+               synced_at=_now(), tracked=True)
+    return res
 
 
 # =============================================================================================
@@ -1344,6 +1550,19 @@ def api_skeleton(cid: int, body: SkelIn, request: Request):
 def api_convert(cid: int, key: int, request: Request):
     c = C(request); guard(c, "muharrirga o'tkazish", AUTHORS, f"kurs #{cid} · {PK.lesson_code(key)}")
     return convert_lesson(c, cid, key)
+
+class ResyncIn(BaseModel):
+    preview: bool = True
+
+@router.get(P + "/subjects/{cid}/lessons/{key}/resync")
+def api_resync_view(cid: int, key: int, request: Request):
+    c = C(request); guard(c, "paketdan yangilash (ko'rish)", AUTHORS, f"kurs #{cid} · {PK.lesson_code(key)}")
+    return resync(c, cid, key, True)
+
+@router.post(P + "/subjects/{cid}/lessons/{key}/resync")
+def api_resync(cid: int, key: int, body: ResyncIn, request: Request):
+    c = C(request); guard(c, "paketdan yangilash", AUTHORS, f"kurs #{cid} · {PK.lesson_code(key)} · {'ko`rish' if body.preview else 'qo`shish'}".replace("`", "'"))
+    return resync(c, cid, key, body.preview)
 
 class AuthIn(BaseModel):
     authority: str

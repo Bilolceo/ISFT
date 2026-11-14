@@ -505,21 +505,54 @@ def course_row(r: dict, n_lessons: int | None = None) -> dict:
             "cover": _asset_url(r["cover_asset"]), "updated_at": r["updated_at"], "updated_by": r["updated_by"], "created_at": r["created_at"],
             "src": r["src"] or "", "rev": r["rev"], "lessons": n_lessons}
 
-def course_list(c: Ctx, q: str = "", status: str = "") -> dict:
+def course_list(c: Ctx, q: str = "", status: str = "", fan: int = 0) -> dict:
+    """Kurslar ro'yxati (ko'lam — scope, o'zgarmagan). «Dars tayyorlash» bilan bog'langan kurslar (ds_links: fan skeleti / paketdan o'tkazish)
+    fan bo'yicha guruhlanadi (groups: fan → kurslar dars kodi tartibida, holatlar soni), qolganlari — «Mustaqil kurslar» (standalone).
+    q — kurs, muallif yoki fan nomi bo'yicha; fan — bitta fan (dl_course_id) guruhi; fans — ko'lamdagi barcha fanlar (filtr ro'yxati, filtrlarsiz)."""
     sw, sa = scope(c)
     rows = db.rows(_con, f"""SELECT k.*, (SELECT COUNT(*) FROM ku_lessons l WHERE l.course_id=k.id AND l.deleted=0) nl FROM ku_courses k
                              WHERE k.deleted=0 AND {sw} ORDER BY k.updated_at DESC, k.id DESC""", sa)
+    try:       # ds_links — app/dars.py jadvali (bo'lmasa — hamma kurs mustaqil)
+        links = {r["ku_course_id"]: r for r in db.rows(_con, "SELECT ku_course_id, dl_course_id, lkey, src, authority FROM ds_links")}
+    except Exception:
+        links = {}
+    dl = {}
+    ids = sorted({r["dl_course_id"] for r in rows if r["dl_course_id"]} | {links[r["id"]]["dl_course_id"] for r in rows if r["id"] in links})
+    if ids:
+        for d in db.rows(_con, f"SELECT id, subject, direction, course FROM dl_courses WHERE id IN ({','.join('?' * len(ids))})", tuple(ids)): dl[d["id"]] = d
+    fans = {}
+    for r in rows:
+        if r["id"] in links: k_ = links[r["id"]]["dl_course_id"]; fans[k_] = fans.get(k_, 0) + 1
     if status in STATUS: rows = [r for r in rows if r["status"] == status]
+    if fan: rows = [r for r in rows if r["id"] in links and links[r["id"]]["dl_course_id"] == int(fan)]
     if q.strip():
         ql = q.lower().strip()
-        rows = [r for r in rows if ql in f"{r['title']} {r['author_name']}".lower()]
-    dl = {}
-    ids = sorted({r["dl_course_id"] for r in rows if r["dl_course_id"]})
-    if ids:
-        for d in db.rows(_con, f"SELECT id, subject FROM dl_courses WHERE id IN ({','.join('?' * len(ids))})", tuple(ids)): dl[d["id"]] = d["subject"]
-    items = [{**course_row(r, r["nl"]), "dl_subject": dl.get(r["dl_course_id"])} for r in rows]
+        def hay(r):
+            ln = links.get(r["id"]); d = dl.get(ln["dl_course_id"] if ln else r["dl_course_id"]) or {}
+            return f"{r['title']} {r['author_name']} {d.get('subject') or ''} {d.get('direction') or ''}".lower()
+        rows = [r for r in rows if ql in hay(r)]
+    items, groups = [], {}
+    for r in rows:
+        ln = links.get(r["id"])
+        it = {**course_row(r, r["nl"]), "dl_subject": (dl.get(r["dl_course_id"]) or {}).get("subject"),
+              "dars": {"dl_course_id": ln["dl_course_id"], "lkey": ln["lkey"], "code": PK.lesson_code(ln["lkey"]), "src": ln["src"] or "",
+                       "authority": ln["authority"]} if ln else None}
+        items.append(it)
+        if not ln: continue
+        g = groups.get(ln["dl_course_id"])
+        if g is None:
+            d = dl.get(ln["dl_course_id"]) or {}
+            g = groups[ln["dl_course_id"]] = {"dl_course_id": ln["dl_course_id"], "subject": d.get("subject") or f"Fan #{ln['dl_course_id']}",
+                                              "direction": d.get("direction") or "", "course": d.get("course"), "ids": [], "counts": {k: 0 for k in STATUS}}
+        g["ids"].append((ln["lkey"], it["id"])); g["counts"][it["status"]] = g["counts"].get(it["status"], 0) + 1
+    out_groups = []
+    for g in sorted(groups.values(), key=lambda g: (g["subject"].lower(), g["dl_course_id"])):
+        g["ids"] = [i for _, i in sorted(g["ids"])]          # dars kodi tartibida: L1..Ln, keyin A1..
+        g["n"] = len(g["ids"]); out_groups.append(g)
     counts = {k: sum(1 for r in items if r["status"] == k) for k in STATUS}
-    return {"items": items, "total": len(items), "counts": counts}
+    return {"items": items, "total": len(items), "counts": counts, "groups": out_groups, "standalone": [it["id"] for it in items if not it["dars"]],
+            "fans": sorted(({"dl_course_id": k, "subject": (dl.get(k) or {}).get("subject") or f"Fan #{k}", "direction": (dl.get(k) or {}).get("direction") or "", "n": n}
+                            for k, n in fans.items()), key=lambda x: (x["subject"].lower(), x["dl_course_id"]))}
 
 def summary(c: Ctx) -> dict:
     """Jamlangan sonlar (rahbariyat): kurslar holati, darslar, bloklar, import va eksportlar — kurs nomlari va tarkibisiz."""
@@ -1874,9 +1907,9 @@ def api_summary(request: Request):
     return summary(c)
 
 @router.get(P + "/courses")
-def api_courses(request: Request, q: str = "", status: str = ""):
-    c = C(request); guard(c, "kurslar ro'yxati", READERS, f"{q[:30]}/{status}")
-    return course_list(c, q, status)
+def api_courses(request: Request, q: str = "", status: str = "", fan: int = 0):
+    c = C(request); guard(c, "kurslar ro'yxati", READERS, f"{q[:30]}/{status}{f'/fan #{fan}' if fan else ''}")
+    return course_list(c, q, status, fan)
 
 class CourseIn(BaseModel):
     title: str = Field("", max_length=300)

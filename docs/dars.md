@@ -2,7 +2,7 @@
 
 **Kod:** `app/dars.py` (server), `static/dars.js`, `static/dars.css` («Fanlar» yorlig'i), `static/kurs.js` (izohlar paneli, AI tugmasi, bog'lanish tasmasi),
 `static/paket.js` (yorliq va dars paneli ilgaklari). Asos — `app/paket.py` (`docs/paket.md`) va `app/kurs.py` (`docs/kurs.md`).
-**Testlar:** `tests/test_dars.py`; brauzer — `tools/dars_check.js` (PW va CHROME berilganda test o'zi chaqiradi; skrinshotlar — `DS_OUT`).
+**Testlar:** `tests/test_dars.py`, `tests/test_dars_resync.py` (qayta sinxronlash, muharrir ro'yxatidagi fan guruhlari); brauzer — `tools/dars_check.js` (PW va CHROME berilganda test o'zi chaqiradi; skrinshotlar — `DS_OUT`).
 **API:** `/api/dars/*` · **Ruxsat resursi:** `rbac.PAKET` (har so'rov audit jurnalida, `dars: …`).
 
 ## Nima uchun
@@ -45,6 +45,26 @@ holati, `kurs` — muharrir kursi holati. Amallar: «Avtomatik yig'ish (shablon)
 Bog'lanish — `ds_links(dl_course_id, lkey, ku_course_id, authority, tpl_id, src)`: muharrirda «Dars tayyorlash: fan · L3 · eksport uchun ustun manba» tasmasi
 (`course.dars`), paket dars panelida — `topic_view.kurs_link` va «Muharrirda ochish». O'tkazilgandan keyin ustun manba — `kurs` (muharrir); fan to'rida
 almashtiriladi (`POST …/authority`). Qayta bosish — o'sha kurs (dublikat yo'q).
+
+## Paketdan qayta sinxronlash (`GET|POST /subjects/{cid}/lessons/{key}/resync {preview}`)
+
+O'tkazilgandan keyin paketga yangi / o'zgargan mazmun (video havola yoki fayl, taqdimot, ma'ruza matni, reja, qo'shimcha fayllar, xulosalar,
+kartochkalar, mashqlar, muqova …) qo'shilsa, paket dars panelida (muharrir tasmasi ostida) — **«Yangi fayllar bor»** (qaysi bandlar, nechta blok
+qo'shiladi / yangilanadi, muallif bloklari soni) va **«Muharrirga qo'shish»** (oldin ko'rish oynasi: har band bo'yicha +/~/− va jami).
+
+- **Kuzatuv yozuvi** — `ds_sync(dl_course_id, lkey, ku_course_id, sig, slots, synced_at, synced_by, n)`: o'tkazishda va har sinxronlashda yoziladi.
+  `slots[kalit] = {fp, ed}`: `fp` — shu shablon bandining paket mazmuni barmoq izi (`blocks_from_gather` fayllarsiz: fayl o'rnida yo'l + nom/o'lcham/vaqt
+  yoki sha), `ed` — muharrirdagi shu bandning shablon bloklari xeshi; `sig` — `paket.source_sig` (o'zgarmagan bo'lsa tez javob, yig'ish yo'q).
+- **Har band uchun amal** (`dars.resync_actions` — sof funksiya): paket mazmuni o'zgarmagan — tegilmaydi (muallif bloklarni o'chirgan bo'lsa ham qayta
+  qo'shilmaydi); bandda blok yo'q yoki bo'sh (to'ldirilmagan, skelet) — **to'ldiriladi**; muharrirda o'zgartirilmagan (`ed` mos) — **yangilanadi**;
+  muallif shablon blokini o'zgartirgan — **tegilmaydi** («muharrirda o'zgartirilgan bandlar» sifatida ko'rsatiladi); kuzatuv yozuvi yo'q va mazmun
+  bor (eski o'tkazishlar) — tegilmaydi, birinchi sinxronlashdan keyin kuzatiladi.
+- **Yozish** (`dars.resync_apply` — sof funksiya): shablon bloklari uid'lari (`tp<kalit><nn><hex4>`) joyida yangilanadi, yetmagani bandning oxirgi blokidan
+  keyin (blok bo'lmasa — shablon tartibidagi keyingi mavjud band oldiga) qo'shiladi, ortiqchasi olinadi. **Muallif bloklari (boshqa uid) hech qachon
+  o'zgarmaydi va o'chmaydi**, boshqa bandlar ham. Faqat yangilanadigan bandlar fayllari `ku_assets`ga ko'chiriladi.
+- `preview=false`: kurs oldin versiyaga saqlanadi («Paketdan yangilashdan oldin»), dars va kurs `rev` oshadi (ochiq muharrir 409 bilan ogohlantiradi),
+  `ku_log` va audit (`dars: paketdan muharrirga qo'shildi`), `ds_sync` yangilanadi — bayroq o'chadi, keyingi o'zgarishda qaytadi. Qayta bosish — o'zgarishsiz.
+- Ruxsat — o'tkazish bilan bir xil (`masofaviy`, `masofaviy_xodim`, o'qituvchi — o'z fani; kafedra va boshqalar — 403, audit).
 
 ## Fan skeleti (`POST /subjects/{cid}/skeleton {ratio, apply, with_kurs}`)
 
@@ -110,7 +130,7 @@ har dars alohida .zip (`ISFT_<fan>_<L01>_<tur>.zip`, ZIP_STORED, oqim bilan). Is
 
 ## Ruxsatlar (qisqacha)
 
-| Lavozim | Fanlar to'ri | O'tkazish, skelet, shablon qo'llash, ommaviy | Shablon tahriri | Izoh | To'xtatuvchi izoh / hal qilish | AI |
+| Lavozim | Fanlar to'ri | O'tkazish, qayta sinxronlash, skelet, shablon qo'llash, ommaviy | Shablon tahriri | Izoh | To'xtatuvchi izoh / hal qilish | AI |
 |---|---|---|---|---|---|---|
 | `masofaviy`, `masofaviy_xodim` | hamma | ha | ha | ha | ha | ha |
 | `oqituvchi` | o'z fanlari | o'z fanlari | — | o'z kurslari | — (oddiy izohni hal qiladi) | o'z kurslari |
@@ -119,7 +139,9 @@ har dars alohida .zip (`ISFT_<fan>_<L01>_<tur>.zip`, ZIP_STORED, oqim bilan). Is
 
 ## Cheklovlar
 
-- Muharrirga o'tkazish bir martalik: keyin paketga yuklangan yangi fayllar muharrir nusxasiga o'zi qo'shilmaydi (ustun manbani «Shablon»ga qaytarish yoki qo'lda qo'shish).
+- Paketdan qayta sinxronlash qo'lda («Muharrirga qo'shish») — avtomatik emas. Yakuniy test darsi savollari va statik bandlar (bo'lim sarlavhasi,
+  «Davom etish», ajratgich) sinxronlanmaydi; paketdan olib tashlangan mazmun muharrirdan o'chirilmaydi; muallif o'zgartirgan shablon bandi
+  yangilanmaydi (qo'lda). Bu funksiyadan oldin o'tkazilgan darslarda birinchi sinxronlash faqat bo'sh / yo'q bandlarni to'ldiradi, keyin to'liq kuzatiladi.
 - Ommaviy ish holati server xotirasida: server qayta ishga tushsa, tugamagan ish «uzildi» bo'ladi (yakunlangan natija `ds_jobs`da qoladi).
 - Kafedra muharrirda «faqat ko'rish» rejimida: maydonlar ko'rinadi, lekin avtosaqlash o'chiq (server ham 403 qaytaradi).
 - AI «eng uzun javob» belgisi — qat'iy uzunlik solishtiruvi; ma'no jihatidan chalg'ituvchilar sifati — o'qituvchi ko'rib chiqadi.

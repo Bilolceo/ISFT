@@ -395,9 +395,12 @@ def assign(c: Ctx, sid: int, ref: str, tutor: int, note: str = "") -> dict:
 
 _REMIND_DAY: dict = {}
 
-def remind(c: Ctx, sid: int, ref: str, channel: str = "telegram") -> dict:
-    """Eslatma — Talabalar markazining xabarlar navbatiga (ops_notices; SMS/Telegram shlyuzi ulanganda yuboriladi). Cheklov: bitta talabaga
-    `remind_cooldown_days` kunda bir marta (kurs farqi yo'q), bitta xodim kuniga `remind_daily_max` ta. Har biri lrs_actions va audit jurnalida."""
+def remind(c: Ctx, sid: int, ref: str, channel: str = "telegram", note: str = "", base: str | None = None) -> dict:
+    """Eslatma — Talabalar markazining xabarlar navbatiga (ops_notices). Telegram: talaba kabinetda Telegram'ni ulagan bo'lsa — darhol bot orqali
+    yuboriladi (app/talaba_darslar.deliver); ulanmagan bo'lsa — navbatda qoladi («Telegram ulanmagan») va talaba ulanganda yuboriladi; bot tokeni
+    yo'q bo'lsa — navbatda. SMS — shlyuz ulanganda. Cheklov: bitta talabaga `remind_cooldown_days` kunda bir marta (kurs farqi yo'q), bitta xodim
+    kuniga `remind_daily_max` ta. Har biri lrs_actions, notice_delivery va audit jurnalida."""
+    from . import talaba_darslar as TD
     if channel not in CHANNELS: raise HTTPException(400, "Kanal: telegram yoki sms")
     s = _student_in_scope(c, sid)
     co = _course(c, ref)
@@ -413,21 +416,24 @@ def remind(c: Ctx, sid: int, ref: str, channel: str = "telegram") -> dict:
     if channel == "sms" and not s["phone"]: raise HTTPException(400, "Talabaning telefon raqami yo'q — Telegram kanalini tanlang")
     row = next((r for r in course_rows(co) if r["student_id"] == sid), None)
     nxt = _next_lesson(co, sid)
-    link = None
-    if nxt and L.package_for(ref, nxt["ref"] if co["kind"] == "dl" else ""):
-        link = "/xapi/l/" + L.make_link(sid, ref, nxt["ref"] if co["kind"] == "dl" else "")
+    # launch havolasi/tokeni xabarga YOZILMAYDI (kirishsiz ochib bo'lardi) — faqat kabinetdagi «Mening darslarim» (HEMIS ID bilan kirish)
+    link = TD.cabinet_url(base)
     name = (s["full_name"].split() + [""])[1] or s["full_name"]
+    note = " ".join((note or "").split())[:300]
+    who = _short(c.user["full_name"]) or c.user["full_name"]
     text = (f"Hurmatli {name}! ISFT masofaviy ta'lim: «{co['title']}» kursida "
             + (f"{row['lag']} ta dars ortda qoldingiz ({row['done']}/{row['expected']}). " if row and row["lag"] else "darslaringizni davom ettiring. ")
-            + (f"Keyingi dars: {nxt['title']}. " if nxt else "") + (f"Havola: {link}" if link else "Savollar bo'lsa — tyutoringizga murojaat qiling."))
+            + (f"Keyingi dars: {nxt['title']}. " if nxt else "") + (f"\n{who}: «{note}»\n" if note else "")
+            + f"Darslaringiz: {link} (talaba kabineti → «Mening darslarim»). Savollar bo'lsa — tyutoringizga murojaat qiling.")
     with _lock:
         nid = _con.execute("INSERT INTO ops_notices(ts,channel,task_id,case_id,student_id,phone,text,status,user_id) VALUES(?,?,?,?,?,?,?,?,?)",
                            (_iso(_now()), channel, None, None, sid, s["phone"] if channel == "sms" else None, text[:900], "navbatda", c.user["id"])).lastrowid
         _log(c, sid, ref, "eslatma", f"{CHANNELS[channel]} · navbatda", notice=nid)
         _con.commit()
-    rbac.audit(_con, c, "ortda qolganlar: eslatma", RES, True, f"talaba #{sid} · {ref} · {channel} · xabar #{nid}")
-    return {"ok": True, "notice_id": nid, "channel": CHANNELS[channel], "text": text, "link": link,
-            "gateway": f"{CHANNELS[channel]} shlyuzi ulanmagan (demo): xabar chiqish navbatiga yozildi va ulanganda yuboriladi."}
+    dv = TD.deliver(_con, nid) if channel == "telegram" else {"status": "navbatda", "label": "SMS shlyuzi ulanmagan — navbatda"}
+    rbac.audit(_con, c, "ortda qolganlar: eslatma", RES, True, f"talaba #{sid} · {ref} · {channel} · xabar #{nid} · {dv['status']}")
+    return {"ok": True, "notice_id": nid, "channel": CHANNELS[channel], "text": text, "link": link, "delivery": dv["status"], "delivery_label": dv["label"],
+            "gateway": dv["label"]}
 
 def _next_lesson(co: dict, sid: int) -> dict | None:
     pr = {r["lesson_ref"]: r["status"] for r in db.rows(_con, "SELECT lesson_ref, status FROM lrs_progress WHERE student_id=? AND course_ref=?", (sid, co["ref"]))}
@@ -510,6 +516,15 @@ def api_list(request: Request, course: str = "", reason: str = "", level: str = 
     page = rows[max(0, offset): max(0, offset) + max(1, min(200, limit))]
     acts = _actions_map([r["student_id"] for r in page])
     hemis = c.role.key in DEPT
+    from . import talaba_darslar as TD
+    tg = TD.linked_set(_con, [r["student_id"] for r in page]) if c.role.key in ACT_ROLES else set()
+    last_n = {}
+    if c.role.key in ACT_ROLES and page:
+        for r in db.rows(_con, f"""SELECT a.student_id, a.course_ref, a.notice_id FROM lrs_actions a WHERE a.id IN (SELECT MAX(id) FROM lrs_actions
+                                   WHERE kind='eslatma' AND notice_id IS NOT NULL AND student_id IN ({','.join('?' * len(page))}) GROUP BY student_id, course_ref)""",
+                         [r["student_id"] for r in page]):
+            last_n[(r["student_id"], r["course_ref"])] = r["notice_id"]
+    dl = TD.last_delivery(_con, list(last_n.values()))
     items = []
     for r in page:
         it = {k: r[k] for k in ("student_id", "full_name", "grp", "group_id", "course_ref", "course", "course_sub", "lessons", "released", "expected", "done", "lag",
@@ -517,6 +532,10 @@ def api_list(request: Request, course: str = "", reason: str = "", level: str = 
         if hemis: it["hemis_id"] = r["hemis_id"]
         a = acts.get((r["student_id"], r["course_ref"]), {})
         it["actions"] = {k: v for k, v in a.items()}
+        if c.role.key in ACT_ROLES:
+            it["telegram"] = r["student_id"] in tg
+            nid = last_n.get((r["student_id"], r["course_ref"]))
+            if nid and "eslatma" in it["actions"]: it["actions"]["eslatma"]["delivery"] = dl.get(nid)
         items.append(it)
     groups = sorted({(r["group_id"], r["grp"]) for r in all_rows(c, course) if r["group_id"]}, key=lambda x: x[1] or "")
     return {"items": items, "total": total, "offset": offset, "groups": [{"id": g, "name": n} for g, n in groups][:300]}
@@ -543,6 +562,9 @@ def api_student(sid: int, request: Request, course: str = ""):
     for a in acts: a["user_name"] = _short(a["user_name"]) or a["user_name"]
     st = {"id": s["id"], "full_name": s["full_name"], "grp": s["grp"]}
     if c.role.key in DEPT: st["hemis_id"] = s["hemis_id"]
+    if c.role.key in ACT_ROLES:
+        from . import talaba_darslar as TD
+        st["telegram"] = bool(TD.linked_set(_con, [sid]))
     return {"student": st, "course": _pub_course(co), "lessons": out, "row": row and {k: row[k] for k in ("done", "expected", "lag", "reasons", "level", "last", "time_min")},
             "actions": acts if c.role.key in ACT_ROLES else [], "tutors": tutors_for(sid)[:40] if c.role.key in DEPT else []}
 
@@ -572,7 +594,7 @@ def api_assign(body: ActIn, request: Request):
 @router.post(P + "/remind")
 def api_remind(body: ActIn, request: Request):
     c = C(request); guard(c, "eslatma", ACT_ROLES, f"talaba #{body.student_id}")
-    return remind(c, body.student_id, body.course_ref, body.channel)
+    return remind(c, body.student_id, body.course_ref, body.channel, body.note, str(request.base_url))
 
 @router.post(P + "/contacted")
 def api_contacted(body: ActIn, request: Request):

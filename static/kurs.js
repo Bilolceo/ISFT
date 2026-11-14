@@ -9,10 +9,10 @@
    Ruxsat va ko'lam — serverda. Global: renderKurs(). app.js yordamchilari: $, esc, toast, locked, errCard, showLogin, ico, ICONS, ME, go, arm.
    ===================================================================== */
 const KU = {meta: null, who: null, view: "list", cid: 0, course: null, lid: 0, lesson: null, blocks: [], title: "", quiz: null, rev: 0,
-            dirty: false, saving: false, again: false, saveT: 0, sel: -1, state: "", conflict: null, list: {q: "", status: ""}, trash: null, pv: null,
+            dirty: false, saving: false, again: false, saveT: 0, sel: -1, state: "", conflict: null, list: {q: "", status: "", fan: 0}, trash: null, pv: null,
             cm: null, cmOpen: false, cmBlock: null, cmAll: false, cmDone: false};
 function kuReset() { clearTimeout(KU.saveT); Object.assign(KU, {meta: null, who: null, view: "list", cid: 0, course: null, lid: 0, lesson: null, blocks: [], title: "", quiz: null, rev: 0,
-  dirty: false, saving: false, again: false, sel: -1, state: "", conflict: null, list: {q: "", status: ""}, trash: null, pv: null,
+  dirty: false, saving: false, again: false, sel: -1, state: "", conflict: null, list: {q: "", status: "", fan: 0}, trash: null, pv: null,
   cm: null, cmOpen: false, cmBlock: null, cmAll: false, cmDone: false}); }
 if (typeof ICONS === "object") {
   const I = {plus: '<path d="M12 5v14M5 12h14"/>', trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/>',
@@ -137,16 +137,24 @@ async function kuList(v) {
   KU.view = "list"; KU.cid = 0; KU.course = null;
   v = v || $("#v-kurs");
   const M = KU.meta, L = KU.list;
-  const d = await kuApi(`/api/kurs/courses?q=${encodeURIComponent(L.q)}&status=${L.status}`);
+  const d = await kuApi(`/api/kurs/courses?q=${encodeURIComponent(L.q)}&status=${L.status}&fan=${+L.fan || 0}`);
   const all = d.counts, tot = Object.values(all).reduce((a, b) => a + b, 0);
   const st = (k, t) => `<button type="button" class="${L.status === k ? "on" : ""}" data-st="${k}">${esc(t)} <small>${k ? all[k] : tot}</small></button>`;
+  const fans = d.fans || [], groups = d.groups || [];
+  if (L.fan && !fans.some(f => f.dl_course_id === +L.fan)) L.fan = 0;
   v.innerHTML = `<div class="ku-head"><div><h2>Kurs muharriri</h2><span class="muted">${esc(M.scope)} · bloklardan kurs yig'ing va NEXTID uchun xAPI paket oling</span></div>
       <div class="ku-acts"><button type="button" class="btn ghost" id="kuImp">${kuI("upload")} Rise'dan import</button><button type="button" class="btn primary" id="kuNew">${kuI("plus")} Yangi kurs</button></div></div>
     ${!M.player ? `<div class="ku-warn">${ico("alert", 15)}<span>Kurs pleyeri o'rnatilmagan — ko'rish va eksport vaqtincha ishlamaydi. Kursni tahrirlash mumkin.</span></div>` : ""}
     <div class="ku-bar"><div class="ku-seg" role="group" aria-label="Holat bo'yicha">${st("", "Hammasi")}${Object.entries(M.status).map(([k, t]) => st(k, t)).join("")}</div>
-      <label class="ku-search">${ico("search", 16)}<input type="search" id="kuQ" placeholder="Kurs yoki muallif" value="${esc(L.q)}" aria-label="Qidirish"></label></div>
-    <div class="ku-cards">${d.items.length ? d.items.map(kuCourseCard).join("") : `<div class="ku-empty"><b>Kurs yo'q</b><span>«Yangi kurs» bilan boshlang yoki Rise 360 eksportini import qiling.</span></div>`}</div>`;
+      <div class="ku-filt">${fans.length ? `<select class="ku-in" id="kuFan" aria-label="Fan bo'yicha"><option value="0">Barcha fanlar</option>${fans.map(f => `<option value="${f.dl_course_id}" ${+L.fan === f.dl_course_id ? "selected" : ""}>${esc(f.subject)}${f.direction ? " · " + esc(f.direction) : ""} (${f.n})</option>`).join("")}</select>` : ""}
+      <label class="ku-search">${ico("search", 16)}<input type="search" id="kuQ" placeholder="Kurs, fan yoki muallif" value="${esc(L.q)}" aria-label="Qidirish"></label></div></div>
+    ${d.items.length ? kuGroupsHtml(d) : `<div class="ku-empty"><b>Kurs yo'q</b><span>${L.q || L.fan || L.status ? "Filtr bo'yicha kurs topilmadi." : "«Yangi kurs» bilan boshlang yoki Rise 360 eksportini import qiling."}</span></div>`}`;
   v.querySelectorAll("[data-st]").forEach(b => b.onclick = () => { L.status = b.dataset.st; kuList(v); });
+  const fs = $("#kuFan"); if (fs) fs.onchange = () => { L.fan = +fs.value || 0; kuList(v); };
+  v.querySelectorAll("[data-grp]").forEach(b => b.onclick = () => {
+    const k = b.dataset.grp, open = b.getAttribute("aria-expanded") !== "true";
+    b.setAttribute("aria-expanded", open); b.closest(".ku-grp").classList.toggle("open", open); kuGrpSave(k, open);
+  });
   let t = 0; $("#kuQ").oninput = e => { clearTimeout(t); t = setTimeout(() => { L.q = e.target.value; kuList(v).then(() => { const q = $("#kuQ"); q.focus(); q.setSelectionRange(q.value.length, q.value.length); }); }, 300); };
   v.querySelectorAll("[data-open]").forEach(b => b.onclick = () => kuOpen(+b.dataset.open));
   $("#kuNew").onclick = kuNewCourse;
@@ -157,6 +165,32 @@ function kuCourseCard(c) {
     <div class="ku-card-img">${c.cover ? `<img src="${esc(c.cover)}" alt="" loading="lazy">` : `<span>${kuI("layers", 28)}</span>`}</div>
     <div class="ku-card-b"><b>${esc(c.title)}</b><small class="muted">${esc(c.author_name || "")}${c.dl_subject ? " · " + esc(c.dl_subject) : ""}</small>
     <div class="ku-card-f">${kuChip(c.status_label, KU_ST[c.status])}${c.src === "rise" ? kuChip("Rise'dan") : c.src === "demo" ? kuChip("Namuna") : ""}<span class="muted">${c.lessons} ta dars · ${kuD(c.updated_at)}</span></div></div></button>`;
+}
+/* «Dars tayyorlash» bilan bog'langan kurslar — fan bo'yicha yig'iladigan guruhlar (holat — har foydalanuvchi uchun localStorage'da), qolganlari — «Mustaqil kurslar» */
+const kuGrpKey = () => "jarvis.kuGroups." + String((KU.who && (KU.who.id ?? KU.who.user_id)) ?? KU.who ?? "");
+function kuGrpState() { try { const v = JSON.parse(localStorage.getItem(kuGrpKey()) || "{}"); return v && typeof v === "object" ? v : {}; } catch (e) { return {}; } }
+function kuGrpSave(k, open) { try { const s = kuGrpState(); s[k] = open ? 1 : 0; localStorage.setItem(kuGrpKey(), JSON.stringify(s)); } catch (e) {} }
+function kuGroupsHtml(d) {
+  const L = KU.list, by = Object.fromEntries(d.items.map(c => [c.id, c])), saved = kuGrpState(), M = KU.meta;
+  const filtered = !!(L.q || L.fan), groups = d.groups || [], solo = (d.standalone || []).map(i => by[i]).filter(Boolean);
+  const isOpen = (k, dflt) => filtered ? true : (k in saved ? !!saved[k] : dflt);
+  const grp = (k, title, sub, n, counts, body, dflt) => {
+    const open = isOpen(k, dflt), cnt = counts ? Object.entries(counts).filter(([, x]) => x).map(([s, x]) => kuChip(`${(M.status || {})[s] || s} ${x}`, KU_ST[s])).join("") : "";
+    return `<section class="ku-grp ${open ? "open" : ""}"><button type="button" class="ku-grp-h" data-grp="${esc(k)}" aria-expanded="${open}">
+      <span class="ku-grp-c" aria-hidden="true">${kuI("down", 16)}</span><span class="ku-grp-t"><b>${esc(title)}</b>${sub ? `<small class="muted">${esc(sub)}</small>` : ""}</span>
+      <span class="ku-grp-n">${cnt}<span class="ku-chip">${n} ta kurs</span></span></button><div class="ku-grp-b">${body}</div></section>`;
+  };
+  const rows = ids => `<div class="ku-rows">${ids.map(i => by[i]).filter(Boolean).map(kuCourseRow).join("")}</div>`;
+  return `<div class="ku-grps">${groups.length ? `<h3 class="ku-grps-h">Fanlar bo'yicha <small class="muted">${groups.length} ta fan · ${groups.reduce((a, g) => a + g.n, 0)} ta kurs</small></h3>` : ""}
+    ${groups.map(g => grp("f" + g.dl_course_id, g.subject, [g.direction, g.course ? `${g.course}-kurs` : ""].filter(Boolean).join(" · "), g.n, g.counts, rows(g.ids), groups.length === 1)).join("")}
+    ${solo.length ? (groups.length ? grp("solo", "Mustaqil kurslar", "Dars tayyorlash bilan bog'lanmagan", solo.length, null, `<div class="ku-cards">${solo.map(kuCourseCard).join("")}</div>`, true)
+                                   : `<div class="ku-cards">${solo.map(kuCourseCard).join("")}</div>`) : ""}</div>`;
+}
+function kuCourseRow(c) {
+  const ds = c.dars || {};
+  return `<button type="button" class="ku-row-c" data-open="${c.id}" style="--acc:${esc(c.accent)}"><span class="ku-row-code">${esc(ds.code || "—")}</span>
+    <span class="ku-row-t"><b>${esc(c.title)}</b><small class="muted">${esc(c.author_name || "")} · ${c.lessons} ta dars · ${kuD(c.updated_at)}${ds.authority === "kurs" ? " · eksport: muharrir" : ""}</small></span>
+    ${kuChip(c.status_label, KU_ST[c.status])}</button>`;
 }
 function kuNewCourse() {
   const M = KU.meta;
