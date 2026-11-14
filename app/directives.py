@@ -60,7 +60,7 @@ COLS = [("origin", "TEXT"), ("parent_id", "INT"), ("issuer_user", "INT"), ("issu
         ("review", "TEXT"), ("review_note", "TEXT"), ("review_at", "TEXT"), ("review_by", "INT"), ("created_at", "TEXT"),
         ("src", "TEXT")]     # manba: 'syl:<so'rov id>' (O'quv dasturlari — kafedra so'rovi), 'portal' / 'portal:<xat id>' (Portal — ma'lumot so'rovi)
 SRC_LABEL = {"syl": "O'quv dasturlari · kafedra so'rovi", "portal": "Portal · ma'lumot so'rovi", "dl": "Masofaviy ta'lim · kontent monitoringi",
-             "lrs": "Masofaviy ta'lim · ortda qolgan talaba"}
+             "lrs": "Masofaviy ta'lim · ortda qolgan talaba", "nz": "Nazorat markazi"}
 
 def init(con):
     try:

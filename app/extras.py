@@ -459,6 +459,10 @@ def notifications(c: Ctx) -> list[dict]:
         from . import syllabus as SY
         items += SY.notif_items(c)
     except Exception as e: print("notifications.syllabus:", repr(e))
+    try:
+        from . import nazorat as NZ    # Nazorat markazi: eskalatsiya, eslatma, yangi muddat, haftalik hisobot
+        items += NZ.notif_items(c)
+    except Exception as e: print("notifications.nazorat:", repr(e))
     # --- kutilayotgan ishlar: «Mening vazifalarim» bilan AYNAN bitta yig'uvchi (mywork.collect — majlis, portal muddatlari, markaz, buyruqlar,
     #     murojaatlar, AI takliflari va barcha modul adapterlari). Alohida hisob-kitob yo'q — sonlar ikki joyda bir xil. ---
     try:
