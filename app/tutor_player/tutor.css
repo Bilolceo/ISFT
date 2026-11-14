@@ -1,0 +1,53 @@
+/* ISFT Core — AI tutor paneli (pleyer ichida). Prefiks: itu-. Telefon — pastdan chiquvchi panel, keng ekran — o'ng tomonda. */
+.itu-fab{position:fixed;right:16px;bottom:16px;z-index:2147483000;display:inline-flex;align-items:center;gap:8px;padding:11px 16px;border:0;border-radius:999px;
+  background:#870037;color:#fff;font:600 15px/1.2 Manrope,system-ui,sans-serif;box-shadow:0 6px 20px rgba(0,0,0,.25);cursor:pointer}
+.itu-fab:focus-visible,.itu-panel button:focus-visible,.itu-panel textarea:focus-visible{outline:3px solid #f59e0b;outline-offset:2px}
+.itu-dot{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:rgba(255,255,255,.2);font-weight:800}
+.itu-panel{position:fixed;z-index:2147483001;right:16px;bottom:16px;width:380px;max-width:calc(100vw - 32px);height:min(620px,calc(100vh - 32px));
+  display:flex;flex-direction:column;background:#fff;color:#1f2937;border-radius:16px;box-shadow:0 12px 40px rgba(0,0,0,.3);
+  font:14px/1.45 Manrope,system-ui,sans-serif;overflow:hidden;box-sizing:border-box}
+.itu-panel[hidden],.itu-fab[hidden]{display:none}
+.itu-panel *{box-sizing:border-box}
+.itu-h{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;background:#870037;color:#fff}
+.itu-h b{font-size:15px}
+.itu-pill{margin-left:8px;padding:2px 8px;border-radius:999px;background:rgba(255,255,255,.2);font-size:11px;font-weight:700;text-transform:uppercase}
+.itu-x{border:0;background:transparent;color:#fff;font-size:26px;line-height:1;cursor:pointer;min-width:44px;min-height:44px}
+.itu-note{margin:0;padding:8px 14px;background:#fff7ed;color:#7c2d12;font-size:12px}
+.itu-log{flex:1;overflow-y:auto;padding:12px 14px;display:flex;flex-direction:column;gap:10px}
+.itu-m{max-width:92%;padding:9px 12px;border-radius:12px;word-wrap:break-word;overflow-wrap:anywhere}
+.itu-m p{margin:0}
+.itu-me{align-self:flex-end;background:#870037;color:#fff;border-bottom-right-radius:4px}
+.itu-bot{align-self:flex-start;background:#f3f4f6;border-bottom-left-radius:4px}
+.itu-topilmadi,.itu-rad,.itu-off{background:#fef3c7}
+.itu-xato{background:#fee2e2}
+.itu-wait{opacity:.7;font-style:italic}
+.itu-teacher{background:#dcfce7}
+.itu-tag{display:inline-block;margin-bottom:4px;font-size:11px;font-weight:700;color:#00575B;text-transform:uppercase}
+.itu-cites{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px}
+.itu-sm{font-size:12px;color:#6b7280}
+.itu-cite{border:1px solid #00575B;background:#fff;color:#00575B;border-radius:999px;padding:4px 10px;font:600 12px/1.2 inherit;cursor:pointer;min-height:32px}
+.itu-cite.off{border-style:dashed;color:#6b7280;border-color:#9ca3af;cursor:default;display:inline-flex;align-items:center}
+.itu-acts{display:flex;gap:12px;margin-top:6px;flex-wrap:wrap}
+.itu-lnk{border:0;background:transparent;color:#4b5563;font:600 12px/1.2 inherit;text-decoration:underline;cursor:pointer;padding:6px 0;min-height:32px}
+.itu-f{display:flex;gap:8px;padding:10px 14px;border-top:1px solid #e5e7eb}
+.itu-f textarea{flex:1;resize:none;border:1px solid #d1d5db;border-radius:10px;padding:8px 10px;font:inherit;min-height:44px;color:inherit;background:#fff}
+.itu-send{border:0;border-radius:10px;background:#870037;color:#fff;font:600 14px/1 inherit;padding:0 14px;min-height:44px;cursor:pointer}
+.itu-q{margin:0;padding:0 14px 10px}
+.itu-help{display:inline-flex;align-items:center;gap:6px;margin-top:10px;border:1px solid #00575B;background:#fff;color:#00575B;border-radius:999px;
+  padding:6px 12px;font:600 13px/1.2 Manrope,system-ui,sans-serif;cursor:pointer;min-height:36px}
+@media (max-width:719px){
+  .itu-panel{right:0;left:0;bottom:0;width:100%;max-width:100%;height:78vh;border-radius:16px 16px 0 0}
+  .itu-fab{right:12px;bottom:12px;padding:10px 14px}
+}
+@media (prefers-color-scheme:dark){
+  .itu-panel{background:#111827;color:#e5e7eb}
+  .itu-bot{background:#1f2937}
+  .itu-topilmadi,.itu-rad,.itu-off{background:#422006}
+  .itu-xato{background:#450a0a}
+  .itu-teacher{background:#052e16}
+  .itu-note{background:#431407;color:#fed7aa}
+  .itu-f{border-color:#374151}
+  .itu-f textarea{background:#1f2937;border-color:#4b5563}
+  .itu-cite,.itu-help{background:#111827;color:#5eead4;border-color:#5eead4}
+  .itu-lnk,.itu-sm{color:#9ca3af}
+}

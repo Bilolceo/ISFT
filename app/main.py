@@ -541,6 +541,7 @@ RDY.bind(con, ctx); app.include_router(RDY.router)
 DTS.init(con); DTS.bind(con, ctx); app.include_router(DTS.router)
 TJB.init(con); TJB.bind(con, ctx); app.include_router(TJB.router)
 KSL.bind(con, ctx); KSL.init(con); app.include_router(KSL.router)   # init — namuna keyslar (LRS namunasi bayroqlaridan; ORT/HFT bog'langandan keyin)
+from . import tutor as TUT, tutor_admin as TUA; TUT.init(con); TUT.bind(con, ctx); app.include_router(TUT.router); app.include_router(TUA.router)   # AI tutor pilot (docs/tutor.md)
 from . import moliya as MOL   # Moliya: to'lovlar reyestri (qo'lda), kunlik solishtirish, byudjet ijrosi, xarajat tasdig'i, xarid moliyalashtirish, oylik hisobotlar
 MOL.init(con)
 MOL.bind(con, ctx)

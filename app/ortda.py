@@ -501,7 +501,8 @@ def _caps(c: Ctx) -> dict:
             "policy": k == HEAD, "questions": k in QUESTION_ROLES, "aggregate_only": k not in LIST_ROLES, "launch": k in DEPT,
             # keyslar, natija ko'rsatkichlari, haftalik taqvim, eslatmalar/tajriba (app/keyslar.py, app/haftalik.py, app/tajriba.py)
             "cases": k in ACT_ROLES, "case_metrics": k in ACT_ROLES + LEAD, "calendar": k in LIST_ROLES, "calendar_edit": k in DEPT,
-            "triggers": k in DEPT + LEAD, "triggers_edit": k == HEAD}
+            "triggers": k in DEPT + LEAD, "triggers_edit": k == HEAD,
+            "tutor": k in DEPT + LEAD + (TEACH,)}   # AI tutor pilot yorlig'i (app/tutor_admin.py)
 
 @router.get(P + "/meta")
 def api_meta(request: Request):

@@ -859,6 +859,7 @@ def x_pkg(code: str, path: str, request: Request):
     hd = {"Content-Security-Policy": launch_csp(request), "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
           "Cache-Control": "no-store" if path == "index.html" else "private, max-age=300"}
     ct = PK._CT.get(ext, "application/octet-stream")
+    if path == "index.html" and data is not None: data = __import__("app.tutor", fromlist=["player_inject"]).player_inject(data, L)   # AI tutor (pilot; aks holda o'zgarishsiz)
     if span is None: return Response(data, media_type=ct, headers=hd)
     return PK.range_response(f, ct, request.headers.get("range"), hd, off=span[0], size=span[1])
 
