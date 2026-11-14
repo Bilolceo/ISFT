@@ -25,7 +25,7 @@
       ? `<button class="btn sm ${l.status === "otdi" || l.status === "yakunlandi" ? "ghost" : "primary"}" type="button" data-open="${esc(c.ref)}" data-l="${esc(l.code)}">${l.resume ? "Davom etish" : l.status === "otdi" || l.status === "yakunlandi" ? "Qayta ko'rish" : "Ochish"}</button>`
       : l.status === "otdi" || l.status === "yakunlandi" ? "" : `<span class="tk-small tk-muted">onlayn ochish hali yo'q</span>`;
     return `<li class="tkd-l"><span class="tkd-code">${esc(l.code)}</span>
-      <div class="tkd-mid"><b>${esc(l.title)}</b><div class="tk-small tk-muted">${esc(KIND[l.kind] || "")}${l.last ? " · oxirgi: " + dmy(l.last) : ""}</div>
+      <div class="tkd-mid"><b>${esc(l.title)}</b><div class="tk-small tk-muted">${esc(KIND[l.kind] || "")}${l.due_label && l.status !== "otdi" && l.status !== "yakunlandi" ? " · muddat: " + esc(l.due_label) : ""}${l.last ? " · oxirgi: " + dmy(l.last) : ""}</div>
         <div class="tkd-st"><span class="tk-pill ${ST[l.status] || ""}">${esc(status(l))}</span>${mk}</div>
         ${l.status === "jarayonda" ? bar(l.pct, "") : ""}</div>
       <div class="tkd-act">${btn}</div></li>`;
@@ -69,12 +69,37 @@
     };
   }
 
+  /* «ISFT Ready» kirish kursi kartasi: holat, muddat, nishon */
+  function readyCard(r) {
+    if (!r) return "";
+    const done = r.status === "tugatildi";
+    return `<div class="tk-card tkd-ready ${done ? "ok" : r.late ? "bad" : ""}">
+      <div class="tkd-badge" aria-hidden="true">${done ? "✓" : "R"}</div>
+      <div class="tkd-mid"><b>${esc(r.title)}</b>
+        <span class="tk-small tk-muted">${done ? "Kirish kursi tugatildi — «ISFT Ready» nishoni sizniki." : `Platforma, muddatlar, yordam, akademik halollik va AI'dan to'g'ri foydalanish · ${r.done}/${r.total} · muddat ${dmy(r.deadline)}`}</span>
+        ${done ? `<span class="tk-pill ok">ISFT Ready nishoni</span>` : r.late ? `<span class="tk-pill bad">Muddat o'tdi</span>` : ""}</div>
+      ${!done && r.can_open ? `<button class="btn sm primary" type="button" data-open="${esc(r.ref)}" data-l="">${r.status === "yangi" ? "Boshlash" : "Davom etish"}</button>` : ""}</div>`;
+  }
+  /* «Bu hafta»: joriy hafta darslari va muddati o'tgan bajarilmaganlar — muddat bilan */
+  function weekCard(d) {
+    const w = d.this_week || [];
+    if (!w.length) return "";
+    const open = w.filter((x) => !x.done), done = w.length - open.length;
+    return `<section class="tk-card tkd-week" aria-labelledby="tkd-week-h"><div class="tkd-week-h"><b id="tkd-week-h">Bu hafta</b>
+        <span class="tk-small tk-muted">${d.week_no ? d.week_no + "-hafta · " : ""}${open.length ? `${open.length} ta dars kutilmoqda` : "hammasi bajarildi"}${done ? ` · ${done} ta bajarildi` : ""}</span></div>
+      <ul class="tkd-list">${w.map((x) => `<li class="tkd-l ${x.done ? "done" : ""}"><span class="tkd-code">${esc(x.code)}</span>
+        <div class="tkd-mid"><b>${esc(x.title)}</b><div class="tk-small tk-muted">${esc(x.course)}</div>
+          <div class="tkd-st">${x.done ? `<span class="tk-pill ok">Bajarildi</span>` : x.late ? `<span class="tk-pill bad">Muddati o'tgan: ${esc(x.due_label || "")}</span>` : `<span class="tk-pill warn">Muddat: ${esc(x.due_label || "")}</span>`}</div></div>
+        <div class="tkd-act">${!x.done && x.can_open ? `<button class="btn sm ${x.late ? "primary" : ""}" type="button" data-open="${esc(x.course_ref)}" data-l="${esc(x.code)}">${x.resume ? "Davom etish" : "Ochish"}</button>` : ""}</div></li>`).join("")}</ul></section>`;
+  }
+
   async function page(m) {
     const d = await api("/api/talaba/darslar");
     const T = d.total;
     if (!d.courses.length) {
-      m.innerHTML = head("Mening darslarim", "Masofaviy kurslar, darslar va natijalar") +
+      m.innerHTML = head("Mening darslarim", "Masofaviy kurslar, darslar va natijalar") + readyCard(d.ready) +
         `<div class="tk-card"><div class="tk-empty">${d.masofaviy ? (d.pending && d.pending.length ? "Kurslaringiz darslari hali tayyorlanmoqda: " + d.pending.map(esc).join(", ") : "Guruhingiz uchun masofaviy kurslar hali biriktirilmagan.") : "Bu bo'lim masofaviy ta'lim talabalari uchun."}</div></div><div id="tkd-tg"></div>`;
+      m.onclick = (ev) => { const o = ev.target.closest("[data-open]"); if (o) launch(o.dataset.open, o.dataset.l, o); };
       if (d.masofaviy) tgCard(m.querySelector("#tkd-tg"));
       return;
     }
@@ -86,6 +111,9 @@
         <div class="tk-card tk-stat ${T.lag ? "bad" : "ok"}"><span class="k">Ortda</span><span class="v">${T.lag}</span><span class="s">${T.lag ? "dars — taqvimdan" : "taqvim bo'yicha"}</span></div>
         <div class="tk-card tk-stat"><span class="k">Kurslar</span><span class="v">${T.courses}</span><span class="s">${T.late ? `${T.late} ta kechikkan dars` : "kechikkan dars yo'q"}</span></div>
       </div>
+      ${readyCard(d.ready && d.ready.status !== "tugatildi" ? d.ready : null)}
+      ${weekCard(d)}
+      ${d.ready && d.ready.status === "tugatildi" ? readyCard(d.ready) : ""}
       ${nx ? `<div class="tk-card tkd-next"><div><span class="tk-small tk-muted">Keyingi tavsiya etilgan dars</span><b>${esc(nx.code)} · ${esc(nx.title)}</b>
           <span class="tk-small tk-muted">${esc(nx.course)}${nx.mark === "kechikkan" ? " · kechikkan" : nx.mark === "bu_hafta" ? " · bu hafta" : ""}</span></div>
           <button class="btn primary" type="button" data-open="${esc(nx.course_ref)}" data-l="${esc(nx.code)}">${nx.resume ? "Davom etish" : "Boshlash"}</button></div>` : ""}

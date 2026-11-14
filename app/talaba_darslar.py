@@ -98,19 +98,20 @@ def _status_row(p: dict | None) -> dict:
 
 def course_view(con, s: dict, co: dict) -> dict:
     """Bitta kurs: darslar (NEXTID tartibi), holat, taqvim belgisi, keyingi tavsiya etilgan dars, o'z progressi."""
-    from . import paket as PK, ortda as ORT
+    from . import paket as PK, ortda as ORT, haftalik as H
     sid, cid = int(s["id"]), int(co["id"])
     ref = f"dl:{cid}"
     oco = {"ref": ref, "kind": "dl", "dl_id": cid}
     cal = ORT.lessons_of(oco)                                        # taqvim tartibi (reja yoki L/A teng yoyilgan)
     cal_ix = {x["ref"]: i for i, x in enumerate(cal)}
-    start, weeks = ORT.calendar(oco)
+    gid = (db.one(con, "SELECT group_id FROM students WHERE id=?", (sid,)) or {}).get("group_id")
+    pl = H.plan(oco, gid, cal)                                       # guruhning haftalik taqvimi: chiqarilish sanasi va muddat
+    sched, start, weeks = pl["sched"], pl["start"], pl["weeks"]
     today = clock.today()
     pol = L.policy(con)
     n = len(cal)
-    rel_now = LA.released(n, start, today, weeks)
-    rel_prev = LA.released(n, start, today - dt.timedelta(days=7), weeks)
-    exp = LA.expected_done(n, start, today, weeks, pol["grace_weeks"])
+    rel_now = LA.released_by(sched, today)
+    exp = LA.expected_by_due(sched, today, pol["grace_weeks"])
     prog = {r["lesson_ref"]: r for r in db.rows(con, "SELECT * FROM lrs_progress WHERE student_id=? AND course_ref=?", (sid, ref))}
     appr = _approved_keys(con, cid)
     kl = _kurs_links(con, cid)
@@ -140,13 +141,15 @@ def course_view(con, s: dict, co: dict) -> dict:
         st = _status_row(p)
         i = cal_ix.get(code)
         done = st["status"] in LA.DONE_ST
-        mark = None
-        if i is not None:
-            if i < exp and not done: mark = "kechikkan"
-            elif rel_prev <= i < rel_now: mark = "bu_hafta"
-            elif i >= rel_now: mark = "keyinroq"
+        mark, sc = None, (sched[i] if i is not None else None)
+        if sc:      # muddat bo'yicha: kechikkan — muddati o'tgan va bajarilmagan; bu hafta — chiqarilgan, muddati hali o'tmagan; keyinroq — hali chiqarilmagan
+            if sc["due"] < today and not done: mark = "kechikkan"
+            elif sc["release"] <= today <= sc["due"]: mark = "bu_hafta"
+            elif sc["release"] > today: mark = "keyinroq"
         items.append({"code": code, "title": title, "kind": l.get("kind") or ("maruza" if code.startswith("L") else "amaliy"), **st, "mark": mark,
-                      "cal": i, "can_open": bool(launch), "resume": bool(p) and not done and st["status"] != "boshlanmagan"})
+                      "cal": i, "can_open": bool(launch), "resume": bool(p) and not done and st["status"] != "boshlanmagan",
+                      "week": sc["week"] if sc else None, "due": sc["due"].isoformat() if sc else None, "release": sc["release"].isoformat() if sc else None,
+                      "due_label": H.due_label(sc["due"]) if sc else None})
     def _done_at(code: str) -> bool:
         # dars ikki manbadan biridan bajarilgan bo'lishi mumkin: dl:<cid> (paket) yoki bog'langan muharrir kursi ku:<id> (ds_links)
         if (prog.get(code) or {}).get("status") in LA.DONE_ST: return True
@@ -175,12 +178,30 @@ def my_lessons(con, s: dict) -> dict:
     nxt = None
     for c in sorted(cos, key=lambda c: -c["lag"]):
         if c["next"]: nxt = {"course_ref": c["ref"], "course": c["title"], **c["next"]}; break
+    # «Bu hafta»: joriy haftaning darslari (chiqarilgan, muddati o'tmagan) va muddati o'tgan bajarilmaganlar — muddat bo'yicha
+    week = []
+    for c in cos:
+        for l in c["lessons"]:
+            if l["mark"] in ("bu_hafta", "kechikkan"):          # kechikkan — faqat bajarilmagan (belgi shuni anglatadi)
+                week.append({"course_ref": c["ref"], "course": c["title"], "code": l["code"], "title": l["title"], "due": l["due"], "due_label": l["due_label"],
+                             "status": l["status"], "status_label": l["status_label"], "late": l["mark"] == "kechikkan", "can_open": l["can_open"],
+                             "resume": l["resume"], "done": l["status"] in LA.DONE_ST})
+    week.sort(key=lambda x: (x["done"], not x["late"], x["due"] or "", x["course"], x["code"]))
+    from . import isft_ready as RDY
+    try: ready = RDY.student_status(con, s["id"]) if s.get("study_form") == "masofaviy" else None
+    except Exception: ready = None
     return {"courses": cos, "pending": pending, "total": tot, "next": nxt, "today": clock.today().isoformat(),
-            "masofaviy": s.get("study_form") == "masofaviy"}
+            "masofaviy": s.get("study_form") == "masofaviy", "this_week": week[:30], "ready": ready,
+            "week_no": max((c["week"] for c in cos), default=0)}
 
 def resolve_launch(con, s: dict, course_ref: str, code: str) -> dict:
     """Talaba so'ragan dars — FAQAT o'z ro'yxatidagi, ochiladigan (tasdiqlangan) dars bo'lsa. Aks holda None."""
     kind, _, cid = (course_ref or "").partition(":")
+    if kind == "ku" and cid.isdigit():                 # «ISFT Ready» kirish kursi — har bir faol masofaviy talaba uchun (faqat e'lon qilingan bo'lsa)
+        from . import isft_ready as RDY
+        i = RDY.info(con)
+        if i and i["published"] and i["id"] == int(cid) and s.get("study_form") == "masofaviy": return {"course_ref": i["ref"], "lesson_ref": ""}
+        return None
     if kind != "dl" or not cid.isdigit(): return None
     co = next((c for c in courses_of(con, s) if c["id"] == int(cid)), None)
     if not co: return None

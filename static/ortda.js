@@ -13,7 +13,11 @@ const OQ = {meta: null, who: null, tab: "talabalar", f: {...OQ0}, qcourse: "", q
 function orReset() { Object.assign(OQ, {meta: null, who: null, tab: "talabalar", f: {...OQ0}, qcourse: "", qlesson: "", ccourse: ""}); }
 if (!document.querySelector('link[href="ortda.css"]')) document.head.insertAdjacentHTML("beforeend", '<link rel="stylesheet" href="ortda.css">');
 if (!document.querySelector('link[href="masofaviy.css"]')) document.head.insertAdjacentHTML("beforeend", '<link rel="stylesheet" href="masofaviy.css">');
-const OR_TABS = {talabalar: "Talabalar", kurslar: "Kurslar", savollar: "Savollar tahlili", qoidalar: "Qoidalar"};
+const OR_TABS = {talabalar: "Talabalar", keyslar: "Keyslar", kurslar: "Kurslar", natija: "Natija", taqvim: "Haftalik taqvim",
+                 eslatmalar: "Eslatmalar va tajriba", savollar: "Savollar tahlili", qoidalar: "Qoidalar"};
+/* keyslar.js qo'shadigan yorliqlar (keyslar, natija, taqvim, eslatmalar) — imkoniyat (caps) bo'yicha */
+const OR_TAB_CAP = {keyslar: "cases", natija: "case_metrics", taqvim: "calendar", eslatmalar: "triggers"};
+window.OR_EXT = window.OR_EXT || {};
 const OR_LVL = {yuqori: ["Yuqori xavf", "bad"], orta: ["O'rta xavf", "warn"], past: ["Past", ""]};
 const OR_ST = {boshlanmagan: "", jarayonda: "info", otmadi: "bad", yakunlandi: "ok", otdi: "ok"};
 const OR_FLAG = {qiyin: ["Juda qiyin", "bad"], oson: ["Juda oson", ""], farqlamaydi: ["Farqlamaydi", "warn"], salbiy: ["Salbiy farqlash", "bad"], chalgituvchi: ["Kuchli chalg'ituvchi", "warn"]};
@@ -26,7 +30,8 @@ async function renderOrtda(tab) {
   if (OQ.who !== who) { const t = tab || OQ.tab; orReset(); OQ.who = who; tab = t; }
   if (!OQ.meta) { const m = await dlApi("/api/ortda/meta"); if (OQ.who !== who) return; OQ.meta = m; }
   const M = OQ.meta;
-  const tabs = Object.keys(OR_TABS).filter(t => t !== "talabalar" || M.caps.list).filter(t => t !== "savollar" || M.caps.questions);
+  const tabs = Object.keys(OR_TABS).filter(t => t !== "talabalar" || M.caps.list).filter(t => t !== "savollar" || M.caps.questions)
+    .filter(t => !OR_TAB_CAP[t] || (M.caps[OR_TAB_CAP[t]] && window.OR_EXT[t]));
   OQ.tab = tab && tabs.includes(tab) ? tab : tabs.includes(OQ.tab) ? OQ.tab : tabs[0];
   const demo = M.source !== "lrs";
   v.innerHTML = `<div class="dl-head"><div><h2>Ortda qolganlar</h2><span class="muted">${esc(M.scope)} · semestrning ${M.week}-haftasi · ${dlD(M.today)}</span></div>
@@ -39,7 +44,7 @@ async function renderOrtda(tab) {
   v.querySelector("[data-dl]")?.addEventListener("click", () => go("masofaviy"));
   const box = $("#orBox");
   try {
-    await ({talabalar: orStudents, kurslar: orCourses, savollar: orQuestions, qoidalar: orRules})[OQ.tab](box);
+    await ({talabalar: orStudents, kurslar: orCourses, savollar: orQuestions, qoidalar: orRules, ...window.OR_EXT})[OQ.tab](box);
   } catch (e) {
     if (e?.message === "auth") return;
     box.innerHTML = e?.message === "denied" ? locked("Bu bo'lim") : `<div class="card dl-card"><p>${esc(e?.msg || "Ma'lumotni yuklab bo'lmadi")}</p></div>`;

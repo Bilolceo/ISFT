@@ -82,6 +82,7 @@ async function dsSubject(box) {
     ${can.write ? `<div class="pk-acts ds-tools"><button type="button" class="btn sm" id="dsSkel">${ico("plus", 15)} Fan skeleti (L + A)</button>
       <button type="button" class="btn sm" id="dsApply">Shablonni qo'llash</button>
       <button type="button" class="btn sm" id="dsBulk">${ico("download", 15)} Hammasini yig'ish va eksport</button>
+      <button type="button" class="btn sm" id="dsAq" title="Muharrirdagi har dars oxiriga 3–5 savollik past xavfli test — Test bankdagi tasdiqlangan savollardan, fan bo'yicha takrorsiz">${ico("checkc", 15)} Har dars oxiriga test</button>
       ${can.template ? `<button type="button" class="btn sm ghost" id="dsTpl">Kafedra shablonini tahrirlash</button>` : ""}</div>` : ""}</div>
     ${groups.length ? groups.map(([k, ls]) => `<div class="card pk-card"><h3>${esc(DS_KIND[k])} <span class="muted">· ${ls.length} ta</span></h3><ol class="ds-grid">${ls.map(row).join("")}</ol></div>`).join("")
       : `<div class="card pk-card pk-empty">Darslar yo'q — «Fan skeleti» bilan yarating.</div>`}`;
@@ -89,6 +90,12 @@ async function dsSubject(box) {
   box.querySelector("#dsSkel")?.addEventListener("click", () => dsSkeleton(box));
   box.querySelector("#dsApply")?.addEventListener("click", () => dsApply(box));
   box.querySelector("#dsBulk")?.addEventListener("click", () => dsBulk(box));
+  box.querySelector("#dsAq")?.addEventListener("click", e => { if (!arm(e.currentTarget, "Qo'shilsinmi?")) return; (async () => {
+    const r = await pkApi(`/api/dars/subjects/${DS.cid}/dars-testlari`, {});
+    if (!r) return;
+    toast(`Dars oxiri testi: ${r.added.length} ta qo'shildi${r.skipped.length ? `, ${r.skipped.length} ta o'tkazildi (${r.skipped[0].reason})` : ""}${r.already ? `, avvaldan ${r.already}` : ""}`);
+    dsSubject(box);
+  })(); });
   box.querySelector("#dsTpl")?.addEventListener("click", () => dsTemplates(box));
   box.querySelectorAll("[data-open]").forEach(b => b.onclick = () => { PK.cid = DS.cid; PK.topic = +b.dataset.open; PK.ups = null; renderPaket("mavzular"); });
   box.querySelectorAll("[data-ku]").forEach(b => b.onclick = () => go("kurs", {cid: +b.dataset.ku}));
