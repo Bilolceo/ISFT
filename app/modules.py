@@ -35,6 +35,7 @@ def _m(key, title, desc, on, needs="", lock=False, soft=False, group="asosiy"):
 MODULES = [
     # ---- asosiy (standart: yoqilgan) ----
     _m("panel", "Boshqaruv paneli", "Bosh sahifa: sizdan kutilayotgan ishlar va lavozim ko'rsatkichlari.", 1, lock=True),
+    _m("nazorat", "Nazorat markazi", "Rektor: faqat istisnolar va ularning egalari, imzo navbati, haftalik hisobot (rektor menyusi — 5 band).", 1, "Rektorat"),
     _m("mywork", "Mening vazifalarim", "Barcha manbalardagi ishlar bitta ro'yxatda.", 1, lock=True),
     _m("tasks", "Majlislar va topshiriqlar", "Majlis bayonnomasi, qarorlar va topshiriqlar ijrosi.", 1, "Rektorat kotibi"),
     _m("portal", "Yozishmalar", "Bo'limlararo xatlar, fayllar va umumiy bazalar.", 1, "Devonxona"),

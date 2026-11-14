@@ -61,6 +61,8 @@ async def _warm():
     asyncio.create_task(OPSM.poller())   # qoidalar har 10 daqiqada qayta hisoblanadi
     from . import studio as _STU
     asyncio.create_task(_STU.poller())   # studiya: lease muddati o'tgan montajlar va YouTube navbati («studio» bo'limi o'chiq bo'lsa — hech narsa)
+    from . import nazorat as _NZ
+    asyncio.create_task(_NZ.poller())    # Nazorat markazi: eskalatsiya skaneri (10 daqiqa) va dushanba 08:00 haftalik hisoboti («nazorat» o'chiq bo'lsa — hech narsa)
 
 @app.on_event("startup")
 async def _bot_start():   # Telegram bot shu jarayonda (TELEGRAM_BOT_TOKEN bo'lsa); token yo'q — faqat log
@@ -558,6 +560,10 @@ app.include_router(TKS.router)
 from . import devon as DVN, qabul as QBL, rejalar as RJL, it_requests as ITR   # Kiruvchi xatlar (Devonxona), Qabul (abituriyentlar), KPI maqsadlari / Sifat amallari, AT akkaunt so'rovlari
 for _m in (DVN, QBL, RJL, ITR):
     _m.init(con); _m.bind(con, ctx); app.include_router(_m.router)
+from . import nazorat as NZ   # Nazorat markazi (rektor): faqat istisnolar va egalari, 4 amal, eskalatsiya, imzo navbati, haftalik hisobot
+NZ.init(con)
+NZ.bind(con, ctx)
+app.include_router(NZ.router)
 class _NoCacheStatic(StaticFiles):
     """JS/CSS/HTML har safar ETag bilan qayta tekshiriladi — yangi deploydan keyin brauzer eski kodni ishlatib qolmasin."""
     async def get_response(self, path, scope):

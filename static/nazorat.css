@@ -1,0 +1,72 @@
+/* «Nazorat markazi», «Imzo navbati», «Haftalik hisobot», «Barcha bo'limlar» (static/nazorat.js). Ranglar — style.css tokenlari (yorug'/qorong'i). */
+.nz-head h2{margin:0}
+.nz-sum{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:16px}
+.nz-s{display:flex;flex-direction:column;gap:2px;padding:14px 18px;border-radius:var(--r);background:var(--surface);border:1px solid var(--card-brd);text-align:left;font:inherit;color:var(--ink)}
+.nz-s b{font-size:26px;font-weight:800;line-height:1.1}
+.nz-s span{font-size:12.5px;color:var(--muted)}
+.nz-s.bad b{color:var(--bad)}.nz-s.warn b{color:var(--warn)}.nz-s.ok b{color:var(--ok)}
+.nz-s.link{cursor:pointer}.nz-s.link:hover{border-color:var(--teal)}.nz-s.link:hover span{color:var(--teal)}
+.nz-areas{display:flex;flex-direction:column;gap:12px}
+.nz-area{padding:14px 18px}
+.nz-green,.nz-amber{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.nz-green>.i,.nz-amber>.i,.nz-ah>.i{color:var(--muted);flex:none}
+.nz-ok{display:inline-flex;align-items:center;gap:5px;margin-left:auto;color:var(--ok);font-weight:600;font-size:13px}
+.nz-am{margin-left:auto;color:var(--warn);font-size:13px;font-weight:600}
+.nz-amber .nz-lbtn{margin-left:0}
+.nz-red{border-left:4px solid var(--bad)}
+.nz-amber-open{border-left:4px solid var(--warn)}
+.nz-ah{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+.nz-ah .nz-lbtn{margin-left:auto}
+.nz-item{padding:12px 0;border-top:1px solid var(--line)}
+.nz-item:first-of-type{border-top:0}
+.nz-item.low{opacity:.92}
+.nz-it{display:flex;flex-direction:column;gap:3px;min-width:0}
+.nz-it b{font-weight:700;overflow-wrap:anywhere}
+.nz-why{display:flex;gap:6px;align-items:flex-start;font-size:13px;color:var(--bad)}
+.nz-item.low .nz-why{color:var(--warn)}
+.nz-why .i{flex:none;margin-top:2px}
+.nz-meta{display:flex;flex-wrap:wrap;gap:6px 18px;margin:8px 0;font-size:12.5px;color:var(--ink-2)}
+.nz-meta>span{display:inline-block;min-width:0}
+.nz-meta i{font-style:normal;color:var(--muted);margin-right:6px}
+.nz-st{font-weight:700}.nz-st.s2{color:var(--bad)}.nz-st.s1{color:var(--warn)}.nz-st.s0{color:var(--ink-2)}
+.nz-acts .btn{white-space:nowrap}
+.nz-lower{border-top:1px dashed var(--line-2);margin-top:6px}
+.nz-foot{margin-top:14px}
+.nz-flash{animation:nzFlash 2.4s var(--ease)}
+@keyframes nzFlash{0%,40%{background:var(--warn-soft)}100%{background:transparent}}
+/* imzo navbati */
+.nz-sign{padding:6px 18px}
+.nz-srow{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:10px 16px;align-items:center;padding:12px 0;border-top:1px solid var(--line)}
+.nz-srow:first-child{border-top:0}
+.nz-age{font-size:12.5px;font-weight:700;color:var(--ink-2);white-space:nowrap}.nz-age.old{color:var(--bad)}
+/* haftalik */
+.nz-brief .nz-bh{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+.nz-lines{margin:6px 0 14px;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+.nz-dec{margin:6px 0 0;padding-left:22px;display:flex;flex-direction:column;gap:6px;font-weight:600}
+.nz-hist{margin-top:12px}
+/* barcha bo'limlar */
+.nz-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px}
+.nz-tile{display:flex;align-items:center;gap:10px;padding:16px 18px;cursor:pointer;font:inherit;color:var(--ink);text-align:left;border:1px solid var(--card-brd)}
+.nz-tile:hover{border-color:var(--teal);color:var(--teal)}
+.nz-tile .i{flex:none;color:var(--teal)}
+/* modal */
+.nz-modal-bg{position:fixed;inset:0;background:rgba(10,8,9,.45);display:flex;align-items:flex-start;justify-content:center;z-index:80;padding:6vh 16px;overflow-y:auto}
+.nz-modal{background:var(--raised);color:var(--ink);border-radius:20px;padding:20px 22px;width:100%;max-width:520px;box-shadow:var(--shadow-pop);border:1px solid var(--card-brd)}
+.nz-modal h3{margin:0 0 10px}
+.nz-mp{margin:0 0 12px;font-size:13.5px}
+.nz-f{display:flex;flex-direction:column;gap:5px;font-size:13px;font-weight:600;margin:10px 0}
+.nz-f input,.nz-f textarea,.nz-sel{font:inherit;font-weight:500;padding:9px 12px;border-radius:10px;border:1px solid var(--line-2);background:var(--surface);color:var(--ink);width:100%;box-sizing:border-box}
+.nz-r{display:flex;gap:8px;align-items:center;font-size:13.5px;margin:8px 0}
+.nz-macts{justify-content:flex-end;margin-top:14px}
+.nz-rules{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}
+.nz-rules .nz-f{margin:6px 0}
+@media (max-width:700px){
+  .nz-sum{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .nz-s b{font-size:22px}
+  .nz-area{padding:12px 14px}
+  .nz-ok,.nz-am{margin-left:0;flex-basis:100%}
+  .nz-acts .btn{flex:1 1 calc(50% - 8px)}
+  .nz-srow{grid-template-columns:minmax(0,1fr) auto}
+  .nz-srow .row-actions{grid-column:1/-1}
+  .nz-rules{grid-template-columns:1fr}
+}
