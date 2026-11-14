@@ -161,7 +161,7 @@ ok(all(any(x["visible"] and gr in (x.get("sub") or "") for x in f["faces"]) for 
 # =====================================================================
 print("\n— D. Ruxsatlar (lavozim bo'yicha) —")
 def kinds_seen(c):
-    r = c.get("/api/face/frames", params={"limit": 96})
+    r = c.get("/api/face/frames", params={"limit": 96, "date": FDAY})   # namuna kadrlar kuni (tunda «bugun» bo'sh bo'ladi)
     if r.status_code != 200: return r.status_code, None
     return 200, {(x["kind"] or x["status"]) for f in r.json()["frames"] for x in f["faces"] if x["visible"]}
 st, kk = kinds_seen(S(16)); ok(st == 200 and {"talaba", "oqituvchi", "xodim"} <= kk, f"Xo'jalik bo'limi (xavfsizlik): hammasi ({sorted(kk)})")
@@ -177,7 +177,7 @@ ok(httpx.post(B + "/api/login", json={"user_id": 13, "password": PW}).status_cod
 D13 = S(24); st, kk = kinds_seen(D13)
 ok(st == 200 and kk is not None and kk <= {"talaba"}, f"Tyutor: faqat talabalar ({sorted(kk or [])})")
 fac = q("SELECT faculty_id FROM users WHERE id=24")[0][0]
-dv = D13.get("/api/face/frames", params={"limit": 96}).json()
+dv = D13.get("/api/face/frames", params={"limit": 96, "date": FDAY}).json()
 pids = {x["person_id"] for f in dv["frames"] for x in f["faces"] if x["visible"] and x["person_id"]}
 ok(pids and all(q("SELECT faculty_id FROM face_persons WHERE id=?", (p,))[0][0] == fac for p in pids), f"Tyutor: barcha shaxslar o'z fakultetidan (#{fac}, {len(pids)} kishi)")
 mixed = next((f for f in dv["frames"] if any(not x["visible"] for x in f["faces"])), None)
