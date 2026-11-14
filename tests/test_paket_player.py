@@ -38,10 +38,10 @@ ok('href="player.css"' in html and '<meta name="viewport"' in html and 'lang="uz
 ok(not re.search(r'(src|href)="(/|[a-z]+:)', html), "index.html: faqat nisbiy manzillar")
 
 print("== 2. Xavfsizlik va tashqi resurslar")
-ALLOWED = re.compile(r"^https?://(www\.)?(youtube-nocookie\.com|youtube\.com|youtu\.be)(/|$)|^http://adlnet\.gov/expapi/")
+ALLOWED = re.compile(r"^https?://(www\.)?(youtube-nocookie\.com|youtube\.com|youtu\.be)(/|$)|^http://adlnet\.gov/expapi/|^https://w3id\.org/xapi/")   # w3id — cmi5 kengaytma IRI (identifikator, so'rov emas)
 urls = re.findall(r"https?://[^\s'\"()<>]+", js + css + html)
 bad = [u for u in urls if not ALLOWED.match(u)]
-ok(not bad, f"Tashqi URL lar faqat YouTube va ADL xAPI IRI ({len(urls)} ta topildi){': ' + ', '.join(bad[:5]) if bad else ''}")
+ok(not bad, f"Tashqi URL lar faqat YouTube va ADL / cmi5 xAPI IRI ({len(urls)} ta topildi){': ' + ', '.join(bad[:5]) if bad else ''}")
 ok(not re.search(r"\beval\s*\(|new\s+Function\s*\(|setTimeout\s*\(\s*['\"]|document\.write", js), "eval / new Function / satrli setTimeout / document.write yo'q")
 ok(not re.search(r"@import|url\((['\"]?)(https?:|//)", css), "CSS da tashqi @import/url yo'q")
 inner = re.findall(r"\.innerHTML\s*=\s*([^;]+)", js)

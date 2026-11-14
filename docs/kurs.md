@@ -84,6 +84,9 @@ LMS: `lms.js` (paket pleyeri bilan umumiy) — SCORM 1.2, SCORM 2004 4-nashr, xA
 test topshirilganda, ikkalasi yoki biri. Baholash qoidasi serverdagi `grade()` / `norm_answer()` bilan bir xil (bo'sh joy: katta-kichik harf, apostrof
 variantlari, chetdagi tinish belgilari).
 
+ISFT Core'ning o'z LRS'i va NEXTID'ga bog'liq bo'lmagan ishga tushirish yo'li (talabaning shaxsiy havolasi → eksport qilingan kurs xAPI launch
+parametrlari bilan), shuningdek savollar tahlilidan «Muharrirda ochish» (dars + blok) — `docs/lrs.md`.
+
 ## Eksport
 
 `POST /api/kurs/courses/{id}/export {mode}` — `xapi` (NEXTID, standart), `scorm12`, `scorm2004`, `none` (oddiy HTML). Zip: pleyer + `lms.js` + shriftlar +

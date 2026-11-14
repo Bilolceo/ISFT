@@ -314,6 +314,7 @@ async function kuLoadLesson(lid, skipFlush = false) {
   KU.course.status = l.status; kuStatusChip();
   kuRenderSide(); kuRenderCanvas(); kuRenderPanel(); kuNote(); kuState("saved");
   if (KU.pv) kuPvLoad();
+  if (KU.focus) { const i = KU.blocks.findIndex(b => b.id === KU.focus); KU.focus = null; if (i >= 0) kuSelect(i); }
 }
 
 /* ---------- dars (markaz) ---------- */
@@ -997,7 +998,10 @@ async function kuExport() {
     if (v !== "kurs" && KU.dirty) kuSave();
     prev(v, opts);
     if (v !== "kurs") { $("#kuPanel")?.classList.remove("open"); return; }
-    if (opts && typeof opts === "object" && opts.cid) { KU.view = "course"; KU.cid = +opts.cid; KU.lid = 0; }
+    if (opts && typeof opts === "object" && opts.cid) {
+      const who = typeof ME !== "undefined" ? ME : null; if (KU.who !== who) { kuReset(); KU.who = who; }   /* birinchi kirish — havola holati tozalanib ketmasin */
+      KU.view = "course"; KU.cid = +opts.cid; KU.lid = +opts.lid || 0; KU.focus = opts.block || null;   /* ortda.js savollar tahlili: dars + blok */
+    }
     Promise.resolve().then(() => renderKurs()).catch(e => { if (e?.message === "auth") return; $("#v-kurs").innerHTML = e?.message === "denied" ? locked("Bu bo'lim") : errCard("kurs"); });
   };
   go._ku = true;

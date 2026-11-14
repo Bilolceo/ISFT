@@ -511,6 +511,12 @@ from . import studio as STU   # Studiya: dars ishlab chiqarish — syomka bandi,
 STU.init(con)   # jadvallar, standart «Studiya» xonasi, operator demo akkaunti, namuna bandlar (PK.init dan keyin)
 STU.bind(con, ctx)
 app.include_router(STU.router)
+from . import lrs as LRS, ortda as ORT   # LRS (xAPI statementlar, launch tokenlari, to'g'ridan-to'g'ri ishga tushirish) va «Ortda qolganlar» (docs/lrs.md)
+LRS.init(con)   # jadvallar va namuna (sun'iy) statementlar (KUR.init dan keyin — paket/kurs jadvallari kerak)
+LRS.bind(con, ctx)
+app.include_router(LRS.router)
+ORT.bind(con, ctx)
+app.include_router(ORT.router)
 from . import moliya as MOL   # Moliya: to'lovlar reyestri (qo'lda), kunlik solishtirish, byudjet ijrosi, xarajat tasdig'i, xarid moliyalashtirish, oylik hisobotlar
 MOL.init(con)
 MOL.bind(con, ctx)

@@ -255,7 +255,7 @@ slayd **tartib raqami** bo'yicha: taqdimot almashtirilsa izoh/audio o'sha raqamd
 | Boshqa Rise bloklari: accordion, tabs, timeline, labeled graphic, scenario, process, chart, embed | — | **yo'q** |
 | Rasm/video tahriri (kesish, filtr), stok rasmlar kutubxonasi | — | **yo'q** (rasm faqat o'lchamga keltiriladi) |
 | Hamkorlikda tahrir, sharh (Review 360) | bo'lim tasdiqlashi / qaytarishi (izoh bilan) | qisman |
-| Natijani LMS'ga yozish | SCORM 1.2 / 2004 / xAPI; NEXTID'da — faqat `postMessage` | Rise bilan bir xil cheklov (NEXTID launch parametrlarisiz) |
+| Natijani LMS'ga yozish | SCORM 1.2 / 2004 / xAPI; NEXTID'da — faqat `postMessage`; ISFT Core LRS — shaxsiy havola orqali (`docs/lrs.md`) | Rise bilan bir xil cheklov (NEXTID launch parametrlarisiz) — o'z LRS'imiz va NextBrain'ga so'rov (`docs/nextid_xapi_sorov.md`) |
 
 Haqiqiy `.mp4` ijrosi lokal sinovda tekshirilmagan (ffmpeg yo'q — testlarda faqat sarlavhasi to'g'ri namuna fayl): `<video>`, `<track>`, Range javoblari
 tekshiriladi, kodek mosligi (H.264/AAC tavsiya etiladi) — foydalanuvchi zimmasida.
