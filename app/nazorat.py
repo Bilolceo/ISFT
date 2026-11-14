@@ -1359,3 +1359,53 @@ def api_case_outcomes(request: Request):
     return {"enabled": True, "total": t, "since": d["since"], "demo": d["demo"], "policy": d["policy"], "definitions": d["definitions"],
             "tutors": [{k: x[k] for k in ("id", "name", "load", "over", "opened", "open", "overdue", "sla_pct", "median_contact_h", "reeng_pct", "closed")}
                        for x in d["tutors"]][:30]}
+
+
+# =============================================================================================
+# HEMIS ALMASHINUVI (app/hemis.py, docs/hemis.md) — alohida bo'lim: qoida va detektorlar.
+#   hemis:farq      — N kundan (hemis_diff_days) ortiq hal qilinmagan HEMIS ↔ ISFT Core farqlari (jamlangan; egasi — Registrator ofisi);
+#   hemis:sifat     — takroriy HEMIS ID / HEMIS IDsiz faol talabalar / masofaviy talaba boshqa shakldagi guruhda / guruhsiz (jamlangan);
+#   hemis:topilmadi — «HEMIS'da topilmadi» deb belgilangan, N kundan ortiq ko'rib chiqilmagan yozuvlar.
+# Rektor faqat sonlarni ko'radi (ism, HEMIS ID yo'q).
+# =============================================================================================
+RULES.update({"hemis_diff_days": (7, 1, 90, "HEMIS almashinuvi: farq necha kundan keyin istisno (hal qilinmagan)")})
+
+
+def _hemis_cands(con, now, R, O: Org) -> list[dict]:
+    try:
+        from . import hemis as HMS
+        if HMS._con is None: return []
+        days = R.get("hemis_diff_days", 7)
+        n, t0, tot = HMS.overdue_diffs(con, days)
+        qc = HMS.quality_counts(con)
+        lim = (now - dt.timedelta(days=days)).isoformat(timespec="seconds")
+        mi = db.one(con, "SELECT COUNT(*) n, MIN(since) t0 FROM hemis_missing WHERE status='ochiq' AND since<=?", (lim,))
+    except Exception as e:
+        print("nazorat.hemis:", repr(e)); return []
+    owner, out = O.head("talabalar"), []
+    if n:
+        out.append({"key": "hemis:farq", "area": "talabalar", "kind": "hemis",
+                    "title": f"{n} ta HEMIS ↔ ISFT Core farqi {days} kundan ortiq hal qilinmagan",
+                    "why": f"Farqlar navbatida jami {tot} ta ochiq farq (holat, guruh, ta'lim shakli, fuqarolik, ism-sharif). Registrator qaror qiladi: "
+                           "HEMIS to'g'ri / ISFT Core to'g'ri / qo'lda", "src": "HEMIS almashinuvi",
+                    "since": (_dt(t0) or now) + dt.timedelta(days=days), "owner": owner, "unit": "talabalar", "deadline": None,
+                    "link": {"view": "hemis", "tab": "farqlar"}, "state": [n], "aggregate": True})
+    crit = {k: qc.get(k, 0) for k in ("dup_hemis", "no_hemis", "dist_form", "no_group")}
+    if sum(crit.values()):
+        names = (("dup_hemis", "takroriy HEMIS ID"), ("no_hemis", "HEMIS IDsiz talaba"),
+                 ("dist_form", "masofaviy talaba boshqa shakldagi guruhda"), ("no_group", "guruhsiz talaba"))
+        out.append({"key": "hemis:sifat", "area": "talabalar", "kind": "hemis",
+                    "title": f"HEMIS ma'lumot sifati: {sum(crit.values())} ta muammo",
+                    "why": "; ".join(f"{crit[k]} — {t}" for k, t in names if crit[k]), "src": "HEMIS almashinuvi — sifat",
+                    "since": None, "owner": owner, "unit": "talabalar", "deadline": None, "link": {"view": "hemis", "tab": "sifat"},
+                    "state": sorted(crit.items()), "aggregate": True})
+    if mi and mi["n"]:
+        out.append({"key": "hemis:topilmadi", "area": "talabalar", "kind": "hemis",
+                    "title": f"{mi['n']} ta yozuv «HEMIS'da topilmadi» — {days} kundan ortiq ko'rib chiqilmagan",
+                    "why": "ISFT Core'da bor, HEMIS eksportida yo'q. O'chirilmaydi — registrator sababini aniqlaydi (chetlashtirish, ko'chirish, xato)",
+                    "src": "HEMIS almashinuvi", "since": (_dt(mi["t0"]) or now) + dt.timedelta(days=days), "owner": owner, "unit": "talabalar",
+                    "deadline": None, "link": {"view": "hemis", "tab": "farqlar"}, "state": [mi["n"]], "aggregate": True})
+    return out
+
+
+DETECTORS.append(_hemis_cands)

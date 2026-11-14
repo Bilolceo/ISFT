@@ -582,6 +582,7 @@ from . import yuzma_yuz as YY   # Yuzma-yuz tadbirlar (masofaviy): ro'yxatdan o'
 YY.init(con)
 YY.bind(con, ctx)
 app.include_router(YY.router)
+from . import hemis as HMS; HMS.init(con); HMS.bind(con, ctx); app.include_router(HMS.router)   # HEMIS almashinuvi: import (dry-run → qo'llash), farqlar navbati, eksport, sifat, API skeleti (docs/hemis.md)
 class _NoCacheStatic(StaticFiles):
     """JS/CSS/HTML har safar ETag bilan qayta tekshiriladi — yangi deploydan keyin brauzer eski kodni ishlatib qolmasin."""
     async def get_response(self, path, scope):
