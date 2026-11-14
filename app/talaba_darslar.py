@@ -259,14 +259,15 @@ def _pw_tag(con, sid: int) -> str | None:
 
 def link_of(con, sid: int) -> dict | None:
     """Amaldagi ulanish (parol o'zgarmagan va talaba faol/ta'tilda). Parol o'zgargan bo'lsa — ulanish uziladi (xodimlar kabi)."""
-    r = db.one(con, "SELECT * FROM student_tg WHERE student_id=?", (int(sid),))
-    if not r: return None
-    st = db.one(con, "SELECT status FROM students WHERE id=?", (int(sid),))
-    if not st or st["status"] not in ("faol", "akademik ta'til") or r["pw_tag"] != _pw_tag(con, sid):
-        with _lock:
+    # O'qish va o'chirish bitta qulf ostida: umumiy ulanishda parallel o'qish noto'g'ri natija bersa, to'g'ri ulanish o'chib ketmasin.
+    with _lock:
+        r = db.one(con, "SELECT * FROM student_tg WHERE student_id=?", (int(sid),))
+        if not r: return None
+        st = db.one(con, "SELECT status FROM students WHERE id=?", (int(sid),))
+        if not st or st["status"] not in ("faol", "akademik ta'til") or r["pw_tag"] != _pw_tag(con, sid):
             con.execute("DELETE FROM student_tg WHERE student_id=?", (int(sid),)); con.commit()
-        return None
-    return r
+            return None
+        return r
 
 def student_by_tg(con, tg_id: int) -> int | None:
     r = db.one(con, "SELECT student_id FROM student_tg WHERE telegram_id=?", (int(tg_id),))
