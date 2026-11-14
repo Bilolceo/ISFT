@@ -270,6 +270,18 @@ body.tk{background:var(--bg-solid);overflow-x:hidden}
 @media (max-width:520px){.tkd-l{grid-template-columns:40px 1fr}.tkd-act{grid-column:2}.tkd-act .btn{width:100%}}
 .tkd-code-box{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:10px;padding:12px;border:1px dashed var(--line-2);border-radius:14px}
 .tkd-otp{font-size:24px;letter-spacing:.18em;font-family:ui-monospace,Menlo,monospace}
+/* «Bu hafta» va «ISFT Ready» (talaba_darslar.js) */
+.tkd-week{border-left:4px solid var(--warn)}
+.tkd-week-h{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:6px}
+.tkd-week-h b{font-size:16px}
+.tkd-week .tkd-l.done{opacity:.6}
+.tkd-ready{display:grid;grid-template-columns:44px 1fr auto;gap:12px;align-items:center;border-left:4px solid var(--brand)}
+.tkd-ready.ok{border-left-color:var(--ok)}
+.tkd-ready.bad{border-left-color:var(--bad)}
+.tkd-ready .tkd-mid{display:flex;flex-direction:column;gap:3px;align-items:flex-start}
+.tkd-badge{width:44px;height:44px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:18px;background:var(--brand);color:#fff}
+.tkd-ready.ok .tkd-badge{background:var(--ok)}
+@media (max-width:520px){.tkd-ready{grid-template-columns:40px 1fr}.tkd-ready .btn{grid-column:2;width:100%}}
 .tkd-sum{grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:8px}
 .tkd-sum .tk-stat .v{font-size:22px}
 @media (max-width:520px){.tkd-sum .tk-stat{padding:10px 12px;border-radius:16px}.tkd-sum .tk-stat .s{font-size:11.5px}}

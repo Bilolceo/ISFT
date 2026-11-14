@@ -143,7 +143,8 @@ async function kuList(v) {
   const fans = d.fans || [], groups = d.groups || [];
   if (L.fan && !fans.some(f => f.dl_course_id === +L.fan)) L.fan = 0;
   v.innerHTML = `<div class="ku-head"><div><h2>Kurs muharriri</h2><span class="muted">${esc(M.scope)} · bloklardan kurs yig'ing va NEXTID uchun xAPI paket oling</span></div>
-      <div class="ku-acts"><button type="button" class="btn ghost" id="kuImp">${kuI("upload")} Rise'dan import</button><button type="button" class="btn primary" id="kuNew">${kuI("plus")} Yangi kurs</button></div></div>
+      <div class="ku-acts">${M.caps.approve ? `<button type="button" class="btn ghost" id="kuReady" title="Masofaviy ta'limga kirish kursi: platforma, muddatlar, yordam, akademik halollik, AI, o'qish odatlari — bilimni tekshirish va nishon bilan">${kuI("plus")} «ISFT Ready» shabloni</button>` : ""}
+        <button type="button" class="btn ghost" id="kuImp">${kuI("upload")} Rise'dan import</button><button type="button" class="btn primary" id="kuNew">${kuI("plus")} Yangi kurs</button></div></div>
     ${!M.player ? `<div class="ku-warn">${ico("alert", 15)}<span>Kurs pleyeri o'rnatilmagan — ko'rish va eksport vaqtincha ishlamaydi. Kursni tahrirlash mumkin.</span></div>` : ""}
     <div class="ku-bar"><div class="ku-seg" role="group" aria-label="Holat bo'yicha">${st("", "Hammasi")}${Object.entries(M.status).map(([k, t]) => st(k, t)).join("")}</div>
       <div class="ku-filt">${fans.length ? `<select class="ku-in" id="kuFan" aria-label="Fan bo'yicha"><option value="0">Barcha fanlar</option>${fans.map(f => `<option value="${f.dl_course_id}" ${+L.fan === f.dl_course_id ? "selected" : ""}>${esc(f.subject)}${f.direction ? " · " + esc(f.direction) : ""} (${f.n})</option>`).join("")}</select>` : ""}
@@ -159,6 +160,13 @@ async function kuList(v) {
   v.querySelectorAll("[data-open]").forEach(b => b.onclick = () => kuOpen(+b.dataset.open));
   $("#kuNew").onclick = kuNewCourse;
   $("#kuImp").onclick = kuImport;
+  /* «ISFT Ready» (app/isft_ready.py): mavjud bo'lsa — o'sha kurs ochiladi, aks holda qoralama yaratiladi (tasdiqlash va eksport — odatdagidek) */
+  $("#kuReady")?.addEventListener("click", async () => {
+    const r = await kuApi("/api/kurs/isft-ready", {});
+    if (!r) return;
+    toast(r.created ? "«ISFT Ready» qoralamasi yaratildi — ko'rib chiqing, tasdiqlang va xAPI eksport qiling" : "«ISFT Ready» kursi allaqachon bor — ochildi");
+    kuOpen(r.id);
+  });
 }
 function kuCourseCard(c) {
   return `<button type="button" class="ku-card" data-open="${c.id}" style="--acc:${esc(c.accent)}">
@@ -266,6 +274,7 @@ function kuTop() {
     <button type="button" class="btn sm ghost" id="kuSt">${kuI("gear", 15)} Sozlamalar</button>
     <button type="button" class="btn sm ghost" id="kuEx">${kuI("download", 15)} Eksport</button>` : ""}
     <button type="button" class="btn sm ghost" id="kuCmBtn" aria-controls="kuCm">${ico("chat", 15)} Izohlar</button>
+    ${c.write ? `<button type="button" class="btn sm ghost" id="kuAq" title="Har bloklar darsidan keyin 3–5 savollik past xavfli test — Test bankdagi tasdiqlangan savollardan (takrorsiz)">${kuI("quiz", 15)} Dars oxiri testlari</button>` : ""}
     ${KU.meta.caps.ai && c.write ? `<button type="button" class="btn sm ghost" id="kuAi" title="Ma'ruza hujjatidan (Word / PDF) bloklar, kartochkalar va test — AI">${ico("spark", 15)} AI: hujjatdan dars</button>` : ""}
     ${c.submit ? `<button type="button" class="btn sm primary" id="kuSub">Ko'rib chiqishga yuborish</button>` : ""}
     ${c.approve && co.status !== "tasdiqlangan" ? `<button type="button" class="btn sm primary" id="kuApp">Tasdiqlash</button>` : ""}
@@ -273,6 +282,17 @@ function kuTop() {
   $("#kuPv").onclick = kuPreview; $("#kuQl").onclick = kuQuality; if (c.write) { $("#kuVr").onclick = kuVersions; $("#kuSt").onclick = kuSettings; $("#kuEx").onclick = kuExport; }
   $("#kuCmBtn").onclick = () => KU.cmOpen ? kuCmClose() : kuCmOpen(null); kuCmCount();
   $("#kuAi") && ($("#kuAi").onclick = kuAiLesson);
+  /* dars oxiri testlari (app/dars_testi.py): bir bosishda — natija modalda (qo'shilgan / o'tkazib yuborilgan sabablari bilan) */
+  $("#kuAq") && ($("#kuAq").onclick = e => { if (arm(e.currentTarget, "Qo'shilsinmi?")) (async () => {
+    await kuFlush();
+    const r = await kuFetch(`/api/kurs/courses/${KU.cid}/dars-testlari`, {});
+    if (!r.ok) { toast(kuErr(r.data)); return; }
+    const d = r.data; KU.course = d.course; kuRenderSide(); kuTop(); kuStatusChip();
+    kuModal("Dars oxiri testlari", `<p>${d.added.length ? `Qo'shildi: <b>${d.added.length}</b> ta test (${d.added.reduce((a, x) => a + x.questions, 0)} savol) — Test bankdagi tasdiqlangan savollardan, takrorsiz, aralashtirilgan; urinishlar cheklanmagan, o'tish bali 60 %.` : "Yangi test qo'shilmadi."}
+      ${d.already ? ` Avval qo'shilgan: ${d.already}.` : ""}</p>
+      ${d.skipped.length ? `<p class="muted">O'tkazib yuborildi:</p><ul>${d.skipped.map(s => `<li>${esc(s.lesson || "#" + s.lesson_id)} — ${esc(s.reason)}</li>`).join("")}</ul>` : ""}
+      <p class="muted">Avvalgi holat versiyalarda saqlandi (Versiyalar → tiklash).</p>`, {okText: "Yopish", onOk: () => true});
+  })(); });
   /* to'xtatuvchi izohlar ochiq bo'lsa server 409 qaytaradi — sabab yozib aylanib o'tish mumkin (audit jurnaliga yoziladi) */
   const act = async (action, note = "", override = "") => {
     await kuFlush();

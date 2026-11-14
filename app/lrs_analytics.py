@@ -215,3 +215,58 @@ def risk_reasons(row: dict, pol: dict | None = None) -> list[dict]:
 def risk_level(reasons: list[dict]) -> str:
     s = sum(r["sev"] for r in reasons)
     return "yuqori" if s >= 4 else "orta" if s >= 2 else "past" if s else ""
+
+
+# Qoidalar FAQAT o'quv faolligiga asoslanadi. risk_reasons() faqat shu kalitlarni o'qiydi — demografik ma'lumot (jinsi, yoshi, tug'ilgan sanasi,
+# millati, hududi, ijtimoiy holati, to'lov turi va h.k.) hech qachon qoida kirishi bo'lmaydi (tests/test_keyslar.py tekshiradi).
+RULE_INPUTS = ("expected", "done", "max_fails", "fail_lesson", "days_inactive", "started")
+REASONS["ready"] = "«ISFT Ready» tugatilmagan"
+
+
+def ready_reasons(completed: bool, started: bool, today: dt.date, deadline: dt.date) -> list[dict]:
+    """«ISFT Ready» kirish kursi qoidasi (erta signal): muddat (1-hafta oxiri; kurs semestr o'rtasida e'lon qilingan bo'lsa — e'londan 7 kun)
+    o'tdi va kurs tugatilmagan → «boshlamagan» bayrog'i (og'irlik 2). Faqat faollik: tugatdimi, boshladimi, sana."""
+    if completed or today <= deadline: return []
+    d = f"{deadline.day:02d}.{deadline.month:02d}"
+    return [{"code": "ready", "label": f"Boshlamagan: «ISFT Ready» kirish kursi muddati ({d}) o'tdi" if not started
+             else f"«ISFT Ready» kirish kursi muddatida ({d}) tugatilmagan", "sev": 2}]
+
+
+# =============================================================================================
+# 6. Haftalik ritm: darslar jadvali (chiqarilish sanasi va muddati) — app/haftalik.py (kogorta taqvimi) shu funksiyalardan foydalanadi
+# =============================================================================================
+def release_week(i: int, n_lessons: int, weeks: int) -> int:
+    """i-dars (0 dan) qaysi haftada chiqariladi: released() bilan bir xil teng taqsimot — eng kichik w, ceil(n·w/weeks) > i."""
+    weeks = max(1, int(weeks))
+    for w in range(1, weeks + 1):
+        if math.ceil(n_lessons * w / weeks) > i: return w
+    return weeks
+
+
+def schedule(n_lessons: int, start: dt.date, weeks: int, due_override: dict | None = None) -> list[dict]:
+    """Darslar jadvali: [{week, release, due}] (sana). Standart — dars o'z haftasining boshida (1-hafta — semestr boshlangan kuni) chiqariladi,
+    muddati — o'sha haftaning oxiri (yakshanba). due_override: {i: sana} — bo'lim bitta darsning muddatini o'zgartirgan bo'lsa (chiqarilishdan
+    oldin bo'lolmaydi)."""
+    m0 = monday(start)
+    out = []
+    for i in range(max(0, n_lessons)):
+        w = release_week(i, n_lessons, weeks)
+        rel = max(start, m0 + dt.timedelta(weeks=w - 1))
+        due = m0 + dt.timedelta(weeks=w - 1, days=6)
+        ov = (due_override or {}).get(i)
+        if isinstance(ov, dt.date) and ov >= rel: due = ov
+        out.append({"week": w, "release": rel, "due": due})
+    return out
+
+
+def released_by(sched: list[dict], today: dt.date) -> int:
+    """Shu kungacha chiqarilgan darslar soni (chiqarilish sanasi ≤ bugun)."""
+    return sum(1 for s in sched if s["release"] <= today)
+
+
+def expected_by_due(sched: list[dict], today: dt.date, grace_weeks: int = 1) -> int:
+    """Kutilgan yakunlangan darslar — muddati o'tganlar. grace_weeks — muddatdan keyingi imtiyoz: 1 (standart) — muddat yakshanba, bayroq
+    keyingi haftadan (standart taqvimda expected_done(…, 1) bilan aynan bir xil); 2 — yana bir hafta; 0 — chiqarilgan dars darhol kutiladi."""
+    g = max(0, int(grace_weeks))
+    if not g: return released_by(sched, today)
+    return sum(1 for s in sched if today > s["due"] + dt.timedelta(weeks=g - 1))

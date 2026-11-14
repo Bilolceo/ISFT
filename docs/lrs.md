@@ -164,7 +164,9 @@ Kurs identifikatori:
 **Taqvim bo'yicha kutilgan progress.**
 
 - Darslar `weeks` (15) haftaga teng taqsimlanadi va har hafta boshida chiqariladi. Semestr boshi — `academic_rules.term_dates`.
-- Kutilgan = `grace_weeks` (1) hafta oldin chiqarilganlar. Joriy hafta darslari hali talab qilinmaydi.
+- Har darsning muddati bor — standart holda o'sha hafta oxiri (yakshanba). Bo'lim kurs yoki guruh (kogorta) bo'yicha taqvimni o'zgartirishi mumkin:
+  boshlanish sanasi, haftalar soni, alohida muddatlar (`app/haftalik.py`, docs/keyslar.md).
+- Kutilgan = muddati o'tgan darslar, `grace_weeks` (1) imtiyozi bilan. Standart taqvimda bu `grace_weeks` hafta oldin chiqarilganlar bilan bir xil.
 - Misol: 45 dars, 11-hafta — 33 tasi chiqarilgan, 30 tasi kutilgan.
 
 ## «Ortda qolganlar» qoidalari
@@ -175,6 +177,10 @@ Kurs identifikatori:
 | Testdan qayta-qayta o'tolmayapti | hali o'tilmagan bitta testda ≥ `fail_attempts` (3) muvaffaqiyatsiz urinish | 2 (ikki baravar — 3) |
 | Faolsiz | oxirgi faollikdan ≥ `inactive_days` (7) kun | 2 (ikki baravar — 3) |
 | Umuman boshlamagan | hech qanday statement yo'q, kutilgan > 0 | 3 |
+| «ISFT Ready» tugatilmagan | kirish kursi muddati (1-hafta oxiri) o'tdi, kurs tugatilmagan — faqat 1-kurs masofaviy talabalar (docs/keyslar.md) | 2 |
+
+Qoidalar faqat o'quv faolligiga asoslanadi (`lrs_analytics.RULE_INPUTS`) — demografik ma'lumot ishlatilmaydi. Har bayroq keysga aylanadi
+(egasi, SLA, majburiy natija) — docs/keyslar.md.
 
 Og'irliklar yig'indisi ≥ 4 — yuqori xavf, 2–3 — o'rta. Chegaralarni bo'lim boshlig'i «Qoidalar» yorlig'ida o'zgartiradi (audit bilan).
 Qo'shimcha chegaralar:

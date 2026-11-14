@@ -88,6 +88,17 @@ def _course_rows() -> list[dict]:
                         "subject": r["subject"], "direction": r["direction"], "course": r["course"], "teacher_id": r["teacher_id"],
                         "department_id": r["department_id"], "dept": r["dept"], "dl_id": r["dl_course_id"], "author_id": r["author_id"], "ku_id": r["id"]})
     out.sort(key=lambda x: (x["title"] or "", x["sub"] or ""))
+    # «ISFT Ready» kirish kursi (app/isft_ready.py): tasdiqlangan bo'lsa — 1-kurs masofaviy talabalari uchun kuzatiladi (o'z qoidasi bilan)
+    try:
+        from . import isft_ready as RDY
+        ri = RDY.info(_con)
+    except Exception:
+        ri = None
+    if ri and ri["published"]:
+        out = [x for x in out if x["ref"] != ri["ref"]]
+        out.insert(0, {"ref": ri["ref"], "kind": "ku", "title": RDY.TITLE, "sub": "Kirish kursi · 1-kurs masofaviy talabalari", "subject": None,
+                       "direction": None, "course": None, "teacher_id": None, "department_id": None, "dept": None, "dl_id": None,
+                       "author_id": ri["author_id"], "ku_id": ri["id"], "ready": True})
     return out
 
 def courses_for(c: Ctx) -> list[dict]:
@@ -155,7 +166,11 @@ def calendar(co: dict) -> tuple[dt.date, int]:
     return start, int(pl.get("weeks") or pol["weeks"])
 
 def enrolled(co: dict) -> list[int]:
-    """Kursdagi talabalar: masofaviy guruhlar (yo'nalish × kurs, faol). Bog'lanmagan kurs muharriri kursi — statement yuborganlar."""
+    """Kursdagi talabalar: masofaviy guruhlar (yo'nalish × kurs, faol). Bog'lanmagan kurs muharriri kursi — statement yuborganlar.
+    «ISFT Ready» — barcha 1-kurs masofaviy talabalari (kirish kursi)."""
+    if co.get("ready"):
+        return [r["id"] for r in db.rows(_con, """SELECT s.id FROM students s JOIN groups_ g ON g.id=s.group_id WHERE s.study_form='masofaviy' AND s.status='faol'
+                                                  AND g.form='masofaviy' AND g.course=1""")]
     if co.get("direction") and co.get("course"):
         return [r["id"] for r in db.rows(_con, """SELECT s.id FROM students s JOIN groups_ g ON g.id=s.group_id WHERE s.study_form='masofaviy' AND s.status='faol'
                                                   AND g.form='masofaviy' AND g.direction=? AND g.course=?""", (co["direction"], co["course"]))]
@@ -165,6 +180,10 @@ def _tutor_students(c: Ctx) -> list[int]:
     """Tyutor: o'z guruhlari (rbac.student_scope) + unga biriktirilgan (ochiq) talabalar."""
     own = {r["id"] for r in db.rows(_con, f"SELECT s.id FROM students s WHERE {c.student_scope('s')}")}
     own |= {r["student_id"] for r in db.rows(_con, "SELECT student_id FROM lrs_actions WHERE kind='tyutor' AND tutor_user=? AND status='ochiq'", (c.user["id"],))}
+    try:      # keyslar (app/keyslar.py): tyutorga biriktirilgan ochiq keyslar talabalari
+        own |= {r["student_id"] for r in db.rows(_con, "SELECT student_id FROM ok_cases WHERE owner_user=? AND status IN ('ochiq','jarayonda')", (c.user["id"],))}
+    except Exception:
+        pass
     return sorted(own)
 
 def visible_students(c: Ctx) -> set | None:
@@ -184,11 +203,18 @@ _CACHE: dict = {}
 def _stamp() -> tuple:
     r = db.one(_con, "SELECT MAX(updated) u, COUNT(*) n FROM lrs_progress") or {}
     p = tuple(sorted(L.policy().items()))
-    return (r.get("u"), r.get("n"), p, clock.today().isoformat())
+    from . import haftalik as H
+    return (r.get("u"), r.get("n"), p, clock.today().isoformat(), H.stamp())
 
 def course_rows(co: dict) -> list[dict]:
-    """Kursdagi har bir talaba: bajarilgan / kutilgan darslar, kechikish, muvaffaqiyatsiz urinishlar, oxirgi faollik, vaqt, sabablar."""
-    key = (co["ref"], _stamp())
+    """Kursdagi har bir talaba: bajarilgan / kutilgan darslar, kechikish, muvaffaqiyatsiz urinishlar, oxirgi faollik, vaqt, sabablar.
+    Kutilgan — talaba guruhining haftalik taqvimi bo'yicha muddati o'tgan darslar (app/haftalik.py; standart taqvimda avvalgi hisob bilan bir xil)."""
+    from . import haftalik as H
+    ready = None
+    if co.get("ready"):                       # «ISFT Ready»: o'z qoidasi — muddatgacha (1-hafta oxiri) tugatilmagan bo'lsa «boshlamagan» bayrog'i
+        from . import isft_ready as RDY
+        ready = RDY.deadline(_semester_start(), _con)
+    key = (co["ref"], _stamp(), ready)
     hit = _CACHE.get(co["ref"])
     if hit and hit[0] == key and time.time() - hit[1] < 30: return hit[2]
     pol = L.policy()
@@ -196,9 +222,12 @@ def course_rows(co: dict) -> list[dict]:
     lessons = lessons_of(co)
     refs = [l["ref"] for l in lessons]
     codes = {l["ref"]: l["code"] for l in lessons}
-    start, weeks = calendar(co)
-    exp = LA.expected_done(len(refs), start, today, weeks, pol["grace_weeks"])
-    rel = LA.released(len(refs), start, today, weeks)
+    plans: dict = {}
+    def _exp_rel(gid) -> tuple[int, int]:
+        if gid not in plans:
+            pl = H.plan(co, gid, lessons)
+            plans[gid] = (LA.expected_by_due(pl["sched"], today, pol["grace_weeks"]), LA.released_by(pl["sched"], today))
+        return plans[gid]
     prog: dict = {}
     for r in db.rows(_con, "SELECT * FROM lrs_progress WHERE course_ref=?", (co["ref"],)):
         prog.setdefault(r["student_id"], {})[r["lesson_ref"]] = r
@@ -218,8 +247,15 @@ def course_rows(co: dict) -> list[dict]:
         di = (today - dt.date.fromisoformat(last[:10])).days if last else None
         tsum = sum(float(v["time_s"] or 0) for v in pr.values())
         scores = [v["best"] for l, v in pr.items() if l and v["best"] is not None]
-        row = {"expected": exp, "done": done, "max_fails": mf, "fail_lesson": fl, "days_inactive": di, "started": bool(pr)}
-        rs = LA.risk_reasons(row, pol)
+        if ready:
+            fin = (pr.get("") or {}).get("status") in LA.DONE_ST or (bool(refs) and done >= len(refs))
+            if fin: done = len(refs)
+            exp, rel = (len(refs) if today > ready else 0), len(refs)
+            rs = LA.ready_reasons(fin, bool(pr), today, ready)
+        else:
+            exp, rel = _exp_rel(st["group_id"])
+            row = {"expected": exp, "done": done, "max_fails": mf, "fail_lesson": fl, "days_inactive": di, "started": bool(pr)}
+            rs = LA.risk_reasons(row, pol)
         out.append({"student_id": sid, "full_name": st["full_name"], "hemis_id": st["hemis_id"], "group_id": st["group_id"], "grp": st["grp"],
                     "course_ref": co["ref"], "course": co["title"], "course_sub": co["sub"], "lessons": len(refs), "released": rel, "expected": exp,
                     "done": done, "lag": max(0, exp - done), "pct": round(100 * done / len(refs), 1) if refs else 0, "max_fails": mf, "fail_lesson": fl,
@@ -462,7 +498,10 @@ def contacted(c: Ctx, sid: int, ref: str, note: str = "") -> dict:
 def _caps(c: Ctx) -> dict:
     k = c.role.key
     return {"list": k in LIST_ROLES, "names": k in LIST_ROLES, "hemis": k in DEPT, "assign": k in DEPT, "remind": k in ACT_ROLES, "contacted": k in ACT_ROLES,
-            "policy": k == HEAD, "questions": k in QUESTION_ROLES, "aggregate_only": k not in LIST_ROLES, "launch": k in DEPT}
+            "policy": k == HEAD, "questions": k in QUESTION_ROLES, "aggregate_only": k not in LIST_ROLES, "launch": k in DEPT,
+            # keyslar, natija ko'rsatkichlari, haftalik taqvim, eslatmalar/tajriba (app/keyslar.py, app/haftalik.py, app/tajriba.py)
+            "cases": k in ACT_ROLES, "case_metrics": k in ACT_ROLES + LEAD, "calendar": k in LIST_ROLES, "calendar_edit": k in DEPT,
+            "triggers": k in DEPT + LEAD, "triggers_edit": k == HEAD}
 
 @router.get(P + "/meta")
 def api_meta(request: Request):
@@ -547,17 +586,18 @@ def api_student(sid: int, request: Request, course: str = ""):
     s = _student_in_scope(c, sid)
     co = _course(c, course)
     pr = {r["lesson_ref"]: r for r in db.rows(_con, "SELECT * FROM lrs_progress WHERE student_id=? AND course_ref=?", (sid, course))}
-    start, weeks = calendar(co)
+    from . import haftalik as H
     ls = lessons_of(co)
+    pl = H.plan(co, s["group_id"], ls)["sched"]           # talaba guruhining haftalik taqvimi
     today = clock.today()
     out = []
     for i, l in enumerate(ls):
         p = pr.get(l["ref"]) or {}
-        rel_week = next((w for w in range(1, weeks + 1) if LA.released(len(ls), start, start + dt.timedelta(weeks=w - 1), weeks) > i), None)
+        sc = pl[i]
         out.append({"ref": l["ref"], "code": l["code"], "title": l["title"], "status": p.get("status") or "boshlanmagan", "status_label": LA.STATUS.get(p.get("status") or "boshlanmagan"),
                     "pct": p.get("pct") or 0, "score": p.get("score"), "best": p.get("best"), "attempts": p.get("attempts") or 0, "fails": p.get("fails") or 0,
-                    "time_min": round((p.get("time_s") or 0) / 60), "last": p.get("last_ts"), "week": rel_week,
-                    "released": bool(rel_week and start + dt.timedelta(weeks=rel_week - 1) <= today)})
+                    "time_min": round((p.get("time_s") or 0) / 60), "last": p.get("last_ts"), "week": sc["week"],
+                    "released": sc["release"] <= today, "due": sc["due"].isoformat()})
     row = next((r for r in course_rows(co) if r["student_id"] == sid), None)
     acts = db.rows(_con, "SELECT ts, kind, user_name, note, task_id, tutor_user FROM lrs_actions WHERE student_id=? ORDER BY id DESC LIMIT 30", (sid,))
     for a in acts: a["user_name"] = _short(a["user_name"]) or a["user_name"]

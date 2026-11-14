@@ -63,6 +63,8 @@ async def _warm():
     asyncio.create_task(_STU.poller())   # studiya: lease muddati o'tgan montajlar va YouTube navbati («studio» bo'limi o'chiq bo'lsa — hech narsa)
     from . import nazorat as _NZ
     asyncio.create_task(_NZ.poller())    # Nazorat markazi: eskalatsiya skaneri (10 daqiqa) va dushanba 08:00 haftalik hisoboti («nazorat» o'chiq bo'lsa — hech narsa)
+    from . import keyslar as _KS
+    asyncio.create_task(_KS.poller())    # Ortda qolganlar: bayroqlar → keyslar (10 daqiqa) va yoqilgan to'siq nuqtasi eslatmalari («masofaviy» o'chiq bo'lsa — hech narsa)
 
 @app.on_event("startup")
 async def _bot_start():   # Telegram bot shu jarayonda (TELEGRAM_BOT_TOKEN bo'lsa); token yo'q — faqat log
@@ -527,6 +529,13 @@ from . import talaba_darslar as TDR   # Talaba kabineti: «Mening darslarim» (l
 TDR.init(con)
 TDR.bind(con)
 app.include_router(TDR.router)
+# Ortda qolganlar → keys boshqaruvi, haftalik ritm (kogorta taqvimi), to'siq nuqtalaridagi eslatmalar va tajriba, dars oxiri testi, «ISFT Ready» (docs/keyslar.md)
+from . import haftalik as HFT, keyslar as KSL, tajriba as TJB, isft_ready as RDY, dars_testi as DTS
+HFT.init(con); HFT.bind(con, ctx); app.include_router(HFT.router)
+RDY.bind(con, ctx); app.include_router(RDY.router)
+DTS.init(con); DTS.bind(con, ctx); app.include_router(DTS.router)
+TJB.init(con); TJB.bind(con, ctx); app.include_router(TJB.router)
+KSL.bind(con, ctx); KSL.init(con); app.include_router(KSL.router)   # init — namuna keyslar (LRS namunasi bayroqlaridan; ORT/HFT bog'langandan keyin)
 from . import moliya as MOL   # Moliya: to'lovlar reyestri (qo'lda), kunlik solishtirish, byudjet ijrosi, xarajat tasdig'i, xarid moliyalashtirish, oylik hisobotlar
 MOL.init(con)
 MOL.bind(con, ctx)

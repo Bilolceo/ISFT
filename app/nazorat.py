@@ -1296,3 +1296,66 @@ def _yy_inperson_cands(con, now, R, O: Org) -> list[dict]:
 
 
 DETECTORS += [_yy_limit_cands, _yy_inperson_cands]
+
+# =============================================================================================
+# «ORTDA QOLGANLAR» KEYSLARI — NATIJA KO'RSATKICHLARI (app/keyslar.py). Alohida bo'lim: yuqoridagi kodga tegmaydi,
+# faqat RULES va DETECTORS ro'yxatlariga qo'shadi va bitta yangi API qo'shadi (/api/nazorat/keyslar).
+#   Istisnolar («talabalar» sohasi): SLA ichida bog'lanilmagan keyslar (tyutor bo'yicha, jamlangan) va tyutor yuklamasi chegaradan oshgani.
+#   Ko'rsatkichlar: ochilgan / yopilgan, median bog'lanish vaqti, SLA ichida bog'lanish ulushi, qayta faollashish — bayroqlar soni emas, natija.
+# =============================================================================================
+# =============================================================================================
+RULES.update({"case_sla_min": (1, 1, 100, "Keyslar: SLA ichida bog'lanilmagan keyslar (tyutor bo'yicha, kamida)")})
+
+
+def _case_cands(con, now, R, O: Org) -> list[dict]:
+    if not MODS.on("masofaviy"): return []
+    try:
+        from . import keyslar as KS
+        if KS._con is None: return []
+        pol = KS.policy(con)
+        rows = db.rows(con, "SELECT id, owner_user, sla_due, first_contact_at FROM ok_cases WHERE status IN ('ochiq','jarayonda')")
+    except Exception as e:
+        print("nazorat.keyslar:", repr(e)); return []
+    out, head = [], O.head("masofaviy")
+    late: dict = {}
+    for r in rows:
+        due = _dt(r["sla_due"])
+        if r["first_contact_at"] or not due or due >= now: continue
+        late.setdefault(r["owner_user"] or 0, []).append(due)
+    mn = R.get("case_sla_min", 1)
+    for k, ds in late.items():
+        if len(ds) < mn: continue
+        who = O.person(k) if k else None
+        out.append({"key": f"keys_sla:{k}", "area": "talabalar", "kind": "keys",
+                    "title": f"{len(ds)} ta ortda qolgan talaba keysi SLA ichida bog'lanilmagan" + (f" — {who['name']}" if who else " — tyutor biriktirilmagan"),
+                    "why": f"Birinchi bog'lanish muddati ({pol['sla_days']} ish kuni) o'tgan, qo'ng'iroq yoki uchrashuv qayd etilmagan: {len(ds)} ta (chegara — {mn})",
+                    "src": "Ortda qolganlar — keyslar", "since": min(ds), "owner": k or head, "unit": "masofaviy", "deadline": None,
+                    "link": {"view": "ortda", "tab": "keyslar"}, "state": [len(ds)], "aggregate": True})
+    lim = pol["caseload_max"]
+    for uid, n in KS.loads(con).items():
+        if n <= lim: continue
+        who = O.person(uid)
+        out.append({"key": f"keys_load:{uid}", "area": "talabalar", "kind": "yuklama",
+                    "title": f"Tyutor yuklamasi oshgan: {who['name'] if who else '#' + str(uid)} — {n} ta ochiq keys",
+                    "why": f"Chegara — {lim} ta (1:50 nisbat). Keyslarni boshqa tyutorlarga taqsimlang («Ortda qolganlar» → Keyslar → Biriktirish)",
+                    "src": "Ortda qolganlar — keyslar", "since": None, "owner": head, "unit": "masofaviy", "deadline": None,
+                    "link": {"view": "ortda", "tab": "keyslar"}, "state": [n], "aggregate": True})
+    return out
+
+
+DETECTORS.append(_case_cands)
+
+
+@router.get(P + "/keyslar")
+def api_case_outcomes(request: Request):
+    """Rektor / o'quv prorektori: keyslar natija ko'rsatkichlari (jamlangan; talaba ismi yo'q, tyutorlar — xodim sifatida)."""
+    _mod_guard()
+    c = C(request); _guard(c, "keyslar natijasi", roles=(LEAD, "prorektor_oquv"))
+    if not MODS.on("masofaviy"): return {"enabled": False}
+    from . import keyslar as KS
+    d = KS.metrics_data()
+    t = d["total"]
+    rbac.audit(_con, c, "nazorat: keyslar natijasi", RES, True, f"{t['opened']} ochilgan · SLA {t['sla_pct']}%")
+    return {"enabled": True, "total": t, "since": d["since"], "demo": d["demo"], "policy": d["policy"], "definitions": d["definitions"],
+            "tutors": [{k: x[k] for k in ("id", "name", "load", "over", "opened", "open", "overdue", "sla_pct", "median_contact_h", "reeng_pct", "closed")}
+                       for x in d["tutors"]][:30]}
