@@ -160,7 +160,7 @@ def _sub_short(s: str, n=30) -> str:
 def ingest(con, cam: dict, ev: dict, t: dt.datetime | None = None):
     """Bitta yuz voqeasi (hikvision.normalize kind='yuz'). Faqat kirish zonasidagi kameralar. Qaytaradi: yozuv yoki None."""
     t = t or now()
-    SF.init(con)
+    SF.ensure_schema(con)     # executescript emas: process_event'ning ochiq tranzaksiyasi (kamera holati) muddatidan oldin commit qilinmaydi
     room = db.one(con, "SELECT zone FROM rooms WHERE id=?", (cam["room_id"],)) or {}
     if room.get("zone") != "kirish":
         return None                                      # bino ichida shaxs kuzatilmaydi

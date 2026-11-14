@@ -149,6 +149,31 @@ def main():
         r = it.post(f"/api/accounts/{tid}/update", json={"role": bad})
         ok(r.status_code in (400, 403), f"rolni {bad} ga o'zgartirish rad: {r.status_code}")
     ok(q("SELECT role FROM users WHERE id=?", (tid,))[0][0] == "marketing", "rol o'zgarmadi")
+    # nom bandligi (qulf ostida) va shaxs almashganda sessiyalar
+    full_t = q("SELECT full_name FROM users WHERE id=?", (tid,))[0][0]
+    pos_t, per_t = full_t.split(": ", 1)
+    r = it.post("/api/accounts", json={"position": pos_t.upper(), "person": "  " + per_t.lower() + " ", "role": "yuridik"})
+    ok(r.status_code == 400 and "allaqachon bor" in r.json()["detail"]["message"] and f"#{tid}" in r.json()["detail"]["message"],
+       "bir xil nomli (harf/bo'shliq farqsiz) ikkinchi akkaunt yaratilmaydi — 400")
+    other = q("SELECT id, full_name FROM users WHERE role='xarid' AND COALESCE(active,1)!=0 AND full_name LIKE '%:%' ORDER BY id LIMIT 1") or \
+            q("SELECT id, full_name FROM users WHERE role='xarid' AND COALESCE(active,1)!=0 ORDER BY id LIMIT 1")
+    op_, oper_ = (other[0][1].split(": ", 1) + [""])[:2]
+    r = it.post(f"/api/accounts/{tid}/update", json={"position": op_, "person": oper_})
+    ok(r.status_code == 400 and "allaqachon bor" in r.json()["detail"]["message"] and q("SELECT full_name FROM users WHERE id=?", (tid,))[0][0] == full_t,
+       "boshqa akkaunt nomiga o'zgartirish rad — 400, nom o'zgarmadi")
+    import concurrent.futures as _cf
+    nm_ = f"{PREFIX} Poyga {stamp}"
+    with _cf.ThreadPoolExecutor(4) as ex_:
+        rs_ = list(ex_.map(lambda _: it.post("/api/accounts", json={"position": nm_, "person": "Bir Xil", "role": "yuridik"}).status_code, range(4)))
+    ok(rs_.count(200) == 1 and q("SELECT COUNT(*) FROM users WHERE full_name=?", (f"{nm_}: Bir Xil",))[0][0] == 1,
+       f"bir vaqtda 4 ta bir xil nomli yaratish — faqat bittasi o'tdi ({rs_})")
+    for (rid_,) in q("SELECT id FROM users WHERE full_name=?", (f"{nm_}: Bir Xil",)): it.post(f"/api/accounts/{rid_}/deactivate")
+    t3 = S(tid, pw2)
+    ok(t3.get("/api/me").status_code == 200, "sinov: yangi sessiya")
+    r = it.post(f"/api/accounts/{tid}/update", json={"position": pos_t})
+    ok(r.status_code == 200 and t3.get("/api/me").status_code == 200, "faqat lavozim nomi o'zgardi (shaxs o'sha) — sessiya saqlanadi")
+    r = it.post(f"/api/accounts/{tid}/update", json={"person": "Boshqayev Boshqa"})
+    ok(r.status_code == 200 and r.json()["revoked"] >= 1 and t3.get("/api/me").status_code == 401, "F.I.Sh. o'zgardi (boshqa shaxs) — sessiyalari yopildi")
     ok(it.post(f"/api/accounts/{REKTOR}/update", json={"person": "Boshqa"}).status_code == 403, "rektor akkauntini tahrirlash rad")
     ok(it.post(f"/api/accounts/{IT}/update", json={"role": "yuridik"}).status_code == 403, "o'z rolini o'zgartirish rad")
     ok(q("SELECT role FROM users WHERE id=?", (IT,))[0][0] == "it_head", "it_head roli o'zgarmadi")
@@ -220,7 +245,7 @@ def main():
 
     # ---------- tozalash ----------
     ok(it.post(f"/api/accounts/{tid}/deactivate").status_code == 200, "test akkaunti faolsizlantirildi")
-    ok(cleanup() == 1 and not q("SELECT 1 FROM users WHERE id=?", (tid,)), "test akkaunti bazadan o'chirildi (prefiks bilan himoyalangan)")
+    ok(cleanup() >= 1 and not q("SELECT 1 FROM users WHERE id=?", (tid,)), "test akkaunti bazadan o'chirildi (prefiks bilan himoyalangan)")   # + poyga sinovi akkaunti
     ok([u["id"] for u in anon.get("/api/users").json()] == login_list0, "kirish ro'yxati test oldidagi bilan bir xil")
     print(f"\nHammasi o'tdi: {N[0]} ta tekshiruv.")
 

@@ -185,11 +185,28 @@ async function showLogin() {
   drawRoles(); if ($("#password") && !$("#password").value && !window.ISFT_HIDE_DEMO_HINT && DEMO_PW) $("#password").value = DEMO_PW;   /* faqat namoyish rejimida oldindan to'ldiriladi */
   $("#loginBtn").disabled = !selUser;
 }
+/* Kirishdan oldin ismlar brauzerga berilmaydi — ism bo'yicha qidiruvni server bajaradi: to'liq so'z (familiya/ism, ≥3 harf) mos kelgan
+   akkaunt raqamlari. Natija keshlanadi; javob kelganda ro'yxat qayta chiziladi (qidiruv matni o'zgarmagan bo'lsa). */
+const NAME_HITS = {};
+let nameTimer = 0;
+function findByName(q) {
+  if (q in NAME_HITS || USERS.some(u => u.name) || !/^[\p{L}' ]+$/u.test(q) || q.split(/\s+/).some(w => w.length < 3)) return;
+  clearTimeout(nameTimer);
+  nameTimer = setTimeout(async () => {
+    const r = await fetch("/api/users/find", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({q})}).then(r => r.ok ? r.json() : null).catch(() => null);
+    if (!r) return;
+    NAME_HITS[q] = r.ids || [];
+    const cur = ($("#roleSearch").value || "").trim().toLowerCase().replace(/[ʻʼ‘’`]/g, "'");
+    if (cur === q && NAME_HITS[q].length) drawRoles();
+  }, 250);
+}
 function drawRoles() {
   $("#lvlTabs").querySelectorAll("button").forEach(b => { b.classList.toggle("on", +b.dataset.l === LVL); b.setAttribute("aria-selected", +b.dataset.l === LVL); });
   const q = ($("#roleSearch").value || "").trim().toLowerCase().replace(/[ʻʼ‘’`]/g, "'");
   if (q) $("#lvlTabs").querySelectorAll("button").forEach(b => { b.classList.remove("on"); b.setAttribute("aria-selected", false); });
-  const list = USERS.filter(u => q ? (u.role + " " + personOf(u)).toLowerCase().replace(/[ʻʼ‘’`]/g, "'").includes(q) : u.level === LVL && !u.search_only);   /* tyutorlar — faqat qidiruvda */
+  const hits = q && NAME_HITS[q] || [];   /* ism bo'yicha server qidiruvi (/api/users/find — faqat akkaunt raqamlari, ism qaytmaydi) */
+  if (q) findByName(q);
+  const list = USERS.filter(u => q ? (u.role + " " + personOf(u)).toLowerCase().replace(/[ʻʼ‘’`]/g, "'").includes(q) || hits.includes(u.id) : u.level === LVL && !u.search_only);   /* tyutorlar — faqat qidiruvda */
   const el = $("#roleList");
   el.innerHTML = list.length ? list.map(u => `<div class="role-row ${u.id === selUser ? "sel" : ""}" data-id="${u.id}" tabindex="0" role="option" aria-selected="${u.id === selUser}" title="${esc([u.role, personOf(u)].filter(Boolean).join(" — "))}">
     <span class="avatar l${u.level}${u.photo ? " has-photo" : ""}">${avHtml(u)}</span><div><b>${esc(u.role)}</b><small>${esc([personOf(u), q ? LVL_TABS[u.level] : ""].filter(Boolean).join(" · "))}</small></div><span class="chk">${u.id === selUser ? ico("check", 13) : ""}</span></div>`).join("")

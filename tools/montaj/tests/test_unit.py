@@ -12,7 +12,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from pipeline import captions, chapters, edl as E, slides as S  # noqa: E402
+from pipeline import captions, chapters, edl as E, slides as S, graphics as G  # noqa: E402
+from pipeline.run import TEMPLATES  # noqa: E402
 from pipeline.common import FPS, uz_typography, fmt_ts  # noqa: E402
 
 
@@ -339,6 +340,35 @@ class ChapterTests(unittest.TestCase):
     def test_youtube_format(self):
         self.assertEqual(fmt_ts(83.4), "01:23")
         self.assertEqual(fmt_ts(3723), "1:02:03")
+
+
+class WatermarkLayoutTests(unittest.TestCase):
+    """Suv belgisi (logo) hech bir shablonda o'qituvchi/kamera sohasini (ekran — PiP) yopmasligi kerak."""
+
+    SIZES = [(88, 66), (40, 66), (300, 66), (700, 66)]   # standart logo, tor, keng va juda keng logolar (balandlik — WATERMARK_H)
+
+    def test_no_overlap_all_templates(self):
+        self.assertEqual(set(TEMPLATES), {"maruza_slayd", "faqat_oqituvchi", "ekran"})
+        for tpl in TEMPLATES:
+            for slide_on in (False, True):
+                for size in self.SIZES:
+                    x, y = G.watermark_xy(tpl, size, slide_on)
+                    r = (x, y, x + size[0], y + size[1])
+                    with self.subTest(tpl=tpl, slide_on=slide_on, size=size):
+                        self.assertTrue(0 <= r[0] and r[2] <= G.W and 0 <= r[1] and r[3] <= G.H - G.Geo.BAR_H, r)
+                        for cam in G.camera_rects(tpl, slide_on):
+                            self.assertFalse(G.rects_overlap(r, cam, G.WM_GAP), f"{tpl}: logo {r} ↔ kamera {cam}")
+
+    def test_ekran_pip_opposite_corner(self):
+        x, y = G.watermark_xy("ekran", G.watermark().size)
+        self.assertFalse(G.rects_overlap((x, y, x + 88, y + 66), G.Geo.PIP))
+        self.assertLess(x, G.Geo.PIP[0]); self.assertLess(y, G.Geo.PIP[1])   # PiP past-o'ngda → logo yuqori-chapda
+        self.assertEqual(G.camera_rects("ekran"), [G.Geo.PIP])
+
+    def test_rects_overlap(self):
+        self.assertTrue(G.rects_overlap((0, 0, 10, 10), (5, 5, 15, 15)))
+        self.assertFalse(G.rects_overlap((0, 0, 10, 10), (10, 0, 20, 10)))
+        self.assertTrue(G.rects_overlap((0, 0, 10, 10), (20, 0, 30, 10), gap=11))
 
 
 class ReportSchemaTests(unittest.TestCase):

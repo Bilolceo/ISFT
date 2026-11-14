@@ -139,7 +139,7 @@ def user_link(con, user: dict) -> dict:
     """{staff_id, teacher_id} — foydalanuvchining o'z xodim/o'qituvchi yozuvi (yo'q bo'lsa None). kadrlar._own_staff_id ham shundan oladi."""
     uid = user.get("id")
     try: row = db.one(con, "SELECT * FROM user_staff WHERE user_id=?", (uid,))
-    except Exception: con.executescript(SCHEMA); row = None
+    except Exception: db.run_script(con, SCHEMA); row = None   # joriy tranzaksiyani muddatidan oldin commit qilmaydi
     tid = user.get("teacher_id") or (row or {}).get("teacher_id")
     if row and (row["staff_id"] or row["locked"]):
         return {"staff_id": row["staff_id"], "teacher_id": tid}
@@ -163,7 +163,7 @@ def user_link(con, user: dict) -> dict:
 def lock_user_link(con, uid: int) -> None:
     """Akkaunt nomi o'zgartirilganda (accounts.py): hali bog'lanmagan akkaunt yangi ism bo'yicha boshqa xodimga bog'lanib qolmasin."""
     try:
-        if not db.one(con, "SELECT 1 x FROM sqlite_master WHERE name='user_staff'"): con.executescript(SCHEMA)
+        if not db.one(con, "SELECT 1 x FROM sqlite_master WHERE name='user_staff'"): db.run_script(con, SCHEMA)   # accounts.update_account tranzaksiyasi ichida
         con.execute("INSERT INTO user_staff(user_id,locked,linked_at,how) VALUES(?,1,?,'nom o''zgartirilgan') ON CONFLICT(user_id) DO UPDATE SET locked=1", (uid, _now()))
     except Exception as e: print("staff_absence.lock_user_link:", e)
 
@@ -576,7 +576,7 @@ def link_order(con, c: Ctx, aid: int, b: OrderIn, base_url: str) -> dict:
     if a["kind"] != "mehnat": raise HTTPException(400, "Buyruq loyihasi faqat mehnat ta'tili uchun")
     if a["status"] != "faol": raise HTTPException(409, "Yozuv bekor qilingan")
     from . import orders as ORD
-    ensure_order_col(con); con.executescript(ORD.SCHEMA)
+    ensure_order_col(con); db.run_script(con, ORD.SCHEMA)
     ref = (b.reg_no or "").strip()
     if ref:
         o = db.one(con, "SELECT * FROM orders WHERE kind='xodim_tatil' AND (reg_no=? OR ('#' || id)=?)", (ref, ref))

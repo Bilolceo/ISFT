@@ -40,9 +40,17 @@ CREATE TABLE IF NOT EXISTS face_sync(id INTEGER PRIMARY KEY, op TEXT, fpid TEXT,
 CREATE TABLE IF NOT EXISTS face_meta(key TEXT PRIMARY KEY, value TEXT);
 """
 
+_SCHEMA_OK = [False]
+
 def init(con):
-    con.executescript(SCHEMA)
+    db.run_script(con, SCHEMA)
     con.commit()
+    _SCHEMA_OK[0] = True
+
+def ensure_schema(con):
+    """So'rov / kamera voqeasi yo'lida: sxema bir marta tekshiriladi, COMMIT qilinmaydi (camsec.process_event o'z tranzaksiyasini o'zi yakunlaydi)."""
+    if not _SCHEMA_OK[0]:
+        db.run_script(con, SCHEMA); _SCHEMA_OK[0] = True
 
 def meta(con, k, v=None):
     if v is None:

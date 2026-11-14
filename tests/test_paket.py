@@ -1847,9 +1847,20 @@ if SERVER_PLAYER:
     mon1 = {r_["kind"]: r_ for r_ in q("SELECT * FROM dl_items WHERE course_id=? AND topic_no=?", (C1, N1))}
     ok(all(mon1[k_]["status"] == mon0[k_]["status"] and mon1[k_]["src"] == mon0[k_]["src"] for k_ in mon0), "Qaytarilgan paket monitoringni o'zgartirmaydi")
     ok(teach.get(U).json()["state"] == "tayyorlanmoqda" and next(x for x in teach.get(f"{P}/courses/{C1}").json()["topics"] if x["no"] == N1)["returned"], "Qaytarilgan dars: «Tayyorlanmoqda» + qaytarilgan belgisi")
+    # qaytarilgan dars o'zgarishsiz qayta yuborilmaydi: na shu versiyani «submit», na majburiy qayta yig'ish (force) bilan
     r = teach.post(f"{P}/packages/{b1['package']['id']}/action", json={"action": "submit"})
-    ok(r.status_code == 200 and r.json()["package"]["status"] == "tayyor" and kaf8.post(f"{P}/packages/{b1['package']['id']}/action", json={"action": "submit"}).status_code == 403,
-       "O'qituvchi qayta yubordi (submit); kafedra yubora olmaydi (403)")
+    ok(r.status_code == 409 and "o'zgartirilmagan" in r.json()["detail"] and "Sinov: qaytarish" in r.json()["detail"]
+       and q("SELECT status FROM pk_packages WHERE id=?", (b1['package']['id'],))[0]["status"] == "qoralama",
+       f"Qaytarilgan dars o'zgarishsiz qayta yuborilmaydi — 409, sababi bilan ({r.status_code})")
+    bf = teach.post(U + "/build", json={"force": True}).json()
+    ok(bf["package"]["status"] == "qoralama" and teach.post(f"{P}/packages/{bf['package']['id']}/action", json={"action": "submit"}).status_code == 409,
+       "Majburiy qayta yig'ish (o'sha mazmun) — avtomatik yuborilmaydi, «submit» ham 409")
+    ok(kaf8.post(f"{P}/packages/{b1['package']['id']}/action", json={"action": "submit"}).status_code == 403, "Kafedra yubora olmaydi (403)")
+    teach.post(U + "/upload", params={"name": "maruza12.txt"}, content=(BODY + "\nTuzatildi: bo'lim izohiga ko'ra misol qo'shildi.").encode("utf-8"))
+    b1 = teach.post(U + "/build", json={}).json()
+    if b1["package"]["status"] != "tayyor":
+        b1["package"] = teach.post(f"{P}/packages/{b1['package']['id']}/action", json={"action": "submit"}).json()["package"]
+    ok(b1["package"]["status"] == "tayyor" and b1["package"]["version"] == 3, f"Material tuzatildi → qayta tayyorlandi (v{b1['package']['version']}), bo'limga yuborildi")
     # (e) tasdiqlash → monitoringdagi shu mavzuning paketda BOR materiallari yopiladi
     logs0 = q("SELECT COUNT(*) n FROM dl_log WHERE item_id IN (SELECT id FROM dl_items WHERE course_id=? AND topic_no=?)", (C1, N1))[0]["n"]
     ra = head.post(f"{P}/packages/{b1['package']['id']}/action", json={"action": "approve"}).json()
@@ -1861,29 +1872,29 @@ if SERVER_PLAYER:
     ok(mon2["test"]["status"] == mon0["test"]["status"] or vr["quiz"]["ok"], "Paketda test yo'q — monitoringdagi «test» o'zgarmadi")
     lg_ = q("SELECT l.action, l.note FROM dl_log l JOIN dl_items i ON i.id=l.item_id WHERE i.course_id=? AND i.topic_no=? ORDER BY l.id DESC LIMIT 1", (C1, N1))
     logs1 = q("SELECT COUNT(*) n FROM dl_log WHERE item_id IN (SELECT id FROM dl_items WHERE course_id=? AND topic_no=?)", (C1, N1))[0]["n"]
-    ok(logs1 - logs0 == len(open0) and (not open0 or (lg_[0]["action"] == "tasdiqlandi" and "L12 v1" in lg_[0]["note"])), "Monitoring tarixida yozuv: «Dars tayyorlash: L12 v1 tasdiqlandi»")
+    ok(logs1 - logs0 == len(open0) and (not open0 or (lg_[0]["action"] == "tasdiqlandi" and "L12 v3" in lg_[0]["note"])), "Monitoring tarixida yozuv: «Dars tayyorlash: L12 v3 tasdiqlandi»")
     mine_ = teach.get("/api/masofaviy/items", params={"due": "overdue", "limit": 300}).json()["items"]
     ok(not any(x["topic_no"] == N1 and x["kind"] in ("maruza", "taqdimot", "video") and x["subject"] == own["subject"] and x["direction"] == own["direction"] for x in mine_),
        "O'qituvchining «muddati o'tgan» ro'yxatida bu materiallar yo'q")
     v3 = teach.get(U).json()
-    ok(v3["state"] == "tasdiqlangan" and v3["nextid"]["version"] == 1 and not v3["stale"], "Dars: Tasdiqlangan; «NEXTID uchun: v1»")
+    ok(v3["state"] == "tasdiqlangan" and v3["nextid"]["version"] == 3 and not v3["stale"], "Dars: Tasdiqlangan; «NEXTID uchun: v3»")
     # (f) tasdiqdan keyin manba o'zgardi → «eskirgan»
     teach.post(U + "/upload", params={"name": "maruza12b.txt"}, content=(BODY + "\nQo'shimcha xatboshi: pul massasi va inflyatsiya o'zaro bog'liq. " * 3).encode("utf-8"))
     v4 = teach.get(U).json()
-    ok(v4["stale"] and v4["changed"] and v4["nextid"]["version"] == 1 and next(x for x in teach.get(f"{P}/courses/{C1}").json()["topics"] if x["no"] == N1)["stale"],
+    ok(v4["stale"] and v4["changed"] and v4["nextid"]["version"] == 3 and next(x for x in teach.get(f"{P}/courses/{C1}").json()["topics"] if x["no"] == N1)["stale"],
        "Tasdiqdan keyin fayl almashtirildi → «Tasdiqlangan versiya eskirgan» (dars va ro'yxatda)")
     ok(any(x["kind"] == "eskirgan" and x["course_id"] == C1 and x["no"] == N1 for x in head.get(P + "/queue").json()["items"])
        and any(x["kind"] == "eskirgan" and x["no"] == N1 for x in teach.get(P + "/queue").json()["items"]), "Eskirgan dars bo'lim navbatida va o'qituvchida ko'rinadi")
     b2 = teach.post(U + "/build", json={}).json()
     v5 = teach.get(U).json()
-    ok(b2["package"]["version"] == 2 and v5["state"] == "kutilmoqda" and not v5["stale"] and not v5["changed"] and v5["nextid"]["version"] == 1,
-       "Qayta tayyorlandi: v2 tasdiq kutmoqda, eskirgan belgisi yo'q, NEXTID uchun hozircha v1")
+    ok(b2["package"]["version"] == 4 and v5["state"] == "kutilmoqda" and not v5["stale"] and not v5["changed"] and v5["nextid"]["version"] == 3,
+       "Qayta tayyorlandi: v4 tasdiq kutmoqda, eskirgan belgisi yo'q, NEXTID uchun hozircha v3")
     # (g) tasdiqlangan versiya qaytarilsa — paket orqali yopilgan materiallar qaytadi
     rr = head.post(f"{P}/packages/{b1['package']['id']}/action", json={"action": "reject", "note": "Sinov: tasdiq bekor"}).json()
     mon3 = {r_["kind"]: r_ for r_ in q("SELECT * FROM dl_items WHERE course_id=? AND topic_no=?", (C1, N1))}
     ok(rr["monitoring"] == len(open0) and all(mon3[k_]["status"] == "qaytarildi" for k_ in open0), "Tasdiqlangan paket qaytarildi → paket orqali yopilgan materiallar «qaytarildi»")
     head.post(f"{P}/packages/{b2['package']['id']}/action", json={"action": "approve"})
-    ok(all(r_["status"] == "tasdiqlandi" for r_ in q("SELECT status FROM dl_items WHERE course_id=? AND topic_no=? AND kind IN ('maruza','taqdimot','video')", (C1, N1))), "v2 tasdiqlandi → materiallar yana yopildi")
+    ok(all(r_["status"] == "tasdiqlandi" for r_ in q("SELECT status FROM dl_items WHERE course_id=? AND topic_no=? AND kind IN ('maruza','taqdimot','video')", (C1, N1))), "v4 tasdiqlandi → materiallar yana yopildi")
     # (h) to'liq bo'lmagan dars: qoralama → o'qituvchi «shu holicha yuborish»
     U2 = f"{P}/courses/{C1}/topics/{N2}"
     teach.post(U2 + "/upload", params={"name": "m13.txt"}, content=BODY.replace("12-MAVZU", "13-MAVZU").encode("utf-8"))

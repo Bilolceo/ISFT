@@ -66,7 +66,8 @@ har bob boshida 2.4 s "N-BOʻLIM · bob nomi" banneri.
   ustida to'liq ko'rsatiladi), lower-third boshida va har bob boshida banner.
 - **`ekran`** — ekran yozuvi to'liq (nisbat mos kelmasa to'q fon bilan), `--webcam` berilsa
   past-o'ngda 400×300 yumaloq PiP (oq ramka, soya). Veb-kamera ekran yozuvidan kech/oldin
-  boshlangan bo'lsa — `--webcam-offset SONIYA`.
+  boshlangan bo'lsa — `--webcam-offset SONIYA`. Logo bu shablonda PiP ga diagonal qarama-qarshi — **yuqori chapda**
+  (o'qituvchi yuzini yopmaydi; joy `graphics.watermark_xy`, kamera sohalari `graphics.camera_rects` — birlik sinovi bilan).
 - **Intro** — chapda och fonda logo va "ISFT · Masofaviy taʼlim", o'ngda bordo gradient panelda
   FAN (bosh harflar), oq chiziq, katta "L3 · Mavzu nomi", o'qituvchi ismi; matn 0.5 s dan keyin
   yumshoq paydo bo'ladi va 28 px yuqoriga siljiydi. **Outro** — och fon, markazda logo,

@@ -234,6 +234,33 @@ ok(r2.get("ok") and r2.get("telegram_unlinked") is True and linked(U1) is None a
 r3 = post(x, "/api/me/password", {"current": "Yangi2026parol", "new": PW}).json()
 ok(r3.get("ok") and r3.get("telegram_unlinked") is False, "ulanmagan akkaunt: telegram_unlinked=false (demo parol tiklandi)")
 ok(rbac.pin_fp("a") != rbac.pin_fp("b") and rbac.pin_fp("a") == rbac.pin_fp("a"), "bot: ulanish parol izi bilan bog'lanadi (parol o'zgarsa — qayta tasdiqlash)")
+# eski (parol izi yo'q) ulanishlar, eski ochiq parol yozuvi va CLI tiklash — xotiradagi bazada (server ma'lumotiga tegilmaydi)
+from app import bot as BOTM, extras as EXM
+tc = sqlite3.connect(":memory:"); tc.row_factory = sqlite3.Row
+tc.executescript("""CREATE TABLE users(id INTEGER PRIMARY KEY, full_name TEXT, role TEXT, pin TEXT, telegram_id INT, active INT DEFAULT 1, tg_pin_fp TEXT);
+  CREATE TABLE audit_log(id INTEGER PRIMARY KEY, ts TEXT, user_id INT, user_name TEXT, role TEXT, channel TEXT, action TEXT, resource TEXT, allowed INT, detail TEXT);""")
+h0 = rbac.hash_password("Eski2025")
+tc.executemany("INSERT INTO users(id,full_name,role,pin,telegram_id,tg_pin_fp) VALUES(?,?,?,?,?,?)", [
+    (1, "Xarid bo'limi", "xarid", h0, 111, None),                       # eski ulanish: iz yo'q (parol o'zgargan bo'lishi mumkin)
+    (2, "Kadrlar bo'limi", "kadrlar", h0, 222, rbac.pin_fp(h0)),        # izli ulanish, parol o'sha
+    (3, "Yuridik bo'lim", "yuridik", "1234", 333, rbac.pin_fp("1234")),  # eski OCHIQ parol yozuvi, izli ulanish
+    (4, "Marketing bo'limi", "marketing", h0, 444, None)])
+tc.commit()
+_bc = BOTM.con; BOTM.con = tc
+try:
+    r1_ = BOTM.still_linked(dict(tc.execute("SELECT * FROM users WHERE id=1").fetchone()))
+    ok(r1_ is False and tc.execute("SELECT telegram_id FROM users WHERE id=1").fetchone()[0] is None,
+       "bot: parol izi yo'q eski ulanish joriy parolga jimgina bog'lanmaydi — uziladi (qayta tasdiqlash)")
+    ok(BOTM.still_linked(dict(tc.execute("SELECT * FROM users WHERE id=2").fetchone())) is True, "bot: izi joriy parolga mos ulanish saqlanadi")
+    rbac.rehash_legacy(tc, 3, "1234", rbac.hash_password("1234"))
+    ok(BOTM.still_linked(dict(tc.execute("SELECT * FROM users WHERE id=3").fetchone())) is True and tc.execute("SELECT telegram_id FROM users WHERE id=3").fetchone()[0] == 333,
+       "eski ochiq parol kirishda xeshga o'tkazildi (parol o'sha) — Telegram ulanishi uzilmadi")
+    tc.execute("UPDATE users SET tg_pin_fp=? WHERE id=4", (rbac.pin_fp(h0),)); tc.commit()
+    EXM.reset_passwords(tc)
+    ok(tc.execute("SELECT COUNT(*) FROM users WHERE telegram_id IS NOT NULL OR tg_pin_fp IS NOT NULL").fetchone()[0] == 0,
+       "CLI reset-passwords: barcha Telegram ulanishlari (eski izsizlari ham) uzildi")
+finally:
+    BOTM.con = _bc; tc.close()
 ok(q1("SELECT COUNT(*) FROM audit_log WHERE action IN ('akkauntlar: parol tiklandi','parol o''zgartirildi') AND detail LIKE '%Telegram uzildi%' AND ts>=?", (TODAY.isoformat(),)) >= 2, "auditda «Telegram uzildi» qaydi")
 
 # =============================================================================================
@@ -270,6 +297,8 @@ if victim:
     ok(att.get(f"/api/staffabs/{AID}").status_code in (403, 404), "begona akkaunt xodim yo'qligini ocholmaydi")
     r = post(ithead, f"/api/accounts/{nu['id']}/update", {"position": f"Sinov xodimi {STAMP}", "person": vname, "role": "xarid", "unit": "xarid"})
     ok(r.status_code == 200 and q1("SELECT locked FROM user_staff WHERE user_id=?", (nu["id"],)) == 1, "akkaunt nomi boshqa xodim ismiga o'zgartirildi — bog'lash yopildi")
+    ok(att.get("/api/me").status_code == 401, "F.I.Sh. o'zgardi (akkaunt boshqa shaxsga o'tdi) — oldingi sessiya yopildi")
+    att = S(nu["id"], nu["password"])
     lst = att.get("/api/staffabs").json()
     ok(att.get(f"/api/staffabs/{AID}").status_code in (403, 404) and AID not in {x.get("id") for x in (lst.get("items") or [])},
        "nomi moslashtirilgan akkaunt baribir o'sha xodimning yo'qligi va hujjatlarini ko'rmaydi")
@@ -321,6 +350,31 @@ if task_p:
     w("DELETE FROM agent_actions WHERE id=?", (dup,))
 else:
     ok(True, "topshiriq turidagi ochiq taklif yo'q — takror tasdiq sinovi o'tkazib yuborildi")
+
+# sovish muddati / eskirish / muddatli kalit (xotiradagi baza — server ma'lumotiga tegilmaydi)
+mc = sqlite3.connect(":memory:"); mc.row_factory = sqlite3.Row
+mc.executescript("""CREATE TABLE agent_actions(id INTEGER PRIMARY KEY, key TEXT UNIQUE, agent TEXT, level INT, title TEXT, detail TEXT, status TEXT,
+                    created_at TEXT, decided_at TEXT, decided_by TEXT, payload TEXT, result TEXT);
+                    CREATE TABLE tasks(id INTEGER PRIMARY KEY, status TEXT);""")
+PL = {"effect": "remind", "task_ids": [5]}
+d1, d2 = (TODAY - dt.timedelta(days=3)).isoformat(), (TODAY - dt.timedelta(days=1)).isoformat()
+b1_, b2_ = f"ijro:overdue:5@{d1}", f"ijro:overdue:5@{d2}"
+ok(AH._base(b1_ + "#" + TODAY.isoformat()) == b1_ and AH._base("ijro:overdue:5#2026-01-01") == "ijro:overdue:5", "agent kaliti: muddatli va eski (muddatsiz) obyekt kalitlari taniladi")
+ok(AH._propose(mc, b1_, "ijro", 2, "T", "", PL) and not AH._propose(mc, b1_, "ijro", 2, "T", "", PL), "muddati o'tgan topshiriq: bitta ochiq taklif")
+mc.execute("UPDATE agent_actions SET status='rad', decided_at=?, decided_by='Rektor' WHERE key LIKE ?", (AH._now(), b1_ + "#%")); mc.commit()
+ok(not AH._propose(mc, b1_, "ijro", 2, "T", "", PL), f"inson rad etgan taklif — {AH.COOLDOWN_DAYS['rad']} kun qayta taklif qilinmaydi (sovish)")
+ok(AH._propose(mc, b2_, "ijro", 2, "T", "", PL), "muddat uzaytirilib yana o'tib ketdi (yangi muddat) — yangi taklif (kalitda muddat)")
+ok(AH._expire(mc, "ijro", set()) == 1 and AH._propose(mc, b2_, "ijro", 2, "T", "", PL),
+   "sharti yo'qolib avtomatik yopilgan taklif sovish muddatisiz — sharti qaytsa darhol yana taklif qilinadi")
+mc.execute("INSERT INTO agent_actions(key,agent,level,title,status,created_at,payload) VALUES('ijro:overdue:7#2026-01-01','ijro',2,'L','rad','2026-01-01T08:00:00','{}')")
+mc.execute("UPDATE agent_actions SET decided_at=?, decided_by='Rektor' WHERE key='ijro:overdue:7#2026-01-01'", (AH._now(),)); mc.commit()
+ok(not AH._propose(mc, f"ijro:overdue:7@{d1}", "ijro", 2, "T", "", PL), "eski (muddatsiz) kalit bilan qabul qilingan qaror ham hisobga olinadi")
+old = (TODAY - dt.timedelta(days=AH.STALE_DAYS + 1)).isoformat() + "T08:00:00"
+mc.execute("INSERT INTO agent_actions(key,agent,level,title,status,created_at,payload) VALUES('chat:ijro:abc:2026-01-01','ijro',2,'S','taklif',?,'{}')", (old,)); mc.commit()
+n_ = AH._expire_stale(mc)
+ok(n_ == 1 and mc.execute("SELECT status, decided_by FROM agent_actions WHERE key='chat:ijro:abc:2026-01-01'").fetchone()[:] == ("rad", AH.AUTO)
+   and mc.execute("SELECT COUNT(*) FROM agent_actions WHERE status='taklif'").fetchone()[0] == 1, f"{AH.STALE_DAYS} kundan eski ochiq taklif avtomatik yopildi; yangilari qoldi")
+mc.close()
 
 # =============================================================================================
 print("— 9. Qo'ng'iroqcha va «Mening vazifalarim»: bitta yig'uvchi —")

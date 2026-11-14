@@ -239,6 +239,46 @@ def bottom_bar() -> Image.Image:
     return Image.new("RGB", (W, Geo.BAR_H), MAROON)
 
 
+WM_MARGIN = 48       # suv belgisi kadr chetidan
+WM_GAP = 24          # suv belgisi va o'qituvchi (kamera) sohasi orasidagi eng kam masofa
+
+
+def camera_rects(template: str, slide_on: bool = False) -> list[tuple[int, int, int, int]]:
+    """Kadrdagi o'qituvchi (kamera) sohalari — suv belgisi ularni HECH QACHON yopmasligi kerak.
+    ekran: PiP (alohida veb-kamera bo'lsa ham, kamera ekran yozuviga «pishirilgan» bo'lsa ham — o'qituvchi shu burchakda)."""
+    if template == "ekran":
+        return [Geo.PIP]
+    if template == "maruza_slayd" and slide_on:
+        return [Geo.TEACH]
+    return []
+
+
+def rects_overlap(a, b, gap: int = 0) -> bool:
+    return a[0] < b[2] + gap and b[0] < a[2] + gap and a[1] < b[3] + gap and b[1] < a[3] + gap
+
+
+def watermark_xy(template: str, size: tuple[int, int], slide_on: bool = False) -> tuple[int, int]:
+    """Suv belgisi (logo) joyi. maruza_slayd + slayd: sarlavha qatorida, o'qituvchi ramkasi ustida (ramkaga kirmaydi).
+    ekran: PiP ga diagonal qarama-qarshi burchak (yuqori chap) — o'qituvchi yuzini yopmaydi. Qolganlari: yuqori o'ng.
+    Har qanday nomzod kamera sohasi bilan kesishsa — keyingi burchak olinadi."""
+    w, h = size
+    tl, tr = (WM_MARGIN, 34), (W - WM_MARGIN - w, 34)
+    bl, br = (WM_MARGIN, H - Geo.BAR_H - 34 - h), (W - WM_MARGIN - w, H - Geo.BAR_H - 34 - h)
+    cams = camera_rects(template, slide_on)
+    if template == "maruza_slayd" and slide_on:
+        cands = [(Geo.TEACH[2] - w, Geo.HY - h // 2), tr, tl]
+    elif template == "ekran":
+        # PiP qaysi burchakda bo'lsa, unga eng uzoq burchak birinchi
+        px, py = (Geo.PIP[0] + Geo.PIP[2]) / 2, (Geo.PIP[1] + Geo.PIP[3]) / 2
+        cands = sorted([tl, tr, bl, br], key=lambda p: -((p[0] + w / 2 - px) ** 2 + (p[1] + h / 2 - py) ** 2))
+    else:
+        cands = [tr, tl]
+    for x, y in cands:
+        if not any(rects_overlap((x, y, x + w, y + h), c, WM_GAP) for c in cams):
+            return x, y
+    return cands[-1]
+
+
 def watermark(logo_path=None, opacity: float = 0.6) -> Image.Image:
     lg = load_logo(logo_path, Geo.WATERMARK_H)
     a = lg.getchannel("A").point(lambda v: int(v * opacity))

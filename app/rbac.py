@@ -300,6 +300,23 @@ def set_password(con, uid: int, pin_hash: str) -> bool:
     con.commit()
     return bool(u and u.get("telegram_id"))
 
+def rehash_legacy(con, uid: int, old_stored: str, new_hash: str):
+    """Eski ochiq yozuvni (parol o'zi o'zgarmagan) xeshga o'tkazish. Parol yozuvi o'zgargani uchun Telegram izi (tg_pin_fp) ham yangi
+    yozuvga ko'chiriladi — aks holda bot buni «parol o'zgardi» deb ulanishni bekordan-bekorga uzardi. Iz eski yozuvga mos kelmasa
+    (yoki yo'q bo'lsa) — tegilmaydi: bot uni baribir qayta tasdiqlashga yuboradi."""
+    con.execute("UPDATE users SET pin=? WHERE id=?", (new_hash, uid))
+    try: con.execute("UPDATE users SET tg_pin_fp=? WHERE id=? AND tg_pin_fp=?", (pin_fp(new_hash), uid, pin_fp(old_stored)))
+    except Exception: pass      # ustun hali yo'q
+    con.commit()
+
+def unlink_telegram_all(con, uid: int | None = None) -> int:
+    """Parol tashqi yo'l bilan (CLI) almashtirilganda — Telegram ulanishi(lari) uziladi (set_password bilan bir xil qoida)."""
+    w, a = ("WHERE id=?", (uid,)) if uid else ("", ())
+    n = con.execute(f"UPDATE users SET telegram_id=NULL {w}" + (" AND" if w else " WHERE") + " telegram_id IS NOT NULL", a).rowcount
+    try: con.execute(f"UPDATE users SET tg_pin_fp=NULL {w}", a)
+    except Exception: pass
+    return n
+
 _PATR = ("ovich", "evich", "ovna", "evna")
 
 def polite_name(full_name: str) -> str | None:

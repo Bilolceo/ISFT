@@ -551,6 +551,7 @@ def reset_passwords(con, user_id: int | None = None) -> int:
         n = con.execute("UPDATE users SET pin=? WHERE id=?", (h, user_id)).rowcount
     else:
         n = con.execute("UPDATE users SET pin=?", (h,)).rowcount
+    rbac.unlink_telegram_all(con, user_id)     # parol almashdi — Telegram ulanishi ham uziladi (eski izsiz ulanishlar ham)
     con.execute("INSERT INTO audit_log(ts,user_id,user_name,role,channel,action,resource,allowed,detail) VALUES(?,?,?,?,?,?,?,?,?)",
                 (_iso(_now()), 0, "Server administratori (CLI)", "admin", "cli", "demo parollari tiklandi", "auth", 1,
                  f"{n} ta akkaunt" + (f" · #{user_id}" if user_id else "")))

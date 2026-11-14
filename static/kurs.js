@@ -203,7 +203,8 @@ async function kuOpen(cid, lid) {
   lid = ls.some(l => l.id === lid) ? lid : (ls[0]?.id || 0);
   v.innerHTML = `<div class="ku-top" style="--acc:${esc(co.accent)}"><button type="button" class="ku-ib" id="kuBack" aria-label="Kurslar ro'yxatiga qaytish" title="Kurslar">${kuI("back", 18)}</button>
       <div class="ku-top-t"><button type="button" class="ku-ct" id="kuCt" title="Kurs sozlamalari">${esc(co.title)}</button>
-        <div class="ku-top-s"><span id="kuStChip">${kuChip(co.status_label, KU_ST[co.status])}</span><span class="ku-save" id="kuSave" role="status" aria-live="polite"></span></div></div>
+        <div class="ku-top-s"><span id="kuStChip">${kuChip(co.status_label, KU_ST[co.status])}</span><span class="ku-save" id="kuSave" role="status" aria-live="polite"></span>
+          <span id="kuLive" aria-live="polite" aria-atomic="true" style="position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap"></span></div></div>
       <div class="ku-top-a" id="kuTopA"></div></div>
     <div id="kuNote"></div>
     <div class="ku-ed"><aside class="ku-side" id="kuSide" aria-label="Darslar"></aside><section class="ku-canvas" id="kuCanvas" aria-label="Dars"></section>
@@ -262,11 +263,20 @@ function kuRenderSide() {
   el.innerHTML = `<div class="ku-side-h"><b>Darslar</b><span class="muted">${ls.length}</span></div>
     <ol class="ku-ls" id="kuLs">${ls.map((l, i) => `<li draggable="true" data-lid="${l.id}" class="${l.id === KU.lid ? "on" : ""}">
       <span class="ku-grip" aria-hidden="true">${kuI("grip", 14)}</span>
-      <button type="button" class="ku-l" data-go="${l.id}" aria-current="${l.id === KU.lid ? "page" : "false"}"><span class="no">${l.type === "quiz" ? kuI("quiz", 15) : i + 1}</span>
+      <button type="button" class="ku-l" data-go="${l.id}" aria-current="${l.id === KU.lid ? "page" : "false"}" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" aria-describedby="kuLsHint"><span class="no">${l.type === "quiz" ? kuI("quiz", 15) : i + 1}</span>
         <span class="t">${esc(l.id === KU.lid && KU.title ? KU.title : l.title)}</span><small>${l.type === "quiz" ? `Test · ${l.blocks} savol` : `${l.blocks} blok`}</small></button></li>`).join("")}</ol>
     <div class="ku-side-a"><button type="button" class="btn sm ghost" data-add="blocks">${kuI("plus", 14)} Dars</button><button type="button" class="btn sm ghost" data-add="quiz">${kuI("plus", 14)} Test</button></div>
-    <p class="ku-note">Tartibni o'zgartirish uchun darsni sudrang (yoki dars sarlavhasi yonidagi ↑ ↓).</p>`;
+    <p class="ku-note" id="kuLsHint">Tartibni o'zgartirish uchun darsni sudrang, dars sarlavhasi yonidagi ↑ ↓ ni bosing yoki darsni tanlab Alt + ↑ / ↓.</p>`;
   el.querySelectorAll("[data-go]").forEach(b => b.onclick = () => { if (+b.dataset.go !== KU.lid) kuLoadLesson(+b.dataset.go); });
+  /* klaviatura: fokusdagi dars — Alt+↑ / Alt+↓ bilan ko'chiriladi; fokus o'sha darsda qoladi, yangi o'rni ekran o'quvchisiga aytiladi */
+  el.querySelectorAll("[data-go]").forEach(b => b.onkeydown = e => {
+    if (!e.altKey || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return;
+    e.preventDefault();
+    const ids = co.lessons_list.map(l => l.id), lid = +b.dataset.go, i = ids.indexOf(lid), j = i + (e.key === "ArrowUp" ? -1 : 1);
+    if (j < 0 || j >= ids.length) { kuSay(j < 0 ? "Dars allaqachon birinchi o'rinda" : "Dars allaqachon oxirgi o'rinda"); return; }
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+    kuOrder(ids, lid);
+  });
   el.querySelectorAll("[data-add]").forEach(b => b.onclick = () => kuAddLesson(b.dataset.add));
   let drag = null;
   el.querySelectorAll("#kuLs li").forEach(li => {
@@ -278,12 +288,16 @@ function kuRenderSide() {
       const ids = co.lessons_list.map(l => l.id), from = +drag.dataset.lid; ids.splice(ids.indexOf(from), 1); ids.splice(ids.indexOf(+li.dataset.lid) + (top ? 0 : 1), 0, from); kuOrder(ids); };
   });
 }
-async function kuOrder(ids) {
+/* ekran o'quvchisi uchun qisqa xabar (ko'rinmas aria-live maydon) */
+function kuSay(t) { const el = $("#kuLive"); if (!el) return; el.textContent = ""; setTimeout(() => { el.textContent = t; }, 30); }
+async function kuOrder(ids, focusLid = null) {
   await kuFlush();
   const r = await kuFetch(`/api/kurs/courses/${KU.cid}/order`, {order: ids, rev: KU.course.rev});
   if (r.status === 409) { toast("Kurs boshqa joyda o'zgargan — yangilandi"); return kuOpen(KU.cid, KU.lid); }
   if (!r.ok) { toast(kuErr(r.data)); return; }
   KU.course = r.data; kuRenderSide(); kuLessonHead();
+  const ml = focusLid ?? null, ls = KU.course.lessons_list, k = ml != null ? ls.findIndex(l => l.id === ml) : -1;
+  if (k >= 0) { document.querySelector(`#kuLs [data-go="${ml}"]`)?.focus(); kuSay(`Dars «${ls[k].title}» ${k + 1}-o'ringa ko'chirildi (jami ${ls.length} ta)`); }
 }
 async function kuAddLesson(type) {
   await kuFlush();
@@ -324,7 +338,7 @@ function kuRenderCanvas() {
   kuLessonHead();
   $("#kuLt").oninput = e => { KU.title = e.target.value; const s = document.querySelector(`#kuLs li[data-lid="${KU.lid}"] .t`); if (s) s.textContent = KU.title; kuDirty(); };
   el.querySelectorAll("[data-lmv]").forEach(b => b.onclick = () => { const ids = KU.course.lessons_list.map(l => l.id), i = ids.indexOf(KU.lid), j = i + +b.dataset.lmv;
-    if (j < 0 || j >= ids.length) return; [ids[i], ids[j]] = [ids[j], ids[i]]; kuOrder(ids); });
+    if (j < 0 || j >= ids.length) return; [ids[i], ids[j]] = [ids[j], ids[i]]; kuOrder(ids, KU.lid).then(() => b.isConnected && b.focus()); });
   el.querySelector("[data-ldup]").onclick = async () => { await kuFlush(); const r = await kuApi(`/api/kurs/lessons/${KU.lid}/duplicate`, {}); if (r) { KU.course = r.course; kuLoadLesson(r.id, true); toast("Darsdan nusxa olindi"); } };
   el.querySelector("[data-ldel]").onclick = async e => {
     if (!arm(e.currentTarget, "O'chirilsinmi?")) return;
@@ -347,7 +361,7 @@ function kuIssues(iss) {
 function kuCard(b, i) {
   const M = KU.meta.blocks, n = KU.blocks.length;
   return `<section class="ku-blk ${i === KU.sel ? "sel" : ""}" data-bi="${i}" id="kb-${b.id}" aria-label="${esc(M[b.type]?.label || b.type)}">
-    <div class="ku-blk-h"><span class="ku-grip" draggable="true" title="Sudrab ko'chirish" aria-hidden="true">${kuI("grip", 14)}</span><b>${KU.lesson.type === "quiz" ? `${i + 1}-savol` : esc(M[b.type]?.label || b.type)}</b>
+    <div class="ku-blk-h"><span class="ku-grip" draggable="true" tabindex="0" role="button" title="Sudrab yoki Alt + ↑ / ↓ bilan ko'chirish" aria-label="Blokni ko'chirish (${i + 1}/${n}): Alt + ↑ yoki Alt + ↓" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown">${kuI("grip", 14)}</span><b>${KU.lesson.type === "quiz" ? `${i + 1}-savol` : esc(M[b.type]?.label || b.type)}</b>
       <span class="ku-iss-w">${kuIssues(b.issues)}</span>
       <span class="ku-tools"><button type="button" class="ku-ib" data-act="up" ${i === 0 ? "disabled" : ""} aria-label="Yuqoriga" title="Yuqoriga">${kuI("up", 15)}</button>
         <button type="button" class="ku-ib" data-act="down" ${i === n - 1 ? "disabled" : ""} aria-label="Pastga" title="Pastga">${kuI("down", 15)}</button>
@@ -524,7 +538,16 @@ function kuBindCanvas() {
     kuAct(a, card ? +card.dataset.bi : -1, e);
   });
   cv.addEventListener("keydown", e => { if ((e.key === "Enter" || e.key === " ") && e.target.matches(".ku-drop[data-act]")) { e.preventDefault(); e.target.click(); } });
-  /* bloklarni sudrab ko'chirish (sichqoncha); klaviatura — ↑ ↓ tugmalari */
+  /* klaviatura bilan ko'chirish: blok (tutqich, asboblar paneli yoki blokning o'zi) fokusda — Alt+↑ / Alt+↓. Matn maydonlarida Alt+strelka
+     tizimning o'z vazifasini bajaradi (kursorni ko'chirish), shuning uchun u yerda ushlanmaydi. Yangi o'rin aria-live orqali aytiladi. */
+  cv.addEventListener("keydown", e => {
+    if (!e.altKey || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return;
+    const card = e.target.closest("[data-bi]");
+    if (!card || e.target.closest("input, textarea, select, [contenteditable='true'], [data-rich]")) return;
+    e.preventDefault();
+    kuMoveBlock(+card.dataset.bi, e.key === "ArrowUp" ? -1 : 1, ".ku-grip");
+  });
+  /* bloklarni sudrab ko'chirish (sichqoncha); klaviatura — ↑ ↓ tugmalari yoki Alt+↑ / Alt+↓ */
   let drag = -1;
   cv.addEventListener("dragstart", e => { const g = e.target.closest(".ku-grip"), card = g && g.closest("[data-bi]"); if (!card) return; drag = +card.dataset.bi; card.classList.add("drag"); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", String(drag)); e.dataTransfer.setDragImage(card, 20, 20); });
   cv.addEventListener("dragend", () => { drag = -1; cv.querySelectorAll(".drag,.over-t,.over-b").forEach(x => x.classList.remove("drag", "over-t", "over-b")); });
@@ -541,13 +564,23 @@ function kuSelect(i, scroll = true) {
   kuRenderPanel();
 }
 const kuMove = (arr, i, j) => { if (j < 0 || j >= arr.length) return false; const [x] = arr.splice(i, 1); arr.splice(j, 0, x); return true; };
+/* blokni bir qadam ko'chirish (↑ ↓ tugmalari va Alt+strelka): fokus ko'chgan blokning shu elementida qoladi, yangi o'rni aytiladi */
+function kuMoveBlock(bi, step, focusSel) {
+  const j = bi + step, n = KU.blocks.length, what = KU.lesson.type === "quiz" ? "Savol" : "Blok";
+  if (!kuMove(KU.blocks, bi, j)) { kuSay(`${what} allaqachon ${step < 0 ? "birinchi" : "oxirgi"} o'rinda`); return false; }
+  KU.sel = j; kuRenderBlocks(); kuRenderPanel(); kuDirty();
+  const card = document.querySelector(`#kuBlocks [data-bi="${j}"]`);
+  (card?.querySelector(focusSel) || card?.querySelector(".ku-grip"))?.focus();
+  kuSay(`${what} ${j + 1}-o'ringa ko'chirildi (jami ${n} ta)`);
+  return true;
+}
 async function kuAct(a, bi, e) {
   const act = a.dataset.act, b = KU.blocks[bi], d = b?.data, i = +a.dataset.i;
   const re = () => { kuReblock(bi); kuDirty(); };
   switch (act) {
     case "ins": return KU.lesson.type === "quiz" ? kuInsert("question", +a.dataset.at) : kuLibrary(+a.dataset.at);
     case "tb": return kuTestbank();
-    case "up": case "down": { const j = bi + (act === "up" ? -1 : 1); if (kuMove(KU.blocks, bi, j)) { KU.sel = j; kuRenderBlocks(); kuRenderPanel(); kuDirty(); document.querySelector(`#kuBlocks [data-bi="${j}"] [data-act="${act}"]`)?.focus(); } return; }
+    case "up": case "down": kuMoveBlock(bi, act === "up" ? -1 : 1, `[data-act="${act}"]:not([disabled])`); return;
     case "dup": { const c = kuClone({type: b.type, data: b.data}); KU.blocks.splice(bi + 1, 0, {id: kuUid(), ...c, issues: b.issues}); KU.sel = bi + 1; kuRenderBlocks(); kuRenderPanel(); kuDirty(); toast("Blokdan nusxa olindi"); return; }
     case "del": return kuDelete(bi);
     case "gear": kuSelect(bi, false); $("#kuPanel").classList.add("open"); $("#kuPanel").querySelector("select, input, button")?.focus(); return;

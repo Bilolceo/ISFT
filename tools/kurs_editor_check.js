@@ -6,7 +6,7 @@
  *   KU_CID=<kurs id> [KU_QCID=<sifat hisoboti skrinshoti uchun kurs id>] OUT=/tmp/kurs node tools/kurs_editor_check.js
  *
  * Tekshiradi: kurslar ro'yxati, kurs ochilishi (darslar, bloklar), «+» → blok kutubxonasi → yangi blok, joyida yozish va avtosaqlash (server
- * holati bilan solishtiriladi), o'ng panel sozlamasi, o'chirish → «Bekor qilish», ↑ ↓ ko'chirish, ziddiyat (boshqa joyda saqlangan rev → 409 →
+ * holati bilan solishtiriladi), o'ng panel sozlamasi, o'chirish → «Bekor qilish», ↑ ↓ ko'chirish, klaviatura bilan ko'chirish (Alt+↑/↓ — blok va dars, aria-live), ziddiyat (boshqa joyda saqlangan rev → 409 →
  * ogohlantirish va «Oxirgi holatni yuklash»), ko'rish oynasi (pleyer iframe'da, telefon kengligi), sifat hisoboti, telefon kengligida gorizontal
  * aylantirish yo'qligi, konsol xatolari yo'qligi. Natija: "  ✓ …" / "  ✗ …"; xato bo'lsa chiqish kodi 1. Skrinshotlar: $OUT.
  */
@@ -83,6 +83,36 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     await page.click(`#kuBlocks [data-bi="${curIns}"] [data-act="down"]`);
     await sleep(200);
     ok(((await page.textContent(`#kuBlocks [data-bi="${curIns + 1}"]`)) || '').includes(MARK), '↓ tugmasi bilan blok pastga ko\'chdi');
+    // klaviatura: blok tutqichi fokusda — Alt+↑ / Alt+↓ (fokus ko'chgan blokda qoladi, aria-live xabari)
+    await page.focus(`#kuBlocks [data-bi="${curIns + 1}"] .ku-grip`);
+    await page.keyboard.press('Alt+ArrowUp');
+    await sleep(150);
+    ok(((await page.textContent(`#kuBlocks [data-bi="${curIns}"]`)) || '').includes(MARK)
+       && await page.evaluate(i => document.activeElement === document.querySelector(`#kuBlocks [data-bi="${i}"] .ku-grip`), curIns)
+       && new RegExp(`${curIns + 1}-o'ringa ko'chirildi`).test(await page.textContent('#kuLive')),
+       'Alt+↑ (klaviatura): blok yuqoriga ko\'chdi, fokus o\'sha blokda, ekran o\'quvchisiga yangi o\'rni aytildi');
+    await page.keyboard.press('Alt+ArrowDown');
+    await sleep(150);
+    ok(((await page.textContent(`#kuBlocks [data-bi="${curIns + 1}"]`)) || '').includes(MARK), 'Alt+↓ (klaviatura): blok pastga qaytdi');
+    const rich = `#kuBlocks [data-bi="${curIns + 1}"] [data-rich]`;
+    await page.focus(rich); await page.keyboard.press('Alt+ArrowUp'); await sleep(150);
+    ok(((await page.textContent(`#kuBlocks [data-bi="${curIns + 1}"]`)) || '').includes(MARK), 'Matn maydonida Alt+↑ blokni ko\'chirmaydi (kursor uchun)');
+    ok(await page.$eval(`#kuBlocks [data-bi="${curIns + 1}"] .ku-grip`, g => g.tabIndex === 0 && g.getAttribute('role') === 'button' && /Alt/.test(g.getAttribute('aria-label') || '')),
+       'Blok tutqichi klaviaturadan fokuslanadi (role=button, Alt + ↑/↓ izohi)');
+    // darslar: fokusdagi dars Alt+↓ / Alt+↑ bilan ko'chadi (server tartibi bilan solishtiriladi)
+    const ord0 = (await api(`/api/kurs/courses/${CID}`)).data.lessons_list.map(l => l.id);
+    if (ord0.length >= 2) {
+      await page.focus(`#kuLs [data-go="${ord0[0]}"]`);
+      await page.keyboard.press('Alt+ArrowDown');
+      await page.waitForFunction(id => document.querySelector('#kuLs li:nth-child(2) [data-go]')?.dataset.go === String(id), ord0[0], { timeout: 10000 });
+      await sleep(150);   // aria-live matni qisqa kechikish bilan yoziladi (ekran o'quvchisi o'zgarishni sezishi uchun)
+      const ord1 = (await api(`/api/kurs/courses/${CID}`)).data.lessons_list.map(l => l.id);
+      ok(ord1[1] === ord0[0] && ord1[0] === ord0[1] && await page.evaluate(id => document.activeElement?.dataset.go === String(id), ord0[0])
+         && /2-o'ringa ko'chirildi/.test(await page.textContent('#kuLive')), 'Alt+↓ (klaviatura): dars 2-o\'ringa ko\'chdi (serverda), fokus o\'sha darsda, aria-live xabari');
+      await page.keyboard.press('Alt+ArrowUp');
+      await page.waitForFunction(id => document.querySelector('#kuLs li:nth-child(1) [data-go]')?.dataset.go === String(id), ord0[0], { timeout: 10000 });
+      ok(JSON.stringify((await api(`/api/kurs/courses/${CID}`)).data.lessons_list.map(l => l.id)) === JSON.stringify(ord0), 'Alt+↑ (klaviatura): dars joyiga qaytdi');
+    }
     await page.click(`#kuBlocks [data-bi="${curIns + 1}"] [data-act="del"]`);
     await page.waitForSelector('#kuUndo button');
     ok(!((await page.textContent('#kuBlocks')) || '').includes(MARK), 'Blok o\'chirildi, «Bekor qilish» tugmasi chiqdi');

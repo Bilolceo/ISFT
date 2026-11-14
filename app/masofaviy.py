@@ -176,7 +176,7 @@ def seed(con, force=False):
     """Demo: kontent rejasi va 8 haftalik LMS faolligi (bir marta; dl_meta.seed_v1). Hammasi SUN'IY — haqiqiy LMS ulanguncha."""
     if not force and db.one(con, "SELECT 1 x FROM dl_meta WHERE k='seed_v1'"): return
     if force:
-        con.executescript("DELETE FROM dl_items; DELETE FROM dl_courses; DELETE FROM dl_activity; DELETE FROM dl_log; DELETE FROM dl_reminders; DELETE FROM dl_ai;")
+        db.run_script(con, "DELETE FROM dl_items; DELETE FROM dl_courses; DELETE FROM dl_activity; DELETE FROM dl_log; DELETE FROM dl_reminders; DELETE FROM dl_ai;")   # qayta to'ldirish bilan bitta tranzaksiyada
     R = random.Random(20261110)
     today, now = _today(), _now()
     pol = policy(con)

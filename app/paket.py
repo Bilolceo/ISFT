@@ -3019,6 +3019,8 @@ def build_topic(c: Ctx | None, cid: int, no: int, mode: str | None = None, force
             if c: rbac.audit(_con, c, "paket: tekshiruvdan o'tmadi", RES, True, f"kurs #{cid} · {lesson_code(no)} · {val['errors'][:2]}")
             raise HTTPException(422, "Paket tekshiruvdan o'tmadi: " + "; ".join(val["errors"][:3]))
         status = "tayyor" if g["ready"]["sendable"] else "qoralama"      # asosiy qismlar bor — bo'limga yuboriladi (test ixtiyoriy)
+        if status == "tayyor" and _rejected_same(cid, no, fp):          # majburiy qayta yig'ish (force) qaytarilgan mazmunni avtomatik yubormaydi
+            status = "qoralama"
         pid = _store_package(c, cid, no, data, st["mode"], status, st, fp, val, {k: (v["ok"] if isinstance(v, dict) else v) for k, v in g["ready"].items()},
                              version, src, sig)
         _log(c, cid, no, "yig'ildi", f"v{version} · {MODES[st['mode']]} · {status}", pid)
@@ -3119,6 +3121,17 @@ def _sync_monitoring(c: Ctx, r: dict, approve: bool, note: str = "") -> int:
     except Exception as e:                    # monitoring yangilanmasa ham tasdiqlash bekor bo'lmaydi
         print("paket._sync_monitoring:", repr(e)); return 0
 
+def _rejected_same(cid: int, no: int, content_hash: str | None) -> dict | None:
+    """Bo'lim qaytargan (status='qoralama' + izoh) va mazmuni (content_hash — dars materiallari, sozlama va pleyer barmoq izi) aynan shu
+    bo'lgan versiya. Bunday mazmun o'zgartirilmasdan bo'limga qayta yuborilmaydi."""
+    if not content_hash: return None
+    return db.one(_con, """SELECT id, version, note FROM pk_packages WHERE course_id=? AND topic_no=? AND content_hash=? AND status='qoralama'
+                           AND COALESCE(note,'')!='' ORDER BY version DESC LIMIT 1""", (cid, no, content_hash))
+
+def _unchanged_msg(rj: dict) -> str:
+    return (f"Dars v{rj['version']} bo'lim tomonidan qaytarilgan va shundan beri o'zgartirilmagan — bir xil mazmun qayta yuborilmaydi. "
+            f"Avval qaytarish sababiga ko'ra materiallarni tuzating va darsni qayta yig'ing. Qaytarish sababi: «{(rj['note'] or '').strip()[:200]}»")
+
 def package_action(c: Ctx, pid: int, action: str, note: str = "") -> dict:
     r, co = _package(c, pid)
     synced = 0
@@ -3144,6 +3157,8 @@ def package_action(c: Ctx, pid: int, action: str, note: str = "") -> dict:
         if db.one(_con, "SELECT 1 x FROM pk_packages WHERE course_id=? AND topic_no=? AND version>?", (r["course_id"], r["topic_no"], r["version"])):
             raise HTTPException(409, "Faqat oxirgi versiya yuboriladi — darsni qayta tayyorlang")
         with _lock:
+            rj = _rejected_same(r["course_id"], r["topic_no"], r["content_hash"])   # qulf ostida: qaytarish bilan poyga bo'lmasin
+            if rj: raise HTTPException(409, _unchanged_msg(rj))
             _con.execute("UPDATE pk_packages SET status='tayyor', note=NULL WHERE id=?", (r["id"],))
             _log(c, r["course_id"], r["topic_no"], "bo'limga yuborildi", f"v{r['version']}", r["id"]); _con.commit()
     else:

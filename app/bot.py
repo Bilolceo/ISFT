@@ -104,17 +104,19 @@ def _ensure_fp():
 
 def still_linked(u) -> bool:
     """Ulanish hali amaldami: akkaunt faol va parol ulanish paytidagidek. Parol qaysi yo'l bilan o'zgargan bo'lmasin (tiklash, o'zi almashtirgan,
-    CLI) — ulanish uziladi va bot qayta tasdiqlashni (KOD parol) so'raydi. Eski ulanishlar (iz yo'q) birinchi murojaatda joriy parolga bog'lanadi."""
+    CLI) — ulanish uziladi va bot qayta tasdiqlashni (KOD parol) so'raydi. Eski ulanishlar (parol izi yo'q — iz joriy qilinishidan oldin
+    ulangan) ham uziladi: ular qaysi parol bilan tasdiqlangani noma'lum, parol o'shandan beri o'zgargan bo'lishi mumkin — joriy parolga
+    jimgina bog'lab qo'yish o'zgargan parolni «qonuniylashtirib» yuborardi. Foydalanuvchi bir marta KOD parol bilan qayta ulanadi."""
     if not u or u.get("active") == 0: return False   # accounts.py: faolsizlantirilgan akkaunt
     try:
         _ensure_fp()
         if "pin" not in u or "tg_pin_fp" not in u: u = db.one(con, "SELECT * FROM users WHERE id=?", (u["id"],)) or u
+        if not u.get("telegram_id"): return False
         fp = rbac.pin_fp(u.get("pin"))
-        if not u.get("tg_pin_fp"):
-            con.execute("UPDATE users SET tg_pin_fp=? WHERE id=?", (fp, u["id"])); con.commit(); return True
-        if u["tg_pin_fp"] != fp:
+        if u.get("tg_pin_fp") != fp:
             con.execute("UPDATE users SET telegram_id=NULL, tg_pin_fp=NULL WHERE id=?", (u["id"],)); con.commit()
-            rbac.audit(con, rbac.Ctx(u, rbac.ROLES[u["role"]], "telegram"), "telegram ulanishi uzildi", "auth", True, "parol o'zgargan — qayta tasdiqlash kerak")
+            why = "parol o'zgargan" if u.get("tg_pin_fp") else "eski ulanish (parol izi yo'q)"
+            rbac.audit(con, rbac.Ctx(u, rbac.ROLES[u["role"]], "telegram"), "telegram ulanishi uzildi", "auth", True, f"{why} — qayta tasdiqlash kerak")
             return False
     except Exception as e:
         log.warning("still_linked: %s", e)

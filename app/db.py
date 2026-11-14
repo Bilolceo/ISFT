@@ -65,6 +65,23 @@ def init(con: sqlite3.Connection) -> None:
     from . import kadrlar as _K; con.executescript(_K.SCHEMA)   # hr_files — boshqa modullar bo'shatilgan xodimlarni chiqarib tashlaydi (seed ham)
     con.commit()
 
+def run_script(con, script: str) -> int:
+    """Bir nechta SQL buyrug'ini JORIY tranzaksiya ichida bajaradi (con.executescript o'rniga).
+    sqlite3 `executescript` bajarishdan oldin har doim COMMIT beradi — so'rov o'rtasida chaqirilsa (masalan, «jadval yo'q bo'lsa —
+    yaratamiz» zaxira yo'li, kamera voqeasini yozishdan oldin sxema tekshiruvi) shu paytgacha yozilgan yarim-tayyor o'zgarishlar
+    muddatidan oldin saqlanib qoladi va keyingi xato ularni qaytara olmaydi. Bu yerda buyruqlar birma-bir `execute` qilinadi:
+    tranzaksiya ochiq bo'lsa — uning ichida (chaqiruvchi commit/rollback qiladi), bo'lmasa — avvalgidek darhol.
+    Ishga tushishdagi migratsiyalar (`init`, `migrate`, `ensure_schema` — so'rovlar xizmatidan oldin, ochiq tranzaksiyasiz) executescript'da
+    qolishi xavfsiz. Qaytaradi: bajarilgan buyruqlar soni."""
+    n, buf = 0, ""
+    for part in script.split(";"):
+        buf += part + ";"
+        if sqlite3.complete_statement(buf):
+            if buf.strip(" \t\r\n;"): con.execute(buf); n += 1
+            buf = ""
+    if buf.strip(" \t\r\n;"): con.execute(buf); n += 1
+    return n
+
 def rows(con, sql, args=()):
     return [dict(r) for r in con.execute(sql, args).fetchall()]
 

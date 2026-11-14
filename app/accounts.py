@@ -18,7 +18,7 @@ Faolsizlantirish: users.active=0 → kirish rad etiladi (main.py /api/login), ma
 (main.ctx), kirish ro'yxatida (/api/users) ko'rinmaydi, Telegram uziladi (bot ham faol bo'lmagan akkauntni tanimaydi).
 Har bir amal rbac.audit(resource="accounts").
 """
-import datetime as dt, re, secrets, time
+import datetime as dt, re, secrets, threading, time
 from fastapi import APIRouter, Request, HTTPException, Response
 from pydantic import BaseModel
 from . import clock
@@ -242,6 +242,21 @@ def _clean(v, field, label, required=False, mx=120) -> str:
 def _full(position, person) -> str:
     return f"{position}: {person}" if person else position
 
+# Yaratish/tahrirlash bitta qulf ostida: nom bandligini tekshirish va yozish orasida boshqa so'rov (ikki oynadan bir vaqtda saqlash)
+# xuddi shu nomni olib qo'ymasin; tahrirlashda akkaunt qulf ichida qayta o'qiladi (eski holat ustidan yozilmaydi).
+_wlock = threading.Lock()
+
+def _norm_name(v: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[ʻʼ‘’`´]", "'", v or "")).strip().casefold()
+
+def _name_taken(full: str, except_uid: int | None = None) -> int | None:
+    """Shu nomli (katta-kichik harf, bo'shliq, apostrof farqsiz) boshqa FAOL akkaunt bo'lsa — uning id si. Kirish ro'yxatida bir xil
+    nomli ikki akkaunt adashtiradi (va birovning nomi ostida kirish xavfi) — shuning uchun ruxsat etilmaydi."""
+    key = _norm_name(full)
+    for r in _con.execute("SELECT id, full_name FROM users WHERE COALESCE(active,1)!=0 AND id!=?", (except_uid or -1,)).fetchall():
+        if _norm_name(r[1]) == key: return r[0]
+    return None
+
 @router.post("/api/accounts")
 def create_account(body: AccountIn, request: Request, response: Response):
     c = C(request, True, "yaratish", f"{body.position or ''} · {body.role or ''}")
@@ -256,8 +271,11 @@ def create_account(body: AccountIn, request: Request, response: Response):
     full = _full(pos, person)
     cols = {"full_name": full, "role": role, "unit": unit, "link_code": code, "pin": rbac.hash_password(pw), "active": 1,
             "created_at": _now(), "created_by": c.user["id"], **extra}
-    cur = _con.execute(f"INSERT INTO users({','.join(cols)}) VALUES({','.join('?' * len(cols))})", tuple(cols.values()))
-    _con.commit()
+    with _wlock:
+        other = _name_taken(full)
+        if other: _bad(f"«{full}» nomli akkaunt allaqachon bor (#{other}) — lavozim nomi yoki F.I.Sh. boshqacha bo'lsin", "person" if person else "position")
+        cur = _con.execute(f"INSERT INTO users({','.join(cols)}) VALUES({','.join('?' * len(cols))})", tuple(cols.values()))
+        _con.commit()
     rbac.audit(_con, c, "akkauntlar: yaratildi", RES, True, f"#{cur.lastrowid} {full} · rol {role} · bo'lim {unit}")
     response.headers["Cache-Control"] = "no-store"
     return {"ok": True, "id": cur.lastrowid, "password": pw, "link_code": code,
@@ -266,7 +284,11 @@ def create_account(body: AccountIn, request: Request, response: Response):
 @router.post("/api/accounts/{uid}/update")
 def update_account(uid: int, body: AccountIn, request: Request):
     c = C(request, True, "tahrirlash", f"#{uid}")
-    u = _target(uid)
+    with _wlock:
+        return _update_locked(c, uid, body, request)
+
+def _update_locked(c: Ctx, uid: int, body: AccountIn, request: Request) -> dict:
+    u = _target(uid)                 # qulf ichida o'qiladi — parallel tahrir natijasi ustidan eski holat yozilmaydi
     if u["id"] == c.user["id"]: _deny(c, "tahrirlash", _tag(u), "O'z akkauntingiz lavozimi va bo'limini o'zgartira olmaysiz")
     if u["role"] in PROTECTED:
         _deny(c, "tahrirlash", _tag(u), "Rahbariyat va AT boshlig'i akkaunti faqat server administratori (CLI) orqali o'zgartiriladi")
@@ -284,15 +306,26 @@ def update_account(uid: int, body: AccountIn, request: Request):
     if role != u["role"]: ch.append(f"rol: {u['role']} → {role}")
     if unit != (u.get("unit") or ""): ch.append(f"bo'lim: {u.get('unit') or '—'} → {unit}")
     if not ch: return {"ok": True, "changed": False, "message": "O'zgarish yo'q"}
+    if _norm_name(full) != _norm_name(u["full_name"]):
+        other = _name_taken(full, uid)
+        if other: _bad(f"«{full}» nomli akkaunt allaqachon bor (#{other}) — lavozim nomi yoki F.I.Sh. boshqacha bo'lsin", "person" if person else "position")
+    person_changed = _norm_name(_short(full)) != _norm_name(_short(u["full_name"]))
     cols = {"full_name": full, "role": role, "unit": unit, **extra}
     _con.execute(f"UPDATE users SET {', '.join(k + '=?' for k in cols)} WHERE id=?", (*cols.values(), uid))
     if _short(full) != _short(u["full_name"]):     # ism o'zgardi: bog'lanmagan akkaunt yangi ism bo'yicha boshqa xodimning yozuvlariga ulanmaydi
         from . import staff_absence as SA
         SA.lock_user_link(_con, uid)
+    tg = False
+    if person_changed:   # akkaunt boshqa shaxsga o'tdi — oldingi egasining Telegram ulanishi uziladi
+        tg = bool(u.get("telegram_id")); rbac.unlink_telegram_all(_con, uid)
     _con.commit()
-    n = SS.revoke_user(_con, uid) if role != u["role"] else 0      # rol o'zgarsa — eski ruxsatli sessiyalar yopiladi
-    rbac.audit(_con, c, "akkauntlar: tahrirlandi", RES, True, f"#{uid} · " + " · ".join(ch) + (f" · sessiyalar yopildi: {n}" if n else ""))
-    return {"ok": True, "changed": True, "message": "Saqlandi" + (" · rol o'zgargani uchun sessiyalari yopildi" if role != u["role"] else "")}
+    # rol o'zgarsa (eski ruxsatlar) yoki akkaunt boshqa shaxsga o'tsa (F.I.Sh. o'zgardi) — barcha ochiq sessiyalar yopiladi
+    n = SS.revoke_user(_con, uid) if (role != u["role"] or person_changed) else 0
+    rbac.audit(_con, c, "akkauntlar: tahrirlandi", RES, True, f"#{uid} · " + " · ".join(ch) + (f" · sessiyalar yopildi: {n}" if n else "")
+               + (" · Telegram uzildi" if tg else ""))
+    why = "rol o'zgargani" if role != u["role"] else "F.I.Sh. o'zgargani" if person_changed else ""
+    return {"ok": True, "changed": True, "revoked": n, "telegram_unlinked": tg,
+            "message": "Saqlandi" + (f" · {why} uchun sessiyalari yopildi" if why else "") + (" · Telegram uzildi" if tg else "")}
 
 # ---------------------------------------------------------------------------------------------
 # Amallar

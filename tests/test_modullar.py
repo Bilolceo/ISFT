@@ -67,7 +67,8 @@ import datetime as dt
 from app import occupancy as OC, clock   # noqa: E402
 def mk():
     c = sqlite3.connect(":memory:")
-    c.executescript("""CREATE TABLE tickets(id INTEGER PRIMARY KEY, room_id INT, item TEXT, text TEXT, reporter TEXT, status TEXT, procurement_id INT);
+    c.executescript("""CREATE TABLE tickets(id INTEGER PRIMARY KEY, room_id INT, item TEXT, text TEXT, reporter TEXT, status TEXT, procurement_id INT,
+          assignee_user INT, note TEXT);
         CREATE TABLE cameras(id INTEGER PRIMARY KEY, room_id INT, mode TEXT, ticket_id INT, ticket_kind TEXT);
         CREATE TABLE cam_events(id INTEGER PRIMARY KEY, ticket_id INT);
         CREATE TABLE occupancy(room_id INT, ts TEXT, count INT);""")
@@ -78,36 +79,67 @@ def mk():
         (3, 3, "Kamera", "Kamera javob bermayapti", "ISFT Core (avtomatik)", "hal qilindi", None),               # yopilgan → tarix, qoladi
         (4, 3, "Proyektor", "Yonmayapti", "o'qituvchi", "yangi", None),                                          # odam yozgan → qoladi
         (5, 3, "Xavfsizlik", "Tungi kirish", "ISFT Core (kamera voqeasi)", "jarayonda", None),                   # simulyator voqeasi, ochiq → o'chadi
-        (6, 3, "Kamera", "Kamera javob bermayapti", "ISFT Core (avtomatik)", "yangi", 7)])                        # xaridga bog'langan → qoladi
+        (6, 3, "Kamera", "Kamera javob bermayapti", "ISFT Core (avtomatik)", "yangi", 7),                         # xaridga bog'langan → qoladi
+        (7, 4, "Kamera", "Kamera javob bermayapti", "ISFT Core (avtomatik)", "yangi", None),                     # kamerasi olib tashlangan xona → qoladi
+        (8, None, "Xavfsizlik", "Kamera voqeasi", "ISFT Core (kamera voqeasi)", "yangi", None)])                  # xonasiz → qoladi
+    c.execute("INSERT INTO tickets(id,room_id,item,text,reporter,status,assignee_user) VALUES(9,1,'Kamera','x','ISFT Core (avtomatik)','jarayonda',22)")  # xodimga biriktirilgan → qoladi
+    c.execute("INSERT INTO tickets(id,room_id,item,text,reporter,status,note) VALUES(10,3,'Kamera','x','ISFT Core (avtomatik)','yangi','Usta chaqirildi')")  # izoh yozilgan → qoladi
     c.execute("INSERT INTO cam_events(id,ticket_id) VALUES(1,5)")
     now = clock.now().replace(microsecond=0)
     c.executemany("INSERT INTO occupancy VALUES(?,?,?)", [(1, (now - dt.timedelta(days=d)).isoformat(), 5) for d in (0, 3, 9, 30)] +
-                  [(2, (now - dt.timedelta(days=d)).isoformat(), 7) for d in (0, 30)])
+                  [(2, (now - dt.timedelta(days=d)).isoformat(), 7) for d in (0, 30)] + [(4, now.isoformat(), 9)])
     c.commit(); return c
 c = mk(); r = OC.cleanup(c)
 ids = [x[0] for x in c.execute("SELECT id FROM tickets ORDER BY id")]
-ok(r["tickets"] == 2 and ids == [2, 3, 4, 6], f"Simulyator o'chiq: uning OCHIQ arizalari o'chdi; haqiqiy kamera, yopilgan, odam yozgan va xaridga bog'langani qoldi ({ids})")
+ok(r["tickets"] == 2 and ids == [2, 3, 4, 6, 7, 8, 9, 10], f"Simulyator o'chiq: uning OCHIQ arizalari o'chdi; haqiqiy kamera, yopilgan, odam yozgan, xaridga bog'langan, "
+   f"kamerasiz/xonasiz, biriktirilgan va izohli arizalar qoldi ({ids})")
 ok(c.execute("SELECT ticket_id FROM cameras WHERE id=1").fetchone()[0] is None and c.execute("SELECT ticket_id FROM cameras WHERE id=2").fetchone()[0] == 2
    and c.execute("SELECT ticket_id FROM cam_events").fetchone()[0] is None, "Kamera va voqea yozuvlaridagi ariza havolasi tozalandi (haqiqiy kameraniki — joyida)")
-ok(c.execute("SELECT COUNT(*) FROM occupancy WHERE room_id=1").fetchone()[0] == 0 and c.execute("SELECT COUNT(*) FROM occupancy WHERE room_id=2").fetchone()[0] == 2,
-   "Simulyator sanoqlari to'liq o'chdi; haqiqiy kamera xonasiniki qoldi")
+ok(c.execute("SELECT COUNT(*) FROM occupancy WHERE room_id=1").fetchone()[0] == 0 and c.execute("SELECT COUNT(*) FROM occupancy WHERE room_id=2").fetchone()[0] == 2
+   and c.execute("SELECT COUNT(*) FROM occupancy WHERE room_id=4").fetchone()[0] == 1,
+   "Simulyator sanoqlari to'liq o'chdi; haqiqiy kamera va kamerasi olib tashlangan xonaniki qoldi")
+# ishga tushishda — kuniga ko'pi bilan bir marta (oxirgi vaqt bazada); simulyator kaliti o'zgarsa — darhol
+c = mk()
+ok(OC.cleanup_daily(c) is not None and OC.cleanup_daily(c) is None, "cleanup_daily: birinchi ishga tushishda bajariladi, takror ishga tushishda (24 soat ichida) — yo'q")
+c.execute("UPDATE maintenance_runs SET ts=ts-90000"); ok(OC.cleanup_daily(c) is not None, "cleanup_daily: 24 soatdan keyin yana bajariladi")
+os.environ["ISFT_CORE_CAM_SIM"] = "1"; ok(OC.cleanup_daily(c) is not None, "cleanup_daily: simulyator kaliti o'zgarsa — darhol"); os.environ.pop("ISFT_CORE_CAM_SIM")
 ok(OC.cleanup(c) == {"tickets": 0, "occupancy": 0}, "Takror chaqiruv — hech narsa o'zgarmaydi (idempotent)")
 os.environ["ISFT_CORE_CAM_SIM"] = "1"
 OC.KEEP_DAYS = 7   # standart (tests/run_all.py seed tarixi uchun ISFT_CORE_OCC_KEEP_DAYS=40 beradi)
 c = mk(); r = OC.cleanup(c)
-ok(r["tickets"] == 0 and c.execute("SELECT COUNT(*) FROM tickets").fetchone()[0] == 6, "Simulyator yoqilgan: arizalarga tegilmaydi")
-ok(c.execute("SELECT COUNT(*) FROM occupancy").fetchone()[0] == 3, f"Simulyator yoqilgan: {OC.KEEP_DAYS} kundan eski sanoqlar o'chadi (6 → 3)")
+ok(r["tickets"] == 0 and c.execute("SELECT COUNT(*) FROM tickets").fetchone()[0] == 10, "Simulyator yoqilgan: arizalarga tegilmaydi")
+ok(c.execute("SELECT COUNT(*) FROM occupancy").fetchone()[0] == 4, f"Simulyator yoqilgan: {OC.KEEP_DAYS} kundan eski sanoqlar o'chadi (7 → 4)")
 os.environ.pop("ISFT_CORE_CAM_SIM")
 import asyncio
 OC._con = mk(); before = OC._con.execute("SELECT COUNT(*) FROM occupancy").fetchone()[0]
 os.environ["ISFT_CORE_MODULES"] = "-cams,-spaces"; M._cache = None
 asyncio.run(OC.poll_once())
 os.environ.pop("ISFT_CORE_MODULES"); M._cache = None
-ok(OC._con.execute("SELECT COUNT(*) FROM occupancy").fetchone()[0] == before and OC._con.execute("SELECT COUNT(*) FROM tickets").fetchone()[0] == 6,
+ok(OC._con.execute("SELECT COUNT(*) FROM occupancy").fetchone()[0] == before and OC._con.execute("SELECT COUNT(*) FROM tickets").fetchone()[0] == 10,
    "Bo'lim o'chiq: fon so'rovchisi hech narsa yozmaydi (sanoq ham, ariza ham)")
 OC._con = None
 
 # ===================================================================== F (birlik)
+print("\n— F0. executescript: so'rov yo'lida yashirin COMMIT yo'q —")
+import ast as _ast
+from app import db as _DB
+mc = sqlite3.connect(":memory:"); mc.execute("CREATE TABLE t(x)"); mc.commit()
+mc.execute("INSERT INTO t VALUES(1)")
+n_ = _DB.run_script(mc, "CREATE TABLE IF NOT EXISTS u(y); CREATE INDEX IF NOT EXISTS iu ON u(y); INSERT INTO u VALUES('a;b');")
+mc.rollback()
+ok(n_ == 3 and mc.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 0, "db.run_script: ochiq tranzaksiya ichida bajariladi (rollback oldingi yozuvni ham qaytaradi — yashirin COMMIT yo'q)")
+mc.execute("INSERT INTO t VALUES(1)"); mc.executescript("CREATE TABLE IF NOT EXISTS v(z);"); mc.rollback()
+ok(mc.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 1, "(taqqoslash) sqlite3 executescript oldin COMMIT qiladi — shuning uchun so'rov yo'lida ishlatilmaydi")
+mc.close()
+# executescript faqat ishga tushishdagi migratsiya / seed funksiyalarida (so'rov xizmatidan oldin, ochiq tranzaksiyasiz) qolishi mumkin
+MIGR = {"init", "migrate", "ensure_schema", "ensure_tutors", "init_tables", "seed", "run"}
+bad_ = []
+for p_ in sorted((ROOT / "app").glob("*.py")):
+    for fn in _ast.walk(_ast.parse(p_.read_text(encoding="utf-8"))):
+        if isinstance(fn, (_ast.FunctionDef, _ast.AsyncFunctionDef)) and fn.name not in MIGR:
+            bad_ += [f"{p_.name}:{fn.name}:{n.lineno}" for n in _ast.walk(fn) if isinstance(n, _ast.Attribute) and n.attr == "executescript"]
+ok(not bad_, f"app/: executescript faqat init/migrate/seed funksiyalarida (so'rov yo'lida — db.run_script) {bad_}")
+
 print("\n— F1. Urinishlar cheklovi xotirasi —")
 from app import sessions as SS   # noqa: E402
 L = SS.Limiter(5, 600)
@@ -197,6 +229,17 @@ if not demo:
 else:
     print("  · ISFT_CORE_SHOW_DEMO_PASSWORD=1 — namoyish rejimi: ism va parol ko'rsatiladi (tekshiruvlar o'tkazib yuborildi)")
 ok(all(u.get("search_only") for u in us if u["role"].startswith("Tyutor")), "Tyutorlar — faqat qidiruvda (search_only)")
+# Tyutor o'z akkauntini ISMI bilan topa oladi (server qidiruvi), lekin javobda ism yo'q va prefiks/umumiy so'z bilan ro'yxat chiqmaydi
+tut = q("SELECT id, full_name FROM users WHERE role='tyutor' AND COALESCE(active,1)!=0 ORDER BY id LIMIT 1")[0]
+tnm = tut[1].split(":", 1)[1].split()
+fr = httpx.post(B + "/api/users/find", json={"q": tnm[0]})
+ok(fr.status_code == 200 and tut[0] in fr.json()["ids"] and len(fr.json()["ids"]) <= 5 and set(fr.json()) == {"ids"},
+   f"Kirish: tyutor familiyasi bo'yicha topiladi (#{tut[0]}) — faqat akkaunt raqami qaytadi")
+ok(tut[0] in httpx.post(B + "/api/users/find", json={"q": f"{tnm[0].upper()} {tnm[1].lower()}"}).json()["ids"], "Kirish: familiya + ism (katta-kichik harf farqsiz)")
+ok(httpx.post(B + "/api/users/find", json={"q": tnm[0][:4]}).json()["ids"] == [] and httpx.post(B + "/api/users/find", json={"q": "qizi"}).json()["ids"] == []
+   and httpx.post(B + "/api/users/find", json={"q": "a"}).json()["ids"] == [],
+   "Kirish: prefiks, juda umumiy so'z yoki 1 harf bilan akkauntlar ro'yxati chiqmaydi")
+ok("/api/users/find" in httpx.get(B + "/app.js").text, "app.js: kirish qidiruvi ism bo'yicha serverdan so'raydi")
 idx = httpx.get(B + "/index.html").text; appjs = httpx.get(B + "/app.js").text
 ok(PW not in idx and PW not in appjs and all(PW not in httpx.get(f"{B}/login/v{n}.js").text for n in (1, 2, 3)), "Sahifa va skriptlarda sinov paroli matni yo'q")
 ok("switcher.js" not in idx and "switcher.css" not in idx and "jarvis-login\",v" not in idx, "Dizayn almashtirgich (DIZAYN 1/2/3) foydalanuvchiga yuklanmaydi")

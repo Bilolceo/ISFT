@@ -125,13 +125,21 @@ def _add(con, key, agent, level, title, detail="", payload=None, auto=False, res
     if auto:
         res = _execute(con, payload, _jarvis(agent), agent, auto=True)
         con.execute("UPDATE agent_actions SET status='bajarildi', decided_at=?, decided_by=?, result=? WHERE id=?",
-                    (_now(), "ISFT Core (avtomatik)", (result or res)[:600], aid))
+                    (_now(), AUTO, (result or res)[:600], aid))
     con.commit()
     return aid
 
 # ---------- obyekt bo'yicha takliflar ----------
-COOLDOWN_DAYS = {"bajarildi": 7, "rad": 14}     # qaror qabul qilingan obyekt bo'yicha shu muddatdan oldin qayta taklif qilinmaydi
-OBJ_RE = re.compile(r"^(ijro:overdue:\d+|talaba:jiddiy|moliya:over:.+?|hujjat:partner:\d+)(?::|#)(\d{4}-\d{2}-\d{2})(?:\.\d+)?$")
+COOLDOWN_DAYS = {"bajarildi": 7, "rad": 14}     # INSON qaror qabul qilgan obyekt bo'yicha shu muddatdan oldin qayta taklif qilinmaydi
+AUTO = "ISFT Core (avtomatik)"                  # avtomatik yopilgan (sharti yo'qolgan / eskirgan) taklif — inson qarori emas, sovish muddati yo'q
+STALE_DAYS = 30                                 # shuncha kun qaror qabul qilinmagan ochiq taklif eskirgan deb yopiladi (sharti saqlansa — yangisi)
+# Obyekt kaliti. Muddati o'tgan topshiriq — MUDDAT bilan (`ijro:overdue:12@2026-11-10`): muddat uzaytirilib, yana o'tib ketsa — bu yangi holat,
+# avvalgi muddat bo'yicha qaror (rad / eslatma yuborildi) yangi taklifni to'sib qo'ymaydi. Eski (muddatsiz) kalitlar ham taniladi.
+OBJ_RE = re.compile(r"^(ijro:overdue:\d+(?:@\d{4}-\d{2}-\d{2})?|talaba:jiddiy|moliya:over:.+?|hujjat:partner:\d+)(?::|#)(\d{4}-\d{2}-\d{2})(?:\.\d+)?$")
+
+def _legacy(base: str) -> str:
+    """`ijro:overdue:12@2026-11-10` → `ijro:overdue:12` (muddatsiz eski kalit)."""
+    return base.split("@", 1)[0]
 
 def _base(key: str) -> str | None:
     m = OBJ_RE.match(key or "")
@@ -151,6 +159,8 @@ def _propose(con, base, agent, level, title, detail, payload) -> bool:
     qilinmaydi. True — yangi taklif yaratildi."""
     payload = {**payload, "origin": base}
     last = _latest(con, base)
+    if not last and _legacy(base) != base:      # yangilanishdan oldingi (muddatsiz kalitli) yozuv — o'sha obyekt
+        last = _latest(con, _legacy(base))
     if last and last["status"] == "taklif":
         pj = json.dumps(payload, ensure_ascii=False)
         if (last["title"], last["detail"], last["payload"]) != (title[:300], detail[:1000], pj):
@@ -161,20 +171,35 @@ def _propose(con, base, agent, level, title, detail, payload) -> bool:
         try: lp = json.loads(last["payload"] or "{}")
         except ValueError: lp = {}
         if _task_open(con, lp.get("created_task")): return False
+        if last["decided_by"] == AUTO: last = None   # avtomatik yopilgan — sovish muddati yo'q, sharti qaytsa darhol taklif qilinadi
+    if last:
         try: age = (clock.today() - dt.date.fromisoformat((last["decided_at"] or last["created_at"])[:10])).days
         except (ValueError, TypeError): age = 999
         if age < COOLDOWN_DAYS.get(last["status"], 7): return False
-    return bool(_add(con, f"{base}#{_today()}", agent, level, title, detail, payload=payload))
+    key = f"{base}#{_today()}"
+    if con.execute("SELECT 1 FROM agent_actions WHERE key=?", (key,)).fetchone():   # shu kuni avtomatik yopilib, sharti qaytgan
+        key += f".{con.execute('SELECT COUNT(*) FROM agent_actions WHERE substr(key,1,?)=?', (len(key), key)).fetchone()[0]}"
+    return bool(_add(con, key, agent, level, title, detail, payload=payload))
 
 def _expire(con, agent: str, live: set) -> int:
     """Sharti endi bajarilmaydigan ochiq takliflar (topshiriq bajarildi, xarajat rejaga tushdi, shartnoma uzaytirildi) avtomatik yopiladi."""
     n = 0
+    live = set(live) | {_legacy(b) for b in live if _latest(con, b) is None}   # eski kalitli ochiq taklif hali yangilanmagan bo'lsa — tirik
     for r in db.rows(con, "SELECT id, key FROM agent_actions WHERE status='taklif' AND agent=?", (agent,)):
         b = _base(r["key"])
         if b and b not in live:
             n += con.execute("UPDATE agent_actions SET status='rad', decided_at=?, decided_by=?, result=? WHERE id=? AND status='taklif'",
-                             (_now(), "ISFT Core (avtomatik)", "Dolzarbligini yo'qotdi — sharti endi bajarilmaydi; taklif avtomatik yopildi, hech qanday amal bajarilmadi.", r["id"])).rowcount
-    if n: con.commit()
+                             (_now(), AUTO, "Dolzarbligini yo'qotdi — sharti endi bajarilmaydi; taklif avtomatik yopildi, hech qanday amal bajarilmadi.", r["id"])).rowcount
+    con.commit()          # 0 qator bo'lsa ham: UPDATE ochgan yashirin tranzaksiya yozish qulfini ushlab qolmasin
+    return n
+
+def _expire_stale(con) -> int:
+    """STALE_DAYS kundan beri qaror qabul qilinmagan ochiq takliflar (skaner va suhbat takliflari) yopiladi — ro'yxatda abadiy osilib qolmaydi.
+    Sharti hamon bajarilsa, skaner shu zahoti yangi (bugungi ma'lumot bilan) taklif yaratadi."""
+    lim = (clock.now() - dt.timedelta(days=STALE_DAYS)).replace(microsecond=0).isoformat(timespec="seconds")
+    n = con.execute("UPDATE agent_actions SET status='rad', decided_at=?, decided_by=?, result=? WHERE status='taklif' AND created_at<?",
+                    (_now(), AUTO, f"Eskirdi — {STALE_DAYS} kun ichida qaror qabul qilinmadi; taklif avtomatik yopildi, hech qanday amal bajarilmadi.", lim)).rowcount
+    con.commit()          # 0 qator bo'lsa ham: UPDATE ochgan yashirin tranzaksiya yozish qulfini ushlab qolmasin
     return n
 
 def dedupe(con) -> int:
@@ -265,6 +290,8 @@ def scan(con) -> int:
     rc = _rector(con)
     d = _today()
     new = 0
+    try: _expire_stale(con)
+    except Exception as e: print("agent_hub stale:", e)
     live = {}          # agent → shu skanerda sharti bajarilgan obyekt kalitlari (qolgan ochiq takliflar eskirgan — _expire)
     def add(*a, **k):
         nonlocal new
@@ -295,7 +322,7 @@ def scan(con) -> int:
         over = [t for t in tl if t["overdue"]]
         for t in over:
             who = t["assignee"] or ROLES.get(t["assignee_role"], ROLES["rektor"]).title
-            propose(f"ijro:overdue:{t['id']}", "ijro", 2, f"Rasmiy eslatma: «{_cut(t['text'])}»",
+            propose(f"ijro:overdue:{t['id']}@{str(t['due'])[:10]}", "ijro", 2, f"Rasmiy eslatma: «{_cut(t['text'])}»",
                     f"{who} · muddat {_dmy(t['due'])} ({abs(t['days'] or 0)} kun o'tgan). Tasdiqlansa, rasmiy eslatma yuboriladi va topshiriq tarixiga yoziladi.",
                     {"effect": "remind", "task_ids": [t["id"]]})
         live.setdefault("ijro", set()); _expire(con, "ijro", live["ijro"])

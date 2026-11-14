@@ -243,13 +243,15 @@ def build_graph(job: RenderJob) -> tuple[Graph, list[str]]:
     G.watermark(job.logo).save(work / "watermark.png")
     i_wm = g.inp("-i", str(work / "watermark.png"))
     with Image.open(work / "watermark.png") as im:
-        wm_w = im.width
-    if tpl == "maruza_slayd" and job.slide_spans:  # sarlavha qatori bilan bir chiziqda
+        wm_size = im.size
+    # joy — G.watermark_xy: o'qituvchi/kamera sohasini (PiP, o'qituvchi ramkasi) hech qachon yopmaydi
+    if tpl == "maruza_slayd" and job.slide_spans:  # slayd paytida sarlavha qatori bilan bir chiziqda
         on_s = "+".join(f"between(t,{a:.3f},{b - 0.001:.3f})" for a, b, s in job.slide_spans if s >= 0) or "0"
-        wm_y = f"if({on_s},{G.Geo.HY - G.Geo.WATERMARK_H // 2},34)"
-        g.add(f"[m1][{i_wm}:v]overlay=x={G.Geo.TEACH[2] - wm_w}:y='{wm_y}':eval=frame[m2]")
+        (xa, ya), (xb, yb) = G.watermark_xy(tpl, wm_size, True), G.watermark_xy(tpl, wm_size, False)
+        g.add(f"[m1][{i_wm}:v]overlay=x='if({on_s},{xa},{xb})':y='if({on_s},{ya},{yb})':eval=frame[m2]")
     else:
-        g.add(f"[m1][{i_wm}:v]overlay={W - 48 - wm_w}:34[m2]")
+        wx, wy = G.watermark_xy(tpl, wm_size, False)
+        g.add(f"[m1][{i_wm}:v]overlay={wx}:{wy}[m2]")
     cur = "m2"
     for k, ov in enumerate(overlays_for(job)):
         idx = g.img(ov.png, ov.dur, rate=2)

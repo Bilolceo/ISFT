@@ -66,7 +66,7 @@ def init(con):
     con.commit()
     from . import camsec as CS
     CS.init(con)
-    cleanup(con)
+    cleanup_daily(con)
 
 # =====================================================================
 # Simulyator kaliti va tozalash
@@ -86,9 +86,32 @@ def live() -> bool:
     except Exception:
         return False
 
+_MAINT_SCHEMA = "CREATE TABLE IF NOT EXISTS maintenance_runs(name TEXT PRIMARY KEY, ts REAL, mode TEXT)"
+
+def cleanup_daily(con, force: bool = False) -> dict | None:
+    """Ishga tushishda: tozalash kuniga ko'pi bilan BIR marta (oxirgi ishga tushish vaqti bazada). Simulyator kaliti o'zgargan bo'lsa
+    (sim ↔ haqiqiy) — darhol. Keyingi kunlik tozalash — poller (_LAST_TRIM)."""
+    mode = "sim" if sim_on() else "real"
+    try:
+        con.execute(_MAINT_SCHEMA)
+        r = con.execute("SELECT ts, mode FROM maintenance_runs WHERE name='occupancy.cleanup'").fetchone()
+        if not force and r and r[1] == mode and time.time() - (r[0] or 0) < 86400:
+            return None
+    except Exception as e:
+        print("occupancy.cleanup_daily:", e); return None
+    out = cleanup(con)
+    try:
+        con.execute("INSERT OR REPLACE INTO maintenance_runs(name, ts, mode) VALUES('occupancy.cleanup', ?, ?)", (time.time(), mode)); con.commit()
+    except Exception as e:
+        print("occupancy.cleanup_daily:", e)
+    return out
+
 def cleanup(con) -> dict:
-    """Ishga tushishda (idempotent). Simulyator o'chiq: simulyator ochgan OCHIQ arizalar («Kamera … javob bermayapti» va h.k.) va
-    simulyator sanoqlari o'chiriladi (haqiqiy — isapi — kameralar xonalariga tegilmaydi). Simulyator yoqilgan: KEEP_DAYS kundan eski sanoqlar."""
+    """Tozalash (idempotent; ishga tushishda — cleanup_daily orqali kuniga bir marta). Simulyator o'chiq: simulyator kamerasi turgan
+    xonalardagi, simulyator nomidan ochilgan, yopilmagan va HECH KIM TEGMAGAN (biriktirilmagan, izohsiz, xaridsiz) arizalar hamda o'sha xonalarning sanoqlari
+    o'chiriladi. Haqiqiy (isapi) kamera xonalari, xonasiz yozuvlar va kamerasi olib tashlangan xonalarning tarixi — TEGILMAYDI
+    (avvalgi versiya «haqiqiy kamera xonasida emas» degan keng shart bilan haqiqiy yozuvlarni ham o'chirgan).
+    Simulyator yoqilgan: KEEP_DAYS kundan eski sanoqlar."""
     out = {"tickets": 0, "occupancy": 0}
     try:
         if sim_on():
@@ -96,10 +119,10 @@ def cleanup(con) -> dict:
                 lim = iso(now() - dt.timedelta(days=KEEP_DAYS))
                 out["occupancy"] = con.execute("DELETE FROM occupancy WHERE ts<?", (lim,)).rowcount
         else:
-            real = "SELECT room_id FROM cameras WHERE mode='isapi'"
+            sim_rooms = "SELECT room_id FROM cameras WHERE mode='sim' AND room_id IS NOT NULL"
             ids = [r[0] for r in con.execute(
                 f"""SELECT id FROM tickets WHERE reporter IN (?,?) AND COALESCE(status,'')!='hal qilindi' AND procurement_id IS NULL
-                    AND (room_id IS NULL OR room_id NOT IN ({real}))""", SIM_REPORTERS).fetchall()]
+                    AND assignee_user IS NULL AND COALESCE(note,'')='' AND room_id IN ({sim_rooms})""", SIM_REPORTERS).fetchall()]
             if ids:
                 qm = ",".join("?" * len(ids))
                 con.execute(f"DELETE FROM tickets WHERE id IN ({qm})", ids)
@@ -107,7 +130,7 @@ def cleanup(con) -> dict:
                 try: con.execute(f"UPDATE cam_events SET ticket_id=NULL WHERE ticket_id IN ({qm})", ids)
                 except Exception: pass
                 out["tickets"] = len(ids)
-            out["occupancy"] = con.execute(f"DELETE FROM occupancy WHERE room_id NOT IN ({real})").rowcount
+            out["occupancy"] = con.execute(f"DELETE FROM occupancy WHERE room_id IN ({sim_rooms})").rowcount
         con.commit()
         if out["tickets"] or out["occupancy"] > 1000:
             print(f"occupancy.cleanup: simulyator {'yoqilgan' if sim_on() else 'yoqilmagan'} — {out['tickets']} ariza, {out['occupancy']} sanoq o'chirildi")

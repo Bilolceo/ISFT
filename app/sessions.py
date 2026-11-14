@@ -14,7 +14,8 @@ CREATE INDEX IF NOT EXISTS ix_sessions_user ON sessions(user_id);
 """
 
 def init(con):
-    con.executescript(SCHEMA)
+    from . import db
+    db.run_script(con, SCHEMA)     # create()/resolve() zaxira yo'lida ham chaqiriladi — ochiq tranzaksiyani muddatidan oldin commit qilmaydi
     if "ua" not in {r[1] for r in con.execute("PRAGMA table_info(sessions)")}:
         con.execute("ALTER TABLE sessions ADD COLUMN ua TEXT")
     con.commit()

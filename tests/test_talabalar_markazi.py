@@ -208,13 +208,25 @@ ok(not q("""SELECT 1 FROM ops_tasks t JOIN students s ON s.id=t.student_id WHERE
 print("— Call-markaz navbati: haqiqiy muddat (SLA) va rejalashtirish —")
 con.commit()
 now_s, td = CLK.now().replace(microsecond=0).isoformat(), CLK.today().isoformat()
+# Navbatning birinchi ish kuni: bugun shanba/yakshanba bo'lsa — dushanba (schedule_calls shu kundan boshlaydi). Sana testga qotirilmaydi.
+fd = OPS._workday(CLK.today(), 0).isoformat()
 CALLQ = "SELECT t.id, t.due_at, t.planned_on, t.level, t.created_at, t.attempts, t.title, oc.rule, oc.facts FROM ops_tasks t JOIN ops_cases oc ON oc.id=t.case_id WHERE t.status='yangi' AND t.assignee_role='call_center'"
 before = {r[0]: r[1] for r in q(CALLQ)}
 OPS.schedule_calls(con); con.commit()
 ok(before and before == {r[0]: r[1] for r in q(CALLQ)}, f"1. Rejalashtirish haqiqiy muddatni (due_at) o'zgartirmaydi ({len(before)} ta qo'ng'iroq)")
 rows = q(CALLQ)
 rem = [r for r in rows if r[7] == "kontrakt" and json.loads(r[8]).get("days", -1) >= 0]
-ok(rem and all(r[1] <= json.loads(r[8])["due"] + "T18:00:00" for r in rem), f"1. Kontrakt eslatmasi muddati — to'lov sanasidan kech emas ({len(rem)} ta, masalan {rem[0][1] if rem else '—'})")
+# To'lov jadvali QAT'IY sanalarda (CONTRACT_PLAN) — bugun yaqin to'lov bo'lmasa eslatma holatlari yo'q; shuning uchun muddat qoidasi
+# har bir jadval sanasi uchun to'g'ridan-to'g'ri ham tekshiriladi (2 kun / 30 daqiqa oldin, juma–dushanba chegaralari bilan).
+CPLAN = [r[0] for r in q("SELECT due FROM contract_plan ORDER BY due")]
+crit_days = int(OPS.policy(con)["contract_critical_days"])
+up = [d for d in CPLAN if 0 <= (dt.date.fromisoformat(d) - CLK.today()).days <= crit_days]
+sla_bad = [(d, k) for d in CPLAN for k in (dt.timedelta(days=2), dt.timedelta(hours=10), dt.timedelta(minutes=30))
+           for cr in [dt.datetime.combine(dt.date.fromisoformat(d), dt.time(17, 30)) - k]
+           if OPS._sla("kontrakt", "qongiroq", {"due": d, "days": (dt.date.fromisoformat(d) - cr.date()).days}, cr, 48) > dt.datetime.fromisoformat(d + "T18:00:00")]
+ok(not sla_bad and CPLAN, f"1. Kontrakt eslatmasi SLA: har bir to'lov sanasi ({len(CPLAN)} ta) uchun muddat sanadan kech emas {sla_bad}")
+ok((bool(rem) or not up) and all(r[1] <= json.loads(r[8])["due"] + "T18:00:00" for r in rem),
+   f"1. Kontrakt eslatmasi muddati — to'lov sanasidan kech emas ({len(rem)} ta; yaqin to'lov: {up or 'yo‘q'})")
 dav = [r for r in rows if r[7] == "davomat" and not r[5] and not r[6].startswith("Va'da")]
 ok(dav and all(dt.datetime.fromisoformat(r[1]) - dt.datetime.fromisoformat(r[4]) == dt.timedelta(hours=24) for r in dav), f"1. Davomat 30+ soat: qo'ng'iroq muddati — 24 soat ({len(dav)} ta)")
 cs = reg.get("/api/ops/summary").json()["calls"]
@@ -226,21 +238,22 @@ ok(all(n <= cap for d, n in per_day if d), f"1. Har ish kuniga imkoniyatdan orti
 ok(cs["shortfall_today"] == max(0, cs["due_today"] - cs["capacity_today"]) and
    (f"{cs['capacity_today']} ta imkoniyat" in cs["text"] and ("kechikadi" in cs["text"] or not cs["shortfall_today"])),
    f"1. Yetishmovchilik ochiq aytiladi: «{cs['text'][:140]}…»")
-ok(cs["projected_late"] > 0 and cs["alternatives"]["sms"] > 0 and cs["alternatives"]["overflow"] > 0, f"1. Rejaga ko'ra kechikadigan {cs['projected_late']} ta; muqobil: SMS {cs['alternatives']['sms']}, taqsimlash {cs['alternatives']['overflow']}")
+ok(cs["projected_late"] > 0 and cs["alternatives"]["sms"] == len(rem) and cs["alternatives"]["overflow"] > 0, f"1. Rejaga ko'ra kechikadigan {cs['projected_late']} ta; muqobil: SMS {cs['alternatives']['sms']}, taqsimlash {cs['alternatives']['overflow']}")
 bk = lambda r: (max((r[1] or "9999")[:10], td), -(r[3] or 0))
-today_b = [bk(r) for r in rows if r[2] == td]; later_b = [bk(r) for r in rows if r[2] and r[2] > td and not r[5]]
+today_b = [bk(r) for r in rows if r[2] == fd]; later_b = [bk(r) for r in rows if r[2] and r[2] > fd and not r[5]]
+ok(today_b, f"1. Birinchi ish kuni ({fd}) ro'yxati bo'sh emas")
 ok(not today_b or not later_b or max(today_b) <= min(later_b), "1. Ustuvorlik: avval muddati yaqin va jiddiyroq qo'ng'iroqlar (bugungi ro'yxat)")
 ct2 = cc.get("/api/ops/tasks").json()
 ok(all(t["late"] == (t["due_at"] < CLK.now().isoformat(timespec="seconds")) for t in ct2), "3. Kartada «kechikdi» faqat muddati haqiqatda o'tganlarda")
 ok(cc.post("/api/ops/calls/operators", json={"items": [{"user_id": 23, "capacity": 100}]}).status_code == 403, "Operator me'yorini faqat Registrator ofisi boshlig'i o'zgartiradi")
 r = reg.post("/api/ops/calls/operators", json={"items": [{"user_id": 23, "capacity": 100, "active": True}]}).json()
-ok(r["summary"]["capacity"] == 100 and q("SELECT COUNT(*) FROM ops_tasks WHERE status='yangi' AND assignee_role='call_center' AND planned_on=?", (td,))[0][0] <= 100 + 4,
+ok(r["summary"]["capacity"] == 100 and q("SELECT COUNT(*) FROM ops_tasks WHERE status='yangi' AND assignee_role='call_center' AND planned_on=?", (fd,))[0][0] <= 100 + 4,
    "1. Operator me'yori sozlanadi (100) — navbat qayta rejalashtirildi")
 # ikkinchi operator (test uchun vaqtinchalik akkaunt)
 uid2 = con.execute("INSERT INTO users(full_name,role,pin) VALUES('Call-markaz operatori: Test Operator','call_center','x')").lastrowid; con.commit()
 r = reg.post("/api/ops/calls/operators", json={"items": [{"user_id": 23, "capacity": 60}, {"user_id": uid2, "capacity": 40}]}).json()
-own = q("SELECT assignee_user, COUNT(*) FROM ops_tasks WHERE status='yangi' AND assignee_role='call_center' AND planned_on=? GROUP BY 1", (td,))
-ok(r["summary"]["operators"] == 2 and r["summary"]["capacity"] == 100 and {u for u, _ in own} == {23, uid2}, f"1. Bir nechta operator: imkoniyat 60 + 40, bugungi ro'yxat taqsimlandi {own}")
+own = q("SELECT assignee_user, COUNT(*) FROM ops_tasks WHERE status='yangi' AND assignee_role='call_center' AND planned_on=? GROUP BY 1", (fd,))
+ok(r["summary"]["operators"] == 2 and r["summary"]["capacity"] == 100 and {u for u, _ in own} == {23, uid2}, f"1. Bir nechta operator: imkoniyat 60 + 40, birinchi ish kuni ({fd}) ro'yxati taqsimlandi {own}")
 ok(all(t["assignee_user"] in (23, None) for t in cc.get("/api/ops/tasks").json()), "1. Operator (#23) faqat o'ziga taqsimlangan qo'ng'iroqlarni ko'radi")
 con.execute("DELETE FROM call_operators WHERE user_id=?", (uid2,)); con.execute("DELETE FROM users WHERE id=?", (uid2,)); con.commit()
 reg.post("/api/ops/calls/operators", json={"items": [{"user_id": 23, "capacity": 60}]})
@@ -249,7 +262,7 @@ ok(q("SELECT COUNT(*) FROM ops_tasks WHERE status='yangi' AND assignee_user=?", 
 print("— Muqobil yo'llar: ommaviy SMS/Telegram, kechikadiganlarni taqsimlash —")
 ok(cc.post("/api/ops/calls/notify", json={"preview": True}).status_code == 403, "Ommaviy SMS — faqat Registrator ofisi boshlig'i")
 pv = reg.post("/api/ops/calls/notify", json={"channel": "sms", "preview": True}).json()
-ok(pv["n"] == cs["alternatives"]["sms"] and "shlyuzi ulanmagan" in pv["gateway"] and pv["sample"], f"SMS ko'rib chiqish: {pv['n']} ta, namuna bor, shlyuz holati ochiq aytilgan")
+ok(pv["n"] == cs["alternatives"]["sms"] and "shlyuzi ulanmagan" in pv["gateway"] and (pv["sample"] or pv["n"] == 0), f"SMS ko'rib chiqish: {pv['n']} ta, namuna bor, shlyuz holati ochiq aytilgan")
 tot0 = reg.get("/api/ops/summary").json()["calls"]["total"]
 r = reg.post("/api/ops/calls/notify", json={"channel": "sms", "preview": False}).json()
 ok(r["sent"] == pv["n"] - pv["no_phone"] and q("SELECT COUNT(*) FROM ops_notices WHERE channel='sms' AND status='navbatda'")[0][0] >= r["sent"]

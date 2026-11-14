@@ -122,20 +122,49 @@ def public_core_js():
     body = f"window.ISFT_FLAGS={_json.dumps(f)};\n" + ("" if demo else "window.ISFT_HIDE_DEMO_HINT=true;\n")
     return Response(body, media_type="application/javascript", headers={"Cache-Control": "no-store"})
 
-@app.get("/api/users")
-def users():
+def _login_users() -> list[dict]:
+    """Kirish ro'yxatidagi akkauntlar (faol, bekor qilinmagan lavozim; kafedralar darajasida — kafedra, o'qituvchi, tyutor)."""
     us = db.rows(con, "SELECT * FROM users ORDER BY id")
     # "Kafedralar" bo'limida kafedra mudirlari va o'qituvchilar (Taqdimot, Vazifalar va testlar); tyutorlar (38 ta) ro'yxatni
     # to'ldirib yubormasligi uchun faqat qidiruvda chiqadi (search_only)
     us = [u for u in us if rbac.ROLES[u["role"]].level != 4 or u["role"] in ("kafedra", "oqituvchi", "tyutor")]
     us = [u for u in us if u.get("active") != 0 and not rbac.ROLES[u["role"]].legacy]   # faolsizlantirilgan / bekor qilingan lavozim — ro'yxatda yo'q
     us.sort(key=lambda u: (rbac.ROLES[u["role"]].level, u.get("department_id") or 0, u["id"]))
+    return us
+
+@app.get("/api/users")
+def users():
+    us = _login_users()
     demo = MODS.show_demo_password()
     seen, dup = set(), set()
     for u in us:
         t = rbac.user_title(u)
         (dup if t in seen else seen).add(t)
     return [_login_item(u, demo, dup) for u in us]
+
+# Kirish sahifasida ism bo'yicha qidiruv. /api/users ism bermaydi, shuning uchun brauzerdagi qidiruv ismni topa olmasdi — tyutorlar
+# (faqat qidiruvda, 38 ta bir xil «Tyutor (fakultet) · akkaunt № N») o'z akkauntini ism bilan topa olmasdi. Server faqat TO'LIQ so'z
+# mosligida (familiya va/yoki ism, har biri kamida 3 harf; prefiks emas) akkaunt raqamlarini qaytaradi — ism javobda yo'q, ro'yxatni
+# harf-baharf terib chiqib bo'lmaydi; ko'pi bilan 5 ta natija; bitta IP dan 10 daqiqada 60 ta so'rov.
+FIND_IP = SS.Limiter(60, 600)
+_APOS = str.maketrans({c: "'" for c in "ʻʼ‘’`´"})
+
+def _name_tokens(s: str) -> list[str]:
+    return [w for w in _re.split(r"[^\w']+", (s or "").translate(_APOS).lower()) if w]
+
+class UserFind(BaseModel):
+    q: str = ""
+
+@app.post("/api/users/find")
+def users_find(body: UserFind, request: Request):
+    ip = _ip(request)
+    if FIND_IP.wait_min(ip):
+        raise HTTPException(429, "Juda ko'p qidiruv. Birozdan keyin qayta urinib ko'ring.")
+    FIND_IP.fail(ip)
+    qt = _name_tokens(body.q[:80])
+    if not qt or any(len(w) < 3 for w in qt): return {"ids": []}
+    ids = [u["id"] for u in _login_users() if all(w in _name_tokens((u["full_name"] or "").split(":", 1)[-1]) for w in qt)]
+    return {"ids": ids if len(ids) <= 5 else []}   # juda umumiy so'z (masalan, «qizi») — natija yo'q
 
 # Proksi ortidagi mijoz manzili. start.sh uvicorn'ni --forwarded-allow-ips='*' bilan ishga tushiradi, ya'ni request.client.host —
 # X-Forwarded-For ning ENG CHAPDAGI qiymati, uni esa mijozning o'zi yozib yuborishi mumkin (urinishlar cheklovini chetlab o'tish).
@@ -180,8 +209,8 @@ def login(body: Login, request: Request, response: Response):
         raise HTTPException(403, "Akkaunt faolsizlantirilgan. AT bo'limiga murojaat qiling.")
     SS.LOGIN_USER.reset(body.user_id)
     if not str(u["pin"]).startswith("pbkdf2$"):   # eski ochiq yozuvni xeshga o'tkazamiz
-        u = dict(u); u["pin"] = rbac.hash_password(pw)
-        con.execute("UPDATE users SET pin=? WHERE id=?", (u["pin"], u["id"])); con.commit()
+        old = u["pin"]; u = dict(u); u["pin"] = rbac.hash_password(pw)
+        rbac.rehash_legacy(con, u["id"], old, u["pin"])     # parol o'sha — Telegram izi yangi yozuvga ko'chadi (ulanish uzilmaydi)
     c = rbac.Ctx(u, rbac.ROLES[u["role"]])
     ua = request.headers.get("user-agent", "")
     rbac.audit(con, c, "tizimga kirish", "auth", True, f"IP {ip} · {SS.device(ua)}")

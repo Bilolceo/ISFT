@@ -262,7 +262,8 @@ d = DATA[23][1]
 today = d["today"]
 nq = one("SELECT COUNT(*) FROM ops_tasks WHERE status='yangi' AND assignee_role='call_center' AND COALESCE(planned_on,'') <= ?", (today,))[0]
 mk = [it for it in d["items"] if it["source"] == "markaz"]
-ok(mk and sum(it.get("count") or 1 for it in mk) == nq, f"call-markaz: bugungi qo'ng'iroqlar navbati jamlangan — {nq} ta (keyingi kunlarga rejalashtirilganlar hisobga olinmaydi)")
+# dam olish kuni bugungi ro'yxat bo'sh bo'lishi mumkin (navbat dushanbadan rejalashtiriladi) — kutilgan son bazadan olinadi
+ok(bool(mk) == bool(nq) and sum(it.get("count") or 1 for it in mk) == nq, f"call-markaz: bugungi qo'ng'iroqlar navbati jamlangan — {nq} ta (keyingi kunlarga rejalashtirilganlar hisobga olinmaydi)")
 ok(all(it["link"]["view"] == "ops" for it in mk) and len(mk) <= 5, "call-markaz: navbat bir necha qatorga jamlangan (minglab qator emas)")
 
 u = user(24)
