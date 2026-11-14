@@ -1202,3 +1202,97 @@ def api_brief_make(request: Request):
     if b is None: raise HTTPException(409, "Haftalik hisobot hozir tayyorlanmoqda — birozdan keyin sahifani yangilang")
     rbac.audit(_con, c, "nazorat: haftalik hisobot tayyorlandi", RES, True, f"{b['week']} · {b['source']}")
     return b
+
+
+# =============================================================================================
+# YUZMA-YUZ TADBIRLAR VA HUQUQIY CHEGARALAR (app/yuzma_yuz.py, docs/yuzma_yuz.md) — alohida bo'lim: yangi qoidalar va detektorlar.
+# Me'yoriy asos (VMQ 559, PF-73) ikkilamchi manbalar bo'yicha — yurist tasdiqlashi kerak. Raqamlar rektor «Qoidalar»ida o'zgartiriladi.
+#   yy:kvota:<daraja>:<yo'nalish> — masofaviy talabalar soni: ≥ warn % — sariq (egasida), ≥ 100 % — qizil (darhol rektorda: litsenziya xavfi);
+#   yy:oqit / yy:oqit90           — o'qituvchiga masofaviy talabalar: > chegara — qizil, ≥ warn % — sariq (jamlangan);
+#   yy:kunduzgi:<…>               — kunduzgi shakli yo'q masofaviy yo'nalish (qizil);  yy:ped — pedagogik yo'nalishda masofaviy talabalar (qizil);
+#   yy:royxat                     — muddati o'tgan, yuzma-yuz ro'yxatdan o'tmagan talabalar (jamlangan; since — muddat);
+#   yy:umumiy                     — ko'rib chiqilmagan umumiy akkaunt belgilari (jamlangan).
+# =============================================================================================
+RULES.update({
+    "dl_quota_bachelor": (300, 1, 100000, "Huquqiy chegara: bakalavr yo'nalishida masofaviy talabalar (ko'pi bilan)"),
+    "dl_quota_master": (30, 1, 10000, "Huquqiy chegara: magistratura mutaxassisligida masofaviy talabalar (ko'pi bilan)"),
+    "dl_per_teacher": (50, 1, 1000, "Huquqiy chegara: bitta o'qituvchiga masofaviy talabalar (ko'pi bilan)"),
+    "dl_quota_warn_pct": (90, 50, 100, "Huquqiy chegaralar: ogohlantirish (chegaraning necha foizidan)"),
+})
+
+
+def _yy_red_since(now, R):
+    """Litsenziya xavfi — eskalatsiya oynasi kutilmaydi: darhol rektor bosqichi (2)."""
+    return now - dt.timedelta(days=R["owner_days"] + R["head_days"])
+
+
+def _yy_limit_cands(con, now, R, O: Org) -> list[dict]:
+    if not MODS.on("masofaviy"): return []
+    from . import yuzma_yuz as YY
+    rep = YY.limits_report(con, {"bakalavr": R["dl_quota_bachelor"], "magistr": R["dl_quota_master"], "teacher": R["dl_per_teacher"],
+                                 "warn_pct": R["dl_quota_warn_pct"]})
+    owner, out = O.head("masofaviy"), []
+    link = {"view": "yuzma", "tab": "chegaralar"}
+    for p in rep["programs"]:
+        lv = "magistratura mutaxassisligi" if p["level"] == "magistr" else "bakalavr yo'nalishi"
+        if p["level_flag"] in ("red", "amber"):
+            red = p["level_flag"] == "red"
+            what = ("chegaradan OSHGAN" if p["over"] else "chegara to'lgan (100 %)") if red else f"chegaraning {p['pct']} %"
+            out.append({"key": f"yy:kvota:{p['level']}:{p['direction']}", "area": "oquv", "kind": "kvota",
+                        "title": f"{p['direction']} ({lv}): {p['distance']} masofaviy talaba — {what}",
+                        "why": f"Chegara — {p['limit']} ta ({'qizil: litsenziya xavfi' if red else 'sariq: ' + str(R['dl_quota_warn_pct']) + ' % dan'}); qabul rejasini tekshiring",
+                        "src": "Huquqiy chegaralar (VMQ 559)", "since": _yy_red_since(now, R) if red else now, "owner": owner, "unit": "masofaviy",
+                        "deadline": None, "link": link, "state": [p["distance"], p["limit"], p["level_flag"]], "aggregate": True})
+        if p["no_full_time"]:
+            out.append({"key": f"yy:kunduzgi:{p['level']}:{p['direction']}", "area": "oquv", "kind": "kunduzgi",
+                        "title": f"{p['direction']} ({lv}): masofaviy shakl bor, kunduzgi shakl yo'q",
+                        "why": f"Masofaviy ta'lim faqat kunduzgi shakli mavjud yo'nalishda bo'lishi mumkin; masofaviy talabalar — {p['distance']} ta",
+                        "src": "Huquqiy chegaralar (VMQ 559)", "since": _yy_red_since(now, R), "owner": owner, "unit": "masofaviy", "deadline": None,
+                        "link": link, "state": [p["distance"]], "aggregate": True})
+    ped = [p for p in rep["programs"] if p["pedagogical"]]
+    if ped:
+        n = sum(p["distance"] for p in ped)
+        out.append({"key": "yy:ped", "area": "oquv", "kind": "pedagogik",
+                    "title": f"Pedagogik yo'nalishlarda {n} masofaviy talaba ({len(ped)} ta yo'nalish)",
+                    "why": "Pedagogika yo'nalishlarida masofaviy ta'lim taqiqlangan (PF-73, 2025): " + ", ".join(p["direction"] for p in ped[:4])
+                           + (" …" if len(ped) > 4 else ""),
+                    "src": "Huquqiy chegaralar (PF-73)", "since": _yy_red_since(now, R), "owner": owner, "unit": "masofaviy", "deadline": None,
+                    "link": link, "state": sorted([p["direction"], p["distance"]] for p in ped), "aggregate": True})
+    tr = [t for t in rep["teachers"] if t["level_flag"] == "red"]
+    ta = [t for t in rep["teachers"] if t["level_flag"] == "amber"]
+    if tr:
+        out.append({"key": "yy:oqit", "area": "oquv", "kind": "oqituvchi",
+                    "title": f"{len(tr)} ta o'qituvchiga {R['dl_per_teacher']} tadan ortiq masofaviy talaba to'g'ri keladi",
+                    "why": f"Eng ko'pi — {tr[0]['n']} ta; chegara — {R['dl_per_teacher']} ta (o'qituvchi dars beradigan masofaviy guruhlar bo'yicha)",
+                    "src": "Huquqiy chegaralar (VMQ 559)", "since": _yy_red_since(now, R), "owner": owner, "unit": "masofaviy", "deadline": None,
+                    "link": link, "state": [len(tr), tr[0]["n"]], "aggregate": True})
+    if ta:
+        out.append({"key": "yy:oqit90", "area": "oquv", "kind": "oqituvchi",
+                    "title": f"{len(ta)} ta o'qituvchida masofaviy talabalar chegaraga yaqin ({R['dl_quota_warn_pct']} %+)",
+                    "why": f"Chegara — {R['dl_per_teacher']} ta; yangi guruh biriktirishda hisobga oling", "src": "Huquqiy chegaralar (VMQ 559)",
+                    "since": now, "owner": owner, "unit": "masofaviy", "deadline": None, "link": link, "state": [len(ta)], "aggregate": True})
+    return out
+
+
+def _yy_inperson_cands(con, now, R, O: Org) -> list[dict]:
+    if not MODS.on("masofaviy"): return []
+    from . import yuzma_yuz as YY
+    out = []
+    n, dl = YY.overdue_count(con)
+    if n:
+        out.append({"key": "yy:royxat", "area": "talabalar", "kind": "yuzma",
+                    "title": f"{n} ta masofaviy talaba semestr oldidan yuzma-yuz ro'yxatdan o'tmagan",
+                    "why": f"Muddat {_dmy(dl)} edi (O'zbekiston fuqarolari uchun majburiy; xorijiy fuqarolar ozod)", "src": "Yuzma-yuz tadbirlar",
+                    "since": dt.datetime.combine(dt.date.fromisoformat(dl) + dt.timedelta(days=1), dt.time(8)), "owner": O.head("masofaviy"),
+                    "unit": "masofaviy", "deadline": dl, "link": {"view": "yuzma", "tab": "talabalar"}, "state": [n, dl], "aggregate": True})
+    nf, t0 = YY.open_flags(con)
+    if nf:
+        out.append({"key": "yy:umumiy", "area": "talabalar", "kind": "akkaunt",
+                    "title": f"{nf} ta talaba akkauntida umumiy foydalanish alomati — ko'rib chiqilmagan",
+                    "why": "Bir vaqtda turli tarmoqdan sessiyalar yoki imkonsiz tez almashish; avtomatik bloklanmaydi — bo'lim tekshiradi",
+                    "src": "Kirish jurnali", "since": _dt(t0) or now, "owner": O.head("masofaviy"), "unit": "masofaviy", "deadline": None,
+                    "link": {"view": "yuzma", "tab": "monitoring"}, "state": [nf], "aggregate": True})
+    return out
+
+
+DETECTORS += [_yy_limit_cands, _yy_inperson_cands]

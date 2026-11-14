@@ -154,6 +154,9 @@ Haqiqiy LMS va videokonferensiya platformasi ulanganda yoki birinchi import qili
 Sahifa sarlavhasidagi «Ortda qolganlar» tugmasi — LRS statementlari asosidagi ekran (taqvim bo'yicha kechikish, testdan qayta-qayta o'tolmaslik,
 faolsizlik; tyutorga biriktirish, eslatma, savollar tahlili) — `docs/lrs.md`.
 
+«Umumiy» yorlig'i boshidagi «Yuzma-yuz va huquqiy chegaralar» kartasi va «Yuzma-yuz tadbirlar» menyu bandi — semestr oldidan yuzma-yuz
+ro'yxatdan o'tish, yakuniy nazorat/attestatsiya/himoya, shaxsni tekshirish, qaydnoma, kirish jurnali va kvotalar — `docs/yuzma_yuz.md`.
+
 "Mening vazifalarim" va bosh sahifa havolalari yorliq bilan birga filtrni ham olib yuradi: `tab: "kontent:view=materiallar,due=,status=yuklandi,..."`. `pending.py` faqat `view`/`tab`/`href`ni uzatadi, shuning uchun filtr yorliq matnida. `masofaviy.js` (`dlSpec`) uni o'qiydi. Masalan, "tekshiruvni kutayotgan materiallar" to'g'ridan-to'g'ri "Tekshiruvda" holatidagi materiallar ro'yxatini ochadi.
 
 Sahifa holati (meta, yorliq, filtrlar) joriy foydalanuvchiga bog'langan. Chiqib, boshqa foydalanuvchi bilan kirilsa (sahifa qayta yuklanmasdan), oldingi foydalanuvchining yorliqlari, huquqlari va filtrlari qolmaydi.

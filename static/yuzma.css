@@ -1,0 +1,37 @@
+/* «Yuzma-yuz tadbirlar» (static/yuzma.js) — masofaviy.css (dl-*) ustiga kichik qo'shimchalar */
+.yy-grid{grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr))}
+.yy-list{display:flex;flex-direction:column;gap:6px}
+.yy-sess{display:flex;align-items:center;gap:12px;width:100%;text-align:left;padding:10px 12px;border:1px solid var(--line);border-radius:14px;background:var(--surface);color:var(--ink);font:inherit;cursor:pointer;min-width:0}
+.yy-sess:hover{background:var(--hover)}
+.yy-sess:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+.yy-date{display:flex;flex-direction:column;align-items:center;justify-content:center;min-width:52px;padding:6px 4px;border-radius:12px;background:var(--teal-soft);color:var(--teal)}
+.yy-date b{font-size:15px;line-height:1.1}.yy-date small{font-size:11px;font-weight:600}
+.yy-sm{display:flex;flex-direction:column;flex:1 1 auto;min-width:0}
+.yy-sm b{font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.yy-sm small{color:var(--muted);font-size:12px;overflow-wrap:anywhere}
+.yy-sr{display:flex;flex-wrap:wrap;gap:4px;justify-content:flex-end;flex:0 0 auto}
+.yy-head{display:flex;flex-wrap:wrap;gap:12px;justify-content:space-between;align-items:flex-start}
+.yy-head h3{margin:0 0 4px}
+.yy-head .dl-chips{margin-top:8px}
+.yy-pr{display:flex;gap:6px;align-items:flex-start;overflow-wrap:anywhere}
+.yy-ra{display:flex;flex-wrap:wrap;gap:6px}
+.dl-t td.yy-act{white-space:nowrap}
+.yy-g2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.dl-modal label.yy-chk{flex-direction:row;align-items:center;gap:8px;color:var(--ink);font-weight:500}
+.dl-modal label.yy-chk input{height:auto;width:18px;height:18px;flex:0 0 auto}
+.yy-lims{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
+.yy-lim{display:flex;flex-direction:column;gap:2px;padding:10px 12px;border-radius:12px;background:var(--surface-2);border-left:4px solid var(--ok)}
+.yy-lim.warn{border-left-color:var(--warn)}.yy-lim.bad{border-left-color:var(--bad)}
+.yy-lim b{font-size:18px}.yy-lim span{font-size:12px;color:var(--muted)}
+.yy-fl{padding:6px 0;border-bottom:1px solid var(--line);font-size:13px}
+.yy-fl small{display:block;color:var(--muted)}
+.yy-mcard{margin-bottom:14px}
+.yy-mh{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.yy-mh h3{display:flex;align-items:center;gap:6px;margin:0}
+.yy-mrow{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+@media (max-width:600px){
+  .yy-sess{flex-wrap:wrap}
+  .yy-sr{width:100%;justify-content:flex-start;padding-left:64px}
+  .yy-g2{grid-template-columns:1fr}
+  .dl-t td.yy-act{white-space:normal}
+}

@@ -191,6 +191,11 @@ def api_login(body: LoginIn, request: Request, response: Response):
     _con.commit()
     tok = _new_session(s["id"], a["pw_hash"], ip, ua)
     _audit("kirish", True, s, f"IP {ip} · {SS.device(ua)}", "auth")
+    try:    # kirish jurnali (faqat xeshlar) va umumiy akkaunt alomatlari — app/yuzma_yuz.py (bloklamaydi)
+        from . import yuzma_yuz as YY
+        YY.on_login(s["id"], ip, ua)
+    except Exception as e:
+        print("yuzma_yuz.on_login:", repr(e))
     response.set_cookie(COOKIE, tok, httponly=True, samesite="lax", max_age=TTL, secure=request.url.scheme == "https")
     return {"ok": True, "must_change": bool(a["must_change"])}
 

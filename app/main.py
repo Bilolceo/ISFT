@@ -564,6 +564,10 @@ from . import nazorat as NZ   # Nazorat markazi (rektor): faqat istisnolar va eg
 NZ.init(con)
 NZ.bind(con, ctx)
 app.include_router(NZ.router)
+from . import yuzma_yuz as YY   # Yuzma-yuz tadbirlar (masofaviy): ro'yxatdan o'tish, imtihon/himoya, shaxsni tekshirish, qaydnoma, kirish jurnali (docs/yuzma_yuz.md)
+YY.init(con)
+YY.bind(con, ctx)
+app.include_router(YY.router)
 class _NoCacheStatic(StaticFiles):
     """JS/CSS/HTML har safar ETag bilan qayta tekshiriladi — yangi deploydan keyin brauzer eski kodni ishlatib qolmasin."""
     async def get_response(self, path, scope):

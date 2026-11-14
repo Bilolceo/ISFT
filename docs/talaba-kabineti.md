@@ -59,6 +59,13 @@ Masofaviy talaba uchun (guruh — masofaviy, kurs yo'nalishi va bosqichi guruhni
   `POST /api/talaba/telegram/unlink`. Jadvallar: `student_tg`, `student_tg_codes`, `notice_delivery`. Test: `tests/test_talaba_darslar.py`
   (brauzer — `tools/talaba_darslar_check.js`).
 
+## Yuzma-yuz (`app/yuzma_yuz.py`, `static/yuzma_talaba.js`)
+
+Masofaviy talaba uchun (faqat o'qish): bosh sahifada banner — semestr oldidan yuzma-yuz ro'yxatdan o'tish (muddat o'tgan — qizil,
+kutilmoqda — sariq) va keyingi sessiya; «Yuzma-yuz tadbirlar» sahifasi — holat, muddat, tayinlangan tadbirlar (ro'yxat, yakuniy nazorat,
+attestatsiya, himoya). Xorijiy fuqarolar — «ozod». API: `GET /api/talaba/yuzma`. Kabinetga har kirish (IP/qurilma — faqat xesh) masofaviy
+talabaning kirish jurnaliga yoziladi. Batafsil: `docs/yuzma_yuz.md`.
+
 ## Murojaatlar (`student_requests`)
 
 Ikki turdagi murojaat bor. Kunduzgi va masofaviy talabalarniki **Registrator ofisi** navbatiga tushadi (boshliq #17, xodim #43),
