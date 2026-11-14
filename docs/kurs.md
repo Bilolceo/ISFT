@@ -22,8 +22,15 @@ avtomatik yig'ish (Word + taqdimot + video + Test bank); «Kurs muharriri» — 
 | `rektor`, `prorektor_oquv` | faqat jamlangan sonlar (`GET /api/kurs/summary`): kurslar holati bo'yicha, darslar, bloklar, import, eksport — nomlar va tarkibsiz |
 | boshqalar | 403 (audit) |
 
-Menyu bandi «Kurs muharriri» — `masofaviy`, `masofaviy_xodim`, `oqituvchi`. Rahbariyat jamlangan sonlarni «Masofaviy ta'lim» sahifasidagi
-«Kurs muharriri» tugmasi orqali ko'radi. «Dars tayyorlash» sarlavhasida ham havola bor.
+**2026-11: «Dars tayyorlash» bilan birlashdi** (`docs/dars.md`): alohida menyu bandi yo'q — muharrir «Dars tayyorlash» → «Fanlar» → dars →
+«Muharrirda tahrirlash» orqali ochiladi; `go("kurs")` taxallus sifatida ishlaydi (menyuda «Dars tayyorlash» belgilanadi, sarlavha «Dars tayyorlash › Muharrir»),
+bo'limlar kaliti `kurs` → `paket`. «Dars tayyorlash» sarlavhasidagi «Muharrir: barcha kurslar» — kurslar ro'yxati (Rise importi shu yerda).
+Rahbariyat jamlangan sonlarni «Masofaviy ta'lim» sahifasidagi «Kurs muharriri» tugmasi orqali ko'radi.
+
+`kafedra` — o'z kafedrasi fanlariga (`dl_courses.department_id`) bog'langan kurslarni **faqat ko'radi** (ro'yxat, kurs, dars, fayllar, ko'rish, sifat) va
+blok izohlarini (to'xtatuvchi ham) qoldiradi; tahrirlash, eksport, tasdiqlash — 403. Muharrirda «Izohlar» paneli, blok sarlavhasidagi izoh belgisi,
+«AI: hujjatdan dars» tugmasi va «Dars tayyorlash» bilan bog'lanish tasmasi (`course.dars` — fan, dars kodi, eksport uchun ustun manba) — `docs/dars.md`.
+`POST /courses/{id}/action` — `submit` / `approve` ochiq to'xtatuvchi izohlar bo'lsa 409 (`override` — sabab bilan aylanib o'tish).
 
 ## Ma'lumot modeli (`ku_*`)
 

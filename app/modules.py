@@ -43,8 +43,7 @@ MODULES = [
     _m("ops", "Talabalar navbati", "Talabalar markazi: qoidalar bo'yicha holatlar va ijrochilar navbati.", 1, "Registrator ofisi · manba: HEMIS (hali ulanmagan)"),
     _m("masofaviy", "Masofaviy ta'lim", "LMS faolligi va o'quv kontenti monitoringi.", 1, "Masofaviy ta'lim bo'limi · manba: NEXTID LMS"),
     _m("testbank", "Test bank", "Mavzu testlari va oraliq nazorat banklari.", 1, "Masofaviy ta'lim bo'limi"),
-    _m("paket", "Dars tayyorlash", "Bir ekranda dars: mavzu manbalari, taqdimot, video va test → SCORM / xAPI paket.", 1, "Masofaviy ta'lim bo'limi"),
-    _m("kurs", "Kurs muharriri", "Bloklardan kurs (Articulate Rise o'rniga): darslar, interaktiv bloklar, test → xAPI / SCORM; Rise importi.", 1, "Masofaviy ta'lim bo'limi"),
+    _m("paket", "Dars tayyorlash", "Fan → NEXTID darslari (L/A): shablon bo'yicha avtomatik yig'ish va bloklar muharriri (Rise o'rniga), izohlar, AI → SCORM / xAPI.", 1, "Masofaviy ta'lim bo'limi"),
     _m("studio", "Studiya", "Dars ishlab chiqarish: syomka bandi, AI montaj, YouTube va avtomatik paket — bitta oqim.", 1, "Masofaviy ta'lim bo'limi (studiya)"),
     _m("taqdimot", "Taqdimot", "O'qituvchi materialidan ISFT shablonida taqdimot.", 1, "Kafedralar"),
     _m("service", "Nosozliklar va murojaatlar", "QR orqali nosozlik arizalari va xarid so'rovlari; «Murojaatlar» yorlig'i — «Talabalar navbati», «Tadbir qatnashuvi» — «Yoshlar ishlari» yoqilganda.", 1, "Xo'jalik bo'limi, AT bo'limi, Xarid bo'limi"),
@@ -80,6 +79,7 @@ MODULES = [
     _m("agents", "AI takliflari", "AI agentlar takliflari va kunlik brifing.", 1, "Rektorat · takliflarni kim tasdiqlashi belgilanmagan", group="kutilmoqda"),
 ]
 BY_KEY = {m["key"]: m for m in MODULES}
+ALIASES = {"kurs": "paket"}     # «Kurs muharriri» — endi «Dars tayyorlash» bo'limining bir qismi (alohida kalit yo'q; eski kalit shu bo'limga ergashadi)
 EDITORS = ("it_head", "rektor")
 
 SCHEMA = """CREATE TABLE IF NOT EXISTS module_switch(key TEXT PRIMARY KEY, enabled INT NOT NULL, updated_at TEXT, updated_by TEXT);"""
@@ -134,6 +134,7 @@ def state() -> dict:
 
 
 def on(key: str) -> bool:
+    key = ALIASES.get(key, key)
     m = BY_KEY.get(key)
     if not m: return True                    # reestrda yo'q bo'lim — kalitga bog'lanmagan
     if m["lock"]: return True

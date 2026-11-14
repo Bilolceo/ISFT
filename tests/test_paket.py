@@ -55,15 +55,15 @@ other_dept = q("SELECT * FROM dl_courses WHERE department_id!=? ORDER BY id LIMI
 # =============================================================================================
 print("== 1. Ruxsatlar va ko'lam")
 m = head.get(P + "/meta").json()
-ok(m["tabs"] == ["qamrov", "mavzular", "joylash", "sozlama"] and m["caps"]["approve"] and m["caps"]["settings"], "Bo'lim boshlig'i: 4 bo'lim, tasdiqlash va sozlamalar")
+ok(m["tabs"] == ["fanlar", "qamrov", "mavzular", "joylash", "sozlama"] and m["caps"]["approve"] and m["caps"]["settings"], "Bo'lim boshlig'i: 4 bo'lim, tasdiqlash va sozlamalar")
 ms = staff.get(P + "/meta").json()
 ok(ms["caps"]["approve"] and ms["caps"]["settings"] and ms["caps"]["build"], "Bo'lim xodimi: yig'ish, tasdiqlash, sozlamalar")
 mt = teach.get(P + "/meta").json()
-ok(mt["caps"]["build"] and not mt["caps"]["approve"] and not mt["caps"]["settings"] and mt["tabs"] == ["mavzular"] and mt["tab_labels"]["mavzular"] == "Darslarim",
-   "O'qituvchi: tayyorlaydi, tasdiqlamaydi; bitta yorliq — «Darslarim» (Holat / Ommaviy / Sozlamalar yo'q)")
-ok(m["tab_labels"] == {"qamrov": "Holat", "mavzular": "Darslar", "joylash": "Ommaviy", "sozlama": "Sozlamalar"} and m["title"] == "Dars tayyorlash", "Bo'lim yorliqlari: Holat, Darslar, Ommaviy, Sozlamalar")
+ok(mt["caps"]["build"] and not mt["caps"]["approve"] and not mt["caps"]["settings"] and mt["tabs"] == ["fanlar", "mavzular"] and mt["tab_labels"]["mavzular"] == "Darslarim",
+   "O'qituvchi: tayyorlaydi, tasdiqlamaydi; yorliqlar — «Fanlar» va «Darslarim» (Holat / Ommaviy / Sozlamalar yo'q)")
+ok(m["tab_labels"] == {"fanlar": "Fanlar", "qamrov": "Holat", "mavzular": "Darslar", "joylash": "Ommaviy", "sozlama": "Sozlamalar"} and m["title"] == "Dars tayyorlash", "Bo'lim yorliqlari: Holat, Darslar, Ommaviy, Sozlamalar")
 mk = kaf.get(P + "/meta").json()
-ok(not mk["caps"]["write"] and mk["caps"]["download"] and mk["tabs"] == ["qamrov", "mavzular"], "Kafedra mudiri: ko'rish va yuklab olish")
+ok(not mk["caps"]["write"] and mk["caps"]["download"] and mk["tabs"] == ["fanlar", "qamrov", "mavzular"], "Kafedra mudiri: ko'rish va yuklab olish")
 mr = rek.get(P + "/meta").json()
 ok(mr["tabs"] == ["qamrov"] and not mr["caps"]["view"], "Rektor: faqat jamlangan qamrov")
 ok(pro.get(P + "/meta").json()["tabs"] == ["qamrov"], "O'quv prorektori: faqat jamlangan qamrov")
@@ -508,6 +508,7 @@ ok(tv["ready"]["text"]["ok"] and tv["ready"]["text"]["src"] == "paket" and tv["r
    "Tayyorgarlik: matn (shu yerda), taqdimot (.pptx), video")
 ok(tv["plan"] == ["Talab tushunchasi", "Taklif qonuni", "Bozor muvozanati"] and "<h2>" in tv["text_html"] and "<script" not in tv["text_html"], "Mavzu ko'rinishida reja va tozalangan HTML")
 ok(len(tv["slides"]) == 2 and tv["slides"][1]["image"], "Slaydlar ro'yxati")
+ok("kurs_link" in tv and tv["kurs_link"] is None, "Dars muharrirga o'tkazilmagan — muharrir havolasi yo'q (kurs_link=None; «Muharrirda tahrirlash» — app/dars.py)")
 mk_r = kaf8.get(f"{P}/courses/{mikro['id']}/topics/1").json()
 ok(mk_r["ready"]["text"]["demo"] and mk_r["ready"]["plan"]["explicit"] and mk_r["ready"]["slides"]["src"] == "pptx" and mk_r["ready"]["quiz"]["approved"] > 0,
    "Namuna mavzu: matn (reja bilan), taqdimot, Test bankdagi tasdiqlangan savollar")

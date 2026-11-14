@@ -12,7 +12,8 @@ let ME = null, DASH = null, selUser = null;
    ME.modules — {kalit: yoqilganmi}. Bu mahsulot kaliti (menyu, panel, bildirishnoma, qidiruv), xavfsizlik chegarasi emas — ruxsatni server tekshiradi.
    MOD_SOFT — kaliti faqat menyu bandini boshqaradigan sahifalar: suhbat paneldan, kiruvchi xat «Mening vazifalarim»dan ochiladi. */
 const MOD_SOFT = ["chat", "kiruvchi"];
-const modOn = k => !k || !ME || !ME.modules || !(k in ME.modules) || ME.modules[k] !== false;
+const MOD_ALIAS = {kurs: "paket"};   /* «Kurs muharriri» — «Dars tayyorlash» bo'limining bir qismi (app/modules.py ALIASES) */
+const modOn = k => { k = MOD_ALIAS[k] || k; return !k || !ME || !ME.modules || !(k in ME.modules) || ME.modules[k] !== false; };
 /* havola ({view, tab, …}) qaysi bo'limga tegishli: «Nosozliklar va murojaatlar» ichidagi yorliqlar o'z kalitiga ega */
 const SVC_TAB_MOD = {events: "yoshlar", requests: "ops"};   /* Tadbir qatnashuvi — Yoshlar ishlari bilan; Murojaatlar va hodisalar — Talabalar navbati bilan */
 function linkMod(l) {
@@ -291,7 +292,7 @@ function navApply() {
   document.querySelector('#nav a[data-v="ortda"]')?.classList.toggle("hidden", !["masofaviy", "masofaviy_xodim", "tyutor", "oqituvchi", "kafedra", "rektor", "prorektor_oquv"].includes(ME.role_key) || !modOn("masofaviy"));   /* ortda.js: Ortda qolganlar — LRS asosida (ruxsat — app/ortda.py) */
   document.querySelector('#nav a[data-v="testbank"]')?.classList.toggle("hidden", !["masofaviy", "masofaviy_xodim", "rektor", "prorektor_oquv", "kafedra", "oqituvchi"].includes(ME.role_key));   /* testbank.js: Test bank — mavzu testlari va oraliq banklari (ruxsat — app/testbank.py) */
   document.querySelector('#nav a[data-v="paket"]')?.classList.toggle("hidden", !["masofaviy", "masofaviy_xodim", "rektor", "prorektor_oquv", "kafedra", "oqituvchi"].includes(ME.role_key));   /* paket.js: Dars tayyorlash — SCORM / xAPI (ruxsat — app/paket.py) */
-  document.querySelector('#nav a[data-v="kurs"]')?.classList.toggle("hidden", !["masofaviy", "masofaviy_xodim", "oqituvchi"].includes(ME.role_key));   /* kurs.js: Kurs muharriri — bloklardan kurs (ruxsat — app/kurs.py; rahbariyat — jamlangan sonlar «Masofaviy ta'lim» sahifasidagi tugma orqali) */
+  /* kurs.js: «Kurs muharriri» — alohida menyu bandi yo'q: «Dars tayyorlash» ichida (go("kurs") — taxallus, menyuda «Dars tayyorlash» belgilanadi) */
   document.querySelector('#nav a[data-v="studio"]')?.classList.toggle("hidden", !["masofaviy", "masofaviy_xodim", "montaj_operator", "rektor", "prorektor_oquv", "oqituvchi", "it_head"].includes(ME.role_key));   /* studio.js: Studiya — syomka, AI montaj, YouTube (ruxsat — app/studio.py) */
   if (modOn("cams") && typeof camsNav === "function") camsNav();   /* cams.js: navbat zonasi mas'ullari (qabul, kassa) o'z navbatini ko'radi */
   /* lavozimga keraksiz bandlar (UX tahlili): ruxsat matritsasi — faqat AT boshlig'i va rektor (qolganlar — profilda «Sizning ruxsatlaringiz»);
@@ -366,9 +367,10 @@ function modGate(v) {
 function go(v) {
   clearInterval(SPC.timer); if (v !== "tasks") clearInterval(DEC.timer);
   $("#app").classList.remove("nav-open");
-  document.querySelectorAll("#nav a").forEach(a => a.classList.toggle("on", a.dataset.v === v));
-  if (typeof navOpenFor === "function") navOpenFor(v);
-  const a = document.querySelector(`#nav a[data-v="${v}"]`); $("#crumb").textContent = a ? (a.dataset.lbl || a.textContent.replace(/\d+$/, "").trim()) : "";
+  const nv = MOD_ALIAS[v] || v;      /* taxallus: go("kurs") — menyuda «Dars tayyorlash» */
+  document.querySelectorAll("#nav a").forEach(a => a.classList.toggle("on", a.dataset.v === nv));
+  if (typeof navOpenFor === "function") navOpenFor(nv);
+  const a = document.querySelector(`#nav a[data-v="${nv}"]`); $("#crumb").textContent = a ? (a.dataset.lbl || a.textContent.replace(/\d+$/, "").trim()) + (nv !== v ? " › Muharrir" : "") : "";
   document.querySelectorAll(".view").forEach(s => s.classList.add("hidden"));
   $("#v-" + v).classList.remove("hidden");
   window.scrollTo({top: 0});

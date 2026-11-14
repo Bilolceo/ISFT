@@ -1,0 +1,44 @@
+/* ---------- «Dars tayyorlash» → «Fanlar» (dars.js) — tokenlar style.css'da, qorong'i rejim avtomatik ---------- */
+.ds-h{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start;justify-content:space-between}
+.ds-h h3{margin:6px 0 2px}
+.ds-h p{margin:0;font-size:13px;max-width:760px}
+.ds-h input[type=search]{flex:0 1 320px;min-width:0}
+.ds-subj{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px;margin-top:14px}
+.ds-sc{display:flex;flex-direction:column;gap:4px;text-align:left;padding:12px 14px;border-radius:14px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font:inherit;cursor:pointer;min-width:0}
+.ds-sc:hover{border-color:var(--teal)}
+.ds-sc:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+.ds-sc small{font-size:12px;color:var(--muted);overflow-wrap:anywhere}
+.ds-sc-f{display:flex;flex-direction:column;gap:4px;margin-top:4px}
+.ds-kpis{display:flex;flex-wrap:wrap;gap:8px}
+.ds-kpis span{display:flex;flex-direction:column;align-items:flex-start;padding:6px 12px;border-radius:12px;background:var(--surface);border:1px solid var(--line);font-size:12px;color:var(--muted)}
+.ds-kpis span b{font-size:18px;color:var(--ink)}
+.ds-kpis span.bad b{color:var(--bad)}
+.ds-kpis.sm{margin:8px 0}
+.ds-tools{margin:12px 0 0}
+.ds-grid{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:6px}
+.ds-l{display:grid;grid-template-columns:58px minmax(0,1fr) auto;gap:10px;align-items:center;padding:8px 10px;border-radius:12px;border:1px solid var(--line);background:var(--surface)}
+.ds-l.ok{border-left:4px solid var(--ok)}
+.ds-l.rv{border-left:4px solid var(--teal)}
+.ds-code{font-weight:800;font-size:14px;color:var(--teal);font-variant-numeric:tabular-nums}
+.ds-t{display:flex;flex-direction:column;gap:4px;min-width:0}
+.ds-t b{overflow-wrap:anywhere;font-size:13.5px}
+.ds-sts{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+.ds-st{font-size:11.5px;font-weight:700;padding:1px 7px;border-radius:99px;background:var(--ok-soft);color:var(--ok)}
+.ds-st.off{background:var(--surface-2);color:var(--muted)}
+.ds-a{display:flex;flex-wrap:wrap;gap:6px;align-items:center;justify-content:flex-end}
+.ds-src{display:inline-flex;gap:4px;align-items:center;font-size:12px}
+.ds-src select{font-size:12px;padding:3px 6px}
+.ds-bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 12px;border-radius:12px;background:var(--surface-2);border:1px solid var(--line);font-size:13px;margin:8px 0}
+.ds-bar>svg{color:var(--teal);flex:none}
+.ds-bar>span{flex:1 1 240px;min-width:0}
+.ds-prog{height:10px;border-radius:99px;background:var(--surface-2);overflow:hidden;margin:12px 0 4px}
+.ds-prog i{display:block;height:100%;background:var(--teal);transition:width .3s}
+.ds-tg{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin:10px 0}
+.ds-tl{margin:0 0 6px;padding-left:22px;display:flex;flex-direction:column;gap:4px}
+.ds-tl li{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+.ds-tl select,.ds-tl input{font-size:12.5px;padding:3px 6px;min-width:0;flex:1 1 140px}
+@media (max-width:760px){
+  .ds-l{grid-template-columns:48px minmax(0,1fr)}
+  .ds-a{grid-column:1 / -1;justify-content:flex-start}
+}
+@media (prefers-reduced-motion:reduce){.ds-prog i{transition:none}}
