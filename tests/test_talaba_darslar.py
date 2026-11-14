@@ -160,6 +160,37 @@ ok(l1(cb)["status"] != "otdi" or q("SELECT status FROM lrs_progress WHERE studen
 ok(httpx.post(B + "/xapi/statements", headers=H(qp2["auth"]), json=stmt("experienced") | {"object": {"objectType": "Activity", "id": L.lesson_activity(CR, "L14")}}).status_code == 403,
    "L1 tokeni bilan L14 ga yozib bo'lmaydi (403)")
 
+print("== 3b. Tasdiq bekor qilinsa — ochish va fayllar to'xtaydi (410), tasdiqlanmagan versiyaga qaytish yo'q")
+la3 = ca.post("/api/talaba/darslar/launch", json={"course_ref": CR, "lesson": "L1"}).json()["url"]
+rd = httpx.get(B + la3, follow_redirects=False)
+pbase = rd.headers["location"].split("?")[0].rsplit("/", 1)[0]
+ok(rd.status_code == 302 and httpx.get(B + pbase + "/index.html").status_code == 200, "Ochiq sessiya: paket fayllari beriladi")
+rj_ = head.post(f"{P}/packages/{pk['id']}/action", json={"action": "reject", "note": "Video almashtiriladi"})
+ok(rj_.status_code == 200 and q("SELECT status FROM pk_packages WHERE id=?", (pk["id"],))[0]["status"] == "qoralama", "Bo'lim L1 paketini qaytardi (endi tasdiqlanmagan)")
+g1 = httpx.get(B + pbase + "/index.html"); g2 = httpx.get(B + pbase + "/content.js")
+ok(g1.status_code == 410 and g2.status_code == 410 and "tasdiqlangan holatda emas" in g1.text, "Allaqachon ochilgan sessiya: fayllar 410 (tasdiqlanmagan versiya berilmaydi)")
+g3 = httpx.get(B + la3, follow_redirects=False)
+ok(g3.status_code == 410 and "tasdiqlangan holatda emas" in g3.text, "2 soatlik kabinet havolasi endi ochilmaydi — 410, o'zbekcha xabar")
+ok(ca.post("/api/talaba/darslar/launch", json={"course_ref": CR, "lesson": "L1"}).status_code == 404, "Kabinet: L1 ni yangidan ochib bo'lmaydi (404)")
+v = l1(ca)
+ok(v["can_open"] is False and v["status"] == "otdi", "Kabinetda L1 natijasi ko'rinadi, lekin «Ochish» yo'q")
+ok(q("SELECT COUNT(*) n FROM audit_log WHERE action LIKE 'LRS: tasdiqlanmagan paketni ochish rad etildi%'")[0]["n"] >= 1, "Rad etish auditda")
+v2 = head.post(f"{P}/courses/{CID}/topics/1/build", json={"mode": "xapi", "force": True}).json()["package"]       # yangi versiya — tasdiqlanmagan
+x("UPDATE pk_packages SET status='tasdiqlandi' WHERE id=?", (pk["id"],))                                          # eski versiya qayta tasdiqlandi
+ok(httpx.get(B + pbase + "/index.html").status_code == 200 and v2["id"] != pk["id"] and q("SELECT status FROM pk_packages WHERE id=?", (v2["id"],))[0]["status"] != "tasdiqlandi",
+   "Qayta tasdiqlangach — fayllar yana beriladi (yangi tasdiqlanmagan v2 emas, tasdiqlangan versiya)")
+x("UPDATE pk_packages SET status='qoralama' WHERE id=?", (pk["id"],))
+ok(httpx.get(B + pbase + "/index.html").status_code == 410, "Tasdiqlangan versiya yo'q, faqat tasdiqlanmaganlar bor — 410 (fallback yo'q)")
+x("UPDATE pk_packages SET status='tasdiqlandi' WHERE id=?", (pk["id"],))
+# muharrir kursi: kabinet (strict) havolasi — kurs tasdiqlanmagan bo'lsa 410; xodim havolasi (strict emas) — avvalgidek
+kc = head.post("/api/kurs/courses", json={"title": "Kabinet sinovi: muharrir kursi", "dl_course_id": CID}).json()["id"]
+kl0 = head.get(f"/api/kurs/courses/{kc}").json()["lessons_list"][0]["id"]; KL = head.get(f"/api/kurs/lessons/{kl0}").json()
+head.post(f"/api/kurs/lessons/{kl0}", json={"rev": KL["rev"], "title": "Kirish", "blocks": [{"type": "paragraph", "data": {"html": "<p>Matn</p>"}}]})
+ok(head.post(f"/api/kurs/courses/{kc}/export", json={"mode": "xapi"}).status_code == 200, "Muharrir kursi eksport qilindi (tasdiqlanmagan)")
+ks = L.make_link(SA, f"ku:{kc}", "", days=0.05, strict=True); kn = L.make_link(SA, f"ku:{kc}", "", days=0.05)
+ok(httpx.get(B + "/xapi/l/" + ks, follow_redirects=False).status_code == 410 and httpx.get(B + "/xapi/l/" + kn, follow_redirects=False).status_code == 302,
+   "Muharrir kursi: kabinet havolasi — 410 (tasdiqlanmagan), xodim havolasi — 302")
+
 # =============================================================================================
 print("== 4. Telegram ulash: bir martalik kod")
 ok(TD.bot_enabled() is False, "Testda bot tokeni yo'q — yuborish o'chiq")

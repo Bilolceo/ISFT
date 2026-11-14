@@ -203,8 +203,8 @@ def api_launch(body: LaunchIn, request: Request):
     if not t:
         STP._audit("darsni ochish", False, s, f"ruxsatsiz: {body.course_ref} {body.lesson}"[:120])
         raise HTTPException(404, "Dars topilmadi yoki hali tasdiqlanmagan")
-    if not L.package_for(t["course_ref"], t["lesson_ref"]): raise HTTPException(404, "Dars paketi hali eksport qilinmagan")
-    code = L.make_link(s["id"], t["course_ref"], t["lesson_ref"], days=LAUNCH_HOURS / 24)
+    if not L.package_for(t["course_ref"], t["lesson_ref"], approved_only=True): raise HTTPException(404, "Dars paketi hali eksport qilinmagan")
+    code = L.make_link(s["id"], t["course_ref"], t["lesson_ref"], days=LAUNCH_HOURS / 24, strict=True)
     STP._audit("darsni ochish", True, s, f"{body.course_ref} {body.lesson} → {t['course_ref']}")
     return {"url": f"/xapi/l/{code}"}
 

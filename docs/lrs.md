@@ -77,8 +77,9 @@ Rad etilgan yozish urinishlari (401/403/409) audit jurnaliga yoziladi (`resource
 3. Ochilganda — yangi token va 302:
    `/xapi/pkg/<kod>/index.html?endpoint=<server>/xapi/&auth=Basic…&actor={account}&registration=<uuid5>&activity_id=<IRI>`.
 4. Fayllar eksport zip'i ichidan beriladi:
-   - paket — o'sha dars uchun eng so'nggi paket (tasdiqlangani ustun);
-   - kurs muharriri — oxirgi eksport (xAPI ustun);
+   - paket — faqat HOZIR tasdiqlangan versiya (eng so'nggi tasdiqlangani); tasdiqlanmagan yoki eski versiyaga qaytish yo'q. Tasdiq bekor qilinsa —
+     havola ham, allaqachon ochilgan sessiyaning har bir fayl so'rovi ham **410** (o'zbekcha xabar, audit);
+   - kurs muharriri — oxirgi eksport (xAPI ustun); talaba kabineti havolasi (`strict`) bilan — kurs hozir «tasdiqlangan» bo'lishi shart, aks holda 410;
    - oddiy HTML eksport ishga tushirilmaydi.
    - CSP: `default-src 'none'; script-src 'self'; connect-src <server>/xapi/` — paket skripti `/api` ga so'rov yubora olmaydi.
    - `frame-ancestors 'self' https://my.isft.uz` (`ISFT_CORE_LRS_FRAME_ANCESTORS`) — NEXTID iframe'ida ochish mumkin.

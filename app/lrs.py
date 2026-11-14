@@ -209,10 +209,13 @@ def parse_auth(header: str | None) -> dict:
     return {"kind": "launch", "jti": user, "learner": d["l"], "student_id": sid, "course_ref": d.get("c") or "", "lesson_ref": d.get("s") or "",
             "registration": d.get("r") or ""}
 
-def make_link(sid: int, course_ref: str, lesson_ref: str = "", days: int = LINK_DAYS) -> str:
-    """Uzoq muddatli ishga tushirish havolasi kodi (talaba kabineti, Telegram eslatma, NEXTID tashqi havola). Ichida faqat taxallus va kurs."""
+def make_link(sid: int, course_ref: str, lesson_ref: str = "", days: float = LINK_DAYS, strict: bool = False) -> str:
+    """Ishga tushirish havolasi kodi (talaba kabineti, NEXTID tashqi havola). Ichida faqat taxallus va kurs.
+    strict — talaba kabinetidan: muharrir kursi ham ochilgan paytda TASDIQLANGAN bo'lishi shart (paket darslari — har doim)."""
     lid = learner_id(sid)
-    pl = _b64e(json.dumps({"l": lid, "c": course_ref, "s": lesson_ref or "", "e": int(time.time() + days * 86400)}, separators=(",", ":")).encode())
+    d = {"l": lid, "c": course_ref, "s": lesson_ref or "", "e": int(time.time() + days * 86400)}
+    if strict: d["a"] = 1
+    pl = _b64e(json.dumps(d, separators=(",", ":")).encode())
     return f"{pl}.{_sig('link', pl, 24)}"
 
 def parse_link(code: str) -> dict:
@@ -223,7 +226,7 @@ def parse_link(code: str) -> dict:
     if int(d.get("e") or 0) < time.time(): raise HTTPException(403, "Havola muddati o'tgan — yangi havola so'rang")
     sid = student_of(d.get("l"))
     if sid is None: raise HTTPException(403, "Havola yaroqsiz")
-    return {"learner": d["l"], "student_id": sid, "course_ref": d.get("c") or "", "lesson_ref": d.get("s") or ""}
+    return {"learner": d["l"], "student_id": sid, "course_ref": d.get("c") or "", "lesson_ref": d.get("s") or "", "strict": bool(d.get("a"))}
 
 
 # =============================================================================================
@@ -726,8 +729,10 @@ def code_to_key(code: str) -> int | None:
         if pre == m[1]: return base + int(m[2])
     return None
 
-def package_for(course_ref: str, lesson_ref: str) -> dict | None:
+def package_for(course_ref: str, lesson_ref: str, approved_only: bool = False) -> dict | None:
     """Ishga tushiriladigan eksport: paket — o'sha dars uchun eng so'nggi (tasdiqlangani ustun) paket; kurs muharriri — oxirgi eksport (xAPI ustun).
+    approved_only — faqat HOZIR tasdiqlangan: paket — status='tasdiqlandi' versiya (tasdiqlanmagan/eski versiyaga qaytish yo'q);
+    kurs muharriri — kurs holati «tasdiqlangan».
     → {"file": Path, "activity": IRI, "title"} yoki None. Oddiy HTML (LMS'siz) eksport ishga tushirilmaydi — u natija yubormaydi."""
     kind, _, cid = course_ref.partition(":")
     if not cid.isdigit(): return None
@@ -735,14 +740,15 @@ def package_for(course_ref: str, lesson_ref: str) -> dict | None:
         from . import paket as PK
         key = code_to_key(lesson_ref)
         if key is None: return None
-        r = db.one(_con, """SELECT * FROM pk_packages WHERE course_id=? AND topic_no=? AND mode!='none' AND file IS NOT NULL AND file!=''
+        r = db.one(_con, f"""SELECT * FROM pk_packages WHERE course_id=? AND topic_no=? AND mode!='none' AND file IS NOT NULL AND file!=''
+                            {"AND status='tasdiqlandi'" if approved_only else ""}
                             ORDER BY (status='tasdiqlandi') DESC, version DESC, id DESC LIMIT 1""", (int(cid), key))
         f = PK.store() / r["file"] if r else None
         return {"file": f, "activity": lesson_activity(course_ref, lesson_ref), "id": r["id"]} if f and f.is_file() else None
     if kind == "ku":
         from . import kurs as KU
-        r = db.one(_con, """SELECT e.* FROM ku_exports e JOIN ku_courses k ON k.id=e.course_id AND k.deleted=0 WHERE e.course_id=? AND e.mode!='none'
-                            AND e.file!='' ORDER BY (e.mode='xapi') DESC, e.id DESC LIMIT 1""", (int(cid),))
+        r = db.one(_con, f"""SELECT e.* FROM ku_exports e JOIN ku_courses k ON k.id=e.course_id AND k.deleted=0 WHERE e.course_id=? AND e.mode!='none'
+                            AND e.file!='' {"AND k.status='tasdiqlangan'" if approved_only else ""} ORDER BY (e.mode='xapi') DESC, e.id DESC LIMIT 1""", (int(cid),))
         f = KU.store() / r["file"] if r else None
         return {"file": f, "activity": lesson_activity(course_ref, ""), "id": r["id"]} if f and f.is_file() else None
     return None
@@ -764,6 +770,20 @@ def launch_csp(request: Request) -> str:
             f"media-src 'self'; connect-src {origin}/xapi/; frame-src https://www.youtube-nocookie.com; object-src 'none'; base-uri 'none'; "
             f"form-action 'none'; frame-ancestors 'self' {anc}".strip())
 
+GONE_MSG = "Bu dars hozir tasdiqlangan holatda emas (qayta ko'rib chiqilmoqda) — ochib bo'lmaydi. Keyinroq «Mening darslarim»dan qayta oching."
+
+def launchable(L: dict) -> dict:
+    """Ochish va har bir fayl so'rovi uchun: paket darslari — faqat HOZIR tasdiqlangan versiya (tasdiqlanmagan yoki eski versiyaga qaytish yo'q);
+    kabinet havolasi (strict) bilan muharrir kursi — kurs hozir «tasdiqlangan» bo'lishi shart. Tasdiq bekor qilingan bo'lsa — 410
+    (allaqachon ochilgan sessiya ham fayl ololmaydi). Hech qanday eksport yo'q — 404."""
+    strict = L["course_ref"].startswith("dl:") or L.get("strict")
+    pk = package_for(L["course_ref"], L["lesson_ref"], approved_only=bool(strict))
+    if pk: return pk
+    if strict and package_for(L["course_ref"], L["lesson_ref"]):
+        _audit_sys("LRS: tasdiqlanmagan paketni ochish rad etildi (410)", False, f"{L['course_ref']} {L['lesson_ref']} · talaba #{L['student_id']}")
+        raise HTTPException(410, GONE_MSG)
+    raise HTTPException(404, "Bu dars uchun paket hali eksport qilinmagan — Masofaviy ta'lim bo'limiga murojaat qiling")
+
 @router.get("/xapi/l/{code}")
 def x_launch(code: str, request: Request):
     """Talaba havolasi: yangi qisqa muddatli token bilan paketni ochadi (har ochilishda yangi token; registration — barqaror)."""
@@ -772,8 +792,7 @@ def x_launch(code: str, request: Request):
     L = parse_link(code)
     st = db.one(_con, "SELECT status FROM students WHERE id=?", (L["student_id"],))
     if not st: raise HTTPException(403, "Havola yaroqsiz")
-    pk = package_for(L["course_ref"], L["lesson_ref"])
-    if not pk: raise HTTPException(404, "Bu dars uchun paket hali eksport qilinmagan — Masofaviy ta'lim bo'limiga murojaat qiling")
+    pk = launchable(L)
     q = launch_query(request, L["student_id"], L["course_ref"], L["lesson_ref"], pk["activity"])
     return RedirectResponse(f"/xapi/pkg/{code}/index.html?{q}", 302, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
 
@@ -781,8 +800,7 @@ def x_launch(code: str, request: Request):
 def x_pkg(code: str, path: str, request: Request):
     from . import paket as PK
     L = parse_link(code)
-    pk = package_for(L["course_ref"], L["lesson_ref"])
-    if not pk: raise HTTPException(404, "Paket topilmadi")
+    pk = launchable(L)
     path = (path or "index.html").strip() or "index.html"
     if PK._bad_path(path) or "\x00" in path or "%" in path: raise HTTPException(400, "Yo'l noto'g'ri")
     f = pk["file"]; ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
