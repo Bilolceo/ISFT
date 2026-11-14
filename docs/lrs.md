@@ -81,6 +81,10 @@ Rad etilgan yozish urinishlari (401/403/409) audit jurnaliga yoziladi (`resource
      havola ham, allaqachon ochilgan sessiyaning har bir fayl so'rovi ham **410** (o'zbekcha xabar, audit);
    - kurs muharriri — oxirgi eksport (xAPI ustun); talaba kabineti havolasi (`strict`) bilan — kurs hozir «tasdiqlangan» bo'lishi shart, aks holda 410;
    - oddiy HTML eksport ishga tushirilmaydi.
+   - Fayl so'rovlari (`/xapi/pkg/…`) uchun tasdiq qarori xotirada **30 soniya** keshlanadi (`LAUNCH_TTL_S`; har faylda baza so'rovi va
+     stat bo'lmasin). Paket/kurs tasdiq amallari (`paket.package_action`, kurs tasdiqlash/qaytarish, tasdiqlangan kurs tahriri) va boshqa
+     ulanishdan bazaga yozuv keshni darhol tozalaydi; boshqa holatlarda tasdiq bekor qilingach fayllar ko'pi bilan 30 s ichida to'xtaydi.
+     Ochish (`/xapi/l/<kod>`) — har doim yangidan tekshiriladi. Rad etish (410) auditi — bitta havola kodi uchun 10 daqiqada bitta yozuv.
    - CSP: `default-src 'none'; script-src 'self'; connect-src <server>/xapi/` — paket skripti `/api` ga so'rov yubora olmaydi.
    - `frame-ancestors 'self' https://my.isft.uz` (`ISFT_CORE_LRS_FRAME_ANCESTORS`) — NEXTID iframe'ida ochish mumkin.
    - Media — HTTP Range bilan.

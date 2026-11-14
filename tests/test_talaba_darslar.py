@@ -191,6 +191,25 @@ ks = L.make_link(SA, f"ku:{kc}", "", days=0.05, strict=True); kn = L.make_link(S
 ok(httpx.get(B + "/xapi/l/" + ks, follow_redirects=False).status_code == 410 and httpx.get(B + "/xapi/l/" + kn, follow_redirects=False).status_code == 302,
    "Muharrir kursi: kabinet havolasi — 410 (tasdiqlanmagan), xodim havolasi — 302")
 
+print("== 3c. Bog'langan muharrir kursi (ds_links → ku:<id>) orqali bajarilgan dars kurs progressiga kiradi")
+cdone = lambda: next(c for c in ca.get("/api/talaba/darslar").json()["courses"] if c["ref"] == CR)
+used = {r["lkey"] for r in q("SELECT lkey FROM ds_links WHERE dl_course_id=?", (CID,))}
+lk_code = next(cd for cd in [f"L{i}" for i in range(15, 1, -1)] if L.code_to_key(cd) not in used
+               and not q("SELECT 1 FROM lrs_progress WHERE student_id=? AND course_ref=? AND lesson_ref=?", (SA, CR, cd)))
+lk_key = L.code_to_key(lk_code)
+ku_st = q("SELECT status FROM ku_courses WHERE id=?", (kc,))[0]["status"]
+d0 = cdone()["done"]
+x("UPDATE ku_courses SET status='tasdiqlangan' WHERE id=?", (kc,))
+x("INSERT INTO ds_links(dl_course_id,lkey,ku_course_id,authority) VALUES(?,?,?,'kurs')", (CID, lk_key, kc))
+x("""INSERT OR REPLACE INTO lrs_progress(student_id,course_ref,lesson_ref,status,pct,attempts,last_ts) VALUES(?,?,'','otdi',100,1,datetime('now'))""",
+  (SA, f"ku:{kc}"))
+cv = cdone(); it_ = next((l for l in cv["lessons"] if l["code"] == lk_code), None)
+ok(it_ and it_["status"] == "otdi" and cv["done"] == d0 + 1 and cv["lag"] == max(0, cv["expected"] - cv["done"]),
+   f"{lk_code} (ku:{kc} orqali o'tilgan) — kurs «bajarildi» soniga kirdi ({d0} → {cv['done']})")
+x("DELETE FROM lrs_progress WHERE student_id=? AND course_ref=?", (SA, f"ku:{kc}"))
+x("DELETE FROM ds_links WHERE dl_course_id=? AND lkey=?", (CID, lk_key))
+x("UPDATE ku_courses SET status=? WHERE id=?", (ku_st, kc))
+
 # =============================================================================================
 print("== 4. Telegram ulash: bir martalik kod")
 ok(TD.bot_enabled() is False, "Testda bot tokeni yo'q — yuborish o'chiq")
@@ -218,7 +237,22 @@ O = "/api/ortda"
 rm = head.post(O + "/remind", json={"student_id": SA, "course_ref": CR, "channel": "telegram", "note": "L2 ni shu hafta tugating"})
 ok(rm.status_code == 200, f"Eslatma yaratildi ({rm.status_code})")
 rj = rm.json(); nt = q("SELECT * FROM ops_notices WHERE id=?", (rj["notice_id"],))[0]
-ok("/xapi/" not in nt["text"] and "/talaba#darslarim" in nt["text"] and "L2 ni shu hafta tugating" in nt["text"], "Xabar: launch havolasi/tokeni yo'q, kabinet havolasi va shaxsiy izoh bor")
+pub = os.getenv("ISFT_CORE_PUBLIC_URL", "").strip().rstrip("/")
+ok("/xapi/" not in nt["text"] and "Mening darslarim" in nt["text"] and "L2 ni shu hafta tugating" in nt["text"]
+   and ((pub + "/talaba#darslarim") in nt["text"] if pub else ("http" not in nt["text"] and "/talaba#" not in nt["text"])),
+   "Xabar: launch havolasi/tokeni yo'q, kabinet yo'riqnomasi (havola — faqat ISFT_CORE_PUBLIC_URL dan) va shaxsiy izoh bor")
+# Host sarlavhasi xabardagi havolaga ta'sir qilmaydi (host-header injection)
+SC = next(s_ for s_ in studs[1:-2] if s_ not in (SA, SB))
+rh = head.post(O + "/remind", json={"student_id": SC, "course_ref": CR, "channel": "telegram"}, headers={"Host": "evil.example", "X-Forwarded-Host": "evil.example"})
+th_ = q("SELECT text FROM ops_notices WHERE id=?", (rh.json().get("notice_id"),)) if rh.status_code == 200 else []
+ok(rh.status_code == 200 and th_ and "evil.example" not in th_[0]["text"] and "evil.example" not in json.dumps(rh.json()),
+   f"Soxta Host sarlavhasi — xabarda/javobda begona manzil yo'q ({rh.status_code})")
+_pe = os.environ.pop("ISFT_CORE_PUBLIC_URL", None)
+ok(TD.cabinet_url() is None and "http" not in TD.cabinet_hint(), "ISFT_CORE_PUBLIC_URL yo'q — absolyut havola yo'q, faqat yo'riqnoma")
+os.environ["ISFT_CORE_PUBLIC_URL"] = "https://core.isft.uz/"
+ok(TD.cabinet_url() == "https://core.isft.uz/talaba#darslarim", "ISFT_CORE_PUBLIC_URL bor — havola faqat undan")
+if _pe is None: os.environ.pop("ISFT_CORE_PUBLIC_URL", None)
+else: os.environ["ISFT_CORE_PUBLIC_URL"] = _pe
 ok(rj["delivery"] == "bot_ochiq" and nt["status"] == "navbatda", "Bot o'chiq — xabar navbatda (bot_ochiq)")
 ok(head.post(O + "/remind", json={"student_id": SA, "course_ref": CR}).status_code == 429, "3 kun ichida ikkinchi eslatma — 429")
 sent = []
@@ -249,8 +283,32 @@ ok(TD.link_student(_con, TG_B, kb)["ok"], "SB ulandi")
 got = []
 ok(TD.flush_student(_con, SB, sender=lambda c, t: got.append(c)) == 1 and got == [TG_B] and q("SELECT status FROM ops_notices WHERE id=?", (rb["notice_id"],))[0]["status"] == "yuborildi",
    "Ulangandan keyin navbatdagi eslatma yuborildi")
+# poyga: bot (flush_student) va eslatma (deliver) bir vaqtda — xabar bir marta yuboriladi; Telegram so'rovi paytida modul qulfi band emas
+import threading
+nid_r = x("INSERT INTO ops_notices(ts,channel,student_id,text,status,user_id) VALUES(datetime('now'),'telegram',?,?,'navbatda',?)", (SB, "poyga sinovi", uid("masofaviy")))
+calls, lock_free = [], []
+def slow(chat, text):
+    calls.append(chat)
+    t = threading.Thread(target=lambda: lock_free.append(TD._lock.acquire(timeout=1) and (TD._lock.release() or True)))
+    t.start(); t.join()
+    time.sleep(0.4)
+res = []
+th = [threading.Thread(target=lambda: res.append(TD.deliver(_con, nid_r, sender=slow)["status"])),
+      threading.Thread(target=lambda: res.append(TD.flush_student(_con, SB, sender=slow))),
+      threading.Thread(target=lambda: res.append(TD.deliver(_con, nid_r, sender=slow)["status"]))]
+for t in th: t.start()
+for t in th: t.join()
+ok(len(calls) == 1 and q("SELECT status FROM ops_notices WHERE id=?", (nid_r,))[0]["status"] == "yuborildi"
+   and [r["status"] for r in q("SELECT status FROM notice_delivery WHERE notice_id=?", (nid_r,))] == ["yuborildi"],
+   f"Poyga: flush_student va deliver bir vaqtda — xabar bitta yuborildi ({len(calls)} marta, natijalar {res})")
+ok(lock_free == [True], "Telegram so'rovi paytida modul qulfi bo'sh (tarmoq — qulfdan tashqarida)")
 # parol almashsa — ulanish uziladi
 ok(ca.post("/api/talaba/password", json={"current": NEWPW, "new": NEWPW + "y"}).status_code == 200, "SA parolini almashtirdi")
+ok(q("SELECT 1 FROM student_tg WHERE student_id=?", (SA,)) and SA not in TD.linked_set(_con, [SA, SB]) and SB in TD.linked_set(_con, [SA, SB]),
+   "linked_set: parol izi mos kelmaydigan (uzilgan) ulanish — ulanmagan (qator hali o'chirilmagan bo'lsa ham)")
+li2 = head.get(O + "/list", params={"course": CR, "only_risk": "false", "limit": 200}).json()["items"]
+ok(next((i for i in li2 if i["student_id"] == SA), {}).get("telegram") is False and head.get(f"{O}/student/{SA}", params={"course": CR}).json()["student"]["telegram"] is False,
+   "«Ortda qolganlar»: paroli almashgan talaba — «Telegram ulanmagan»")
 ok(TD.student_by_tg(_con, TG_A) is None and ca.get("/api/talaba/telegram").json()["linked"] is False, "Parol almashgach Telegram ulanishi uzildi (qayta kod kerak)")
 ok(cb.post("/api/talaba/telegram/unlink").json()["unlinked"] and TD.student_by_tg(_con, TG_B) is None, "Kabinetdan uzish")
 

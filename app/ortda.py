@@ -395,7 +395,7 @@ def assign(c: Ctx, sid: int, ref: str, tutor: int, note: str = "") -> dict:
 
 _REMIND_DAY: dict = {}
 
-def remind(c: Ctx, sid: int, ref: str, channel: str = "telegram", note: str = "", base: str | None = None) -> dict:
+def remind(c: Ctx, sid: int, ref: str, channel: str = "telegram", note: str = "") -> dict:
     """Eslatma — Talabalar markazining xabarlar navbatiga (ops_notices). Telegram: talaba kabinetda Telegram'ni ulagan bo'lsa — darhol bot orqali
     yuboriladi (app/talaba_darslar.deliver); ulanmagan bo'lsa — navbatda qoladi («Telegram ulanmagan») va talaba ulanganda yuboriladi; bot tokeni
     yo'q bo'lsa — navbatda. SMS — shlyuz ulanganda. Cheklov: bitta talabaga `remind_cooldown_days` kunda bir marta (kurs farqi yo'q), bitta xodim
@@ -416,15 +416,16 @@ def remind(c: Ctx, sid: int, ref: str, channel: str = "telegram", note: str = ""
     if channel == "sms" and not s["phone"]: raise HTTPException(400, "Talabaning telefon raqami yo'q — Telegram kanalini tanlang")
     row = next((r for r in course_rows(co) if r["student_id"] == sid), None)
     nxt = _next_lesson(co, sid)
-    # launch havolasi/tokeni xabarga YOZILMAYDI (kirishsiz ochib bo'lardi) — faqat kabinetdagi «Mening darslarim» (HEMIS ID bilan kirish)
-    link = TD.cabinet_url(base)
+    # launch havolasi/tokeni xabarga YOZILMAYDI (kirishsiz ochib bo'lardi) — faqat kabinetdagi «Mening darslarim» (HEMIS ID bilan kirish).
+    # Absolyut havola faqat ISFT_CORE_PUBLIC_URL dan (so'rov Host sarlavhasidan emas); sozlanmagan bo'lsa — havolasiz yo'riqnoma.
+    link = TD.cabinet_url()
     name = (s["full_name"].split() + [""])[1] or s["full_name"]
     note = " ".join((note or "").split())[:300]
     who = _short(c.user["full_name"]) or c.user["full_name"]
     text = (f"Hurmatli {name}! ISFT masofaviy ta'lim: «{co['title']}» kursida "
             + (f"{row['lag']} ta dars ortda qoldingiz ({row['done']}/{row['expected']}). " if row and row["lag"] else "darslaringizni davom ettiring. ")
             + (f"Keyingi dars: {nxt['title']}. " if nxt else "") + (f"\n{who}: «{note}»\n" if note else "")
-            + f"Darslaringiz: {link} (talaba kabineti → «Mening darslarim»). Savollar bo'lsa — tyutoringizga murojaat qiling.")
+            + f"Darslaringiz: {TD.cabinet_hint()}. Savollar bo'lsa — tyutoringizga murojaat qiling.")
     with _lock:
         nid = _con.execute("INSERT INTO ops_notices(ts,channel,task_id,case_id,student_id,phone,text,status,user_id) VALUES(?,?,?,?,?,?,?,?,?)",
                            (_iso(_now()), channel, None, None, sid, s["phone"] if channel == "sms" else None, text[:900], "navbatda", c.user["id"])).lastrowid
@@ -594,7 +595,7 @@ def api_assign(body: ActIn, request: Request):
 @router.post(P + "/remind")
 def api_remind(body: ActIn, request: Request):
     c = C(request); guard(c, "eslatma", ACT_ROLES, f"talaba #{body.student_id}")
-    return remind(c, body.student_id, body.course_ref, body.channel, body.note, str(request.base_url))
+    return remind(c, body.student_id, body.course_ref, body.channel, body.note)
 
 @router.post(P + "/contacted")
 def api_contacted(body: ActIn, request: Request):

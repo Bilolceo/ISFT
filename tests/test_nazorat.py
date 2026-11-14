@@ -156,12 +156,17 @@ ok(rv["task_overdue_days"]["value"] == 3 and rv["student_inactive_days"]["value"
    "Standart: topshiriq ≥ 3 kun, talaba 7 kun faolsiz, tasdiq 5 kun")
 ok(rek.post("/api/nazorat/rules", json={"rules": {"owner_days": 99}}).status_code == 400 and rek.post("/api/nazorat/rules", json={"rules": {"yoq": 1}}).status_code == 400,
    "Chegaradan tashqari / noma'lum qoida — 400")
+r_bad = rek.post("/api/nazorat/rules", json={"rules": {"task_overdue_days": 5, "owner_days": 99}})
+rv2 = {x["key"]: x["value"] for x in rek.get("/api/nazorat/rules").json()["rules"]}
+ok(r_bad.status_code == 400 and rv2["task_overdue_days"] == 3 and not q("SELECT 1 FROM nz_rules WHERE k='task_overdue_days' AND v=5"),
+   "Bitta qiymat xato — hech biri yozilmaydi (avval hammasi tekshiriladi, keyin bitta tranzaksiya)")
 mx = max(x["age_days"] for x in I.values() if x["key"].startswith("task:"))
 a1 = last_audit()
 r = rek.post("/api/nazorat/rules", json={"rules": {"task_overdue_days": 30}})
 I30 = items(rek.get("/api/nazorat").json())
 ok(r.status_code == 200 and not any(k.startswith("task:") and I[k]["age_days"] + 3 < 30 for k in I30), "Chegara 30 kun — yangi topshiriqlar istisno emas")
 ok(audit_after(a1, "nazorat: qoidalar o'zgartirildi"), "Qoida o'zgarishi audit jurnalida")
+ok(any("task_overdue_days: 3 → 30" in (x["detail"] or "") for x in audit_after(a1, "nazorat: qoidalar o'zgartirildi")), "Auditda eski → yangi qiymat")
 rek.post("/api/nazorat/rules", json={"rules": {"task_overdue_days": 3}})
 
 # =============================================================================================
@@ -183,7 +188,7 @@ w("UPDATE tasks SET status=? WHERE id=?", (st0, tid))
 # --- Eslatish (agregat istisno — «Nazorat» topshirig'i yaratiladi)
 G = grp[0]["key"]
 a1 = last_audit()
-n0 = len(q("SELECT 1 FROM nz_notes WHERE user_id=?", (I[G]["owner"]["id"],)))
+n0 = len(q("SELECT 1 FROM nz_notes WHERE user_id=? AND title LIKE 'Eslatma:%'", (I[G]["owner"]["id"],)))
 r = rek.post("/api/nazorat/act", json={"key": G, "action": "eslatish", "note": "Juma kunigacha reja"})
 d = r.json()
 tk = q("SELECT * FROM tasks WHERE id=?", (d.get("task_id"),))
@@ -191,7 +196,7 @@ ok(r.status_code == 200 and tk and tk[0]["src"] == f"nz:{G}" and tk[0]["origin"]
    f"Eslatish: Topshiriqlar tizimida «Nazorat» topshirig'i #{d.get('task_id')} (src=nz:{G})")
 ok(q("SELECT 1 FROM task_msgs WHERE task_id=? AND text LIKE 'Eslatma%'", (d["task_id"],)) and q("SELECT 1 FROM task_log WHERE task_id=? AND action='eslatma yuborildi'", (d["task_id"],)),
    "Eslatma topshiriq chatida va tarixida")
-ok(len(q("SELECT 1 FROM nz_notes WHERE user_id=?", (I[G]["owner"]["id"],))) == n0 + 1 and audit_after(a1, "nazorat: eslatish"), "Egasiga bildirishnoma, audit jurnali")
+ok(len(q("SELECT 1 FROM nz_notes WHERE user_id=? AND title LIKE 'Eslatma:%'", (I[G]["owner"]["id"],))) == n0 + 1 and audit_after(a1, "nazorat: eslatish"), "Egasiga bildirishnoma, audit jurnali")
 own = S(I[G]["owner"]["id"])
 ok(any(x["title"].startswith("Eslatma:") for x in own.get("/api/notifications").json()["items"]), "Egasining qo'ng'iroqchasida «Eslatma: …»")
 r2 = rek.post("/api/nazorat/act", json={"key": G, "action": "eslatish"})
@@ -235,7 +240,10 @@ ok(q("SELECT 1 FROM nz_notes WHERE user_id=? AND item_key=?", (ak, KR)) and audi
 # prorektor — vakolatidan tashqari bo'limga tayinlay olmaydi (directives.authorize)
 pk = next((k for k, x in IP.items() if k.startswith("tut:")), None)
 if pk:
+    nt0 = q("SELECT COUNT(*) n FROM tasks WHERE src=?", (f"nz:{pk}",))[0]["n"]; tmax = q("SELECT MAX(id) m FROM tasks")[0]["m"]
     ok(pro.post("/api/nazorat/act", json={"key": pk, "action": "tayinlash", "unit": "buxgalteriya"}).status_code == 403, "Prorektor: vakolatidan tashqari bo'limga — 403")
+    ok(q("SELECT COUNT(*) n FROM tasks WHERE src=?", (f"nz:{pk}",))[0]["n"] == nt0 and q("SELECT MAX(id) m FROM tasks")[0]["m"] == tmax,
+       "Rad etilgan qayta tayinlash — «Nazorat» topshirig'i yaratilmadi (avval tekshiruv, yetim yozuv yo'q)")
     ok(proi.post("/api/nazorat/act", json={"key": pk, "action": "eslatish"}).status_code == 403, "Ilmiy prorektor: ko'lamidan tashqari istisno — 403")
 # rahbariga ko'tarish (agregat)
 TK = tut[0]["key"]
@@ -392,6 +400,38 @@ con.execute("UPDATE users SET tg_pin_fp='eski' WHERE id=?", (rek_id,)); con.comm
 sent.clear()
 NZ.make_brief(con, MON, force=True, use_ai=False, tg_fn=lambda chat, text: (sent.append(chat) or True, "ok"))
 ok(not sent, "Parol o'zgargan (ulanish eskirgan) — Telegram'ga yuborilmaydi")
+
+# ko'rinishlar keshi: overview/item — oxirgi skan natijasi (yangi bo'lsa); faqat ko'rish yozmaydi; amal — bitta skan
+import threading   # noqa: E402
+calls = []
+_det = NZ.detect
+NZ.detect = lambda *a, **k: (calls.append(1), _det(*a, **k))[1]
+NZ.invalidate()
+tc = con.total_changes
+NZ.overview(rctx); NZ.overview(rctx); NZ.overview(pctx)
+ok(len(calls) == 1 and con.total_changes == tc, f"Ko'rinish: 3 ta overview — 1 ta aniqlash (kesh), bazaga yozuv yo'q ({len(calls)} ta, {con.total_changes - tc} o'zgarish)")
+gk = next((x["key"] for x in NZ.latest() if x["kind"] != "topshiriq"), None)
+calls.clear()
+if gk:
+    NZ.act_remind(rctx, gk, "kesh sinovi")
+    NZ.overview(rctx)
+    ok(len(calls) == 1, f"Amal (eslatish) + keyingi overview — jami 1 ta skan ({len(calls)})")
+else:
+    ok(False, "Agregat istisno topilmadi (kesh sinovi)")
+NZ.detect = _det
+# haftalik hisobot: AI so'rovi qulfdan tashqarida; bir vaqtda ikki marta tayyorlanmaydi
+ai_calls, free = [], []
+def slow_ai(stats):
+    ai_calls.append(1)
+    t = threading.Thread(target=lambda: free.append(NZ._lock.acquire(timeout=1) and (NZ._lock.release() or True))); t.start(); t.join()
+    time.sleep(0.5)
+    return ([f"AI {i}" for i in range(1, 7)], ["Q1", "Q2", "Q3"])
+outs = []
+th = [threading.Thread(target=lambda: outs.append(NZ.make_brief(con, MON, force=True, ai_fn=slow_ai, tg_fn=lambda c_, t_: (True, "ok")))) for _ in range(2)]
+for t in th: t.start()
+for t in th: t.join()
+ok(len(ai_calls) == 1 and sorted(o is None for o in outs) == [False, True] and free == [True],
+   f"Hisobot: parallel ikki so'rov — AI bir marta ({len(ai_calls)}), ikkinchisi «tayyorlanmoqda»; AI paytida qulf bo'sh ({free})")
 try: shutil.rmtree(tmp, ignore_errors=True)
 except Exception: pass
 

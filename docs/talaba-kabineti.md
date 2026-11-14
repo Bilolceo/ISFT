@@ -50,6 +50,11 @@ Masofaviy talaba uchun (guruh — masofaviy, kurs yo'nalishi va bosqichi guruhni
 - Telegram eslatmalari: «Ulash kodini olish» → bir martalik kod (8 belgi, 10 daqiqa, bitta ishlatish, soatiga 5 ta, bazada faqat xesh) → botga
   `/start KOD` (yoki `t.me/<bot>?start=KOD`) yoki kodning o'zi. Parol almashtirilsa ulanish uziladi (xodimlar kabi). Ulangan talabaga bot faqat
   eslatma yuboradi (AI yordamchi va xodim buyruqlari yo'q); `/chiqish` — uzish. Ulanganda navbatdagi (14 kun) eslatmalar yuboriladi.
+- Eslatma matnidagi kabinet havolasi faqat `ISFT_CORE_PUBLIC_URL` (masalan `https://core.isft.uz`) dan quriladi — so'rovning `Host`
+  sarlavhasidan hech qachon olinmaydi (host-header injection / ichki manzil sizishi). O'zgaruvchi sozlanmagan bo'lsa, xabarda absolyut havola
+  bo'lmaydi, faqat yo'riqnoma: «talaba kabineti (HEMIS ID bilan kiring) → «Mening darslarim»».
+- Yetkazish poygasiz: xabar `ops_notices.status='yuborilmoqda'` bilan atomar band qilinadi (faqat bitta chaqiruvchi yuboradi), Telegram so'rovi
+  qulfdan tashqarida; server qayta ishga tushganda qolib ketgan «yuborilmoqda» — «xato» (qayta urinish).
 - API: `GET /api/talaba/darslar`, `POST /api/talaba/darslar/launch`, `GET /api/talaba/telegram`, `POST /api/talaba/telegram/code`,
   `POST /api/talaba/telegram/unlink`. Jadvallar: `student_tg`, `student_tg_codes`, `notice_delivery`. Test: `tests/test_talaba_darslar.py`
   (brauzer — `tools/talaba_darslar_check.js`).

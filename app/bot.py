@@ -150,7 +150,7 @@ async def student_link(update: Update, code: str) -> bool:
 async def student_reply(update: Update, sid: int):
     from . import talaba_darslar as TD
     await update.message.reply_text("Siz talaba sifatida ulangansiz — bu yerga masofaviy darslar bo'yicha eslatmalar keladi.\n"
-                                    f"Darslaringiz: {TD.cabinet_url()} (talaba kabineti → «Mening darslarim»).\nUzish: /chiqish")
+                                    f"Darslaringiz: {TD.cabinet_hint()}.\nUzish: /chiqish")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = getattr(context, "args", None) or []

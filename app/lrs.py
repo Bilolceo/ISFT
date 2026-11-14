@@ -772,7 +772,54 @@ def launch_csp(request: Request) -> str:
 
 GONE_MSG = "Bu dars hozir tasdiqlangan holatda emas (qayta ko'rib chiqilmoqda) — ochib bo'lmaydi. Keyinroq «Mening darslarim»dan qayta oching."
 
-def launchable(L: dict) -> dict:
+LAUNCH_TTL_S = 30          # x_pkg: tasdiq qarori shuncha soniya xotirada (tasdiq bekor qilinsa fayllar ko'pi bilan 30 s ichida to'xtaydi;
+                           # paket/kurs tasdiq amallari va boshqa ulanishdan yozuv — keshni darhol tozalaydi)
+GONE_AUDIT_S = 600         # rad etish (410) auditi: bitta havola kodi uchun 10 daqiqada ko'pi bilan bitta yozuv
+_LCACHE: dict = {}         # (course_ref, lesson_ref, strict) → (monotonic, data_version, natija | (status, xabar))
+_GONE_AUD: dict = {}       # havola kodi → oxirgi audit vaqti
+_lc_lock = threading.Lock()
+
+def invalidate_launch():
+    """Tasdiq holati o'zgarganda (app/paket.package_action, app/kurs kurs amallari) — keyingi so'rov qayta tekshiradi."""
+    with _lc_lock: _LCACHE.clear()
+
+def _dv() -> int | None:
+    try: return _con.execute("PRAGMA data_version").fetchone()[0]
+    except Exception: return None
+
+def _launchable_cached(L: dict, code: str) -> dict:
+    """x_pkg uchun: launchable() natijasi LAUNCH_TTL_S soniya keshda (har fayl so'rovida 2 so'rov + stat bo'lmasin). Boshqa ulanish bazaga
+    yozgan bo'lsa (PRAGMA data_version) yoki invalidate_launch() chaqirilgan bo'lsa — darhol qayta tekshiriladi."""
+    strict = bool(L["course_ref"].startswith("dl:") or L.get("strict"))
+    key = (L["course_ref"], L["lesson_ref"], strict)
+    now, dv = time.monotonic(), _dv()
+    with _lc_lock:
+        hit = _LCACHE.get(key)
+    if hit and now - hit[0] < LAUNCH_TTL_S and hit[1] == dv:
+        res = hit[2]
+    else:
+        try:
+            res = launchable(L, audit=False)
+        except HTTPException as e:
+            res = (e.status_code, e.detail)
+        with _lc_lock:
+            if len(_LCACHE) > 5000: _LCACHE.clear()
+            _LCACHE[key] = (now, dv, res)
+    if isinstance(res, tuple):
+        if res[0] == 410: _gone_audit(L, code)
+        raise HTTPException(res[0], res[1])
+    return res
+
+def _gone_audit(L: dict, code: str | None):
+    now = time.monotonic()
+    if code is not None:
+        with _lc_lock:
+            if now - _GONE_AUD.get(code, -1e9) < GONE_AUDIT_S: return
+            if len(_GONE_AUD) > 5000: _GONE_AUD.clear()
+            _GONE_AUD[code] = now
+    _audit_sys("LRS: tasdiqlanmagan paketni ochish rad etildi (410)", False, f"{L['course_ref']} {L['lesson_ref']} · talaba #{L['student_id']}")
+
+def launchable(L: dict, audit: bool = True, code: str | None = None) -> dict:
     """Ochish va har bir fayl so'rovi uchun: paket darslari — faqat HOZIR tasdiqlangan versiya (tasdiqlanmagan yoki eski versiyaga qaytish yo'q);
     kabinet havolasi (strict) bilan muharrir kursi — kurs hozir «tasdiqlangan» bo'lishi shart. Tasdiq bekor qilingan bo'lsa — 410
     (allaqachon ochilgan sessiya ham fayl ololmaydi). Hech qanday eksport yo'q — 404."""
@@ -780,7 +827,7 @@ def launchable(L: dict) -> dict:
     pk = package_for(L["course_ref"], L["lesson_ref"], approved_only=bool(strict))
     if pk: return pk
     if strict and package_for(L["course_ref"], L["lesson_ref"]):
-        _audit_sys("LRS: tasdiqlanmagan paketni ochish rad etildi (410)", False, f"{L['course_ref']} {L['lesson_ref']} · talaba #{L['student_id']}")
+        if audit: _gone_audit(L, code)
         raise HTTPException(410, GONE_MSG)
     raise HTTPException(404, "Bu dars uchun paket hali eksport qilinmagan — Masofaviy ta'lim bo'limiga murojaat qiling")
 
@@ -792,7 +839,7 @@ def x_launch(code: str, request: Request):
     L = parse_link(code)
     st = db.one(_con, "SELECT status FROM students WHERE id=?", (L["student_id"],))
     if not st: raise HTTPException(403, "Havola yaroqsiz")
-    pk = launchable(L)
+    pk = launchable(L, code=code)          # ochish — har doim yangidan tekshiriladi (kesh yo'q)
     q = launch_query(request, L["student_id"], L["course_ref"], L["lesson_ref"], pk["activity"])
     return RedirectResponse(f"/xapi/pkg/{code}/index.html?{q}", 302, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
 
@@ -800,7 +847,7 @@ def x_launch(code: str, request: Request):
 def x_pkg(code: str, path: str, request: Request):
     from . import paket as PK
     L = parse_link(code)
-    pk = launchable(L)
+    pk = _launchable_cached(L, code)       # har fayl so'rovi — qisqa kesh (LAUNCH_TTL_S), rad etish auditi — kod bo'yicha oynada bir marta
     path = (path or "index.html").strip() or "index.html"
     if PK._bad_path(path) or "\x00" in path or "%" in path: raise HTTPException(400, "Yo'l noto'g'ri")
     f = pk["file"]; ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""

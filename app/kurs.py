@@ -602,7 +602,12 @@ def _bump(cid: int, c: Ctx | None, content: bool = True, rev: bool = True):
         st, note = "qoralama", "Tasdiq/ko'rib chiqishdan keyin o'zgartirildi — qayta yuborish kerak"
     _con.execute(f"UPDATE ku_courses SET updated_at=?, updated_by=?, status=?{', rev=rev+1' if rev else ''}{', status_note=?' if note else ''} WHERE id=?",
                  (_now(), c.user["full_name"] if c else "Tizim", st, *((note,) if note else ()), cid))
-    if note: _log(c, cid, "holat: qoralama", note)
+    if note:
+        _log(c, cid, "holat: qoralama", note)
+        try:
+            from . import lrs as LRS
+            LRS.invalidate_launch()        # tasdiqlangan kurs qoralamaga qaytdi — paket fayllari keshi tozalanadi
+        except Exception: pass
 
 def _conflict(kind: str, cur_rev: int, by: str, at: str):
     raise HTTPException(409, {"message": f"{kind} boshqa oynada yoki boshqa foydalanuvchi tomonidan o'zgartirilgan ({by or '—'}, {at or '—'}). "
@@ -976,6 +981,10 @@ def action(c: Ctx, cid: int, act: str, note: str = "", override: str = "") -> di
         _con.execute(f"UPDATE ku_courses SET status=?, {', '.join(k + '=?' for k in upd)}, updated_at=?, updated_by=? WHERE id=?",
                      (st, *upd.values(), _now(), c.user["full_name"], cid))
         _log(c, cid, {"submit": "ko'rib chiqishga yuborildi", "approve": "tasdiqlandi", "return": "qaytarildi"}[act], note); _con.commit()
+    try:                                   # LRS: kurs tasdiq holati o'zgardi — paket fayllari keshi (app/lrs.py) darhol qayta tekshirilsin
+        from . import lrs as LRS
+        LRS.invalidate_launch()
+    except Exception: pass
     _audit(c, {"submit": "ko'rib chiqishga yuborildi", "approve": "tasdiqlandi", "return": "qaytarildi"}[act], f"kurs #{cid} · {note[:80]}")
     return {"ok": True, "course": course_view(c, cid)}
 

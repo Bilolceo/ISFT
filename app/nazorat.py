@@ -406,54 +406,118 @@ def _note(con, uid, title, sub, link, level="warn", kind="nazorat", key=None, ts
                 (uid, ts or _iso(_now()), kind, level, title[:300], (sub or "")[:300], json.dumps(link or {}), key))
 
 
-def scan(con=None, now: dt.datetime | None = None, R: dict | None = None) -> list[dict]:
+FRESH_S = 60              # ko'rinishlar (overview / item / amal) shu soniyagacha oxirgi skan natijasidan foydalanadi
+_CACHE: dict = {}         # {"t": monotonic, "items": [...], "dv": PRAGMA data_version}
+_cache_lock = threading.Lock()
+
+
+def _data_version(con) -> int | None:
+    try: return con.execute("PRAGMA data_version").fetchone()[0]
+    except Exception: return None
+
+
+def invalidate():
+    """Shu jarayondagi yozuvdan keyin (qoidalar, amallar) — keyingi ko'rinish qayta hisoblaydi."""
+    with _cache_lock: _CACHE.clear()
+
+
+def latest() -> list[dict]:
+    """Oxirgi skan natijasi, agar yangi bo'lsa (< FRESH_S soniya va boshqa ulanish bazaga yozmagan — PRAGMA data_version); aks holda
+    YOZMAYDIGAN hisob (scan(write=False)). nz_items va bildirishnomalar — fon skaneri (10 daqiqa) va amaldan keyingi bitta skanda yoziladi.
+    Shu jarayon ichidagi boshqa bo'limlar o'zgarishlari ko'pi bilan FRESH_S soniyada ko'rinadi."""
+    import time as _t
+    with _cache_lock:
+        c = dict(_CACHE)
+    if c and _t.monotonic() - c["t"] < FRESH_S and c["dv"] == _data_version(_con):
+        return c["items"]
+    return scan(_con, write=False)
+
+
+def scan(con=None, now: dt.datetime | None = None, R: dict | None = None, write: bool = True) -> list[dict]:
     """Istisnolarni qayta hisoblash va nz_items bilan solishtirish. Idempotent: bir xil holatda qayta chaqirilsa hech narsa o'zgarmaydi
-    (yangi bildirishnoma faqat eskalatsiya bosqichi oshganda). Natija — ochiq istisnolar (bosqichi, zanjiri bilan)."""
+    (yangi bildirishnoma faqat eskalatsiya bosqichi oshganda). Natija — ochiq istisnolar (bosqichi, zanjiri bilan).
+    Aniqlash (detect — og'ir o'qish) qulfdan tashqarida; nz_items bilan solishtirish va yozish — qulf ostida. write=False — hech narsa
+    yozilmaydi (faqat ko'rish uchun: yangi istisnolar «hozir paydo bo'lgan» deb hisoblanadi, bildirishnoma yo'q)."""
+    import time as _t
     con = con or _con
+    real_now = now is None
     now = (now or _now()).replace(microsecond=0)
     R = R or rules(con)
-    with _lock:
-        cands = detect(con, now, R)
-        O = Org(con)
-        old = {r["key"]: r for r in db.rows(con, "SELECT * FROM nz_items")}
-        ts = _iso(now)
-        seen, res = set(), []
-        for x in cands:
-            k = x["key"]; seen.add(k)
-            o = old.get(k)
-            reopened = o is not None and o["status"] != "open"
-            if o is None or reopened:
-                con.execute("""INSERT INTO nz_items(key,area,kind,title,first_seen,last_seen,status,since,notified_level,task_id)
-                               VALUES(?,?,?,?,?,?,'open',?,-1,?) ON CONFLICT(key) DO UPDATE SET status='open', closed_at=NULL, first_seen=excluded.first_seen,
-                               last_seen=excluded.last_seen, since=excluded.since, reset_at=NULL, snooze_until=NULL, notified_level=-1, ov_user=NULL, ov_unit=NULL""",
-                            (k, x["area"], x["kind"], x["title"], ts, ts, _iso(x["since"]) if x["since"] else ts, x.get("task_id")))
-                o = db.one(con, "SELECT * FROM nz_items WHERE key=?", (k,))
-            since = x["since"] or _dt(o["first_seen"]) or now
-            if o.get("reset_at") and (_dt(o["reset_at"]) or since) > since: since = _dt(o["reset_at"])
-            owner, unit = (o.get("ov_user") or x["owner"]), (o.get("ov_unit") or x["unit"])
-            if x["kind"] == "topshiriq": owner, unit = x["owner"], x["unit"]        # topshiriq — egasi topshiriqning o'zidan
-            ch = O.chain(owner, unit)
-            st = stage_of(since, now, R, head_is_rektor=ch[1] == O.rektor)
-            sn = _dt(o.get("snooze_until"))
-            snoozed = bool(sn and sn > now)
-            h = _hash(x["state"])
-            data = {k2: x.get(k2) for k2 in ("why", "src", "deadline", "link", "aggregate")}
-            con.execute("""UPDATE nz_items SET area=?, kind=?, title=?, last_seen=?, since=COALESCE(?, since), owner_user=?, owner_unit=?, state_hash=?, stage=?,
-                           task_id=COALESCE(task_id, ?), data=? WHERE key=?""",
-                        (x["area"], x["kind"], x["title"], ts, _iso(x["since"]) if x["since"] else None, ch[0], unit, h, st,
-                         x.get("task_id"), json.dumps(data, ensure_ascii=False, default=str), k))
-            # eskalatsiya bildirishnomalari: har bosqichga birinchi marta yetganda — o'sha bosqich egasiga (kutishda bo'lsa — yo'q)
-            nl = o.get("notified_level") if o.get("notified_level") is not None else -1
-            if not snoozed and st > nl:
-                for lv in range(nl + 1, st + 1):
-                    if lv == 1 and ch[1] == O.rektor: continue
-                    who = ch[lv]
-                    if not who: continue
-                    msg = {0: "Sizga tegishli istisno", 1: "Xodimingiz muddatni o'tkazdi", 2: "Rektor nazoratida"}[lv]
-                    _note(con, who, f"{msg}: {x['title']}", x["why"], {"view": "nazorat", "item": k}, "bad" if lv else "warn", key=k, ts=ts)
-                con.execute("UPDATE nz_items SET notified_level=? WHERE key=?", (st, k))
+    cands = detect(con, now, R)
+    if write:
+        with _lock:
+            res = _apply(con, now, R, cands, True)
+    else:
+        res = _apply(con, now, R, cands, False)
+    if real_now and con is _con and _con is not None:
+        with _cache_lock:
+            _CACHE.clear(); _CACHE.update(t=_t.monotonic(), items=res, dv=_data_version(con))
+    return res
+
+
+def _open_row(con, x: dict, ts: str, first_seen: str | None = None):
+    """Yangi yoki qayta ochilgan istisno qatori (nz_items) — ochiq holatga, eskalatsiya/ustidan yozishlar tozalanadi."""
+    since = x["since"] if isinstance(x.get("since"), str) else (_iso(x["since"]) if x.get("since") else ts)
+    con.execute("""INSERT INTO nz_items(key,area,kind,title,first_seen,last_seen,status,since,notified_level,task_id)
+                   VALUES(?,?,?,?,?,?,'open',?,-1,?) ON CONFLICT(key) DO UPDATE SET status='open', closed_at=NULL, first_seen=excluded.first_seen,
+                   last_seen=excluded.last_seen, since=excluded.since, reset_at=NULL, snooze_until=NULL, notified_level=-1, ov_user=NULL, ov_unit=NULL""",
+                (x["key"], x["area"], x["kind"], x["title"], first_seen or ts, ts, since, x.get("task_id")))
+
+
+def _ensure_row(it: dict):
+    """Amal (qulf ostida): istisno faqat YOZMAYDIGAN hisobda ko'ringan bo'lsa (qatori yo'q yoki yopilgan) — qator ochiladi, amal unga yoziladi;
+    amaldan keyingi bitta skan qolganini (bosqich, bildirishnoma) yozadi."""
+    o = db.one(_con, "SELECT status FROM nz_items WHERE key=?", (it["key"],))
+    if o and o["status"] == "open": return
+    _open_row(_con, it, _iso(_now()), it.get("first_seen"))
+
+
+def _apply(con, now: dt.datetime, R: dict, cands: list, write: bool) -> list[dict]:
+    O = Org(con)
+    old = {r["key"]: r for r in db.rows(con, "SELECT * FROM nz_items")}
+    ts = _iso(now)
+    seen, res = set(), []
+    for x in cands:
+        k = x["key"]; seen.add(k)
+        o = old.get(k)
+        reopened = o is not None and o["status"] != "open"
+        if (o is None or reopened) and not write:
+            o = {"key": k, "status": "open", "first_seen": ts, "since": _iso(x["since"]) if x["since"] else ts, "reset_at": None, "snooze_until": None,
+                 "notified_level": -1, "task_id": x.get("task_id"), "ov_user": None, "ov_unit": None}
+        elif o is None or reopened:
+            _open_row(con, x, ts)
+            o = db.one(con, "SELECT * FROM nz_items WHERE key=?", (k,))
+        since = x["since"] or _dt(o["first_seen"]) or now
+        if o.get("reset_at") and (_dt(o["reset_at"]) or since) > since: since = _dt(o["reset_at"])
+        owner, unit = (o.get("ov_user") or x["owner"]), (o.get("ov_unit") or x["unit"])
+        if x["kind"] == "topshiriq": owner, unit = x["owner"], x["unit"]        # topshiriq — egasi topshiriqning o'zidan
+        ch = O.chain(owner, unit)
+        st = stage_of(since, now, R, head_is_rektor=ch[1] == O.rektor)
+        sn = _dt(o.get("snooze_until"))
+        snoozed = bool(sn and sn > now)
+        h = _hash(x["state"])
+        data = {k2: x.get(k2) for k2 in ("why", "src", "deadline", "link", "aggregate")}
+        if not write:
             res.append({**x, "since": since, "stage": st, "chain": ch, "unit": unit, "hash": h, "snoozed": snoozed, "snooze_until": o.get("snooze_until"),
                         "task_id": o.get("task_id") or x.get("task_id"), "first_seen": o["first_seen"]})
+            continue
+        con.execute("""UPDATE nz_items SET area=?, kind=?, title=?, last_seen=?, since=COALESCE(?, since), owner_user=?, owner_unit=?, state_hash=?, stage=?,
+                       task_id=COALESCE(task_id, ?), data=? WHERE key=?""",
+                    (x["area"], x["kind"], x["title"], ts, _iso(x["since"]) if x["since"] else None, ch[0], unit, h, st,
+                     x.get("task_id"), json.dumps(data, ensure_ascii=False, default=str), k))
+        # eskalatsiya bildirishnomalari: har bosqichga birinchi marta yetganda — o'sha bosqich egasiga (kutishda bo'lsa — yo'q)
+        nl = o.get("notified_level") if o.get("notified_level") is not None else -1
+        if not snoozed and st > nl:
+            for lv in range(nl + 1, st + 1):
+                if lv == 1 and ch[1] == O.rektor: continue
+                who = ch[lv]
+                if not who: continue
+                msg = {0: "Sizga tegishli istisno", 1: "Xodimingiz muddatni o'tkazdi", 2: "Rektor nazoratida"}[lv]
+                _note(con, who, f"{msg}: {x['title']}", x["why"], {"view": "nazorat", "item": k}, "bad" if lv else "warn", key=k, ts=ts)
+            con.execute("UPDATE nz_items SET notified_level=? WHERE key=?", (st, k))
+        res.append({**x, "since": since, "stage": st, "chain": ch, "unit": unit, "hash": h, "snoozed": snoozed, "snooze_until": o.get("snooze_until"),
+                    "task_id": o.get("task_id") or x.get("task_id"), "first_seen": o["first_seen"]})
+    if write:
         for k, o in old.items():
             if o["status"] == "open" and k not in seen:
                 con.execute("UPDATE nz_items SET status='closed', closed_at=? WHERE key=?", (ts, k))
@@ -517,8 +581,9 @@ def _view_item(c: Ctx, it: dict, O: Org, now: dt.datetime) -> dict:
 
 
 def overview(c: Ctx, now: dt.datetime | None = None) -> dict:
+    """Faqat ko'rish: oxirgi (yangi) skan natijasi yoki YOZMAYDIGAN hisob — nz_items/bildirishnomalar fon skaneri va amallarda yoziladi."""
+    items = scan(_con, now, write=False) if now else latest()
     now = now or _now()
-    items = scan(_con, now)
     O = Org(_con)
     cur = _curated(c)
     acks = {r["key"]: r["hash"] for r in db.rows(_con, "SELECT key, hash FROM nz_acks WHERE user_id=?", (c.user["id"],))}
@@ -544,8 +609,8 @@ def overview(c: Ctx, now: dt.datetime | None = None) -> dict:
 # 4 amal
 # =============================================================================================
 def _item(c: Ctx, key: str) -> tuple[dict, Org]:
-    with _lock:
-        items = {x["key"]: x for x in scan(_con)}
+    """Oxirgi (yangi) skan natijasidan; amal nz_items qatorini _ensure_row bilan ta'minlaydi — amal uchun to'liq skan faqat bitta (amaldan keyin)."""
+    items = {x["key"]: x for x in latest()}
     it = items.get(key)
     if not it: raise HTTPException(404, "Bu istisno endi yo'q (holat o'zgargan yoki yopilgan)")
     if not _visible(c, it, _curated(c)):
@@ -607,19 +672,41 @@ def O_head(unit):
     return r["head_user"] if r else None
 
 
+class _tx:
+    """Amal tranzaksiyasi (qulf ostida): istisno bo'lsa — rollback (yarim yozuv umumiy ulanishda qolib, keyin boshqa commit bilan
+    saqlanib ketmasin), muvaffaqiyatli bo'lsa — commit."""
+    def __enter__(self):
+        _lock.acquire(); return self
+    def __exit__(self, et, ev, tb):
+        try:
+            if et is None: _con.commit()
+            else: _con.rollback()
+        finally:
+            _lock.release()
+        return False
+
+
+def _after_action():
+    """Amaldan keyin BITTA to'liq skan (yopilish, yangi egasiga bildirishnoma) — natija keshga tushadi, keyingi ko'rinish qayta hisoblamaydi."""
+    invalidate()
+    try: scan(_con)
+    except Exception as e: print("nazorat.after_action:", repr(e))
+
+
 def act_remind(c: Ctx, key: str, note: str = "") -> dict:
     _guard(c, "eslatish", detail=key)
     it, O = _item(c, key)
     owner = it["chain"][0] or it["chain"][1]
-    with _lock:
+    with _tx():
+        _ensure_row(it)
         tid = ensure_task(c, it)
         text = f"Eslatma (Nazorat markazi): «{it['title']}». {it['why']}." + (f" {note.strip()}" if note.strip() else "")
         _task_msg(tid, c, text)
         _task_log(tid, c, "eslatma yuborildi", (O.person(owner) or {}).get("name", "") + (f" · {note.strip()}" if note.strip() else ""))
         _note(_con, owner, f"Eslatma: {it['title']}", (note.strip() or it["why"]), _task_link(tid), "warn", key=key)
         _nzlog(c, key, "eslatish", note)
-        _con.commit()
     rbac.audit(_con, c, "nazorat: eslatish", RES, True, f"{key} → #{tid} · {(O.person(owner) or {}).get('name', '—')}")
+    _after_action()
     return {"ok": True, "task_id": tid, "to": O.person(owner)}
 
 
@@ -633,7 +720,8 @@ def act_deadline(c: Ctx, key: str, due: str, note: str = "") -> dict:
     if not (note or "").strip(): raise HTTPException(400, "Izoh yozing (nega muddat berilmoqda)")
     it, O = _item(c, key)
     due_at = f"{d.isoformat()}T18:00"
-    with _lock:
+    with _tx():
+        _ensure_row(it)
         tid = ensure_task(c, it, d.isoformat())
         old = db.one(_con, "SELECT due, due_at FROM tasks WHERE id=?", (tid,)) or {}
         _con.execute("UPDATE tasks SET due=?, due_at=?, updated_at=? WHERE id=?", (d.isoformat(), due_at, _iso(_now()), tid))
@@ -644,8 +732,8 @@ def act_deadline(c: Ctx, key: str, due: str, note: str = "") -> dict:
         owner = it["chain"][0] or it["chain"][1]
         _note(_con, owner, f"Yangi muddat {_dmy(d.isoformat())}: {it['title']}", note.strip(), {"view": "nazorat", "item": key}, "warn", key=key)
         _nzlog(c, key, "muddat", f"{d.isoformat()} · {note.strip()}")
-        _con.commit()
     rbac.audit(_con, c, "nazorat: muddat berish", RES, True, f"{key} → #{tid} · {d.isoformat()} · {note.strip()[:120]}")
+    _after_action()
     return {"ok": True, "task_id": tid, "due": d.isoformat()}
 
 
@@ -663,46 +751,49 @@ def act_reassign(c: Ctx, key: str, unit: str | None = None, to_head: bool = Fals
     _guard(c, "qayta tayinlash", detail=key)
     it, O = _item(c, key)
     if bool(unit) == bool(to_head): raise HTTPException(400, "Yangi mas'ulni tanlang: bo'lim yoki «rahbariga ko'tarish»")
-    with _lock:
+    # AVVAL tekshiruv (topshiriq yaratilmasdan): rahbar aniqlanmasa yoki bo'lim vakolatdan tashqari bo'lsa — hech narsa yozilmaydi
+    # (DIR.authorize rad etganda audit commit qiladi — oldin yaratilgan topshiriq umumiy ulanishda «yetim» bo'lib saqlanib qolardi)
+    if to_head:
+        new_user = it["chain"][1]
+        if not new_user or new_user == it["chain"][0]: raise HTTPException(400, "Egasining rahbari aniqlanmadi")
+        u = db.one(_con, "SELECT * FROM users WHERE id=?", (new_user,))
+        from . import portal as PT
+        new_unit = PT.unit_key(u) if u else it["unit"]
+        label = f"{rbac.user_title(u)} {_short(u['full_name'])}".strip() if u else "rahbar"
+    else:
+        tunit, _ = DIR.authorize(c, "nazorat: qayta tayinlash", unit, None)
+        new_unit = DEC.org_key(tunit)
+        new_user = O_head(new_unit)
+        label = DEC.unit_name(tunit) or tunit
+        u = db.one(_con, "SELECT full_name, role FROM users WHERE id=?", (new_user,)) if new_user else None
+    with _tx():
+        _ensure_row(it)
         tid = ensure_task(c, it)
         if to_head:
-            new_user = it["chain"][1]
-            if not new_user or new_user == it["chain"][0]: raise HTTPException(400, "Egasining rahbari aniqlanmadi")
-            u = db.one(_con, "SELECT * FROM users WHERE id=?", (new_user,))
-            from . import portal as PT
-            new_unit = PT.unit_key(u) if u else it["unit"]
-            label = f"{rbac.user_title(u)} {_short(u['full_name'])}".strip() if u else "rahbar"
             tunit = DEC.task_key(new_unit)
             if tunit not in DEC.registry(): tunit = db.one(_con, "SELECT unit FROM tasks WHERE id=?", (tid,))["unit"]
             _con.execute("UPDATE tasks SET unit=?, assignee_user=?, assignee=?, assignee_role=?, updated_at=? WHERE id=?",
                          (tunit, new_user, _short(u["full_name"]) if u else "", u["role"] if u else None, _iso(_now()), tid))
             action = "rahbariga ko'tarildi"
         else:
-            tunit, _ = DIR.authorize(c, "nazorat: qayta tayinlash", unit, None)
-            new_unit = DEC.org_key(tunit)
-            new_user = O_head(new_unit)
-            label = DEC.unit_name(tunit) or tunit
-            u = db.one(_con, "SELECT full_name, role FROM users WHERE id=?", (new_user,)) if new_user else None
             _con.execute("UPDATE tasks SET unit=?, assignee_user=NULL, assignee=?, assignee_role=?, status=CASE WHEN status='jarayonda' THEN 'jarayonda' ELSE 'yangi' END, updated_at=? WHERE id=?",
                          (tunit, _short(u["full_name"]) if u else "", u["role"] if u else DEC._head_role(tunit), _iso(_now()), tid))
             action = "qayta tayinlandi"
         _task_log(tid, c, action, f"{label}" + (f" · {note.strip()}" if note.strip() else ""))
         _con.execute("UPDATE nz_items SET ov_user=?, ov_unit=?, reset_at=?, notified_level=-1 WHERE key=?", (new_user, new_unit, _iso(_now()), key))
         _nzlog(c, key, action, f"{label} · {note.strip()}")
-        _con.commit()
     rbac.audit(_con, c, "nazorat: qayta tayinlash", RES, True, f"{key} → #{tid} · {label}")
-    scan(_con)          # yangi egasiga darhol bildirishnoma (eskalatsiya soati qaytadan)
+    _after_action()     # yangi egasiga darhol bildirishnoma (eskalatsiya soati qaytadan) — amal uchun yagona skan
     return {"ok": True, "task_id": tid, "to": label}
 
 
 def act_ack(c: Ctx, key: str) -> dict:
     _guard(c, "ko'rdim", detail=key)
     it, _ = _item(c, key)
-    with _lock:
+    with _tx():
         _con.execute("INSERT INTO nz_acks(user_id,key,hash,ts) VALUES(?,?,?,?) ON CONFLICT(user_id,key) DO UPDATE SET hash=excluded.hash, ts=excluded.ts",
                      (c.user["id"], key, it["hash"], _iso(_now())))
         _nzlog(c, key, "ko'rdim")
-        _con.commit()
     rbac.audit(_con, c, "nazorat: ko'rdim", RES, True, key)
     return {"ok": True}
 
@@ -890,20 +981,29 @@ def _clean_lines(xs, lo, hi) -> list[str]:
     return out[:hi] if len(out) >= lo else []
 
 
-def make_brief(con=None, now: dt.datetime | None = None, force: bool = False, ai_fn=None, tg_fn=None, use_ai: bool | None = None) -> dict:
-    """Shu haftaning hisoboti (bir marta; force — qayta). AI faqat jamlangan sonlarni oladi; xato/kalitsiz — qoidaviy matn."""
+_BRIEF_BUSY: set = set()       # tayyorlanayotgan haftalar — bir vaqtda ikkinchi (takroriy) tayyorlash yo'q
+_brief_flag = threading.Lock()
+
+
+def make_brief(con=None, now: dt.datetime | None = None, force: bool = False, ai_fn=None, tg_fn=None, use_ai: bool | None = None) -> dict | None:
+    """Shu haftaning hisoboti (bir marta; force — qayta). AI faqat jamlangan sonlarni oladi; xato/kalitsiz — qoidaviy matn.
+    Ma'lumot yig'ish va yozish — qisqa qulflar ostida; Claude API va Telegram so'rovlari — qulfdan TASHQARIDA. Shu hafta hisoboti boshqa
+    oqimda tayyorlanayotgan bo'lsa — None (takroriy AI chaqiruvi / Telegram xabari yo'q)."""
     from . import claude_client as CC
     con = con or _con
     now = now or _now()
     wk = week_key(now.date())
-    with _lock:
+    with _brief_flag:
+        if wk in _BRIEF_BUSY: return None
         have = db.one(con, "SELECT * FROM nz_briefs WHERE week=?", (wk,))
         if have and not force: return _brief_row(have)
-        stats = brief_stats(con, now)
+        _BRIEF_BUSY.add(wk)
+    try:
+        stats = brief_stats(con, now)                 # skan o'zi yozish qismini qulf ostida bajaradi
         lines, dec = fallback_text(stats)
         source = "qoida"
         if use_ai is None: use_ai = CC.has_key() or ai_fn is not None
-        if use_ai:
+        if use_ai:                                    # tarmoq — qulfsiz
             try:
                 al, ad = (ai_fn or AI_FN)(stats)
                 al, ad = _clean_lines(al, 5, 8), _clean_lines(ad, 3, 3)
@@ -911,22 +1011,30 @@ def make_brief(con=None, now: dt.datetime | None = None, force: bool = False, ai
             except Exception as e:
                 print("nazorat.brief.ai:", type(e).__name__, str(e)[:120])
         ts = _iso(now)
-        con.execute("""INSERT INTO nz_briefs(week,created_at,source,lines,decisions,stats,tg) VALUES(?,?,?,?,?,?,NULL)
-                       ON CONFLICT(week) DO UPDATE SET created_at=excluded.created_at, source=excluded.source, lines=excluded.lines,
-                       decisions=excluded.decisions, stats=excluded.stats""",
-                    (wk, ts, source, json.dumps(lines, ensure_ascii=False), json.dumps(dec, ensure_ascii=False), json.dumps(stats, ensure_ascii=False)))
-        # yetkazish: ilova (bildirishnoma) va Telegram (rektor botga ulangan bo'lsa)
-        tg = []
         text = f"📊 Haftalik nazorat hisoboti ({wk})\n\n" + "\n".join(f"• {x}" for x in lines) + "\n\nKerakli qarorlar:\n" + "\n".join(f"{i}. {x}" for i, x in enumerate(dec, 1))
-        for u in db.rows(con, "SELECT * FROM users WHERE role='rektor' AND COALESCE(active,1)=1 ORDER BY id"):
-            _note(con, u["id"], f"Haftalik hisobot tayyor ({wk})", lines[0] if lines else "", {"view": "haftalik"}, "info", "hisobot", ts=ts)
-            if u.get("telegram_id") and u.get("tg_pin_fp") == rbac.pin_fp(u.get("pin")):
-                ok, msg = (tg_fn or TG_FN)(u["telegram_id"], text)
-                tg.append({"user": u["id"], "ok": bool(ok), "note": msg})
-                rbac.audit(con, rbac.Ctx(u, rbac.ROLES["rektor"], "telegram"), "haftalik nazorat hisoboti Telegram'ga", RES, bool(ok), msg)
-        con.execute("UPDATE nz_briefs SET tg=? WHERE week=?", (json.dumps(tg, ensure_ascii=False), wk))
-        con.commit()
-        return _brief_row(db.one(con, "SELECT * FROM nz_briefs WHERE week=?", (wk,)))
+        with _lock:
+            con.execute("""INSERT INTO nz_briefs(week,created_at,source,lines,decisions,stats,tg) VALUES(?,?,?,?,?,?,NULL)
+                           ON CONFLICT(week) DO UPDATE SET created_at=excluded.created_at, source=excluded.source, lines=excluded.lines,
+                           decisions=excluded.decisions, stats=excluded.stats""",
+                        (wk, ts, source, json.dumps(lines, ensure_ascii=False), json.dumps(dec, ensure_ascii=False), json.dumps(stats, ensure_ascii=False)))
+            # yetkazish: ilova (bildirishnoma) va Telegram (rektor botga ulangan bo'lsa)
+            targets = []
+            for u in db.rows(con, "SELECT * FROM users WHERE role='rektor' AND COALESCE(active,1)=1 ORDER BY id"):
+                _note(con, u["id"], f"Haftalik hisobot tayyor ({wk})", lines[0] if lines else "", {"view": "haftalik"}, "info", "hisobot", ts=ts)
+                if u.get("telegram_id") and u.get("tg_pin_fp") == rbac.pin_fp(u.get("pin")): targets.append(u)
+            con.commit()
+        tg, sent = [], []
+        for u in targets:                             # Telegram — qulfsiz
+            ok, msg = (tg_fn or TG_FN)(u["telegram_id"], text)
+            tg.append({"user": u["id"], "ok": bool(ok), "note": msg}); sent.append((u, bool(ok), msg))
+        with _lock:
+            for u, ok, msg in sent:
+                rbac.audit(con, rbac.Ctx(u, rbac.ROLES["rektor"], "telegram"), "haftalik nazorat hisoboti Telegram'ga", RES, ok, msg)
+            con.execute("UPDATE nz_briefs SET tg=? WHERE week=?", (json.dumps(tg, ensure_ascii=False), wk))
+            con.commit()
+            return _brief_row(db.one(con, "SELECT * FROM nz_briefs WHERE week=?", (wk,)))
+    finally:
+        with _brief_flag: _BRIEF_BUSY.discard(wk)
 
 
 def _brief_row(r) -> dict:
@@ -1031,18 +1139,23 @@ def api_rules_set(body: dict, request: Request):
     _mod_guard()
     c = C(request); _guard(c, "qoidalarni o'zgartirish", roles=(LEAD,))
     vals = body.get("rules") if isinstance(body.get("rules"), dict) else body
-    ch = []
-    with _lock:
-        for k, v in (vals or {}).items():
-            if k not in RULES: raise HTTPException(400, f"Noma'lum qoida: {k}")
-            d, lo, hi, t = RULES[k]
-            try: v = int(v)
-            except (TypeError, ValueError): raise HTTPException(400, f"«{t}» — butun son bo'lsin")
-            if not lo <= v <= hi: raise HTTPException(400, f"«{t}»: {lo}–{hi} oralig'ida bo'lsin")
+    if not isinstance(vals, dict): raise HTTPException(400, "Qoidalar lug'ati kerak")
+    new = {}
+    for k, v in vals.items():                       # 1) AVVAL hammasi tekshiriladi — bittasi xato bo'lsa hech biri yozilmaydi
+        if k not in RULES: raise HTTPException(400, f"Noma'lum qoida: {k}")
+        d, lo, hi, t = RULES[k]
+        try: v = int(v)
+        except (TypeError, ValueError): raise HTTPException(400, f"«{t}» — butun son bo'lsin")
+        if not lo <= v <= hi: raise HTTPException(400, f"«{t}»: {lo}–{hi} oralig'ida bo'lsin")
+        new[k] = v
+    old = rules()
+    ch = [f"{k}: {old.get(k)} → {v}" for k, v in new.items()]
+    with _tx():                                     # 2) bitta tranzaksiyada yoziladi (xato — rollback)
+        for k, v in new.items():
             _con.execute("INSERT INTO nz_rules(k,v,updated_at,updated_by) VALUES(?,?,?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at, updated_by=excluded.updated_by",
-                         (k, v, _iso(_now()), c.title)); ch.append(f"{k}={v}")
-        _con.commit()
-    rbac.audit(_con, c, "nazorat: qoidalar o'zgartirildi", RES, True, ", ".join(ch))
+                         (k, v, _iso(_now()), c.title))
+    invalidate()
+    rbac.audit(_con, c, "nazorat: qoidalar o'zgartirildi", RES, True, ", ".join(ch) or "o'zgarish yo'q")
     return {"ok": True, "rules": rules_view()}
 
 @router.get(P + "/imzo")
@@ -1086,5 +1199,6 @@ def api_brief_make(request: Request):
     _mod_guard()
     c = C(request); _guard(c, "haftalik hisobotni tayyorlash", roles=(LEAD,))
     b = make_brief(_con, force=True)
+    if b is None: raise HTTPException(409, "Haftalik hisobot hozir tayyorlanmoqda — birozdan keyin sahifani yangilang")
     rbac.audit(_con, c, "nazorat: haftalik hisobot tayyorlandi", RES, True, f"{b['week']} · {b['source']}")
     return b

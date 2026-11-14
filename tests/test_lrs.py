@@ -288,6 +288,14 @@ ok(httpx.get(B + base + "/../../etc/passwd").status_code in (400, 404) and httpx
 ok(httpx.get(B + "/xapi/pkg/AAAA.bbbb/index.html").status_code == 403 and httpx.get(B + lk["url"][:-3] + "abc", follow_redirects=False).status_code == 403, "Soxta / o'zgartirilgan havola kodi — 403")
 old = L.make_link(SA, KR, "", days=-1)
 ok(httpx.get(B + "/xapi/l/" + old, follow_redirects=False).status_code == 403, "Muddati o'tgan havola — 403")
+# kabinet (strict) havolasi — kurs tasdiqlanmagan: har fayl so'rovi 410, lekin audit — kod bo'yicha oynada BITTA yozuv (har asset uchun emas)
+sk = L.make_link(SA, KR, "", days=0.05, strict=True)
+GA = "LRS: tasdiqlanmagan paketni ochish rad etildi (410)"
+na0 = q("SELECT COUNT(*) n FROM audit_log WHERE action=? AND detail LIKE ?", (GA, f"{KR} %"))[0]["n"]
+codes410 = [httpx.get(B + f"/xapi/pkg/{sk}/{f}").status_code for f in ("index.html", "content.js", "lms.js", "index.html", "content.js", "lms.js")]
+na1 = q("SELECT COUNT(*) n FROM audit_log WHERE action=? AND detail LIKE ?", (GA, f"{KR} %"))[0]["n"]
+ok(codes410 == [410] * 6 and na1 - na0 == 1, f"Tasdiqlanmagan kurs: 6 ta fayl so'rovi — hammasi 410, audit yozuvi {na1 - na0} ta (kod bo'yicha bitta)")
+ok(L.LAUNCH_TTL_S <= 60 and L.GONE_AUDIT_S >= 60, f"Kesh muddati {L.LAUNCH_TTL_S} s (tasdiq bekor qilinsa ko'pi bilan shuncha), audit oynasi {L.GONE_AUDIT_S} s")
 tk = L.parse_auth(qp["auth"])
 ok(tk["student_id"] == SA and tk["course_ref"] == KR and tk["lesson_ref"] == "", "Launch tokeni: shu talaba, shu kurs")
 

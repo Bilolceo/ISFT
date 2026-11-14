@@ -44,7 +44,11 @@ DELIVERY = {"yuborildi": "Telegram'ga yuborildi", "xato": "Yuborishda xato — n
 
 
 def init(con):
-    con.executescript(SCHEMA); con.commit()
+    con.executescript(SCHEMA)
+    # jarayon yuborish o'rtasida to'xtagan bo'lsa — band qilingan xabar qayta urinish uchun «xato»ga qaytadi
+    try: con.execute("UPDATE ops_notices SET status='xato' WHERE status='yuborilmoqda'")
+    except Exception: pass
+    con.commit()
 
 def bind(con):
     global _con
@@ -120,7 +124,6 @@ def course_view(con, s: dict, co: dict) -> dict:
     by_code = {l["code"]: l for l in plist}
     order = [l["code"] for l in plist] + [x["ref"] for x in cal if x["ref"] not in by_code]    # NEXTID tartibi (L, A, S, Lab, MT)
     items = []
-    done_n = 0
     for code in order:
         key = L.code_to_key(code)
         if key is None: continue
@@ -137,7 +140,6 @@ def course_view(con, s: dict, co: dict) -> dict:
         st = _status_row(p)
         i = cal_ix.get(code)
         done = st["status"] in LA.DONE_ST
-        done_n += done
         mark = None
         if i is not None:
             if i < exp and not done: mark = "kechikkan"
@@ -145,7 +147,15 @@ def course_view(con, s: dict, co: dict) -> dict:
             elif i >= rel_now: mark = "keyinroq"
         items.append({"code": code, "title": title, "kind": l.get("kind") or ("maruza" if code.startswith("L") else "amaliy"), **st, "mark": mark,
                       "cal": i, "can_open": bool(launch), "resume": bool(p) and not done and st["status"] != "boshlanmagan"})
-    done_all = sum(1 for x in cal if (prog.get(x["ref"]) or {}).get("status") in LA.DONE_ST)
+    def _done_at(code: str) -> bool:
+        # dars ikki manbadan biridan bajarilgan bo'lishi mumkin: dl:<cid> (paket) yoki bog'langan muharrir kursi ku:<id> (ds_links)
+        if (prog.get(code) or {}).get("status") in LA.DONE_ST: return True
+        k = L.code_to_key(code)
+        if k is None or k not in kl: return False
+        rows = kprog.get(f"ku:{kl[k]}") or []
+        p = next((r for r in rows if r["lesson_ref"] == ""), None) or (max(rows, key=lambda r: r["last_ts"] or "") if rows else None)
+        return bool(p) and p["status"] in LA.DONE_ST
+    done_all = sum(1 for x in cal if _done_at(x["ref"]))
     cand = sorted((x for x in items if x["can_open"] and x["status"] not in LA.DONE_ST), key=lambda x: (x["cal"] if x["cal"] is not None else 10**6, x["code"]))
     nxt = cand[0] if cand else None
     scores = [x["best"] for x in items if x["best"] is not None]
@@ -316,10 +326,15 @@ def api_tg_unlink(request: Request):
 # =============================================================================================
 # 3. Eslatma yetkazish
 # =============================================================================================
-def cabinet_url(base: str | None = None) -> str:
-    env = os.getenv("ISFT_CORE_PUBLIC_URL", "").strip()
-    b = (env or base or "").rstrip("/")
-    return (b + "/talaba#darslarim") if b else "/talaba#darslarim"
+def cabinet_url() -> str | None:
+    """Kabinet havolasi — FAQAT sozlangan ISFT_CORE_PUBLIC_URL dan (so'rovning Host sarlavhasidan hech qachon olinmaydi: host-header
+    injection / ichki manzil sizishi). Sozlanmagan bo'lsa — None (xabarga absolyut havola yozilmaydi, faqat yo'riqnoma)."""
+    b = os.getenv("ISFT_CORE_PUBLIC_URL", "").strip().rstrip("/")
+    return (b + "/talaba#darslarim") if b.startswith(("https://", "http://")) else None
+
+def cabinet_hint() -> str:
+    u = cabinet_url()
+    return f"{u} (talaba kabineti → «Mening darslarim»)" if u else "talaba kabineti (HEMIS ID bilan kiring) → «Mening darslarim»"
 
 def tg_send(chat_id: int, text: str):
     """Telegram Bot API sendMessage (sinxron; xato — istisno). Token logga chiqmaydi."""
@@ -341,29 +356,51 @@ SENDER = None          # testlar uchun almashtiriladi: SENDER(chat_id, text)
 def _log(con, nid: int, status: str, detail: str = ""):
     con.execute("INSERT INTO notice_delivery(notice_id,ts,channel,status,detail) VALUES(?,?,?,?,?)", (nid, _iso(), "telegram", status, (detail or "")[:300]))
 
+SENDING = "yuborilmoqda"     # ops_notices.status: xabar band qilingan (bitta yuboruvchi), tarmoq so'rovi ketmoqda (init() da «xato»ga qaytariladi)
+
+def _finish(con, nid: int, st: str, det: str):
+    con.execute("UPDATE ops_notices SET status=? WHERE id=?", ({"yuborildi": "yuborildi", "xato": "xato"}.get(st, "navbatda"), nid))
+    _log(con, nid, st, det)
+    con.execute("UPDATE lrs_actions SET note=? WHERE notice_id=? AND kind='eslatma'", (f"Telegram · {DELIVERY[st]}", nid))
+    con.commit()
+
 def deliver(con, notice_id: int, sender=None) -> dict:
     """Bitta Telegram xabarini yetkazish. → {status, label}. Holatlar: yuborildi | xato | ulanmagan | bot_ochiq.
-    ops_notices.status: yuborildi → «yuborildi», xato → «xato» (qayta urinish mumkin), qolganlari — «navbatda»."""
-    n = db.one(con, "SELECT * FROM ops_notices WHERE id=?", (int(notice_id),))
+    ops_notices.status: yuborildi → «yuborildi», xato → «xato» (qayta urinish mumkin), qolganlari — «navbatda».
+    Poyga: xabar qulf ostida atomar band qilinadi (UPDATE … SET status='yuborilmoqda' WHERE status IN navbatdagi holatlar; rowcount=1 —
+    faqat bitta chaqiruvchi yuboradi: masalan flush_student (bot) va ortda.remind bir vaqtda). Telegram HTTP so'rovi qulfdan TASHQARIDA;
+    natija yana qulf ostida yoziladi."""
+    nid = int(notice_id)
+    n = db.one(con, "SELECT * FROM ops_notices WHERE id=?", (nid,))
     if not n or n["channel"] != "telegram": return {"status": "xato", "label": "Xabar topilmadi"}
     if n["status"] == "yuborildi": return {"status": "yuborildi", "label": DELIVERY["yuborildi"]}
     send = sender or SENDER or (tg_send if bot_enabled() else None)
     lk = link_of(con, n["student_id"])
     with _lock:
-        if not lk:
-            st, det = "ulanmagan", "talaba Telegram'ni ulamagan"
-        elif send is None:
-            st, det = "bot_ochiq", "TELEGRAM_BOT_TOKEN o'rnatilmagan"
-        else:
-            try:
-                send(int(lk["telegram_id"]), n["text"]); st, det = "yuborildi", ""
-            except Exception as e:
-                st, det = "xato", str(e)[:200]
-        con.execute("UPDATE ops_notices SET status=? WHERE id=?", ({"yuborildi": "yuborildi", "xato": "xato"}.get(st, "navbatda"), n["id"]))
-        _log(con, n["id"], st, det)
-        con.execute("UPDATE lrs_actions SET note=? WHERE notice_id=? AND kind='eslatma'", (f"Telegram · {DELIVERY[st]}", n["id"]))
+        if not lk or send is None:                      # tarmoq yo'q — darhol qulf ostida yoziladi
+            st, det = ("ulanmagan", "talaba Telegram'ni ulamagan") if not lk else ("bot_ochiq", "TELEGRAM_BOT_TOKEN o'rnatilmagan")
+            cur = con.execute("UPDATE ops_notices SET status='navbatda' WHERE id=? AND status IN ('navbatda','xato')", (nid,))
+            if cur.rowcount != 1:
+                con.commit()
+                return _busy(con, nid)
+            _finish(con, nid, st, det)
+            return {"status": st, "label": DELIVERY[st], "detail": det}
+        cur = con.execute("UPDATE ops_notices SET status=? WHERE id=? AND status IN ('navbatda','xato')", (SENDING, nid))
         con.commit()
+        if cur.rowcount != 1:                           # boshqa chaqiruvchi allaqachon yubordi / yubormoqda
+            return _busy(con, nid)
+    try:                                                # tarmoq — qulfsiz (10 s gacha)
+        send(int(lk["telegram_id"]), n["text"]); st, det = "yuborildi", ""
+    except Exception as e:
+        st, det = "xato", str(e)[:200]
+    with _lock:
+        _finish(con, nid, st, det)
     return {"status": st, "label": DELIVERY[st], "detail": det}
+
+def _busy(con, nid: int) -> dict:
+    r = db.one(con, "SELECT status FROM ops_notices WHERE id=?", (int(nid),))
+    if r and r["status"] == "yuborildi": return {"status": "yuborildi", "label": DELIVERY["yuborildi"], "detail": ""}
+    return {"status": "band", "label": "Boshqa jarayon yubormoqda", "detail": ""}
 
 def flush_student(con, sid: int, sender=None) -> int:
     """Talaba ulanganda: oxirgi FLUSH_DAYS kundagi navbatdagi (yoki xato bo'lgan) Telegram eslatmalarini yuborish."""
@@ -380,5 +417,11 @@ def last_delivery(con, notice_ids: list[int]) -> dict:
               (SELECT MAX(id) FROM notice_delivery WHERE notice_id IN ({','.join('?' * len(notice_ids))}) GROUP BY notice_id)""", notice_ids)}
 
 def linked_set(con, sids: list[int]) -> set:
+    """link_of'ning to'plam shakli: faqat AMALDAGI ulanishlar (talaba faol/ta'tilda va parol izi mos). Uzilgan ulanishlar — ulanmagan."""
     if not sids: return set()
-    return {r["student_id"] for r in db.rows(con, f"SELECT student_id FROM student_tg WHERE student_id IN ({','.join('?' * len(sids))})", list(sids))}
+    ph = ",".join("?" * len(sids))
+    out = set()
+    for r in db.rows(con, f"""SELECT t.student_id, t.pw_tag, s.status, a.pw_hash FROM student_tg t JOIN students s ON s.id=t.student_id
+                              LEFT JOIN student_auth a ON a.student_id=t.student_id WHERE t.student_id IN ({ph})""", list(sids)):
+        if r["status"] in ("faol", "akademik ta'til") and r["pw_tag"] == (SS.pw_tag(r["pw_hash"]) if r["pw_hash"] else None): out.add(r["student_id"])
+    return out

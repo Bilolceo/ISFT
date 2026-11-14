@@ -3167,6 +3167,10 @@ def package_action(c: Ctx, pid: int, action: str, note: str = "", override: str 
             _log(c, r["course_id"], r["topic_no"], "bo'limga yuborildi", f"v{r['version']}", r["id"]); _con.commit()
     else:
         raise HTTPException(400, "Amal noma'lum")
+    try:                                   # LRS: tasdiq holati o'zgardi — paket fayllari keshi (app/lrs.py) darhol qayta tekshirilsin
+        from . import lrs as LRS
+        LRS.invalidate_launch()
+    except Exception: pass
     return {"ok": True, "package": pack_row(db.one(_con, "SELECT * FROM pk_packages WHERE id=?", (r["id"],))), "monitoring": synced}
 
 def download_name(co: dict, no: int, mode: str) -> str:

@@ -41,7 +41,7 @@ Logda va `last_error` maydonida bot tokeni har doim `***` bilan yashiriladi.
 | `TZ` | `start.sh`: `Asia/Tashkent` | Jarayon soat zonasi. Tizimda zoneinfo bo'lmasa `UZT-5` (UTC+5) ishlatiladi |
 | `ISFT_CORE_TZ` | `Asia/Tashkent` | Institut vaqti (`app/clock.py`): barcha sanalar va vaqt belgilari, «bugun», muddatlar, bot jadvali, kamera voqealari. Server zonasiga (`TZ`) bog'liq emas; tzdata bo'lmasa UTC+5 |
 | `ISFT_CORE_FAKE_TODAY` | yo'q | Demo/test: «bugun»ni `YYYY-MM-DD` ga qotirish (soat — haqiqiy). Seed ham shu sanaga suradi — server va seed bir xil qiymat bilan ishga tushsin. Ishlab chiqarishda qo'ymang |
-| `ISFT_CORE_PUBLIC_URL` | avtomatik (lokal IP) | QR havolalari uchun ochiq manzil, masalan `https://isft-production.up.railway.app` |
+| `ISFT_CORE_PUBLIC_URL` | avtomatik (lokal IP) | QR havolalari uchun ochiq manzil, masalan `https://isft-production.up.railway.app`. Talaba Telegram eslatmalaridagi kabinet havolasi FAQAT shundan olinadi (so'rov Host sarlavhasidan emas); sozlanmagan bo'lsa xabarda havola o'rniga yo'riqnoma bo'ladi |
 
 ### Kirish va demo
 | O'zgaruvchi | Standart | Ma'nosi |
