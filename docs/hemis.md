@@ -129,6 +129,8 @@ HEMIS shabloni olingach moslanadi.
   xeshi ham yo'q; sozlamaga «token: …» ko'rinishidagi matn yozilmaydi (400).
 - «Ulanishni tekshirish» — **bitta zararsiz GET**, 8 s, yo'naltirishga ergashmaydi, javob tanasi o'qilmaydi va saqlanmaydi; natija —
   holat kodi, kechikish, Content-Type. Token faqat «tekshirishda tokenni yuborish» yoqilgan va manzil `https` bo'lsa yuboriladi.
+  Ichki tarmoq manzillari (localhost, 10.x / 172.16–31.x / 192.168.x, 169.254.x — bulut metadata, IPv6 loopback/ULA) — sozlamada ham,
+  tekshirishda (DNS natijasi bo'yicha) ham rad etiladi (SSRF). Ichki proksi orqali ulanish kerak bo'lsa — `ISFT_CORE_HEMIS_ALLOW_PRIVATE=1`.
   «Javob bor» — API ishlashini **tasdiqlamaydi**.
 - `HemisAdapter` — izolyatsiya qilingan adapter: `fetch_students/groups/teachers/load/grades`, `push_grades/attendance`. Hozir har biri
   `NotImplementedError`. Hujjat olingach: adapter `hemis_map.FIELDS` formatidagi yozuvlarni qaytaradi va **xuddi fayl importi kabi**

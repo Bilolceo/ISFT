@@ -69,12 +69,18 @@ def _esc(s) -> str:
     return str(s or "").replace("<", "‹").replace(">", "›")
 
 
+def _safe(s) -> str:
+    """Topshiriq matni / varianti — kurs parchalari kabi: buyruqqa o'xshash jumlalar modelga yuborilmaydi (indeksdagi qoida bilan bir xil)."""
+    from . import tutor_text as TT
+    return _esc(TT.strip_injection(str(s or ""))[0])
+
+
 def build_prompt(mode: str, chunks: list[tuple[str, dict]], question: str, item: dict | None = None) -> str:
     mat = "\n".join(f"[{lid}] ({_esc(c['label'])}{' — ' + _esc(c['title']) if c.get('title') else ''})\n{_esc(c['text'])}" for lid, c in chunks)
     out = f"REJIM: {mode}\n<material>\n{mat}\n</material>\n"
     if item:
-        opts = "; ".join(f"{chr(97 + i)}) {_esc(o)}" for i, o in enumerate(item.get("options") or []))
-        out += f"<topshiriq>\nSavol: {_esc(item.get('stem'))}\n{('Variantlar: ' + opts) if opts else ''}\n</topshiriq>\n"
+        opts = "; ".join(f"{chr(97 + i)}) {_safe(o)}" for i, o in enumerate(item.get("options") or []))
+        out += f"<topshiriq>\nSavol: {_safe(item.get('stem'))}\n{('Variantlar: ' + opts) if opts else ''}\n</topshiriq>\n"
     return out + f"<savol>\n{_esc(question)}\n</savol>"
 
 

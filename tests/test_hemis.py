@@ -89,6 +89,31 @@ for u in ("ftp://x.uz", "https://user:pw@x.uz", "https://x.uz/?token=1", "javasc
     try: HA.validate_url(u)
     except ValueError: bad_urls += 1
 ok(bad_urls == 4 and HA.validate_url("https://hemis.isft.uz/") == "https://hemis.isft.uz", "API manzili: faqat http(s), login/parol va so'rov parametrlari yo'q")
+ok(HM.pii_cols(["Telefon raqami", "Tug'ilgan sanasi", "Yashash manzili", "E-mail", "Guruh", "F.I.Sh.", "Адрес проживания", "Pasport seriyasi"]) == {0, 1, 2, 3, 6, 7},
+   "Shaxsiy ustunlar qo'shimcha so'z bilan ham taniladi (telefon raqami, tug'ilgan sanasi, manzil, email, адрес)")
+sp = HM.strip_pii([["HEMIS ID", "F.I.Sh.", "Guruh", "Telefon raqami"], ["1", "Manzila Karimova", "G1", "+998901234567"]])
+ok(sp[1] == ["1", "Manzila Karimova", "G1", ""], "strip_pii: telefon bo'shatildi; «Manzila» ismi (ma'lumot qatori) sarlavha deb olinmadi")
+ssrf = 0
+for u in ("http://127.0.0.1:8000", "http://localhost", "http://169.254.169.254", "http://[::1]:80", "http://10.0.0.5", "http://192.168.1.1"):
+    try: HA.validate_url(u)
+    except ValueError: ssrf += 1
+pr0 = HA.probe({"api_enabled": True, "api_base_url": "http://169.254.169.254", "api_probe_path": "/latest/meta-data"})
+ok(ssrf == 6 and pr0["sent"] is False and pr0["result"] == "ichki_manzil", "SSRF: ichki manzillar (localhost, xususiy IP, metadata) rad etiladi; probe yubormaydi")
+import zipfile as _zf   # noqa: E402
+_bomb = io.BytesIO()
+with _zf.ZipFile(_bomb, "w", _zf.ZIP_DEFLATED) as z_:
+    z_.writestr("[Content_Types].xml", "<Types/>")
+    with z_.open("xl/sharedStrings.xml", "w", force_zip64=True) as f_:
+        blk = b" " * (1 << 20)
+        for _ in range(HM.MAX_UNZIPPED // len(blk) + 2): f_.write(blk)
+_bomb = _bomb.getvalue()
+try: HM.read_rows(_bomb, "bomba.xlsx"); bomb_ok = False
+except HM.ReadError as e_: bomb_ok = "katta" in str(e_)
+ok(len(_bomb) < 2_000_000 and bomb_ok, f"XLSX zip bomba ({len(_bomb) // 1024} KB → >{HM.MAX_UNZIPPED >> 20} MB) — o'qilmaydi")
+from openpyxl import Workbook as _WB   # noqa: E402
+_wb = _WB(); _ws = _wb.active; _ws.append(["HEMIS ID", "F.I.Sh.", "Guruh"]); _ws.append(["1", "A B", "G"]); _ws.cell(row=3, column=5000, value="x")
+_b = io.BytesIO(); _wb.save(_b)
+ok(max(len(r_) for r_ in HM.read_rows(_b.getvalue(), "keng.xlsx")) <= HM.MAX_COLS, "Juda keng varaq — ustunlar soni cheklangan")
 try: HA.HemisAdapter({"api_enabled": True}).fetch_students(); ad = False
 except NotImplementedError: ad = True
 ok(ad, "Adapter metodlari tasdiqlanmagan endpointlar uchun NotImplementedError beradi")
@@ -150,6 +175,14 @@ ok(q("SELECT COUNT(*) n FROM students")[0]["n"] == N0 and not q("SELECT 1 FROM s
    and q("SELECT payment_type FROM students WHERE id=?", (SE,))[0]["payment_type"] is None, "Ko'rib chiqishda baza o'zgarmadi")
 rr_ = q("SELECT raw_rows FROM hemis_imports WHERE id=?", (IMP,))[0]["raw_rows"]
 ok("Sinovov Bekzod" in rr_ and "00000000000000" not in rr_, "Ko'rib chiqish nusxasida JShShIR qiymati yo'q (ustun tozalangan)")
+r = regx.post(P + "/import/students", params={"name": "pii.csv"},
+              content=csv_bytes([["HEMIS ID", "F.I.Sh.", "Guruh", "Telefon raqami", "Tug'ilgan sanasi", "Yashash manzili"],
+                                 ["9900000000077", "Shaxsiy Sinov", "HMT-01", "+998 90 777 66 55", "2001-02-03", "Toshkent, Sinov ko'chasi 7"]]))
+rr2 = q("SELECT raw_rows FROM hemis_imports WHERE id=?", (r.json()["id"],))[0]["raw_rows"]
+ok(r.status_code == 200 and "Shaxsiy Sinov" in rr2 and not any(x_ in rr2 for x_ in ("777 66 55", "2001-02-03", "Sinov ko'chasi")) and len(r.json()["ignored"]) == 3,
+   "Telefon / tug'ilgan sana / manzil ustunlari ko'rib chiqish nusxasiga ham yozilmadi")
+regx.post(f"{P}/imports/{r.json()['id']}/cancel", json={})
+ok(regx.post(P + "/import/students", params={"name": "katta.csv"}, content=b"a;b\n" * (HM.MAX_BYTES // 4 + 10)).status_code == 413, "25 MB dan katta yuklama — 413")
 r = regx.post(f"{P}/imports/{IMP}/remap", json={"mapping": {"Курс": ""}, "save_profile": "Sintetik test profili"})
 ok(r.status_code == 200 and r.json()["counts"]["diffs"] == 3 and "Курс" not in r.json()["map"], "Qo'lda moslash: «Kurs» e'tiborsiz — guruh kursi farqi yo'qoldi")
 prof = [p_ for p_ in regx.get(P + "/meta").json()["profiles"] if p_["name"] == "Sintetik test profili"]
@@ -282,9 +315,16 @@ ok(reg.post(P + "/api/token", json={"token": TOK}).json()["token_set"] is True, 
 ok(not q("SELECT 1 FROM hemis_settings WHERE v LIKE ?", (f"%{TOK[4:]}%",)) and not q("SELECT 1 FROM audit_log WHERE detail LIKE ?", (f"%{TOK[4:]}%",))
    and TOK not in DBP.read_bytes().decode("latin-1"), "Token bazada yo'q (sozlamalar, audit, butun fayl)")
 ok(reg.post(P + "/settings", json={"values": {"api_base_url": "https://u:p@hemis.example.uz"}}).status_code == 400, "Manzilda login/parol — 400")
-ok(reg.post(P + "/settings", json={"values": {"api_base_url": B, "api_probe_path": "healthz", "api_enabled": True}}).status_code == 200, "Ulagich yoqildi (test manzili)")
+ok(reg.post(P + "/settings", json={"values": {"api_base_url": B}}).status_code == 400 and reg.post(P + "/settings", json={"values": {"api_base_url": "http://169.254.169.254"}}).status_code == 400,
+   "SSRF: ichki manzil (localhost, metadata) sozlamada — 400")
+ok(reg.post(P + "/settings", json={"values": {"api_base_url": "https://hemis.example.uz", "api_probe_path": "healthz", "api_enabled": True}}).status_code == 200, "Ulagich yoqildi")
+w("UPDATE hemis_settings SET v=? WHERE k='api_base_url'", (json.dumps(B),))     # eski (tekshiruvdan oldingi) yozuv — probe baribir yubormaydi
 pr = reg.post(P + "/api/probe").json()
-ok(pr["sent"] and pr["status"] == 200 and pr["auth"] is False and "TASDIQLAMAYDI" in pr["message"], f"Probe: bitta GET → {pr.get('status')} ({pr.get('result')}); token http orqali yuborilmadi")
+ok(pr["sent"] is False and pr["result"] == "ichki_manzil", f"Probe: bazadagi ichki manzilga so'rov yuborilmadi ({pr.get('result')})")
+os.environ["ISFT_CORE_HEMIS_ALLOW_PRIVATE"] = "1"       # faqat test jarayonida: GET mantig'ini mahalliy server bilan tekshirish
+try: pr = HA.probe({"api_enabled": True, "api_base_url": B, "api_probe_path": "/healthz"})
+finally: os.environ.pop("ISFT_CORE_HEMIS_ALLOW_PRIVATE", None)
+ok(pr["sent"] and pr["status"] == 200 and pr["auth"] is False and "TASDIQLAMAYDI" in pr["message"], f"Probe: bitta GET → {pr.get('status')} ({pr.get('result')}); token yuborilmadi")
 reg.post(P + "/settings", json={"values": {"api_enabled": False, "api_base_url": "", "api_probe_path": ""}})
 reg.post(P + "/api/token", json={"token": None})
 ok(reg.get(P + "/settings").json()["token_set"] is False, "Token o'chirildi, ulagich qayta o'chirildi")
@@ -308,9 +348,27 @@ os.environ.update(ISFT_CORE_DATA_DIR=str(tmp), ISFT_CORE_DB=str(tmp / "jarvis.db
                   ISFT_CORE_STAFFABS_DIR=str(tmp / "staffabs_files"), ISFT_CORE_SECRETS_DIR=str(tmp / "secrets"))
 os.environ.pop("ANTHROPIC_API_KEY", None); os.environ.pop("TELEGRAM_BOT_TOKEN", None)
 for m_ in [k for k in sys.modules if k == "app" or k.startswith("app.")]: del sys.modules[m_]
-with contextlib.redirect_stdout(io.StringIO()):
-    from app import main as MAIN   # noqa: E402
+_had_pub, _had_tp = "ISFT_CORE_PUBLIC_URL" in os.environ, "ISFT_CORE_TUTOR_PROVIDER" in os.environ
+os.environ.update(JARVIS_DB=str(tmp / "BOSHQA.db"), JARVIS_DATA_DIR=str(tmp / "boshqa"), JARVIS_PUBLIC_URL="https://eski.example.uz", JARVIS_TUTOR_PROVIDER="claude")
+try:
+    with contextlib.redirect_stdout(io.StringIO()):
+        from app import main as MAIN   # noqa: E402
+    from app import db as _DB   # noqa: E402
+    ok(_DB.DB_PATH == tmp / "jarvis.db" and os.environ["ISFT_CORE_DB"] == str(tmp / "jarvis.db") and not (tmp / "BOSHQA.db").exists()
+       and (_had_pub or os.environ.get("ISFT_CORE_PUBLIC_URL") == "https://eski.example.uz") and (_had_tp or "ISFT_CORE_TUTOR_PROVIDER" not in os.environ),
+       "Eski JARVIS_* nomlari: faqat avval mavjud bo'lganlari (PUBLIC_URL) ko'chiriladi; JARVIS_DB / JARVIS_TUTOR_PROVIDER va h.k. — yo'q")
+finally:
+    for k_ in ("JARVIS_DB", "JARVIS_DATA_DIR", "JARVIS_PUBLIC_URL", "JARVIS_TUTOR_PROVIDER"): os.environ.pop(k_, None)
+    if not _had_tp: os.environ.pop("ISFT_CORE_TUTOR_PROVIDER", None)
+    if not _had_pub: os.environ.pop("ISFT_CORE_PUBLIC_URL", None)
 from app import hemis as H, nazorat as NZ, rbac as RB   # noqa: E402
+_xb, _ = H.build_xlsx("tuzatishlar", [("a", "Nomi"), ("b", "Qiymat")], [{"a": '=HYPERLINK("http://evil.example","x")', "b": "+998901234567"}, {"a": "@SUM(1)", "b": "-1+2"}],
+                        [("Kim", "=cmd|' /C calc'!A0")], dt.datetime(2026, 11, 15, 10, 0))
+from openpyxl import load_workbook as _lw   # noqa: E402
+_w2 = _lw(io.BytesIO(_xb))
+_cells = [c_ for r_ in _w2["HEMIS"].iter_rows(min_row=2) for c_ in r_] + [c_ for r_ in _w2["Ma'lumot"].iter_rows() for c_ in r_]
+ok(all(c_.data_type == "s" for c_ in _cells) and _w2["HEMIS"]["A2"].value.startswith("=HYPERLINK") and _w2["HEMIS"]["A2"].quotePrefix,
+   "Eksport .xlsx: «=», «+», «-», «@» bilan boshlangan qiymatlar formula emas — matn (qiymat o'zgarmaydi)")
 con = MAIN.con
 u = dict(con.execute("SELECT * FROM users WHERE id=?", (REG,)).fetchone())
 CX = RB.Ctx(user=u, role=RB.ROLES["talabalar"])

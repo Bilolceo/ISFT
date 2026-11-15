@@ -195,7 +195,7 @@ def ask(auth: dict, question: str, lesson: str = "", item_id: str = "") -> dict:
     m = TI.load(_con, R["pilot_ref"])
     item = TI.item_by_id(m, auth["course_ref"], item_id) if item_id else None
     if item_id and not item: raise TErr(404, "Topshiriq topilmadi")
-    if not item and q2: item = TI.match_item(m, q2)
+    if not item and q2: item = TI.match_item(m, q2) or TI.near_item(m, q2)
     mode = "maslahat" if item or TT.ANSWER_SEEK.search(TT.norm(q2)) else "javob"
     query = (q2 + " " + (item["stem"] if item else "")).strip()
     rem = lambda: max(0, R["limit"] - used_today(sid))
@@ -303,7 +303,8 @@ async def x_flag(request: Request):
     a = _auth(request)
     d = await _body(request)
     r = _own_log(a, d.get("log_id"))
-    note = TT.clean_out(d.get("note"))[:300]
+    st = db.one(_con, "SELECT full_name FROM students WHERE id=?", (int(a["student_id"]),)) or {}
+    note = TT.scrub(TT.clean_out(d.get("note")), [st.get("full_name") or ""])[:300]     # jurnal o'qituvchiga ko'rinadi — taxallus buzilmasin
     with _lock:
         _con.execute("UPDATE tu_log SET flagged=1, flag_note=?, flag_ts=? WHERE id=?", (note, _iso(), r["id"])); _con.commit()
     return {"ok": True}

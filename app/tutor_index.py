@@ -274,16 +274,24 @@ def coverage(m: dict, q: str) -> float:
     return hit / len(qs)
 
 
-def match_item(m: dict, q: str, need: float = 0.6) -> dict | None:
-    """Talaba savoli test / bilimni tekshirish / Test bank savoliga mos keladimi (savol o'zaklarining ≥ need ulushi)."""
+def match_item(m: dict, q: str, need: float = 0.6, min_len: int = 3, min_hit: int = 1) -> dict | None:
+    """Talaba savoli test / bilimni tekshirish / Test bank savoliga mos keladimi (savol o'zaklarining ≥ need ulushi, kamida min_hit ta umumiy o'zak)."""
     qs = set(TT.stems(q))
     best, bs = None, 0.0
     for it in m["items"]:
         st = it["st"]
-        if len(st) < 3: continue
-        r = len(st & qs) / len(st)
+        if len(st) < min_len: continue
+        k = len(st & qs)
+        if k < min_hit: continue
+        r = k / len(st)
         if r > bs: best, bs = it, r
     return best if bs >= need else None
+
+
+def near_item(m: dict, q: str) -> dict | None:
+    """Qayta ifodalangan (so'zlari tashlab yoki o'rni almashtirib) test savoli: o'zaklarning ≥ 40 % i va kamida 2 tasi mos —
+    «javob» rejimida ham maslahat rejimiga o'tiladi (test javobi tushuntirish niqobida sizib chiqmasin)."""
+    return match_item(m, q, need=0.4, min_len=2, min_hit=2)
 
 
 def item_by_id(m: dict, src: str, iid: str) -> dict | None:

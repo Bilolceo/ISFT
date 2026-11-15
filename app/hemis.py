@@ -211,8 +211,7 @@ def create_preview(c: Ctx, entity: str, raw: bytes, name: str, profile_id: int |
         hi = HM.find_header(rows, entity, prof)
     except HM.ReadError as e:
         raise HTTPException(400, str(e))
-    pii = HM.pii_cols(rows[hi])          # JShShIR va h.k. qiymatlari bazaga (ko'rib chiqish nusxasiga ham) tushmaydi
-    if pii: rows = rows[:hi + 1] + [["" if i in pii else v for i, v in enumerate(r)] for r in rows[hi + 1:]]
+    rows = HM.strip_pii(rows, hi)         # JShShIR, telefon, manzil va h.k. qiymatlari bazaga (ko'rib chiqish nusxasiga ham) tushmaydi
     sha = hashlib.sha256(raw).hexdigest()
     with _lock:
         cur = _con.execute("""INSERT INTO hemis_imports(entity,filename,sha256,size,ts,user_id,user_name,status,scope,profile_id,mapping,raw_rows)
@@ -619,6 +618,9 @@ def _xdir():
     d = db.DATA_DIR / "hemis_exports"; d.mkdir(parents=True, exist_ok=True); return d
 
 
+FORMULA_START = ("=", "+", "-", "@", "\t", "\r")
+
+
 def build_xlsx(kind: str, cols: list[tuple[str, str]], rows: list[dict], meta: list[tuple[str, str]], when: dt.datetime) -> tuple[bytes, str]:
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill
@@ -628,13 +630,19 @@ def build_xlsx(kind: str, cols: list[tuple[str, str]], rows: list[dict], meta: l
     data = [[h for _, h in cols]] + [[cell(r.get(k)) for k, _ in cols] for r in rows]
     content_sha = hashlib.sha256(_j(data).encode()).hexdigest()
     wb = Workbook(); ws = wb.active; ws.title = "HEMIS"
+    def text_only(sheet):    # formula in'ektsiyasi: «=», «+», «-», «@» bilan boshlangan matn (ism, HEMIS qiymati) formula emas — matn katagi
+        for rw in sheet.iter_rows():
+            for x in rw:
+                if isinstance(x.value, str) and x.value[:1] in FORMULA_START: x.data_type = "s"; x.quotePrefix = True
     for row in data: ws.append(row)
+    text_only(ws)
     for cell in ws[1]: cell.font = Font(bold=True); cell.fill = PatternFill("solid", fgColor="DDE6F0")
     for i, (k, h) in enumerate(cols):
         ws.column_dimensions[chr(65 + i) if i < 26 else "A" + chr(65 + i - 26)].width = max(12, min(40, len(h) + 4))
     ws.freeze_panes = "A2"
     m = wb.create_sheet("Ma'lumot")
     for k, v in meta + [("Mazmun SHA-256 (sarlavha + qatorlar, JSON)", content_sha)]: m.append([k, v])
+    text_only(m)
     m.column_dimensions["A"].width = 44; m.column_dimensions["B"].width = 90
     wb.properties.creator = "ISFT Core"; wb.properties.created = when.replace(tzinfo=None); wb.properties.modified = when.replace(tzinfo=None)
     bio = io.BytesIO(); wb.save(bio)
@@ -736,7 +744,13 @@ def api_summary(request: Request):
 @router.post(P + "/import/{entity}")
 async def api_import(entity: str, request: Request, name: str = "fayl.xlsx", profile_id: int = 0, scope: str = "qisman"):
     c = C(request); guard(c, "import (ko'rib chiqish)", MANAGE, f"{entity}: {name[:60]}")
-    raw = await request.body()
+    cl = request.headers.get("content-length") or ""
+    if cl.isdigit() and int(cl) > HM.MAX_BYTES: raise HTTPException(413, "Fayl 25 MB dan katta")
+    buf = bytearray()
+    async for chunk in request.stream():          # xotiraga cheklovsiz o'qilmaydi (content-length bo'lmasa ham)
+        buf += chunk
+        if len(buf) > HM.MAX_BYTES: raise HTTPException(413, "Fayl 25 MB dan katta")
+    raw = bytes(buf)
     from starlette.concurrency import run_in_threadpool
     return await run_in_threadpool(create_preview, c, entity, raw, name, profile_id or None, scope)
 

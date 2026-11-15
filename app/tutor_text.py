@@ -143,7 +143,7 @@ _URL = re.compile(r"https?://|www\.|\]\(|<[a-z/!]", re.I)
 _EN = {"the", "is", "are", "of", "and", "to", "in", "that", "this", "with", "for", "it", "be", "as", "on", "by"}
 
 
-def clean_out(s) -> str:
+def clean_out(s, limit: int = 500) -> str:
     """Model jumlasi → toza matn: HTML teglar va boshqaruv belgilari olib tashlanadi, kirill → lotin, uzunlik chegarasi."""
     s = _html.unescape(str(s or ""))
     s = re.sub(r"<[^>]*>", " ", s)
@@ -153,7 +153,7 @@ def clean_out(s) -> str:
         s = translit(s)
     except Exception:
         pass
-    return re.sub(r"\s+", " ", s).strip()[:500]
+    return re.sub(r"\s+", " ", s).strip()[:limit]
 
 
 def english(s) -> bool:

@@ -141,6 +141,14 @@ IGNORED = ["jshshir", "pinfl", "пинфл", "жшшир", "pasport", "passport"
            "manzil", "адрес", "address", "tug'ilgan sana", "дата рождения", "birth date"]
 _ALIAS_N = {norm_header(a): f for f, al in ALIASES.items() for a in al}
 _IGN_N = {norm_header(a) for a in IGNORED}
+# sarlavha ichida shu bo'laklar bo'lsa ham — shaxsiy ustun («Telefon raqami», «Tug'ilgan sanasi», «Yashash manzili», «E-mail», «Адрес проживания»)
+_PII_PARTS = ("jshshir", "pinfl", "pasport", "passport", "telefon", "phone", "manzil", "adres", "address", "tugilgan", "birth", "rojden",
+              "email", "pochta")
+
+
+def is_pii(n: str) -> bool:
+    """n — norm_header() natijasi."""
+    return bool(n) and (n in _IGN_N or any(x in n for x in _PII_PARTS))
 
 
 def auto_map(headers: list[str], entity: str, profile: dict | None = None) -> dict:
@@ -160,7 +168,7 @@ def auto_map(headers: list[str], entity: str, profile: dict | None = None) -> di
             if f == "teacher_hemis_id" and entity != "load": f = "hemis_id"
         if f == "":                       # profilda «e'tiborsiz» deb belgilangan
             ignored.append(h); continue
-        if n in _IGN_N or any(n.startswith(x) for x in ("jshshir", "pinfl", "pasport", "passport")):
+        if is_pii(n):
             ignored.append(h); continue
         if f and f in fields and f not in used:
             m[i] = f; used.add(f)
@@ -173,8 +181,20 @@ def pii_cols(headers: list[str]) -> set[int]:
     """Shaxsiy ma'lumot ustunlari (JShShIR, pasport, telefon, manzil, tug'ilgan sana) — bazaga hatto ko'rib chiqish uchun ham yozilmaydi."""
     out = set()
     for i, h in enumerate(headers):
-        n = norm_header(h)
-        if n and (n in _IGN_N or any(n.startswith(x) for x in ("jshshir", "pinfl", "pasport", "passport"))): out.add(i)
+        if is_pii(norm_header(h)): out.add(i)
+    return out
+
+
+def strip_pii(rows: list[list[str]], header: int | None = None, scan: int = 15) -> list[list[str]]:
+    """Sarlavha bo'lishi mumkin bo'lgan har bir qatordagi (birinchi `scan` qator) shaxsiy ustunlar — undan keyingi barcha qatorlarda
+    bo'shatiladi. Keyin ustun xaritasi o'zgarib sarlavha boshqa qatorga ko'chsa ham, shaxsiy qiymat bazada qolmaydi."""
+    out = [list(r) for r in rows]
+    for i, r in enumerate(rows[:scan]):
+        if i != header and header_score(r) < 2: continue          # ma'lumot qatori (masalan, ism «Manzila») sarlavha deb olinmaydi
+        cols = pii_cols(r)
+        if not cols: continue
+        for j in range(i + 1, len(out)):
+            out[j] = ["" if k in cols else v for k, v in enumerate(out[j])]
     return out
 
 
@@ -197,6 +217,9 @@ def header_score(cells) -> int:
 # =============================================================================================
 MAX_BYTES = 25 * 1024 * 1024
 MAX_ROWS = 100_000
+MAX_COLS = 300                         # varaqdagi soxta o'lcham (A1:XFD1048576) har qatorni 16 384 katakka to'ldirmasin
+MAX_UNZIPPED = 200 * 1024 * 1024       # .xlsx ichidagi fayllar jami (zip bomba)
+MAX_ENTRIES = 2000
 
 
 class ReadError(ValueError):
@@ -219,11 +242,15 @@ def read_rows(raw: bytes, name: str) -> list[list[str]]:
     if low.endswith(".xls"): raise ReadError("Eski .xls formati qabul qilinmaydi — HEMIS'dan .xlsx yoki .csv qilib eksport qiling")
     if low.endswith(".xlsx") or raw[:2] == b"PK":
         try:
-            import openpyxl
+            import openpyxl, zipfile
+            with zipfile.ZipFile(io.BytesIO(raw)) as z:
+                inf = z.infolist()
+                if len(inf) > MAX_ENTRIES or sum(i.file_size for i in inf) > MAX_UNZIPPED:
+                    raise ReadError("XLSX fayl ochilganda juda katta (siqilgan ma'lumot chegaradan oshdi)")
             wb = openpyxl.load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
             ws = wb.worksheets[0]
             out = []
-            for r in ws.iter_rows(values_only=True):
+            for r in ws.iter_rows(values_only=True, max_col=MAX_COLS):
                 out.append([_cell(v) for v in r])
                 if len(out) > MAX_ROWS + 20: raise ReadError(f"Qatorlar {MAX_ROWS} tadan ko'p")
             wb.close()

@@ -11,7 +11,7 @@ Tamoyillar:
     (Ochiq manbalarda universitet HEMIS nusxalarida «/rest/v1/...» yoki «api/v1» ko'rinishidagi yo'llar uchraydi — TASDIQLANMAGAN.)
 """
 from __future__ import annotations
-import time
+import ipaddress, os, socket, time
 from urllib.parse import urlsplit
 
 TOKEN_NAME = "hemis_api_token"
@@ -21,6 +21,33 @@ LABEL = "TASDIQLANMAGAN: HEMIS API hujjatlari olinmagan — ulagich faqat skelet
 
 class NotConfigured(RuntimeError):
     pass
+
+
+def _allow_private() -> bool:
+    return os.getenv("ISFT_CORE_HEMIS_ALLOW_PRIVATE", "").strip() in ("1", "true", "yes")
+
+
+def _bad_ip(ip: str) -> bool:
+    try: a = ipaddress.ip_address(ip.split("%")[0])
+    except ValueError: return True
+    if getattr(a, "ipv4_mapped", None): a = a.ipv4_mapped
+    return a.is_private or a.is_loopback or a.is_link_local or a.is_reserved or a.is_multicast or a.is_unspecified
+
+
+def internal_host(host: str, resolve: bool = True) -> bool:
+    """SSRF: ichki tarmoq manzili (loopback, xususiy, link-local — bulut metadata 169.254.169.254 ham) bo'lsa True.
+    HEMIS — tashqi xizmat; ichki manzil kerak bo'lsa (proksi) — ISFT_CORE_HEMIS_ALLOW_PRIVATE=1."""
+    if _allow_private(): return False
+    h = (host or "").strip("[]").lower().rstrip(".")
+    if not h or h == "localhost" or h.endswith((".localhost", ".local", ".internal")): return True
+    try:
+        ipaddress.ip_address(h.split("%")[0]); return _bad_ip(h)
+    except ValueError:
+        pass
+    if not resolve: return False
+    try: infos = socket.getaddrinfo(h, None)
+    except OSError: return False          # nom topilmadi — so'rov baribir ulanmaydi
+    return any(_bad_ip(i[4][0]) for i in infos)
 
 
 def validate_url(url: str) -> str:
@@ -33,6 +60,8 @@ def validate_url(url: str) -> str:
         raise ValueError("Manzilda login/parol bo'lmasin — token alohida (maxfiy omborda) saqlanadi")
     if p.query or p.fragment:
         raise ValueError("Manzilda so'rov parametrlari bo'lmasin")
+    if internal_host(p.hostname, resolve=False):
+        raise ValueError("Ichki tarmoq manzili (localhost, 10.x, 192.168.x, 169.254.x …) ruxsat etilmaydi — HEMIS tashqi xizmat")
     return url
 
 
@@ -66,6 +95,9 @@ def probe(cfg: dict, timeout: float = 8.0) -> dict:
     if not url:
         return {**base, "ok": False, "sent": False, "result": "manzil_yoq", "message": "Bazaviy manzil kiritilmagan"}
     target = url + (cfg.get("api_probe_path") or "")
+    if internal_host(urlsplit(target).hostname or ""):
+        return {**base, "ok": False, "sent": False, "result": "ichki_manzil", "target": target,
+                "message": "Manzil ichki tarmoqqa (localhost / xususiy IP) olib boradi — so'rov yuborilmadi"}
     headers = {"Accept": "application/json", "User-Agent": "ISFT-Core-HEMIS-probe"}
     use_tok = bool(cfg.get("api_probe_auth")) and token_set()
     if use_tok:

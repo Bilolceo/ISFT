@@ -298,7 +298,7 @@ def api_reply(qid: int, body: ReplyIn, request: Request):
     _pilot(c, q["pilot_ref"])
     with TU._lock:
         TU._con.execute("UPDATE tu_teacher_q SET status='javob', reply=?, reply_by=?, reply_ts=? WHERE id=?",
-                        (TT.clean_out(body.reply)[:2000], c.user["full_name"], TU._iso(), qid)); TU._con.commit()
+                        (TT.clean_out(body.reply, 2000), c.user["full_name"], TU._iso(), qid)); TU._con.commit()
     return {"ok": True}
 
 
