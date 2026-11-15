@@ -84,6 +84,9 @@ faqat bosqich egasiga (5 tadan ko'p bo'lsa — bitta jamlangan qator). Operator 
 Barcha so'rovlar: `X-Worker-Token: <ISFT_CORE_WORKER_TOKEN>`. Taqqoslash — doimiy vaqtda (`hmac.compare_digest`).
 Token serverda sozlanmagan — **503** `{"detail": "worker o'chiq"}`; noto'g'ri/yo'q — **401** (audit jurnalida). Sessiya cookie o'rnini bosmaydi.
 
+Montaj navbati bo'sh bo'lganda o'sha ishchi «Kurs muharriri» videolari uchun **subtitr navbatini** ham oladi (`/api/montaj/kurs-captions/*` —
+faqat nutq tanish → WebVTT, montajsiz; kontrakt — `docs/kurs.md` «Qulaylik» → «Subtitrlar»). Eski server 404 qaytarsa — ishchi uni so'ramaydi.
+
 ### `POST /api/montaj/jobs/claim`
 Tana yo'q. Javob **204** (navbat bo'sh) yoki **200**:
 ```json

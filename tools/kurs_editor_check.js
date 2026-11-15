@@ -156,7 +156,33 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     await page.waitForSelector('.ku-qis li');
     ok((await page.$$('.ku-qis li')).length >= 1 && (await page.$$('.ku-kpi')).length >= 6, 'Sifat hisoboti: ko\'rsatkichlar va muammolar ro\'yxati');
     await page.screenshot({ path: path.join(OUT, 'kurs-quality.png') });
+    const a11yRows = await page.$$eval('.ku-a11y tbody tr', r => r.map(x => x.dataset.rule));
+    ok(!!(await page.$('[data-a11y-kpi]')) && a11yRows.length === 10 && a11yRows.includes('captions') && a11yRows.includes('contrast'), `Sifat hisoboti: «Qulaylik» ko'rsatkichi va ${a11yRows.length} ta qoida jadvali`);
     await page.keyboard.press('Escape');
+
+    // qulaylik: subtitr yozuvlari muharriri va «Subtitr yaratish (Whisper)» (masofaviy ta'lim bo'limi)
+    const ACID = +(process.env.KU_ACID || 0);
+    if (ACID) {
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.evaluate(cid => kuOpen(cid), ACID); await page.waitForSelector('#kuBlocks .ku-blk');
+      await page.click('#kuQl'); await page.waitForSelector('.ku-a11y');
+      await page.screenshot({ path: path.join(OUT, 'a11y-quality-report.png') });
+      await page.keyboard.press('Escape');
+      const acl = (await api(`/api/kurs/courses/${ACID}`)).data.lessons_list[0].id;
+      const vb0 = (await api(`/api/kurs/lessons/${acl}`)).data.blocks.find(b => b.type === 'video');
+      ok(await page.isVisible('#kuBlocks [data-act="cap-auto"]'), '«Subtitr yaratish (Whisper)» tugmasi video blokida (bo\'lim xodimi)');
+      await page.click('#kuBlocks [data-act="cap-edit"]');
+      await page.waitForSelector('.ku-cue textarea');
+      const nCue = (await page.$$('.ku-cue')).length;
+      await page.fill('.ku-cue >> nth=0 >> textarea', 'Tahrirlangan subtitr matni');
+      await page.screenshot({ path: path.join(OUT, 'a11y-cue-editor.png') });
+      await page.click('.ku-modal [data-ok]');
+      await page.waitForSelector('.ku-cue', { state: 'detached', timeout: 10000 });
+      let vb1 = null;
+      for (let k = 0; k < 20; k++) { await sleep(400); vb1 = (await api(`/api/kurs/lessons/${acl}`)).data.blocks.find(b => b.type === 'video'); if (vb1.data.captions[0].asset !== vb0.data.captions[0].asset) break; }
+      const cues = (await api(`/api/kurs/assets/${vb1.data.captions[0].asset}/cues`)).data.cues || [];
+      ok(nCue >= 2 && vb1.data.captions[0].asset !== vb0.data.captions[0].asset && cues[0] && cues[0].text === 'Tahrirlangan subtitr matni', `Subtitr yozuvlari muharriri: ${nCue} yozuv, tahrir saqlandi (yangi VTT fayl blokka ulandi)`);
+    }
 
     // telefon kengligi
     await page.setViewportSize({ width: 390, height: 844 });

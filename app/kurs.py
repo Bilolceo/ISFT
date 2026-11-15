@@ -16,6 +16,9 @@ tugmasi, bilimni tekshirish savollari, yakuniy test. Bu modul o'sha ishni ISFT C
      bloklar — «import qilinmadi: <tur>» izohli matn bloki. Zip bombasi / yo'l hujumi himoyasi, hajm chegaralari, oqim bilan yuklash.
      Sifat hisoboti (har qanday kurs uchun): to'g'ri javob doim bir o'rinda / eng uzun variant, alt matnsiz rasmlar, inglizcha yorliqlar,
      test qamrovi darslar bo'yicha, bitta to'g'ri javobli «bir nechta javob» savollari; bir bosishli tuzatishlar (aralashtirish, yorliqlar).
+  6. Qulaylik (docs/kurs.md «Qulaylik»): sifat hisobotida 10 ta qoida (alt, kontrast, sarlavhalar tartibi, havola matni, jadval sarlavhasi,
+     video subtitri, audio matni, sarlavhasiz uzun matn, klaviatura ko'rsatmasi, PDF matn qatlami) va xavfsiz tuzatishlar; subtitr yozuvlari
+     muharriri (VTT) va avtomatik subtitr navbati (Whisper — studiya montaj ishchisi, /api/montaj/kurs-captions).
 
 Ruxsat (rbac.KURS, har yozish audit jurnalida):
   masofaviy, masofaviy_xodim — barcha kurslar: tahrirlash, eksport, tasdiqlash / qaytarish, import;
@@ -24,6 +27,7 @@ Ruxsat (rbac.KURS, har yozish audit jurnalida):
 """
 from __future__ import annotations
 import base64, hashlib, hmac, html, io, json, math, os, re, secrets, threading, time, zipfile
+from datetime import timedelta as _td
 from pathlib import Path
 from urllib.parse import quote
 from fastapi import APIRouter, Request, HTTPException
@@ -65,7 +69,8 @@ LABELS = {"start": "Kursni boshlash", "resume": "Davom ettirish", "continue": "D
           "submit": "Javobni tekshirish", "next_question": "Keyingi savol", "retry": "Qayta urinish", "result": "Natija", "search": "Qidirish",
           "complete_hint": "Davom etish uchun yuqoridagi topshiriqlarni bajaring", "menu": "Mundarija", "progress": "bajarildi",
           "passed": "Test topshirildi", "failed": "Test topshirilmadi", "correct": "To'g'ri", "incorrect": "Noto'g'ri", "finish": "Kurs yakunlandi"}
-SETTINGS = {"sidebar": True, "lesson_count": True, "sequential": False, "search": True, "completion": "view", "view_pct": 100, "mode": "xapi"}
+SETTINGS = {"sidebar": True, "lesson_count": True, "sequential": False, "search": True, "completion": "view", "view_pct": 100, "mode": "xapi",
+            "kbd_hints": False}   # kbd_hints — pleyer interaktiv bloklar ostida klaviatura ko'rsatmasini chiqaradi (sifat hisobotidagi bir bosishli tuzatish)
 QUIZ = {"pass_pct": 80, "attempts": 0, "shuffle": True, "randomize": False, "draw": 0, "reveal": "always", "intro": ""}
 
 MAX_LESSONS = 60
@@ -115,6 +120,9 @@ CREATE INDEX IF NOT EXISTS ix_ku_e ON ku_exports(course_id, mode);
 CREATE TABLE IF NOT EXISTS ku_log(id INTEGER PRIMARY KEY, ts TEXT, user_id INT, user_name TEXT, course_id INT, action TEXT, note TEXT);
 CREATE INDEX IF NOT EXISTS ix_ku_log ON ku_log(course_id);
 CREATE TABLE IF NOT EXISTS ku_meta(k TEXT PRIMARY KEY, v TEXT);
+CREATE TABLE IF NOT EXISTS ku_caption_jobs(id INTEGER PRIMARY KEY, course_id INT, asset_id INT, lang TEXT, status TEXT, attempts INT DEFAULT 0,
+  lease TEXT, lease_until TEXT, stage TEXT, pct REAL DEFAULT 0, error TEXT, vtt_asset INT, cues INT, user_id INT, user_name TEXT, created_at TEXT, updated_at TEXT);
+CREATE INDEX IF NOT EXISTS ix_ku_cj ON ku_caption_jobs(status, id);
 """
 
 def _now(): return clock.now().replace(microsecond=0).isoformat(timespec="seconds")
@@ -446,7 +454,7 @@ def _jload(s, d):
 def clean_settings(s, base: dict | None = None) -> dict:
     s = s if isinstance(s, dict) else {}
     out = dict(base or SETTINGS)
-    for k in ("sidebar", "lesson_count", "sequential", "search"):
+    for k in ("sidebar", "lesson_count", "sequential", "search", "kbd_hints"):
         if k in s: out[k] = _b(s[k])
     if s.get("completion") in COMPLETION: out["completion"] = s["completion"]
     if "view_pct" in s: out["view_pct"] = _i(s["view_pct"], 10, 100, out["view_pct"])
@@ -1040,7 +1048,7 @@ def build_content(cid: int, mode: str = "none") -> tuple[dict, dict]:
     content = {"v": 1, "kind": "kurs", "id": f"isft-kurs-{cid}", "title": co["title"], "description": co["description"] or "", "lang": "uz",
                "accent": clean_accent(co["accent"]), "cover": {"src": cover, "alt": co["cover_alt"] or ""} if cover else None,
                "author": co["author_name"] or "", "brand": {"name": PK._brand_full(), "logo": "assets/logo.png" if logo else None},
-               "settings": {k: st[k] for k in ("sidebar", "lesson_count", "sequential", "search")},
+               "settings": {k: st[k] for k in ("sidebar", "lesson_count", "sequential", "search", "kbd_hints")},
                "labels": {**LABELS, **clean_labels(_jload(co["labels"], {}))},
                "tracking": {"mode": mode, "activity_id": f"{ACTIVITY_BASE}/{int(cid)}", "completion": st["completion"], "view_pct": st["view_pct"],
                             "mastery": mastery if st["completion"] != "view" else None},
@@ -1057,6 +1065,7 @@ def player_files() -> dict:
     shared = PK.PLAYER_DIR
     if not (shared / "lms.js").is_file(): raise HTTPException(503, "Pleyerning umumiy qismi (app/paket_player/lms.js) topilmadi")
     out["lms.js"] = (shared / "lms.js").read_bytes()
+    if (shared / "a11y.js").is_file(): out["a11y.js"] = (shared / "a11y.js").read_bytes()   # qulayliklar paneli va ovozli o'qish (umumiy)
     for f in sorted((shared / "fonts").glob("*")):
         if f.is_file() and not f.name.startswith("."): out[f"fonts/{f.name}"] = f.read_bytes()
     return out
@@ -1335,8 +1344,178 @@ def _block_text(b: dict) -> str:
                 elif isinstance(x, dict): out += [y for y in x.values() if isinstance(y, str)]
     return " ".join(out)
 
-def quality_from(data: dict) -> dict:
-    """data — snapshot_data() shakli. → raqamlar va muammolar ro'yxati (fix: "shuffle" | "labels" | "mr_single")."""
+# ---------------------------------------------------------------------------------------------
+# Qulaylik (accessibility) tekshiruvlari — sifat hisobotining «Qulaylik» bo'limi (WCAG 2.1 AA asosida; UNED'dagi Brickfield uslubida).
+# Har qoida: nima topildi (qayerda), qanday tuzatiladi (izoh), xavfsiz bo'lsa — bir bosishli tuzatish (fix).
+# ---------------------------------------------------------------------------------------------
+A11Y_LONG_WORDS = 300          # sarlavhasiz ketma-ket matn (so'z) — bundan uzuni ekran o'quvchisida «yo'qolib» qoladi
+A11Y_MIN_CONTRAST = 4.5        # WCAG AA, oddiy matn
+KBD_TYPES = ("accordion", "tabs", "flashcards", "process", "sorting", "matching", "labeled_graphic")
+_LINK_BAD = {"bu yerga bosing", "shu yerga bosing", "bu yerni bosing", "shu yerni bosing", "bu yerga", "shu yerga", "bu yerda", "shu yerda", "bu yer",
+             "bosing", "havola", "bu havola", "ushbu havola", "havolani bosing", "batafsil", "ko'proq", "ko'proq o'qish", "yana", "ochish", "link",
+             "click here", "click", "here", "read more", "more", "this link", "нажмите здесь", "здесь", "тут", "ссылка", "подробнее"}
+_A_RX = re.compile(r"<a\b[^>]*>(.*?)</a>", re.I | re.S)
+_HTAG_RX = re.compile(r"<h([1-6])\b", re.I)
+_TABLE_RX = re.compile(r"<table\b.*?</table>", re.I | re.S)
+
+def _rgb(h: str) -> tuple:
+    h = str(h or "").lstrip("#")
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4)) if re.fullmatch(r"[0-9a-fA-F]{6}", h) else (0, 0, 0)
+def _lum(c: tuple) -> float:
+    f = lambda x: x / 255 / 12.92 if x / 255 <= 0.03928 else ((x / 255 + 0.055) / 1.055) ** 2.4
+    r, g, b = map(f, c)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+def contrast(a: str, b: str) -> float:
+    """WCAG kontrast nisbati (1…21) ikki #RRGGBB rang orasida."""
+    la, lb = sorted((_lum(_rgb(a)), _lum(_rgb(b))), reverse=True)
+    return round((la + 0.05) / (lb + 0.05), 2)
+def _lite(h: str, t: float = 0.45) -> str:     # pleyerdagi shade(ACC, 0.45) — qorong'i rejimdagi havola rangi
+    return "#" + "".join(f"{round(x + (255 - x) * t):02x}" for x in _rgb(h))
+def accent_contrast(accent: str) -> dict:
+    """Urg'u rangi pleyerda: tugma foni (oq matn), havola/sarlavha rangi (oq va kulrang fonda), qorong'i rejimda — ochroq tus (#171a21 fonda)."""
+    acc = accent if re.fullmatch(r"#[0-9a-fA-F]{6}", str(accent or "")) else DEFAULT_ACCENT
+    pairs = {"button_text": contrast("#ffffff", acc), "link_on_white": contrast(acc, "#ffffff"), "link_on_bg": contrast(acc, "#f4f5f7"),
+             "link_dark": contrast(_lite(acc), "#171a21")}
+    m = min(pairs.values())
+    return {"accent": acc, **pairs, "min": m, "ok": m >= A11Y_MIN_CONTRAST}
+
+def _norm_link(t: str) -> str:
+    return re.sub(r"^[\s.,;:!?\"«»()\-–—…>]+|[\s.,;:!?\"«»()\-–—…>]+$", "", _plain(t).translate(_APOS_T).lower())
+def bad_link_text(t: str) -> bool:
+    """Havola matni maqsadni aytmaydi («bu yerga bosing», «batafsil», yalang'och URL) — ekran o'quvchisi havolalar ro'yxatida ma'nosiz."""
+    n = _norm_link(t)
+    return not n or n in _LINK_BAD or bool(re.fullmatch(r"(?:https?://|www\.)\S+", n))
+
+def _html_fields(btype: str, d: dict) -> list[str]:
+    if btype in ("paragraph", "heading_paragraph", "image_text"): return [d.get("html") or ""]
+    if btype == "list": return [x for x in d.get("items") or [] if isinstance(x, str)]
+    if btype in ("accordion", "tabs", "process", "timeline"): return [x.get("html") or "" for x in d.get("items") or [] if isinstance(x, dict)]
+    if btype == "labeled_graphic": return [m.get("html") or "" for m in d.get("markers") or [] if isinstance(m, dict)]
+    return []
+
+def block_levels(btype: str, d: dict) -> list[int]:
+    """Blok kiritadigan muallif sarlavhalari darajalari (pleyerda dars nomi — h1; HTML ichidagi h1 → h2)."""
+    out = []
+    if btype == "heading" and (d.get("text") or "").strip(): out.append(_i(d.get("level"), 2, 3, 2))
+    if btype == "heading_paragraph" and (d.get("heading") or "").strip(): out.append(2)
+    for h in _html_fields(btype, d) if btype in ("paragraph", "heading_paragraph", "image_text") else []:
+        out += [max(2, int(x)) for x in _HTAG_RX.findall(h)]
+    return out
+
+_TEXT_BLOCKS = ("paragraph", "heading_paragraph", "list", "quote", "image_text")
+def _words_n(t: str) -> int: return len(re.findall(r"\w+(?:['ʻʼ‘’`]\w+)*", _plain(t)))   # «so'z», «o'qish» — bitta so'z
+
+def pdf_text_layer(path: Path) -> bool | None:
+    """PDF'da matn qatlami bormi (skaner rasm emas): birinchi 10 sahifadan matn chiqadimi. O'qib bo'lmasa — None."""
+    try:
+        from pypdf import PdfReader
+        rd = PdfReader(str(path))
+        if rd.is_encrypted:
+            try: rd.decrypt("")
+            except Exception: return None
+        return any((p.extract_text() or "").strip() for p in rd.pages[:10])
+    except Exception:
+        pass
+    try:   # zaxira: kontent oqimlarida matn operatorlari (Tj / TJ)
+        import zlib
+        raw = path.read_bytes()[:30 * 1024 * 1024]
+        if re.search(rb"\)\s*Tj|\]\s*TJ", raw): return True
+        for m in re.finditer(rb"stream\r?\n(.*?)\r?\nendstream", raw, re.S):
+            try:
+                if re.search(rb"\)\s*Tj|\]\s*TJ", zlib.decompress(m.group(1))): return True
+            except zlib.error: continue
+        return False
+    except Exception:
+        return None
+
+def a11y_from(data: dict, pdf: dict | None = None) -> dict:
+    """Qulaylik qoidalari (snapshot_data shaklida). pdf — {asset id: matn qatlami bormi} (quality() diskdagi fayllardan hisoblaydi).
+    → {"rules": [{key, title, level, count, where, hint, fix?, action?, items?}], "passed", "total", "contrast"}."""
+    ls = data.get("lessons") or []
+    co = data.get("course") or {}
+    st = co.get("settings") or {}
+    pdf = pdf or {}
+    R = {k: [] for k in ("alt", "headings", "links", "tables", "captions", "transcript", "long_text", "kbd", "pdf")}
+    cap_items, kbd_types, yt = [], set(), 0
+    for n_, l in enumerate(ls, 1):
+        if l["type"] != "blocks": continue
+        prev, run, run_from = 1, 0, None
+        def flush(k):
+            nonlocal run, run_from
+            if run > A11Y_LONG_WORDS: R["long_text"].append(f"{n_}. {l['title']} · {run_from}–{k}-bloklar ({run} so'z)" if run_from != k else f"{n_}. {l['title']} · {k}-blok ({run} so'z)")
+            run, run_from = 0, None
+        for k, b in enumerate(l["blocks"], 1):
+            t, d = b["type"], b["data"] if isinstance(b["data"], dict) else _jload(b["data"], {})
+            w = f"{n_}. {l['title']} · {k}-blok ({BLOCKS.get(t, (t,))[0]})"
+            # alt matn
+            pairs = [(d.get("asset"), d.get("alt"))] if t in ("image", "image_text", "labeled_graphic") else \
+                    [(x.get("asset"), x.get("alt")) for x in d.get("items") or [] if isinstance(x, dict)] if t == "gallery" else []
+            if any(a and not (alt or "").strip() for a, alt in pairs): R["alt"].append(w)
+            # sarlavhalar tartibi (h1 → h3 sakrash)
+            lv = block_levels(t, d)
+            for x in lv:
+                if x > prev + 1: R["headings"].append(f"{w}: h{prev} dan keyin h{x}")
+                prev = x
+            # sarlavhasiz uzun matn
+            if lv: flush(k - 1 if k > 1 else k)
+            if t in _TEXT_BLOCKS:
+                txt = " ".join(_html_fields(t, d) + [d.get("text") or ""]) if t != "list" else " ".join(d.get("items") or [])
+                nw = _words_n(txt)
+                if nw:
+                    if run_from is None: run_from = k
+                    run += nw
+            else:
+                flush(k - 1 if k > 1 else k)
+            # havola matni
+            for h in _html_fields(t, d):
+                for a in _A_RX.findall(h):
+                    if bad_link_text(a): R["links"].append(f"{w}: «{_plain(a)[:60] or '(bo‘sh)'}»")
+            if t == "button" and d.get("url") and bad_link_text(d.get("label") or ""): R["links"].append(f"{w}: tugma «{d.get('label') or '(bo‘sh)'}»")
+            # jadval sarlavha qatori
+            if t == "table" and len(d.get("rows") or []) >= 2 and not d.get("header"): R["tables"].append(w)
+            for h in _html_fields(t, d):
+                for tb in _TABLE_RX.findall(h):
+                    if not re.search(r"<th\b", tb, re.I): R["tables"].append(w + " (matn ichidagi jadval)")
+            # video subtitri, audio matni, PDF matn qatlami
+            if t == "video":
+                if d.get("source") == "file" and d.get("asset") and not d.get("captions"):
+                    R["captions"].append(w); cap_items.append({"where": w, "asset": d.get("asset"), "lesson": l["uid"], "block": b.get("uid")})
+                elif d.get("source") == "youtube" and d.get("yt_id"): yt += 1
+            if t == "audio" and d.get("asset") and not (d.get("transcript") or "").strip(): R["transcript"].append(w)
+            if t == "attachment" and d.get("asset") and pdf.get(d.get("asset")) is False: R["pdf"].append(w)
+            if t in KBD_TYPES or (t == "gallery" and d.get("style") == "carousel"): kbd_types.add(t)
+        flush(len(l["blocks"]))
+    if co.get("cover_asset") and not (co.get("cover_alt") or "").strip(): R["alt"].append("Kurs muqovasi")
+    if kbd_types and not st.get("kbd_hints"): R["kbd"] = [BLOCKS[t][0] if t in BLOCKS else t for t in sorted(kbd_types)]
+    cc = accent_contrast(co.get("accent"))
+    rules = []
+    def rule(key, title, level, where, hint, fix=None, **kw):
+        rules.append({"key": key, "title": title, "level": level if where else "ok", "count": len(where), "where": where[:60], "hint": hint, "fix": fix if where else None, **kw})
+    rule("alt", "Rasmlar uchun muqobil matn (alt)", "bad", R["alt"],
+         "Har bir rasm blokida «Muqobil matn» maydonini to'ldiring: rasmda nima ko'rsatilganini 1–2 gapda yozing. Bezak rasmlar uchun ham qisqa tavsif.")
+    rule("contrast", "Urg'u rangi va matn kontrasti", "bad", [] if cc["ok"] else [f"{cc['accent']}: eng past kontrast {cc['min']}:1 (kerak ≥ {A11Y_MIN_CONTRAST}:1)"],
+         "Kurs sozlamalarida palitradagi rangni tanlang — barchasi oq matn va havolalar uchun ≥ 4,5:1.", "accent", contrast=cc)
+    rule("headings", "Sarlavhalar tartibi (darajani sakrab o'tmaslik)", "warn", R["headings"],
+         "Dars nomi — 1-daraja; bo'lim sarlavhalari — H2, ichki bo'limlar — H3. H2'siz H3 ishlatmang: ekran o'quvchisi tuzilmani noto'g'ri o'qiydi.", "headings")
+    rule("links", "Havola matni maqsadni aytsin", "warn", R["links"],
+         "«Bu yerga bosing», «batafsil», yalang'och URL o'rniga havola qayerga olib borishini yozing: masalan, «O'zbekiston Konstitutsiyasi (lex.uz)».")
+    rule("tables", "Jadvallarda sarlavha qatori", "warn", R["tables"],
+         "Jadvalning birinchi qatorini «Sarlavha qatori» qiling — ekran o'quvchisi har katakni ustun nomi bilan o'qiydi.", "table_header")
+    rule("captions", "Videolar uchun subtitr (VTT)", "bad", R["captions"],
+         "Video blokida .vtt/.srt subtitr yuklang yoki «Subtitr yaratish» (Whisper, masofaviy ta'lim bo'limi) — eshitish qobiliyati cheklangan talabalar uchun.",
+         action="captions", items=cap_items[:60])
+    rule("transcript", "Audio uchun matn (transkript)", "bad", R["transcript"], "Audio blokidagi «Matni (transkript)» maydoniga audio matnini yozing.")
+    rule("long_text", f"Sarlavhasiz uzun matn (> {A11Y_LONG_WORDS} so'z)", "warn", R["long_text"],
+         "Uzun matnni H2/H3 sarlavhalar bilan bo'limlarga ajrating yoki «Akkordeon»/«Yorliqlar» blokiga o'tkazing — o'qish va navigatsiya osonlashadi.")
+    rule("kbd", "Interaktiv bloklarda klaviatura ko'rsatmasi", "warn", R["kbd"],
+         "Pleyer interaktiv bloklar ostida qisqa ko'rsatma chiqaradi («Tab — keyingi element, Enter / Bo'sh joy — ochish, ← → — yorliqlar»).", "kbd_hints")
+    rule("pdf", "PDF ilovalarda matn qatlami", "bad", R["pdf"],
+         "Skanerlangan PDF — faqat rasm: ekran o'quvchisi o'qiy olmaydi va qidiruv ishlamaydi. Asl Word/PDF faylni yoki OCR qilingan («qidiriladigan») PDF'ni yuklang.")
+    passed = sum(1 for r in rules if r["level"] == "ok")
+    return {"rules": rules, "passed": passed, "total": len(rules), "contrast": cc, "youtube": yt}
+
+def quality_from(data: dict, pdf: dict | None = None) -> dict:
+    """data — snapshot_data() shakli. → raqamlar va muammolar ro'yxati (fix: "shuffle" | "labels" | "mr_single" | qulaylik tuzatishlari)."""
     ls = data.get("lessons") or []
     def pos_stats(qs):
         pos, longest, n = {}, 0, 0
@@ -1423,16 +1602,32 @@ def quality_from(data: dict) -> dict:
     if en: add("bad", "Inglizcha qolgan yorliqlar", f"{len(en)} ta joyda inglizcha matn (masalan: «{en[0]['text'][:60]}»).", "labels")
     if has_quiz and uncovered: add("warn", "Test hamma darslarni qamramaydi", f"Test savollari {rng(covered)}-darslarni qamraydi; savolsiz darslar: {', '.join(str(u['no']) for u in uncovered[:20])}.")
     if mr_single: add("warn", "«Bir nechta javob» savolida bitta to'g'ri javob", f"{mr_single} ta savol — «Bitta javob» turiga o'tkazish kerak.", "mr_single")
+    a11y = a11y_from(data, pdf)
+    for r in a11y["rules"]:   # alt matn — yuqorida (eski raqamlar bilan); qolgan qulaylik qoidalari — «Qulaylik» guruhida
+        if r["level"] != "ok" and r["key"] != "alt":
+            issues.append({"level": r["level"], "title": "Qulaylik: " + r["title"], "detail": f"{r['count']} ta joy — {r['where'][0]}{' …' if r['count'] > 1 else ''}. {r['hint']}",
+                           "fix": r["fix"], "group": "a11y", "key": r["key"], **({"action": r["action"]} if r.get("action") else {})})
     if not issues: add("ok", "Muammo topilmadi", "Asosiy sifat tekshiruvlaridan o'tdi.")
     return {"knowledge": kc, "quiz": qz, "images": {"total": imgs, "missing_alt": no_alt, "where": where_alt[:60], "cover_missing_alt": cover_no_alt},
             "english": en[:200], "english_count": len(en),
             "coverage": {"quiz_questions": len(qqs), "lessons": [{"no": i, "title": l["title"], "questions": cover[i]} for i, l in bl],
                          "covered": rng(covered), "uncovered": uncovered, "unmatched": unmatched},
-            "mr_single": mr_single, "issues": issues}
+            "mr_single": mr_single, "a11y": a11y, "issues": issues}
+
+def pdf_map(cid: int) -> dict:
+    """{asset id: matn qatlami bormi} — kursdagi PDF ilovalar uchun; natija asset meta'sida keshlanadi (fayl o'zgarmaydi)."""
+    out = {}
+    for a in db.rows(_con, "SELECT * FROM ku_assets WHERE course_id=? AND deleted=0 AND kind='file' AND ext='pdf'", (cid,)):
+        meta = _jload(a["meta"], {})
+        if "text_layer" not in meta:
+            meta["text_layer"] = pdf_text_layer(_apath(a)) if _apath(a).is_file() else None
+            with _lock: _con.execute("UPDATE ku_assets SET meta=? WHERE id=?", (json.dumps(meta, ensure_ascii=False), a["id"])); _con.commit()
+        out[a["id"]] = meta["text_layer"]
+    return out
 
 def quality(c: Ctx, cid: int) -> dict:
     _course(c, cid)
-    return quality_from(snapshot_data(cid))
+    return quality_from(snapshot_data(cid), pdf_map(cid))
 
 def _balanced(answers: list, target: int, seed: str) -> list:
     """Javoblarni qayta tartiblash: (birinchi) to'g'ri javob target o'ringa, qolganlari — deterministik aralash."""
@@ -1444,18 +1639,31 @@ def _balanced(answers: list, target: int, seed: str) -> list:
     target = target % len(answers)
     return rest[:target] + [answers[ci]] + rest[target:]
 
+FIXES = {"shuffle": "Javoblarni aralashtirishdan oldin", "labels": "Yorliqlarni tarjima qilishdan oldin", "mr_single": "Savol turini o'zgartirishdan oldin",
+         "headings": "Sarlavha darajalarini tuzatishdan oldin", "table_header": "Jadval sarlavha qatorini yoqishdan oldin",
+         "kbd_hints": "Klaviatura ko'rsatmalarini yoqishdan oldin", "accent": "Urg'u rangini almashtirishdan oldin"}
+
 def apply_fix(c: Ctx, cid: int, fix: str) -> dict:
     """Bir bosishli tuzatishlar (avval versiya saqlanadi):
        shuffle   — to'g'ri javob o'rinlari teng taqsimlanadi (aylanma, deterministik), testlarda «aralashtirish» yoqiladi;
        labels    — standart inglizcha yorliqlar o'zbekchaga ( «Continue» → «Davom etish», «Quiz» → «Yakuniy test» …);
-       mr_single — bitta to'g'ri javobli «bir nechta javob» savollari «bitta javob» turiga."""
-    _course(c, cid, write=True)
-    if fix not in ("shuffle", "labels", "mr_single"): raise HTTPException(400, "Tuzatish turi noma'lum")
-    snapshot(c, cid, "auto", {"shuffle": "Javoblarni aralashtirishdan oldin", "labels": "Yorliqlarni tarjima qilishdan oldin", "mr_single": "Savol turini o'zgartirishdan oldin"}[fix])
+       mr_single — bitta to'g'ri javobli «bir nechta javob» savollari «bitta javob» turiga;
+       qulaylik: headings — darajani sakragan sarlavha bloklari (h1 → h3) bir pog'ona yuqoriga; table_header — jadvallarda birinchi qator
+       sarlavha qatori; kbd_hints — pleyerda interaktiv bloklar ostida klaviatura ko'rsatmasi; accent — kontrasti past urg'u rangi → standart."""
+    co = _course(c, cid, write=True)
+    if fix not in FIXES: raise HTTPException(400, "Tuzatish turi noma'lum")
+    snapshot(c, cid, "auto", FIXES[fix])
     changed, k = 0, 0
     with _lock:
-        for l in _lessons(cid):
+        if fix == "kbd_hints":
+            s0 = clean_settings(_jload(co["settings"], {}))
+            if not s0.get("kbd_hints"):
+                _con.execute("UPDATE ku_courses SET settings=? WHERE id=?", (json.dumps({**s0, "kbd_hints": True}), cid)); changed += 1
+        if fix == "accent" and not accent_contrast(co["accent"])["ok"]:
+            _con.execute("UPDATE ku_courses SET accent=? WHERE id=?", (DEFAULT_ACCENT, cid)); changed += 1
+        for l in (_lessons(cid) if fix not in ("kbd_hints", "accent") else []):
             st = _jload(l["settings"], {})
+            prev = 1
             new_title = l["title"]
             if fix == "labels" and is_english(l["title"]): new_title = _fix_en(l["title"])
             if fix == "labels" and l["type"] == "quiz" and is_english(st.get("intro") or ""): st["intro"] = _fix_en(st["intro"]); changed += 1
@@ -1476,13 +1684,220 @@ def apply_fix(c: Ctx, cid: int, fix: str) -> dict:
                             if is_english(d.get(f) or ""): d[f] = _fix_en(d[f])
                 elif fix == "mr_single" and b["type"] in ("knowledge", "question") and d.get("kind") == "multiple" and sum(1 for a in d.get("answers") or [] if a.get("correct")) <= 1:
                     d["kind"] = "single"
+                elif fix == "table_header" and b["type"] == "table" and len(d.get("rows") or []) >= 2 and not d.get("header"):
+                    d["header"] = True
+                if fix == "headings" and l["type"] == "blocks":
+                    if b["type"] == "heading" and (d.get("text") or "").strip() and _i(d.get("level"), 2, 3, 2) > prev + 1: d["level"] = prev + 1
+                    lv = block_levels(b["type"], d)
+                    if lv: prev = lv[-1]
                 if json.dumps(d, sort_keys=True) != old:
                     _con.execute("UPDATE ku_blocks SET data=? WHERE id=?", (json.dumps(clean_block(b["type"], d, _Assets(cid)), ensure_ascii=False), b["id"])); changed += 1
             _con.execute("UPDATE ku_lessons SET title=?, settings=?, rev=rev+1, updated_at=?, updated_by=? WHERE id=?",
                          (new_title, json.dumps(st, ensure_ascii=False) if l["type"] == "quiz" else l["settings"], _now(), c.user["full_name"], l["id"]))
         _bump(cid, c); _log(c, cid, "sifat tuzatishi", f"{fix} · {changed} ta o'zgarish"); _con.commit()
     _audit(c, "sifat tuzatishi", f"kurs #{cid} · {fix} · {changed}")
-    return {"ok": True, "fix": fix, "changed": changed, "quality": quality_from(snapshot_data(cid)), "course": course_view(c, cid)}
+    return {"ok": True, "fix": fix, "changed": changed, "quality": quality_from(snapshot_data(cid), pdf_map(cid)), "course": course_view(c, cid)}
+
+
+# =============================================================================================
+# Subtitrlar: tahrirlanadigan VTT (yozuvlar ro'yxati) va avtomatik subtitr navbati (Whisper — studiya montaj ishchisi orqali)
+# =============================================================================================
+# Navbat: masofaviy ta'lim bo'limi video blokida «Subtitr yaratish» → ku_caption_jobs (navbatda). Montaj ishchisi (tools/montaj, o'sha
+# ISFT_CORE_WORKER_TOKEN bilan) montaj navbati bo'sh bo'lganda /api/montaj/kurs-captions/claim → videoni yuklab oladi → faster-whisper →
+# WebVTT → /result. Server VTT'ni tekshiradi (paket.to_vtt), kursga «vtt» fayl sifatida saqlaydi va shu videoni ishlatgan barcha video
+# bloklarga (shu tilda subtitr bo'lmasa) qo'shadi. Ishchi o'chiq bo'lsa — qo'lda yo'l (docs/kurs.md): tools/montaj CLI yoki istalgan Whisper
+# → .vtt → video blokida «Subtitr yuklash».
+CAP_STATUS = {"navbatda": "Navbatda", "ishlanmoqda": "Ishlanmoqda", "tayyor": "Tayyor", "xato": "Xato", "bekor": "Bekor qilindi"}
+CAP_LEASE = 2 * 3600
+CAP_ATTEMPTS = 3
+CAP_MAX_CUES = 5000
+W_CAP = "/api/montaj/kurs-captions"
+_CUE_RX = re.compile(r"^(\d{2,3}):(\d{2}):(\d{2})\.(\d{3}) --> (\d{2,3}):(\d{2}):(\d{2})\.(\d{3})")
+
+def vtt_cues(text: str) -> list[dict]:
+    """Me'yorlangan WebVTT (paket.to_vtt natijasi) → [{start, end (soniya), text}] — muharrirdagi yozuvlar ro'yxati uchun."""
+    out = []
+    for blk in re.split(r"\n\s*\n", (text or "").replace("\r\n", "\n")):
+        ls = [x for x in blk.split("\n") if x.strip()]
+        k = next((i for i, x in enumerate(ls[:2]) if _CUE_RX.match(x)), None)
+        if k is None: continue
+        g = [int(x) for x in _CUE_RX.match(ls[k]).groups()]
+        t = lambda h, m, s, ms: round(h * 3600 + m * 60 + s + ms / 1000, 3)
+        out.append({"start": t(*g[:4]), "end": t(*g[4:]), "text": html.unescape("\n".join(ls[k + 1:]))})
+    return out
+
+def cues_vtt(cues) -> dict:
+    """[{start, end, text}] → paket.to_vtt (tekshiruv + me'yorlash; xatoda 400 qator raqami bilan)."""
+    if not isinstance(cues, list) or not cues: raise HTTPException(400, "Subtitrda kamida bitta yozuv bo'lsin")
+    if len(cues) > CAP_MAX_CUES: raise HTTPException(400, f"Yozuvlar juda ko'p ({len(cues)} > {CAP_MAX_CUES})")
+    ts = lambda x: (lambda ms: f"{ms // 3600000:02d}:{ms // 60000 % 60:02d}:{ms // 1000 % 60:02d}.{ms % 1000:03d}")(int(round(_f(x, 0, 86400, 0) * 1000)))
+    parts = []
+    for i, c_ in enumerate(cues, 1):
+        if not isinstance(c_, dict): raise HTTPException(400, f"{i}-yozuv noto'g'ri")
+        txt = "\n".join(x for x in (_text(c_.get("text"), 500).split("\n")) if x.strip())[:500]
+        if not txt: raise HTTPException(400, f"{i}-yozuv matni bo'sh")
+        parts.append(f"{ts(c_.get('start'))} --> {ts(c_.get('end'))}\n{txt.replace('-->', '→')}")
+    return PK.to_vtt(("WEBVTT\n\n" + "\n\n".join(parts) + "\n").encode("utf-8"))
+
+def asset_cues(c: Ctx, aid: int) -> dict:
+    a = db.one(_con, "SELECT * FROM ku_assets WHERE id=? AND deleted=0 AND kind='vtt'", (int(aid),))
+    if not a: raise HTTPException(404, "Subtitr fayli topilmadi")
+    _course(c, a["course_id"])
+    if not _apath(a).is_file(): raise HTTPException(410, "Fayl diskda yo'q")
+    meta = _jload(a["meta"], {})
+    return {"asset": a["id"], "name": a["name"], "lang": meta.get("lang") or "uz", "auto": meta.get("auto") or "", "cues": vtt_cues(_apath(a).read_text("utf-8", "replace"))}
+
+def save_cues(c: Ctx, cid: int, body: dict) -> dict:
+    """Muharrirdagi yozuvlar ro'yxati → yangi «vtt» fayl (eski fayl o'zgarmaydi — versiyalar shu id'ga ishora qiladi). Blokdagi havolani muharrir almashtiradi."""
+    _course(c, cid, write=True)
+    lang = str(body.get("lang") or "uz").lower()
+    if not re.fullmatch(r"[a-z]{2,3}", lang): raise HTTPException(400, "Til kodi noto'g'ri")
+    v = cues_vtt(body.get("cues"))
+    src = A = None
+    if body.get("asset"):
+        A = db.one(_con, "SELECT * FROM ku_assets WHERE id=? AND course_id=? AND kind='vtt' AND deleted=0", (_i(body.get("asset"), 0, 10 ** 9, 0), cid))
+        if not A: raise HTTPException(404, "Asl subtitr fayli topilmadi")
+        src = _jload(A["meta"], {})
+    name = _line(body.get("name"), 120) or (A["name"] if A else f"subtitr-{lang}.vtt")
+    aid = _save_asset(c, cid, "vtt", "vtt", name, data=v["vtt"].encode("utf-8"),
+                      meta={"cues": v["cues"], "lang": lang, "edited": True, **({"auto": src["auto"]} if src and src.get("auto") else {})})
+    with _lock: _log(c, cid, "subtitr tahrirlandi", f"{name[:80]} · {v['cues']} yozuv"); _con.commit()
+    _audit(c, "subtitr tahrirlandi", f"kurs #{cid} · fayl #{aid} · {v['cues']} yozuv")
+    return {"ok": True, **asset_row(db.one(_con, "SELECT * FROM ku_assets WHERE id=?", (aid,)))}
+
+def _cap_row(j: dict) -> dict:
+    return {"id": j["id"], "asset": j["asset_id"], "lang": j["lang"], "status": j["status"], "status_label": CAP_STATUS.get(j["status"], j["status"]),
+            "attempts": j["attempts"], "stage": j["stage"] or "", "pct": j["pct"] or 0, "error": j["error"] or "", "vtt_asset": j["vtt_asset"], "cues": j["cues"],
+            "user_name": j["user_name"] or "", "created_at": j["created_at"], "updated_at": j["updated_at"]}
+
+def _worker_on() -> bool:
+    from . import studio as STU
+    return bool(STU.worker_token())
+
+def caption_jobs(c: Ctx, cid: int) -> dict:
+    _course(c, cid)
+    rows = db.rows(_con, "SELECT * FROM ku_caption_jobs WHERE course_id=? ORDER BY id DESC LIMIT 50", (cid,))
+    return {"items": [_cap_row(j) for j in rows], "worker": _worker_on(), "can_request": c.role.key in DEPT,
+            "manual": "Ishchi o'chiq: tools/montaj (yoki istalgan Whisper) bilan .vtt tayyorlang va video blokida «Subtitr yuklash» — docs/kurs.md."}
+
+def caption_request(c: Ctx, cid: int, asset: int, lang: str = "uz") -> dict:
+    """«Subtitr yaratish» — faqat masofaviy ta'lim bo'limi (navbat — umumiy ishchi resursi). Bir video + til uchun bitta faol vazifa."""
+    _course(c, cid, write=True)
+    lang = str(lang or "uz").lower()
+    if lang not in PK.SUB_LANGS: raise HTTPException(400, "Til noma'lum")
+    a = db.one(_con, "SELECT * FROM ku_assets WHERE id=? AND course_id=? AND kind='video' AND deleted=0", (int(asset), cid))
+    if not a: raise HTTPException(404, "Video fayl topilmadi (shu kursning yuklangan videosi bo'lishi kerak)")
+    with _lock:
+        j = db.one(_con, "SELECT * FROM ku_caption_jobs WHERE course_id=? AND asset_id=? AND lang=? AND status IN ('navbatda','ishlanmoqda')", (cid, a["id"], lang))
+        if j: return {"ok": True, "existing": True, "job": _cap_row(j), "worker": _worker_on()}
+        now = _now()
+        jid = _con.execute("INSERT INTO ku_caption_jobs(course_id,asset_id,lang,status,user_id,user_name,created_at,updated_at) VALUES(?,?,?,'navbatda',?,?,?,?)",
+                           (cid, a["id"], lang, c.user["id"], c.user["full_name"], now, now)).lastrowid
+        _log(c, cid, "subtitr navbatga qo'yildi", f"{a['name'][:80]} · {lang}"); _con.commit()
+    _audit(c, "subtitr navbatga", f"kurs #{cid} · video #{a['id']} · {lang} · vazifa #{jid}")
+    return {"ok": True, "existing": False, "job": _cap_row(db.one(_con, "SELECT * FROM ku_caption_jobs WHERE id=?", (jid,))), "worker": _worker_on()}
+
+def caption_cancel(c: Ctx, jid: int) -> dict:
+    j = db.one(_con, "SELECT * FROM ku_caption_jobs WHERE id=?", (int(jid),))
+    if not j: raise HTTPException(404, "Vazifa topilmadi")
+    _course(c, j["course_id"], write=True)
+    if j["status"] not in ("navbatda", "ishlanmoqda", "xato"): raise HTTPException(409, f"Vazifa holati: {CAP_STATUS.get(j['status'], j['status'])}")
+    with _lock:
+        _con.execute("UPDATE ku_caption_jobs SET status='bekor', lease=NULL, lease_until=NULL, updated_at=? WHERE id=?", (_now(), j["id"]))
+        _log(c, j["course_id"], "subtitr vazifasi bekor qilindi", f"#{j['id']}"); _con.commit()
+    _audit(c, "subtitr vazifasi bekor", f"#{j['id']}")
+    return {"ok": True}
+
+# ---- ishchi tomoni (X-Worker-Token — studiya montaj ishchisi bilan bir xil) ----
+def _wauth(request: Request, action: str) -> Ctx:
+    from . import studio as STU
+    return STU.worker_auth(request, f"kurs subtitr: {action}")
+
+def _cap_requeue(now_iso: str):
+    for j in db.rows(_con, "SELECT * FROM ku_caption_jobs WHERE status='ishlanmoqda' AND lease_until<?", (now_iso,)):
+        st, err = ("navbatda", None) if (j["attempts"] or 0) < CAP_ATTEMPTS else ("xato", "Ishchi javob bermadi (muddat o'tdi)")
+        _con.execute("UPDATE ku_caption_jobs SET status=?, error=COALESCE(?, error), lease=NULL, lease_until=NULL, updated_at=? WHERE id=?", (st, err, now_iso, j["id"]))
+    _con.commit()
+
+def cap_claim(request: Request) -> dict | None:
+    wc = _wauth(request, "claim")
+    now = clock.now().replace(microsecond=0)
+    with _lock:
+        _cap_requeue(now.isoformat(timespec="seconds"))
+        while True:
+            j = db.one(_con, "SELECT * FROM ku_caption_jobs WHERE status='navbatda' ORDER BY id LIMIT 1")
+            if not j: return None
+            a = db.one(_con, "SELECT * FROM ku_assets WHERE id=? AND deleted=0", (j["asset_id"],))
+            if not a or not _apath(a).is_file():
+                _con.execute("UPDATE ku_caption_jobs SET status='xato', error='Video fayli topilmadi', updated_at=? WHERE id=?", (_now(), j["id"])); _con.commit()
+                continue
+            lease = secrets.token_hex(8)
+            _con.execute("UPDATE ku_caption_jobs SET status='ishlanmoqda', attempts=COALESCE(attempts,0)+1, lease=?, lease_until=?, stage='boshlandi', pct=0, updated_at=? WHERE id=?",
+                         (lease, (now + _td(seconds=CAP_LEASE)).isoformat(timespec="seconds"), _now(), j["id"]))
+            _log(None, j["course_id"], "subtitr: ishchi oldi", f"#{j['id']} · {j['lang']}"); _con.commit()
+            break
+    rbac.audit(_con, wc, "kurs subtitr: claim", RES, True, f"#{j['id']} · kurs #{j['course_id']} · video #{a['id']}")
+    return {"job_id": j["id"], "kind": "captions", "lease": lease, "lang": j["lang"], "media_url": f"{W_CAP}/{j['id']}/media", "media_ext": "." + a["ext"],
+            "name": (a["name"] or "")[:160], "course_id": j["course_id"]}
+
+def _cap_active(jid: int, lease: str | None) -> dict:
+    j = db.one(_con, "SELECT * FROM ku_caption_jobs WHERE id=?", (int(jid),))
+    if not j: raise HTTPException(404, "Vazifa topilmadi")
+    if j["status"] != "ishlanmoqda": raise HTTPException(410, f"Vazifa faol emas ({CAP_STATUS.get(j['status'], j['status'])})")
+    if lease is not None and j["lease"] and not hmac.compare_digest(str(lease), j["lease"]): raise HTTPException(409, "Lease eskirgan")
+    return j
+
+def cap_media(request: Request, jid: int) -> Response:
+    _wauth(request, "media")
+    j = _cap_active(jid, None)
+    a = db.one(_con, "SELECT * FROM ku_assets WHERE id=? AND deleted=0", (j["asset_id"],))
+    if not a or not _apath(a).is_file(): raise HTTPException(410, "Video fayli yo'q")
+    return PK.range_response(_apath(a), PK._CT.get(a["ext"], "application/octet-stream"), request.headers.get("range"),
+                             {"X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
+
+def cap_progress(request: Request, jid: int, stage: str, pct) -> dict:
+    _wauth(request, "progress")
+    j = _cap_active(jid, request.headers.get("x-worker-lease"))
+    until = (clock.now().replace(microsecond=0) + _td(seconds=CAP_LEASE)).isoformat(timespec="seconds")
+    with _lock:
+        _con.execute("UPDATE ku_caption_jobs SET stage=?, pct=?, lease_until=?, updated_at=? WHERE id=?", (_line(stage, 40), _f(pct, 0, 100, 0), until, _now(), j["id"])); _con.commit()
+    return {"ok": True}
+
+def cap_fail(request: Request, jid: int, error: str) -> dict:
+    wc = _wauth(request, "fail")
+    j = _cap_active(jid, request.headers.get("x-worker-lease"))
+    with _lock:
+        _con.execute("UPDATE ku_caption_jobs SET status='xato', error=?, lease=NULL, lease_until=NULL, updated_at=? WHERE id=?", (_text(error, 1000) or "Noma'lum xato", _now(), j["id"]))
+        _log(None, j["course_id"], "subtitr: xato", f"#{j['id']} · {_line(error, 150)}"); _con.commit()
+    rbac.audit(_con, wc, "kurs subtitr: fail", RES, True, f"#{j['id']}")
+    return {"ok": True}
+
+def cap_result(request: Request, jid: int, raw: bytes) -> dict:
+    """Ishchi natijasi — WebVTT matni. Tekshiriladi (paket.to_vtt), «vtt» fayl sifatida saqlanadi va shu videoli bloklarga ulanadi."""
+    wc = _wauth(request, "result")
+    j = _cap_active(jid, request.headers.get("x-worker-lease"))
+    if len(raw) > MAX_VTT: raise HTTPException(413, "Subtitr fayli juda katta")
+    v = PK.to_vtt(raw)
+    a = db.one(_con, "SELECT * FROM ku_assets WHERE id=?", (j["asset_id"],))
+    stem = Path(a["name"] or "video").stem[:80] if a else "video"
+    aid = _save_asset(None, j["course_id"], "vtt", "vtt", f"{stem}-{j['lang']}-whisper.vtt", data=v["vtt"].encode("utf-8"),
+                      meta={"cues": v["cues"], "lang": j["lang"], "auto": "whisper", "job": j["id"]})
+    attached = 0
+    label = f"{PK.SUB_LANGS.get(j['lang'], j['lang'])} (avto)"
+    with _lock:
+        for b in db.rows(_con, """SELECT b.* FROM ku_blocks b JOIN ku_lessons l ON l.id=b.lesson_id WHERE l.course_id=? AND l.deleted=0 AND b.type='video'""", (j["course_id"],)):
+            d = _jload(b["data"], {})
+            if d.get("asset") != j["asset_id"] or any(x.get("lang") == j["lang"] for x in d.get("captions") or []): continue
+            d["captions"] = (d.get("captions") or []) + [{"asset": aid, "lang": j["lang"], "label": label}]
+            _con.execute("UPDATE ku_blocks SET data=? WHERE id=?", (json.dumps(clean_block("video", d, _Assets(j["course_id"])), ensure_ascii=False), b["id"]))
+            _con.execute("UPDATE ku_lessons SET rev=rev+1, updated_at=?, updated_by=? WHERE id=?", (_now(), "Subtitr ishchisi", b["lesson_id"]))
+            attached += 1
+        _con.execute("UPDATE ku_caption_jobs SET status='tayyor', vtt_asset=?, cues=?, stage='tayyor', pct=100, lease=NULL, lease_until=NULL, error=NULL, updated_at=? WHERE id=?",
+                     (aid, v["cues"], _now(), j["id"]))
+        if attached: _bump(j["course_id"], None)
+        _log(None, j["course_id"], "subtitr tayyor", f"#{j['id']} · {v['cues']} yozuv · {attached} ta blokka qo'shildi"); _con.commit()
+    rbac.audit(_con, wc, "kurs subtitr: result", RES, True, f"#{j['id']} · {v['cues']} yozuv · {attached} blok")
+    return {"ok": True, "asset": aid, "cues": v["cues"], "attached": attached}
 
 
 # =============================================================================================
@@ -2091,6 +2506,70 @@ class FixIn(BaseModel):
 def api_fix(cid: int, body: FixIn, request: Request):
     c = C(request); guard(c, "sifat tuzatishi", AUTHORS, f"kurs #{cid} · {body.fix}")
     return apply_fix(c, cid, body.fix)
+
+# ---- subtitrlar: yozuvlar muharriri va avtomatik subtitr navbati ----
+@router.get(P + "/assets/{aid}/cues")
+def api_asset_cues(aid: int, request: Request):
+    c = C(request); guard(c, "subtitr yozuvlari", READERS, f"fayl #{aid}")
+    return asset_cues(c, aid)
+
+@router.post(P + "/courses/{cid}/vtt")
+async def api_save_cues(cid: int, request: Request):
+    c = C(request); guard(c, "subtitr tahrirlash", AUTHORS, f"kurs #{cid}")
+    body = await _json(request, 4 * 1024 * 1024)
+    return await run_in_threadpool(save_cues, c, cid, body)
+
+@router.get(P + "/courses/{cid}/captions")
+def api_caption_jobs(cid: int, request: Request):
+    c = C(request); guard(c, "subtitr navbati", READERS, f"kurs #{cid}")
+    return caption_jobs(c, cid)
+
+class CapIn(BaseModel):
+    asset: int
+    lang: str = "uz"
+
+@router.post(P + "/courses/{cid}/captions")
+def api_caption_request(cid: int, body: CapIn, request: Request):
+    c = C(request); guard(c, "subtitr yaratish (Whisper)", DEPT, f"kurs #{cid} · video #{body.asset} · {body.lang[:5]}")
+    return caption_request(c, cid, body.asset, body.lang)
+
+@router.post(P + "/captions/{jid}/cancel")
+def api_caption_cancel(jid: int, request: Request):
+    c = C(request); guard(c, "subtitr vazifasini bekor qilish", DEPT, f"#{jid}")
+    return caption_cancel(c, jid)
+
+@router.post(W_CAP + "/claim")
+def api_cap_claim(request: Request):
+    r = cap_claim(request)
+    return Response(status_code=204) if r is None else r
+
+@router.get(W_CAP + "/{jid}/media")
+def api_cap_media(jid: int, request: Request):
+    return cap_media(request, jid)
+
+class CapProgIn(BaseModel):
+    stage: str = ""
+    pct: float = 0
+    message: str = ""
+
+@router.post(W_CAP + "/{jid}/progress")
+def api_cap_progress(jid: int, body: CapProgIn, request: Request):
+    return cap_progress(request, jid, body.stage, body.pct)
+
+class CapFailIn(BaseModel):
+    error: str = ""
+
+@router.post(W_CAP + "/{jid}/fail")
+def api_cap_fail(jid: int, body: CapFailIn, request: Request):
+    return cap_fail(request, jid, body.error)
+
+@router.post(W_CAP + "/{jid}/result")
+async def api_cap_result(jid: int, request: Request):
+    raw = b""
+    async for ch in request.stream():
+        raw += ch
+        if len(raw) > MAX_VTT: raise HTTPException(413, "Subtitr fayli juda katta")
+    return await run_in_threadpool(cap_result, request, jid, raw)
 
 @router.post(P + "/import/rise")
 async def api_import_rise(request: Request, name: str = "rise.zip"):

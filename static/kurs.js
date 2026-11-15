@@ -259,7 +259,7 @@ async function kuOpen(cid, lid) {
       <aside class="ku-panel" id="kuPanel" aria-label="Blok sozlamalari"></aside></div>
     <aside class="ku-cm" id="kuCm" aria-label="Izohlar" ${KU.cmOpen ? "" : "hidden"}></aside>`;
   $("#kuBack").onclick = async () => { await kuFlush(); if (KU.course?.dars?.linked && typeof dsOpenSubject === "function") return dsOpenSubject(KU.course.dars.dl_course_id); kuList(); };
-  KU.cm = null; kuCmLoad();
+  KU.cm = null; kuCmLoad(); KU.capJobs = {}; kuCapLoad();
   $("#kuCt").onclick = kuSettings;
   kuTop(); kuNote(); kuRenderSide();
   kuBindCanvas(); kuBindPanel();
@@ -527,8 +527,9 @@ function kuEd(b, bi) {
            <p class="ku-note ${d.yt_id ? "ok" : ""}">${d.yt_id ? `Video ID: <code>${esc(d.yt_id)}</code>${d.yt_start ? ` · ${d.yt_start}-soniyadan` : ""} — talabaga youtube-nocookie orqali ko'rsatiladi` : "Havolani kiriting — watch, youtu.be, shorts, embed ko'rinishlari qabul qilinadi"}</p>`
         : d.asset ? `<video class="ku-vid" src="${kuAsset(d.asset)}" ${d.poster ? `poster="${kuAsset(d.poster)}"` : ""} controls preload="metadata"></video>
            <div class="ku-acts">${kuBtn("vid-up", `${kuI("upload", 14)} Videoni almashtirish`)}${kuBtn("img", d.poster ? "Posterni almashtirish" : "Poster rasmi", `data-k="poster"`)}${d.poster ? kuBtn("img-x", "Posterni olib tashlash", `data-k="poster"`) : ""}</div>
-           <div class="ku-sub">Subtitrlar (.vtt / .srt)</div>${d.captions.map((c, i) => `<div class="ku-row"><span class="ku-chip">${esc(c.lang)}</span>${kuIn(`captions.${i}.label`, c.label, "Nomi", "", 40)}${kuX("cap-del", i)}</div>`).join("") || `<p class="ku-note">Subtitr yo'q — eshitish qobiliyati cheklangan talabalar uchun qo'shing.</p>`}
-           <div class="ku-acts"><select class="ku-in sm" id="kuCapL-${esc(b.id)}" aria-label="Subtitr tili">${Object.entries(KU.meta.sub_langs).map(([k, t]) => `<option value="${k}">${esc(t)}</option>`).join("")}</select>${kuBtn("cap-up", `${kuI("upload", 14)} Subtitr yuklash`)}</div>`
+           <div class="ku-sub">Subtitrlar (.vtt / .srt)</div>${d.captions.map((c, i) => `<div class="ku-row"><span class="ku-chip">${esc(c.lang)}</span>${kuIn(`captions.${i}.label`, c.label, "Nomi", "", 40)}${kuBtn("cap-edit", "Tahrirlash", `data-i="${i}" aria-label="${esc(c.label || c.lang)} subtitrini tahrirlash"`)}${kuX("cap-del", i)}</div>`).join("") || `<p class="ku-note">Subtitr yo'q — eshitish qobiliyati cheklangan talabalar uchun qo'shing.</p>`}
+           <div class="ku-acts"><select class="ku-in sm" id="kuCapL-${esc(b.id)}" aria-label="Subtitr tili">${Object.entries(KU.meta.sub_langs).map(([k, t]) => `<option value="${k}">${esc(t)}</option>`).join("")}</select>${kuBtn("cap-up", `${kuI("upload", 14)} Subtitr yuklash`)}${KU.meta.caps.approve ? kuBtn("cap-auto", "Subtitr yaratish (Whisper)") : ""}</div>
+           <p class="ku-note ku-capjob" data-cap-asset="${d.asset}" aria-live="polite">${esc(kuCapJobText(d.asset))}</p>`
         : `<div class="ku-drop" data-act="vid-up" role="button" tabindex="0">${ico("video", 26)}<b>Video yuklash</b><span>.mp4 yoki .webm, ${KU.meta.limits.video_mb} MB gacha</span></div>`;
       return `${src}${body}${kuIn("caption", d.caption, "Video tavsifi (ixtiyoriy)", "cap", 500)}`;
     }
@@ -700,6 +701,8 @@ async function kuAct(a, bi, e) {
     case "pr-add": d.pairs.push({left: "", right: ""}); return re();
     case "pr-del": d.pairs.splice(i, 1); return re();
     case "cap-del": d.captions.splice(i, 1); return re();
+    case "cap-edit": return kuCueEditor(d.captions[i], aid => { d.captions[i].asset = aid; re(); });
+    case "cap-auto": { const lang = $(`#kuCapL-${b.id}`)?.value || "uz"; return kuCapRequest(d.asset, lang); }
     case "vsrc": d.source = a.dataset.v; return re();
     case "img": { const id = await kuPickImage(); if (id) { kuSet(d, a.dataset.k, id); re(); } return; }
     case "img-x": kuSet(d, a.dataset.k, null); return re();
@@ -724,6 +727,80 @@ async function kuAct(a, bi, e) {
   }
 }
 function kuAssetAdd(r) { KU.assets = KU.assets || {}; KU.assets[r.id] = r; }
+
+/* ---------- subtitrlar: avtomatik (Whisper navbati) va yozuvlar muharriri ---------- */
+function kuCapJobText(asset) {
+  const j = (KU.capJobs || {})[asset];
+  if (!j) return "";
+  const when = kuD(j.updated_at);
+  return j.status === "tayyor" ? `Whisper subtitri tayyor (${j.cues} yozuv, ${when}) — tekshirib, kerak bo'lsa «Tahrirlash».`
+    : j.status === "xato" ? `Whisper subtitri: xato — ${j.error || "noma'lum"}`
+    : j.status === "bekor" ? "" : `Whisper subtitri: ${j.status_label.toLowerCase()}${j.pct ? ` (${Math.round(j.pct)}%)` : ""}${KU.capWorker === false ? " — montaj ishchisi o'chiq" : ""}`;
+}
+async function kuCapLoad() {
+  if (!KU.cid) return;
+  const r = await kuFetch(`/api/kurs/courses/${KU.cid}/captions`);
+  if (!r.ok) return;
+  KU.capWorker = r.data.worker; KU.capManual = r.data.manual; KU.capJobs = {};
+  r.data.items.slice().reverse().forEach(j => { KU.capJobs[j.asset] = j; });
+  document.querySelectorAll(".ku-capjob[data-cap-asset]").forEach(p => { p.textContent = kuCapJobText(+p.dataset.capAsset); });
+  clearTimeout(KU.capT);
+  if (r.data.items.some(j => j.status === "navbatda" || j.status === "ishlanmoqda")) KU.capT = setTimeout(() => { if (KU.view === "course") kuCapLoad(); }, 15000);
+  else if (r.data.items.some(j => j.status === "tayyor" && !KU.capSeen?.[j.id])) {   // yangi tayyor subtitr bloklarga server tomonda qo'shilgan — darsni yangilash
+    KU.capSeen = KU.capSeen || {}; const fresh = r.data.items.filter(j => j.status === "tayyor" && !KU.capSeen[j.id]);
+    fresh.forEach(j => KU.capSeen[j.id] = 1);
+    if (KU.capLoaded && KU.lid && !KU.dirty) kuLoadLesson(KU.lid, true);
+  }
+  KU.capLoaded = true;
+}
+async function kuCapRequest(asset, lang) {
+  if (!asset) { toast("Avval video faylni yuklang"); return; }
+  await kuFlush();
+  const r = await kuApi(`/api/kurs/courses/${KU.cid}/captions`, {asset, lang});
+  if (!r) return;
+  toast(r.existing ? "Bu video uchun subtitr allaqachon navbatda" : r.worker ? "Subtitr navbatga qo'yildi — montaj ishchisi Whisper bilan tayyorlaydi" : `Navbatga qo'yildi, lekin montaj ishchisi o'chiq. ${KU.capManual || ""}`);
+  kuCapLoad();
+}
+const kuTc = s => { s = Math.max(0, +s || 0); const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, x = (s % 60).toFixed(3).padStart(6, "0"); return `${h ? String(h).padStart(2, "0") + ":" : ""}${String(m).padStart(2, "0")}:${x}`; };
+const kuTcParse = t => { const p = String(t || "").trim().replace(",", ".").split(":").map(Number); if (!p.length || p.some(x => !isFinite(x))) return NaN; return p.reduce((a, x) => a * 60 + x, 0); };
+async function kuCueEditor(cap, onSaved) {
+  if (!cap?.asset) return;
+  await kuFlush();
+  const d = await kuApi(`/api/kurs/assets/${cap.asset}/cues`).catch(e => { toast(e.msg || "Subtitr o'qilmadi"); return null; });
+  if (!d) return;
+  let cues = d.cues.map(c => ({...c}));
+  const ro = !KU.course?.caps?.write;
+  const bg = kuModal(`Subtitr: ${cap.label || d.lang}`, `<p class="ku-note">${d.auto ? "Whisper avtomatik yaratgan — nomlar, atamalar va tinish belgilarini tekshiring. " : ""}Vaqt: daqiqa:soniya.ms (masalan 01:05.500). Saqlanganda yangi fayl yaratiladi — eski holat versiyalarda qoladi.</p>
+    <div class="ku-cues" id="kuCues" role="list" aria-label="Subtitr yozuvlari"></div>
+    ${ro ? "" : `<div class="ku-acts"><button type="button" class="btn sm ghost" id="kuCueAdd">${kuI("plus", 14)} Yozuv qo'shish</button></div>`}`,
+    {wide: true, okText: "Saqlash", onOk: ro ? null : async bg => {
+      const out = [];
+      for (const [k, c] of cues.entries()) {
+        const s = kuTcParse(c.startT ?? kuTc(c.start)), e = kuTcParse(c.endT ?? kuTc(c.end));
+        if (!(s >= 0) || !(e > s)) { toast(`${k + 1}-yozuv: vaqt noto'g'ri (tugash boshlanishdan keyin bo'lsin)`); return false; }
+        if (!String(c.text || "").trim()) { toast(`${k + 1}-yozuv: matn bo'sh`); return false; }
+        out.push({start: s, end: e, text: c.text});
+      }
+      const r = await kuApi(`/api/kurs/courses/${KU.cid}/vtt`, {asset: cap.asset, lang: d.lang, cues: out});
+      if (!r) return false;
+      kuAssetAdd(r); onSaved(r.id); toast(`Subtitr saqlandi (${out.length} yozuv)`); return true;
+    }});
+  const box = bg.querySelector("#kuCues");
+  const paint = () => {
+    box.innerHTML = cues.map((c, k) => `<div class="ku-cue" role="listitem" data-k="${k}"><span class="ku-cue-n">${k + 1}</span>
+      <input class="ku-in sm" data-f="startT" value="${esc(c.startT ?? kuTc(c.start))}" aria-label="${k + 1}-yozuv boshlanishi" ${ro ? "readonly" : ""} inputmode="decimal">
+      <input class="ku-in sm" data-f="endT" value="${esc(c.endT ?? kuTc(c.end))}" aria-label="${k + 1}-yozuv tugashi" ${ro ? "readonly" : ""} inputmode="decimal">
+      <textarea class="ku-in sm" data-f="text" rows="2" maxlength="500" aria-label="${k + 1}-yozuv matni" ${ro ? "readonly" : ""}>${esc(c.text)}</textarea>
+      ${ro ? "" : `<button type="button" class="ku-ib sm" data-del="${k}" aria-label="${k + 1}-yozuvni o'chirish">${ico("x", 14)}</button>`}</div>`).join("") || `<p class="ku-note">Yozuv yo'q.</p>`;
+  };
+  box.addEventListener("input", e => { const row = e.target.closest("[data-k]"); if (row && e.target.dataset.f) cues[+row.dataset.k][e.target.dataset.f] = e.target.value; });
+  box.addEventListener("click", e => { const x = e.target.closest("[data-del]"); if (x) { cues.splice(+x.dataset.del, 1); paint(); box.querySelector(`[data-k="${Math.min(+x.dataset.del, cues.length - 1)}"] textarea`)?.focus(); } });
+  bg.querySelector("#kuCueAdd")?.addEventListener("click", () => {
+    const last = cues[cues.length - 1], s = last ? (kuTcParse(last.endT ?? kuTc(last.end)) || 0) + 0.2 : 0;
+    cues.push({start: s, end: s + 3, text: ""}); paint(); box.querySelector(`[data-k="${cues.length - 1}"] textarea`)?.focus();
+  });
+  paint();
+}
 function kuInsert(type, at) {
   const def = kuClone(KU.meta.blocks[type].default);
   KU.blocks.splice(at, 0, {id: kuUid(), type, data: def, issues: []});
@@ -959,6 +1036,7 @@ async function kuSettings() {
       <label class="ku-chk"><input type="checkbox" id="kuSt_lc" ${S.lesson_count ? "checked" : ""}> Dars raqami va soni («3 / 12»)</label>
       <label class="ku-chk"><input type="checkbox" id="kuSt_sq" ${S.sequential ? "checked" : ""}> Ketma-ket o'tish (oldingi dars tugamaguncha keyingisi yopiq)</label>
       <label class="ku-chk"><input type="checkbox" id="kuSt_sr" ${S.search ? "checked" : ""}> Kurs bo'yicha qidiruv</label>
+      <label class="ku-chk"><input type="checkbox" id="kuSt_kh" ${S.kbd_hints ? "checked" : ""}> Interaktiv bloklarda klaviatura ko'rsatmasi (qulaylik)</label>
       <h4>Yakunlash (LMS'ga «completed»)</h4>
       <label class="ku-f"><span>Qoida</span><select class="ku-in" id="kuSt_cm">${Object.entries(M.completion).map(([k, t]) => `<option value="${k}" ${S.completion === k ? "selected" : ""}>${esc(t)}</option>`).join("")}</select></label>
       <label class="ku-f"><span>Ko'rilgan darslar ulushi, %</span><input class="ku-in" type="number" min="10" max="100" id="kuSt_vp" value="${S.view_pct}"></label>
@@ -970,7 +1048,7 @@ async function kuSettings() {
       const descHtml = g("#kuSt_d").value.trim().split(/\n{2,}/).map(p => `<p>${esc(p).replace(/\n/g, "<br>")}</p>`).join("");
       const r = await kuFetch(`/api/kurs/courses/${KU.cid}/settings`, {rev: co.rev, title: g("#kuSt_t").value, description: descHtml, cover_asset: cover, cover_alt: g("#kuSt_ca").value,
         accent: bg.querySelector("[name=kuAcc]:checked")?.value, dl_course_id: +g("#kuSt_dl").value || null, labels,
-        settings: {sidebar: g("#kuSt_sb").checked, lesson_count: g("#kuSt_lc").checked, sequential: g("#kuSt_sq").checked, search: g("#kuSt_sr").checked,
+        settings: {sidebar: g("#kuSt_sb").checked, lesson_count: g("#kuSt_lc").checked, sequential: g("#kuSt_sq").checked, search: g("#kuSt_sr").checked, kbd_hints: g("#kuSt_kh").checked,
                    completion: g("#kuSt_cm").value, view_pct: +g("#kuSt_vp").value, mode: g("#kuSt_md").value}});
       if (r.status === 409) { toast("Sozlamalar boshqa joyda o'zgargan — oyna yangilandi, qayta kiriting"); KU.course = (await kuApi(`/api/kurs/courses/${KU.cid}`)); return true; }
       if (!r.ok) { toast(kuErr(r.data)); return false; }
@@ -1008,6 +1086,8 @@ async function kuVersions() {
 }
 
 /* ---------- sifat hisoboti ---------- */
+const KU_FIX = {shuffle: "Javoblarni aralashtirish", labels: "Yorliqlarni tarjima qilish", mr_single: "«Bitta javob»ga o'tkazish",
+  headings: "Sarlavha darajalarini tuzatish", table_header: "Sarlavha qatorini yoqish", kbd_hints: "Ko'rsatmalarni yoqish", accent: "Standart rangga o'tkazish"};
 function kuQualityHtml(q, compact = false) {
   const pos = st => st.total ? `<div class="ku-pos" role="img" aria-label="To'g'ri javob o'rinlari">${["A", "B", "C", "D", "E"].filter(k => st.positions[k] || k < "E").map(k => {
     const n = st.positions[k] || 0, p = Math.round(100 * n / st.total);
@@ -1019,8 +1099,10 @@ function kuQualityHtml(q, compact = false) {
       <div class="ku-kpi ${q.images.missing_alt ? "bad" : ""}"><span>Alt matnsiz rasmlar</span><b>${q.images.missing_alt}/${q.images.total}</b></div>
       <div class="ku-kpi ${q.english_count ? "bad" : ""}"><span>Inglizcha yorliqlar</span><b>${q.english_count}</b></div>
       <div class="ku-kpi ${q.coverage.uncovered.length && q.coverage.quiz_questions ? "warn" : ""}"><span>Test qamrovi</span><b>${q.coverage.quiz_questions ? q.coverage.covered : "—"}</b><small>${q.coverage.quiz_questions ? `${q.coverage.quiz_questions} savol · darslar` : "test yo'q"}</small></div>
-      <div class="ku-kpi ${q.mr_single ? "warn" : ""}"><span>«Bir nechta javob» — 1 ta to'g'ri</span><b>${q.mr_single}</b></div></div>
-    <ul class="ku-qis">${q.issues.map(i => `<li class="${lv[i.level]}"><div><b>${esc(i.title)}</b><span>${esc(i.detail)}</span></div>${i.fix ? `<button type="button" class="btn sm primary" data-fix="${i.fix}">${({shuffle: "Javoblarni aralashtirish", labels: "Yorliqlarni tarjima qilish", mr_single: "«Bitta javob»ga o'tkazish"})[i.fix]}</button>` : ""}</li>`).join("")}</ul>
+      <div class="ku-kpi ${q.mr_single ? "warn" : ""}"><span>«Bir nechta javob» — 1 ta to'g'ri</span><b>${q.mr_single}</b></div>
+      ${q.a11y ? `<div class="ku-kpi ${q.a11y.rules.some(r => r.level === "bad") ? "bad" : q.a11y.passed < q.a11y.total ? "warn" : ""}" data-a11y-kpi><span>Qulaylik (a11y)</span><b>${q.a11y.passed}/${q.a11y.total}</b><small>qoida bajarildi</small></div>` : ""}</div>
+    <ul class="ku-qis">${q.issues.map(i => `<li class="${lv[i.level]}" ${i.key ? `data-a11y="${esc(i.key)}"` : ""}><div><b>${esc(i.title)}</b><span>${esc(i.detail)}</span></div>${i.fix ? `<button type="button" class="btn sm primary" data-fix="${i.fix}">${KU_FIX[i.fix] || "Tuzatish"}</button>` : ""}${i.action === "captions" && KU.meta.caps.approve ? `<button type="button" class="btn sm primary" data-capall>Subtitr yaratish (Whisper)</button>` : ""}</li>`).join("")}</ul>
+    ${!compact && q.a11y ? `<h4>Qulaylik tekshiruvi (WCAG 2.1 AA asosida)</h4><table class="ku-t ku-a11y"><thead><tr><th scope="col">Qoida</th><th scope="col">Holat</th><th scope="col">Qanday tuzatiladi</th></tr></thead><tbody>${q.a11y.rules.map(r => `<tr data-rule="${esc(r.key)}"><td><b>${esc(r.title)}</b>${r.count ? `<details><summary>${r.count} ta joy</summary><ul class="ku-isslist">${r.where.slice(0, 30).map(w => `<li class="warn">${esc(w)}</li>`).join("")}</ul></details>` : ""}</td><td>${r.level === "ok" ? kuChip("bajarildi", "ok") : kuChip(r.level === "bad" ? "muammo" : "tavsiya", r.level === "bad" ? "bad" : "warn")}</td><td class="sm">${esc(r.hint)}${r.key === "contrast" ? ` <span class="muted">(eng past: ${r.contrast.min}:1)</span>` : ""}</td></tr>`).join("")}</tbody></table>` : ""}
     ${compact ? "" : `<div class="ku-2col"><div><h4>To'g'ri javob o'rni — bilimni tekshirish</h4>${pos(q.knowledge)}</div><div><h4>To'g'ri javob o'rni — yakuniy test</h4>${pos(q.quiz)}</div></div>
       ${q.coverage.quiz_questions ? `<h4>Test savollari darslar bo'yicha (taxminiy — matn o'xshashligi)</h4><table class="ku-t"><tbody>${q.coverage.lessons.map(l => `<tr class="${l.questions ? "" : "muted"}"><td>${l.no}. ${esc(l.title)}</td><td class="n">${l.questions || "—"}</td></tr>`).join("")}</tbody></table>` : ""}
       ${q.english.length ? `<h4>Inglizcha matnlar</h4><ul class="ku-isslist">${q.english.slice(0, 40).map(x => `<li class="warn"><b>${esc(x.where)}:</b> ${esc(x.text)}</li>`).join("")}</ul>` : ""}
@@ -1036,6 +1118,17 @@ function kuQualityMount(box, cid, q, compact = true) {
     toast(`Tuzatildi: ${r.changed} ta o'zgarish (oldingi holat «Versiyalar»da)`);
     kuQualityMount(box, cid, r.quality, compact);
     if (KU.cid === cid && KU.view === "course") { KU.course = r.course; KU.dirty = false; if (KU.lid) kuLoadLesson(KU.lid, true); }
+  });
+  box.querySelectorAll("[data-capall]").forEach(b => b.onclick = async () => {   /* subtitrsiz barcha videolar — Whisper navbatiga */
+    const items = (q.a11y?.rules.find(r => r.key === "captions")?.items || []), seen = new Set();
+    b.disabled = true; let n = 0, worker = true;
+    for (const it of items) {
+      if (!it.asset || seen.has(it.asset)) continue; seen.add(it.asset);
+      const r = await kuApi(`/api/kurs/courses/${cid}/captions`, {asset: it.asset, lang: "uz"});
+      if (r) { n++; worker = r.worker; }
+    }
+    toast(`${n} ta video subtitr navbatiga qo'yildi${worker ? "" : " — montaj ishchisi o'chiq: qo'lda yo'l docs/kurs.md da"}`);
+    if (KU.cid === cid) kuCapLoad();
   });
 }
 async function kuQuality() {
