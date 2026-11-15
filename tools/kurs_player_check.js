@@ -378,6 +378,209 @@ async function runPhone(br, base) {
   await d.ctx.close();
 }
 
+// ---------------------------------------------------------------- qulaylik (axe uslubidagi qo'lda tekshiruvlar): klaviatura, ARIA, matn o'lchami, TTS
+const A11Y_EXTRA = img => [
+  { id: 'ax0000001', type: 'paragraph', html: '<p>Bu dars qulaylik tekshiruvi uchun. Matnni ovozli tinglash mumkin. Ikkinchi gap ham bor.</p>' },
+  { id: 'ax0000002', type: 'accordion', items: [{ title: 'Birinchi bo\'lim', html: '<p>A</p>' }, { title: 'Ikkinchi bo\'lim', html: '<p>B <a href="https://isft.uz">ISFT sayti</a></p>' }] },
+  { id: 'ax0000003', type: 'tabs', items: [{ title: 'Yorliq A', html: '<p>A</p>' }, { title: 'Yorliq B', html: '<p>B</p>' }, { title: 'Yorliq C', html: '<p>C</p>' }] },
+  { id: 'ax0000004', type: 'flashcards', style: 'grid', cards: [{ front: 'Savol', back: 'Javob' }, { front: 'Savol 2', back: 'Javob 2' }] },
+  { id: 'ax0000005', type: 'sorting', title: 'Saralang', categories: ['Meva', 'Sabzavot'], items: [{ text: 'Olma', cat: 0 }, { text: 'Sabzi', cat: 1 }] },
+  { id: 'ax0000006', type: 'matching', title: 'Moslang', pairs: [{ left: 'Toshkent', right: 'Poytaxt' }, { left: 'Amudaryo', right: 'Daryo' }] },
+  { id: 'ax0000007', type: 'process', items: [{ title: '1-qadam', html: '<p>a</p>' }, { title: '2-qadam', html: '<p>b</p>' }, { title: '3-qadam', html: '<p>c</p>' }] },
+  { id: 'ax0000008', type: 'timeline', items: [{ date: '1991', title: 'Mustaqillik', html: '<p>x</p>' }] },
+  { id: 'ax0000009', type: 'labeled_graphic', src: img, alt: 'Belgili rasm', markers: [{ x: 20, y: 30, title: 'Nuqta', html: '<p>A</p>' }] },
+  { id: 'ax0000010', type: 'gallery', style: 'carousel', items: [{ src: img, alt: 'A', caption: '1' }, { src: img, alt: 'B', caption: '2' }] },
+  { id: 'ax0000011', type: 'heading', text: 'Bo\'lim sarlavhasi', level: 2 },
+  { id: 'ax0000012', type: 'list', style: 'bulleted', items: ['<p>Birinchi band</p>', '<p>Ikkinchi band</p>'] }
+];
+async function a11yCtx(br, base, opts, init) {
+  const x = await newCtx(br, opts);
+  if (init) await x.ctx.addInitScript(init.fn, init.arg);
+  const img = (CONTENT.cover && CONTENT.cover.src) || (ALLB.find(b => b.src) || {}).src;
+  await x.ctx.route(/\/(kurs|csp)\/xapi\/content\.js$/, async r => {
+    const resp = await r.fetch(), c = JSON.parse((await resp.text()).trim().replace(/^window\.KURS = /, '').replace(/;$/, ''));
+    c.settings.kbd_hints = true;
+    c.lessons[0].blocks = A11Y_EXTRA(img).concat(c.lessons[0].blocks.filter(b => b.type !== 'continue'));
+    r.fulfill({ response: resp, body: 'window.KURS = ' + JSON.stringify(c) + ';' });
+  });
+  return x;
+}
+// ekran o'quvchisi nomi (soddalashtirilgan accname): aria-labelledby → aria-label → <label for> / o'rab turgan label → matn → title
+const AXE = () => {
+  const vis = e => !!(e.offsetWidth || e.offsetHeight || e.getClientRects().length) && !e.closest('[hidden]') && getComputedStyle(e).visibility !== 'hidden';
+  const name = e => {
+    const lb = e.getAttribute('aria-labelledby'); if (lb) return lb.split(/\s+/).map(i => (document.getElementById(i) || {}).textContent || '').join(' ').trim();
+    if (e.getAttribute('aria-label')) return e.getAttribute('aria-label').trim();
+    if (e.id) { const l = document.querySelector(`label[for="${CSS.escape(e.id)}"]`); if (l && l.textContent.trim()) return l.textContent.trim(); }
+    const w = e.closest('label'); if (w && w.textContent.trim()) return w.textContent.trim();
+    if (e.tagName === 'FIELDSET') return ((e.querySelector('legend') || {}).textContent || '').trim();
+    return (e.textContent || '').trim() || (e.getAttribute('title') || '').trim() || (e.querySelector('img[alt]') || {}).alt || '';
+  };
+  const ctl = [...document.querySelectorAll('button, a[href], input:not([type=hidden]), select, textarea, [role=tab], [tabindex]')].filter(vis);
+  const noName = ctl.filter(e => !name(e)).map(e => e.outerHTML.slice(0, 90));
+  const ids = [...document.querySelectorAll('[id]')].map(e => e.id), dup = ids.filter((x, i) => ids.indexOf(x) !== i);
+  const broken = [];
+  document.querySelectorAll('[aria-controls],[aria-labelledby],[aria-describedby]').forEach(e => ['aria-controls', 'aria-labelledby', 'aria-describedby'].forEach(a => {
+    (e.getAttribute(a) || '').split(/\s+/).filter(Boolean).forEach(i => { if (!document.getElementById(i)) broken.push(a + '=' + i); });
+  }));
+  const posTab = [...document.querySelectorAll('[tabindex]')].filter(e => +e.getAttribute('tabindex') > 0).length;
+  const imgs = [...document.querySelectorAll('img')].filter(i => !i.hasAttribute('alt')).length;
+  const hs = [...document.querySelectorAll('main h1, main h2, main h3, main h4, main h5, main h6')].filter(vis).map(h => +h.tagName[1]);
+  const skips = hs.filter((l, i) => i > 0 && l > hs[i - 1] + 1 || i === 0 && l !== 1).length;
+  const exp = [...document.querySelectorAll('[aria-expanded]')].filter(e => !/^(true|false)$/.test(e.getAttribute('aria-expanded'))).length;
+  return { n: ctl.length, noName, dup: [...new Set(dup)], broken, posTab, imgs, hs: hs.join(''), skips, exp, lang: document.documentElement.lang };
+};
+
+async function runA11y(br, base) {
+  const L0 = LESSONS[0].id, url = base + '/kurs/xapi/index.html#lesson=' + L0;
+  const SHOTS = OUT;
+  section('Qulaylik: skip-link, ARIA, nomlar, sarlavhalar, Tab bilan yetib borish');
+  let x = await a11yCtx(br, base);
+  let pg = x.page;
+  await pg.goto(url); await pg.waitForFunction(() => window.ISFTKurs && window.ISFTKurs.ready);
+  await pg.keyboard.press('Tab');
+  const sk = await pg.evaluate(() => ({ cls: document.activeElement.className, txt: document.activeElement.textContent }));
+  await pg.keyboard.press('Enter');
+  ok(sk.cls === 'skip' && /Asosiy mazmunga/.test(sk.txt) && await pg.evaluate(() => document.activeElement.id === 'main'), 'Birinchi Tab — «Asosiy mazmunga o\'tish», Enter — fokus <main> ga');
+  let ax = await pg.evaluate(AXE);
+  ok(!ax.noName.length, `Barcha boshqaruv elementlarining nomi bor (${ax.n} ta)` + (ax.noName.length ? ': ' + ax.noName.slice(0, 3).join(' | ') : ''));
+  ok(!ax.dup.length && !ax.broken.length, 'id takrorlanmaydi, aria-controls / labelledby / describedby havolalari mavjud' + (ax.dup.concat(ax.broken).length ? ': ' + ax.dup.concat(ax.broken).slice(0, 4).join(', ') : ''));
+  ok(!ax.posTab && !ax.imgs && !ax.exp && ax.lang === 'uz', 'Musbat tabindex yo\'q, barcha <img> da alt, aria-expanded — true/false, lang=uz');
+  ok(!ax.skips, `Sarlavhalar darajasi sakramaydi (h1 → h2 → h3): ${ax.hs.slice(0, 30)}`);
+  ok(await pg.$eval('#b-ax0000002 .acc-i > *:first-child', e => e.tagName) === 'H2', 'Muallif sarlavhasisiz akkordeon bandlari — h2 (h1 → h3 sakrashi yo\'q)');
+  // Tab bilan har bir ko'rinadigan boshqaruv elementiga yetib borish (roving tabindex: yorliqlar — bitta to'xtash, radio — guruh bo'yicha bitta)
+  await pg.evaluate(() => { window.__seen = new Set(); window.__skip = 0; document.addEventListener('focusin', e => { window.__seen.add(e.target); if (e.target.classList.contains('skip')) window.__skip++; }); document.activeElement.blur(); window.scrollTo(0, 0); });
+  for (let k = 0; k < 900; k++) { await pg.keyboard.press('Tab'); if (k % 10 === 9 && await pg.evaluate(() => window.__skip >= 2)) break; }   // to'liq aylana (skip-link qayta fokusda)
+  const reach = await pg.evaluate(() => {
+    const vis = e => !!(e.offsetWidth || e.offsetHeight || e.getClientRects().length) && !e.closest('[hidden]');
+    const need = [...document.querySelectorAll('main button:not([disabled]):not([tabindex="-1"]), main a[href], main input:not([disabled]):not([type=radio]), main select, main [tabindex="0"]')].filter(vis);
+    const miss = need.filter(e => !window.__seen.has(e));
+    return { need: need.length, miss: miss.map(e => e.outerHTML.slice(0, 80)) };
+  });
+  ok(reach.need > 20 && !reach.miss.length, `Tab bilan ${reach.need} ta element(ning) hammasiga yetib borildi` + (reach.miss.length ? ' — yetilmadi: ' + reach.miss.slice(0, 3).join(' | ') : ''));
+  // klaviatura ko'rsatmalari (kbd_hints)
+  const kh = await pg.$$eval('.kbd-h', ps => ps.map(p => p.parentElement.className.split(' ')[1] + (p === p.parentElement.firstElementChild ? '' : '!')));
+  ok(['b-accordion', 'b-tabs', 'b-flashcards', 'b-sorting', 'b-matching', 'b-process', 'b-labeled_graphic', 'b-gallery'].every(t => kh.includes(t)), `kbd_hints: klaviatura ko'rsatmasi blok boshida (${kh.length} ta)`);
+  // akkordeon: Enter / Bo'sh joy, aria-expanded, region nomi
+  await pg.focus('#b-ax0000002 .acc-b >> nth=0'); await pg.keyboard.press('Enter');
+  const acc1 = await pg.$eval('#b-ax0000002 .acc-b', b => ({ e: b.getAttribute('aria-expanded'), vis: !document.getElementById(b.getAttribute('aria-controls')).hidden, lab: document.getElementById(b.getAttribute('aria-controls')).getAttribute('aria-labelledby') === b.id }));
+  await pg.keyboard.press(' ');
+  const acc2 = await pg.$eval('#b-ax0000002 .acc-b', b => b.getAttribute('aria-expanded'));
+  ok(acc1.e === 'true' && acc1.vis && acc1.lab && acc2 === 'false', 'Akkordeon: Enter ochadi (aria-expanded=true, panel region nomi — tugma), Bo\'sh joy yopadi');
+  // yorliqlar: ← → Home End, bitta tab to'xtash joyi
+  await pg.focus('#b-ax0000003 [role=tab][aria-selected=true]'); await pg.keyboard.press('ArrowRight');
+  const t1 = await pg.evaluate(() => ({ f: document.activeElement.textContent, s: document.querySelector('#b-ax0000003 [aria-selected=true]').textContent, z: document.querySelectorAll('#b-ax0000003 [role=tab][tabindex="0"]').length }));
+  await pg.keyboard.press('End'); const t2 = await pg.evaluate(() => document.activeElement.textContent);
+  await pg.keyboard.press('ArrowRight'); const t3 = await pg.evaluate(() => document.activeElement.textContent);
+  ok(t1.f === 'Yorliq B' && t1.s === 'Yorliq B' && t1.z === 1 && t2 === 'Yorliq C' && t3 === 'Yorliq A', 'Yorliqlar: → keyingisi (tanlangan va fokusda), End — oxirgisi, aylanma; faqat bittasi Tab to\'xtashi');
+  // kartochka: Bo'sh joy bilan aylantirish, orqa tomoni ekran o'quvchisiga ochiladi
+  await pg.focus('#b-ax0000004 .fc >> nth=0'); await pg.keyboard.press(' ');
+  ok(await pg.$eval('#b-ax0000004 .fc', b => b.getAttribute('aria-pressed') === 'true' && b.querySelector('.fc-b').getAttribute('aria-hidden') === 'false' && b.querySelector('.fc-f').getAttribute('aria-hidden') === 'true'),
+    'Kartochka: Bo\'sh joy — aylanadi (aria-pressed=true), orqa tomon aria-hidden=false');
+  // saralash: faqat klaviatura bilan
+  await pg.focus('#b-ax0000005 .sort-pool .s-card >> nth=0');
+  const chipTxt = await pg.evaluate(() => document.activeElement.textContent.trim());
+  await pg.keyboard.press('Enter');
+  const zoneBtn = await pg.evaluate(t => { const i = t === 'Olma' ? 0 : 1; const b = document.querySelectorAll('#b-ax0000005 .s-zone .btn')[i]; return { dis: b.disabled, lab: b.getAttribute('aria-label') }; }, chipTxt);
+  await pg.focus(`#b-ax0000005 .s-zone >> nth=${chipTxt === 'Olma' ? 0 : 1} >> .btn`); await pg.keyboard.press('Enter');
+  ok(!zoneBtn.dis && /toifasiga joylash/.test(zoneBtn.lab) && await pg.evaluate(t => [...document.querySelectorAll('#b-ax0000005 .s-zone .s-card')].some(c => c.textContent.trim() === t), chipTxt),
+    `Saralash klaviaturada: element (Enter) → «${zoneBtn.lab}» (Enter) — joylashdi`);
+  // moslashtirish: har ro'yxatning nomi bor
+  ok(await pg.$$eval('#b-ax0000006 select', ss => ss.length === 2 && ss.every(s => document.querySelector(`label[for="${s.id}"]`))), 'Moslashtirish: har bir ro\'yxat <label for> bilan');
+  // jarayon: oxirgi qadamda fokus yo'qolmaydi
+  await pg.focus('#b-ax0000007 .proc-n .btn.primary');
+  for (let k = 0; k < 3; k++) await pg.keyboard.press('Enter');
+  ok(await pg.evaluate(() => document.activeElement !== document.body && !!document.activeElement.closest('#b-ax0000007') && !document.activeElement.disabled), 'Jarayon: oxirgi qadamda «Keyingi» o\'chganda fokus blok ichida qoladi');
+  // belgili rasm
+  await pg.focus('#b-ax0000009 .lg-m'); await pg.keyboard.press('Enter');
+  ok(await pg.$eval('#b-ax0000009 .lg-m', b => b.getAttribute('aria-expanded') === 'true' && !document.getElementById(b.getAttribute('aria-controls')).hidden), 'Belgili rasm: Enter — izoh paneli (aria-controls, aria-expanded)');
+  // test darsi: savol fieldset + legend, variantlar label bilan
+  if (QUIZ) {
+    await pg.evaluate(i => window.ISFTKurs.go(i), lessonIndex(QUIZ.id)); await sleep(150);
+    await pg.click('.qz-start .btn.primary'); await sleep(100);
+    ok(await pg.evaluate(() => { const fs = document.querySelector('.qz fieldset'); return !!fs && !!fs.querySelector('legend').textContent.trim() && [...fs.querySelectorAll('input')].every(i => i.type === 'text' ? i.getAttribute('aria-label') : document.querySelector(`label[for="${i.id}"]`)) && document.activeElement && document.activeElement.closest('fieldset') === fs; }),
+      'Test: savol — fieldset/legend, variantlar label bilan, fokus birinchi variantda');
+    ax = await pg.evaluate(AXE);
+    ok(!ax.noName.length && !ax.broken.length, 'Test sahifasi: nomlar va ARIA havolalari to\'g\'ri');
+  }
+  ok(!x.errs.length, 'Konsol xatosiz' + (x.errs.length ? ': ' + x.errs.slice(0, 3).join(' | ') : ''));
+  await x.ctx.close();
+
+  section('Qulaylik paneli: matn o\'lchami, yuqori kontrast, o\'qish uchun qulay shrift (localStorage)');
+  x = await a11yCtx(br, base); pg = x.page;
+  await pg.goto(url); await pg.waitForFunction(() => window.ISFTKurs && window.ISFTKurs.ready);
+  const fs0 = await pg.evaluate(() => parseFloat(getComputedStyle(document.body).fontSize));
+  const ab = await pg.$eval('.top .a11y-b', b => ({ exp: b.getAttribute('aria-expanded'), ctl: b.getAttribute('aria-controls'), lab: b.getAttribute('aria-label') }));
+  await pg.click('.top .a11y-b');
+  const p1 = await pg.evaluate(id => ({ vis: !document.getElementById(id).hidden, exp: document.querySelector('.a11y-b').getAttribute('aria-expanded'), inside: !!document.activeElement.closest('#' + id) }), ab.ctl);
+  ok(ab.exp === 'false' && ab.lab && p1.vis && p1.exp === 'true' && p1.inside, '«Aa» tugmasi: aria-expanded / aria-controls, panel ochilganda fokus panel ichida');
+  await pg.click('[data-a11y="fs+"]'); await pg.click('[data-a11y="fs+"]');
+  const fs1 = await pg.evaluate(() => ({ v: document.documentElement.style.getPropertyValue('--a11y-fs'), px: parseFloat(getComputedStyle(document.body).fontSize), out: document.querySelector('.a11y-v').textContent }));
+  ok(fs1.v === '1.25' && Math.abs(fs1.px - fs0 * 1.25) < 0.6 && fs1.out === '125%', `A+ ×2: matn ${fs0}px → ${fs1.px}px (125%)`);
+  await pg.click('[data-a11y="hc"]'); await pg.click('[data-a11y="dys"]');
+  const hc = await pg.evaluate(() => ({ c: document.documentElement.className, bg: getComputedStyle(document.body).backgroundColor, ink: getComputedStyle(document.body).color, ff: getComputedStyle(document.body).fontFamily,
+    pressed: [...document.querySelectorAll('.a11y-t')].map(b => b.getAttribute('aria-pressed')).join(',') }));
+  ok(/a11y-hc/.test(hc.c) && hc.bg === 'rgb(255, 255, 255)' && hc.ink === 'rgb(0, 0, 0)' && /Verdana/.test(hc.ff) && hc.pressed === 'true,true,false', `Yuqori kontrast (oq/qora) va qulay shrift (${hc.ff.split(',')[0]}), tugmalar aria-pressed`);
+  await pg.screenshot({ path: path.join(SHOTS, 'a11y-panel.png') });
+  await pg.keyboard.press('Escape');
+  ok(await pg.evaluate(() => document.querySelector('.a11y-p').hidden && document.activeElement.classList.contains('a11y-b')), 'Esc — panel yopiladi, fokus «Aa» tugmasiga qaytadi');
+  await pg.screenshot({ path: path.join(SHOTS, 'a11y-contrast-dyslexia.png'), fullPage: false });
+  await pg.reload(); await pg.waitForFunction(() => window.ISFTKurs && window.ISFTKurs.ready);
+  const kept = await pg.evaluate(() => ({ v: document.documentElement.style.getPropertyValue('--a11y-fs'), c: document.documentElement.className, ls: localStorage.getItem('isft-a11y') }));
+  ok(kept.v === '1.25' && /a11y-hc/.test(kept.c) && /a11y-dys/.test(kept.c) && JSON.parse(kept.ls).fs === 125, 'Qayta yuklanganda sozlamalar saqlangan (localStorage «isft-a11y»)');
+  await pg.click('.top .a11y-b'); await pg.click('[data-a11y="rm"]');
+  ok(await pg.$eval('#b-ax0000004 .fc-in', e => getComputedStyle(e).transitionDuration.split(',').every(d => parseFloat(d) === 0)), '«Harakatni kamaytirish» — kartochka animatsiyasi o\'chadi');
+  await pg.evaluate(() => localStorage.removeItem('isft-a11y'));
+  ok(!x.errs.length, 'Konsol xatosiz' + (x.errs.length ? ': ' + x.errs.slice(0, 3).join(' | ') : ''));
+  await x.ctx.close();
+  // prefers-reduced-motion (tizim sozlamasi) va sandbox (localStorage yo'q)
+  x = await a11yCtx(br, base, { reducedMotion: 'reduce' }); pg = x.page;
+  await pg.goto(url); await pg.waitForFunction(() => window.ISFTKurs && window.ISFTKurs.ready);
+  ok(await pg.$eval('#b-ax0000004 .fc-in', e => getComputedStyle(e).transitionDuration.split(',').every(d => parseFloat(d) === 0)) && await pg.evaluate(() => window.ISFTA11y.reduced()), 'prefers-reduced-motion: reduce — animatsiyalar o\'chiq');
+  await x.ctx.close();
+  x = await a11yCtx(br, base); pg = x.page;
+  await pg.goto(base + '/csp/xapi/index.html?preview=1#lesson=' + L0); await pg.waitForFunction(() => window.ISFTKurs && window.ISFTKurs.ready);
+  await pg.click('.top .a11y-b'); await pg.click('[data-a11y="fs+"]');
+  ok(await pg.evaluate(() => document.documentElement.style.getPropertyValue('--a11y-fs') === '1.12' && /saqlashga ruxsat bermadi/.test(document.querySelector('.a11y-note').textContent)) && !x.errs.length,
+    'Sandbox (localStorage yo\'q): A+ ishlaydi, «saqlanmaydi» izohi, konsol xatosiz');
+  await x.ctx.close();
+
+  section('Ovozli o\'qish («Tinglash», Web Speech API)');
+  const mock = { fn: voices => {
+    window.__spoken = [];
+    const ss = { getVoices: () => voices.map(l => ({ lang: l, name: l, default: l === 'en-US' })), speaking: false,
+      speak(u) { window.__spoken.push({ text: u.text, voice: u.voice && u.voice.lang, lang: u.lang }); setTimeout(() => u.onend && u.onend(), 400); },
+      cancel() {}, addEventListener() {} };
+    Object.defineProperty(window, 'speechSynthesis', { value: ss, configurable: true });
+    window.SpeechSynthesisUtterance = function (t) { this.text = t; };
+  } };
+  x = await a11yCtx(br, base, null, { fn: () => { try { Object.defineProperty(window, 'speechSynthesis', { value: undefined, configurable: true }); } catch (e) { /* */ } window.SpeechSynthesisUtterance = undefined; }, arg: null }); pg = x.page;
+  await pg.goto(url); await pg.waitForFunction(() => window.ISFTKurs && window.ISFTKurs.ready);
+  const nT = (await pg.$$('.b-paragraph .tts-b, .b-heading_paragraph .tts-b, .b-list .tts-b')).length;
+  await pg.click('#b-ax0000001 .tts-b'); await sleep(100);
+  ok(nT >= 2 && /qo'llab-quvvatlamaydi/.test(await pg.$eval('#b-ax0000001 .tts-m', e => e.textContent)) && await pg.$eval('#b-ax0000001 .tts-b', b => b.getAttribute('aria-pressed') === 'false') && !x.errs.length,
+    `«Tinglash» tugmasi matn bloklarida (${nT} ta); speechSynthesis yo'q — tushunarli xabar, xatosiz`);
+  await x.ctx.close();
+  x = await a11yCtx(br, base, null, { fn: mock.fn, arg: ['en-US', 'ru-RU', 'uz-UZ'] }); pg = x.page;
+  await pg.goto(url); await pg.waitForFunction(() => window.ISFTKurs && window.ISFTKurs.ready);
+  await pg.click('#b-ax0000001 .tts-b'); await sleep(80);
+  const rd = await pg.evaluate(() => ({ cls: document.getElementById('b-ax0000001').classList.contains('reading'), p: document.querySelector('#b-ax0000001 .tts-b').getAttribute('aria-pressed'), sp: window.__spoken.slice(), m: document.querySelector('#b-ax0000001 .tts-m').textContent }));
+  await pg.screenshot({ path: path.join(SHOTS, 'a11y-tts-reading.png') });
+  ok(rd.cls && rd.p === 'true' && rd.sp.length >= 1 && rd.sp[0].voice === 'uz-UZ' && /qulaylik tekshiruvi/.test(rd.sp[0].text) && /o'zbekcha ovoz/.test(rd.m), `O'qilayotgan blok ajratildi, ovoz uz-UZ (${rd.sp[0] && rd.sp[0].voice})`);
+  await pg.waitForFunction(() => !document.getElementById('b-ax0000001').classList.contains('reading'), null, { timeout: 5000 }).catch(() => {});
+  const fin = await pg.evaluate(() => ({ n: window.__spoken.length, p: document.querySelector('#b-ax0000001 .tts-b').getAttribute('aria-pressed') }));
+  ok(fin.p === 'false' && fin.n >= 1, `O'qish tugadi — ajratish olib tashlandi (${fin.n} bo'lak)`);
+  await x.ctx.close();
+  for (const [vs, re, lbl] of [[['en-US', 'ru-RU'], /ruscha ovoz/, 'uz yo\'q → ru-RU'], [['en-US'], /standart ovoz/, 'faqat en-US → standart'], [[], /ovoz topilmadi/i, 'ovoz yo\'q → xabar']]) {
+    x = await a11yCtx(br, base, null, { fn: mock.fn, arg: vs }); pg = x.page;
+    await pg.goto(url); await pg.waitForFunction(() => window.ISFTKurs && window.ISFTKurs.ready);
+    await pg.click('#b-ax0000012 .tts-b'); await sleep(vs.length ? 80 : 1200);
+    const r = await pg.evaluate(() => ({ m: document.querySelector('#b-ax0000012 .tts-m').textContent, v: (window.__spoken[0] || {}).voice }));
+    ok(re.test(r.m) && !x.errs.length, `Ovoz tanlash: ${lbl} («${r.m}»${r.v ? ', ' + r.v : ''})`);
+    await x.ctx.close();
+  }
+}
+
 (async () => {
   const port = await listen(srv), lport = await listen(lrs);
   const base = 'http://127.0.0.1:' + port, lrsBase = 'http://127.0.0.1:' + lport;
@@ -387,6 +590,7 @@ async function runPhone(br, base) {
     await runScorm2004(br, base);
     await runXapi(br, base, lrsBase);
     await runPhone(br, base);
+    await runA11y(br, base);
   } catch (e) { ok(false, 'Kutilmagan xato: ' + (e && e.stack || e).toString().slice(0, 500)); }
   await br.close(); srv.close(); lrs.close();
   console.log('\n' + Object.entries(counts).map(([s, c]) => `${s}: ${c[0]} ✓ ${c[1]} ✗`).join('\n'));

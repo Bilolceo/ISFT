@@ -379,3 +379,10 @@ textarea.ku-in{resize:vertical;line-height:1.5}
 .ku-row-t small{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @media (max-width:640px){.ku-filt,.ku-filt .ku-in,.ku-filt .ku-search{width:100%;max-width:100%}.ku-grp-n{width:100%;padding-left:26px}.ku-row-c{flex-wrap:wrap}.ku-row-t{flex-basis:calc(100% - 50px)}}
 @media (prefers-reduced-motion:reduce){.ku-grp-c{transition:none}}
+/* subtitr yozuvlari muharriri va qulaylik jadvali */
+.ku-cues{display:flex;flex-direction:column;gap:6px;max-height:55vh;overflow:auto;padding:2px}
+.ku-cue{display:grid;grid-template-columns:26px 112px 112px minmax(0,1fr) 32px;gap:6px;align-items:start}
+.ku-cue-n{font-size:12px;color:var(--muted);padding-top:8px;text-align:right}
+.ku-cue textarea{resize:vertical;min-height:38px}
+@media (max-width:700px){.ku-cue{grid-template-columns:26px 1fr 1fr 32px}.ku-cue textarea{grid-column:2/4}}
+.ku-a11y td{vertical-align:top}.ku-a11y details summary{cursor:pointer;font-size:12px;color:var(--muted)}

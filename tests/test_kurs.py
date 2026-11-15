@@ -370,7 +370,9 @@ ok(Qr["knowledge"]["total"] == 4 and Qr["knowledge"]["positions"] == {"B": 4} an
 ok(Qr["images"]["total"] == 2 and Qr["images"]["missing_alt"] == 2 and Qr["images"]["cover_missing_alt"], "Sifat: 2/2 rasm alt matnsiz, muqova alt'siz")
 ok(Qr["english_count"] == 5 and {e["text"] for e in Qr["english"]} >= {"Quiz", "Expand each tab to explore the main ideas of this lesson."}, f"Sifat: {Qr['english_count']} ta inglizcha yorliq (Continue, Quiz, Expand each…)")
 ok(Qr["coverage"]["covered"] == "1–2" and [u["no"] for u in Qr["coverage"]["uncovered"]] == [3] and Qr["mr_single"] == 1, "Sifat: test 1–2-darslarni qamraydi (3-dars savolsiz), 1 ta «bir nechta javob»da bitta to'g'ri")
-ok({i["fix"] for i in Qr["issues"] if i["fix"]} == {"shuffle", "labels", "mr_single"}, "Tuzatish takliflari: aralashtirish, yorliqlar, savol turi")
+fx_set = {i["fix"] for i in Qr["issues"] if i["fix"]}
+ok(fx_set >= {"shuffle", "labels", "mr_single"} and fx_set <= set(K.FIXES) and all(i.get("group") == "a11y" for i in Qr["issues"] if i["fix"] in fx_set - {"shuffle", "labels", "mr_single"}),
+   f"Tuzatish takliflari: aralashtirish, yorliqlar, savol turi (+ qulaylik: {sorted(fx_set - {'shuffle', 'labels', 'mr_single'})})")
 f1 = teach.post(f"{P}/courses/{ic}/fix", json={"fix": "shuffle"}).json()["quality"]
 ok(max(f1["knowledge"]["positions"].values()) <= 2 and not f1["knowledge"]["flag_pos"] and all(teach.get(f"{P}/lessons/{ic_v['lessons_list'][3]['id']}").json()["quiz"]["shuffle"] for _ in [0]),
    f"«Aralashtirish»: to'g'ri javob o'rinlari teng taqsimlandi {f1['knowledge']['positions']}, testda aralashtirish yoqildi")
@@ -426,6 +428,203 @@ else:
     ok(cov and cov <= {1, 2, 3, 4, 5} and {u["no"] for u in Qr["coverage"]["uncovered"]} >= set(range(6, 14)), f"Test qamrovi: {Qr['coverage']['covered']}-darslar (6–13-darslar savolsiz)")
 
 # =============================================================================================
+print("== 13a. Qulaylik qoidalari (sof funksiyalar, har qoida uchun fixture)")
+def mkpdf(text: str) -> bytes:
+    """Kichik haqiqiy PDF: matnli (BT … Tj) yoki faqat chizma (skaner o'xshatmasi — matn qatlamisiz)."""
+    objs = [b"<< /Type /Catalog /Pages 2 0 R >>", b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>"]
+    cs = (b"BT /F1 18 Tf 20 100 Td (%s) Tj ET" % text.encode()) if text else b"0 0 1 rg 10 10 100 100 re f"
+    objs += [b"<< /Length %d >>\nstream\n" % len(cs) + cs + b"\nendstream", b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
+    out, offs = b"%PDF-1.4\n", []
+    for i, o in enumerate(objs, 1): offs.append(len(out)); out += b"%d 0 obj\n" % i + o + b"\nendobj\n"
+    x = len(out); out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objs) + 1) + b"".join(b"%010d 00000 n \n" % o for o in offs)
+    return out + b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (len(objs) + 1, x)
+def a11y(blocks, course=None, pdf=None):
+    data = {"course": {"accent": "#870037", "settings": {}, "cover_asset": None, **(course or {})},
+            "lessons": [{"uid": "lx", "type": "blocks", "title": "Dars", "blocks": [{"uid": k + 1, "type": t, "data": d} for k, (t, d) in enumerate(blocks)]}]}
+    return {r["key"]: r for r in K.a11y_from(data, pdf)["rules"]}
+long_p = "<p>" + " ".join(["so'z"] * 320) + "</p>"
+CASES = [   # (qoida, muammoli bloklar, to'g'ri bloklar)
+    ("alt", [("image", {"asset": 1, "alt": ""})], [("image", {"asset": 1, "alt": "Bino surati"})]),
+    ("headings", [("heading", {"text": "Ichki", "level": 3})], [("heading", {"text": "Bo'lim", "level": 2}), ("heading", {"text": "Ichki", "level": 3})]),
+    ("headings", [("paragraph", {"html": "<h2>A</h2><h4>B</h4>"})], [("paragraph", {"html": "<h2>A</h2><h3>B</h3>"})]),
+    ("links", [("paragraph", {"html": '<p><a href="https://lex.uz">bu yerga bosing</a></p>'})], [("paragraph", {"html": '<p><a href="https://lex.uz">Konstitutsiya matni (lex.uz)</a></p>'})]),
+    ("links", [("paragraph", {"html": '<p><a href="https://lex.uz">https://lex.uz/docs/1</a></p>'})], [("button", {"label": "Mehnat kodeksini ochish", "url": "https://lex.uz"})]),
+    ("links", [("button", {"label": "Batafsil", "url": "https://lex.uz"})], [("button", {"label": "Batafsil", "url": ""})]),
+    ("tables", [("table", {"header": False, "rows": [["a", "b"], ["1", "2"]]})], [("table", {"header": True, "rows": [["a", "b"], ["1", "2"]]})]),
+    ("tables", [("paragraph", {"html": "<table><tr><td>a</td></tr></table>"})], [("paragraph", {"html": "<table><tr><th>a</th></tr></table>"})]),
+    ("captions", [("video", {"source": "file", "asset": 7, "captions": []})], [("video", {"source": "file", "asset": 7, "captions": [{"asset": 8, "lang": "uz"}]}), ("video", {"source": "youtube", "yt_id": "dQw4w9WgXcQ", "captions": []})]),
+    ("transcript", [("audio", {"asset": 9, "transcript": ""})], [("audio", {"asset": 9, "transcript": "Audio matni"})]),
+    ("long_text", [("paragraph", {"html": long_p})], [("heading", {"text": "1-qism", "level": 2}), ("paragraph", {"html": "<p>" + " ".join(["matn"] * 200) + "</p>"}),
+                                                     ("heading", {"text": "2-qism", "level": 2}), ("paragraph", {"html": "<p>" + " ".join(["matn"] * 200) + "</p>"})]),
+    ("long_text", [("paragraph", {"html": "<p>" + " ".join(["a"] * 200) + "</p>"}), ("list", {"items": ["<p>" + " ".join(["b"] * 150) + "</p>"]})], [("paragraph", {"html": "<p>qisqa</p>"})]),
+    ("kbd", [("tabs", {"items": [{"title": "A", "html": ""}]})], [("paragraph", {"html": "<p>x</p>"})]),
+    ("pdf", [("attachment", {"asset": 11, "title": "Skan"})], [("attachment", {"asset": 12, "title": "Matnli"})]),
+]
+for key, bad_b, good_b in CASES:
+    rb, rg = a11y(bad_b, pdf={11: False, 12: True})[key], a11y(good_b, pdf={11: False, 12: True})[key]
+    ok(rb["level"] in ("bad", "warn") and rb["count"] >= 1 and rb["hint"] and rg["level"] == "ok" and rg["count"] == 0,
+       f"Qoida «{key}»: muammoli fixture topildi ({rb['where'][0] if rb['where'] else '—'}), to'g'ri fixture o'tdi")
+ok(a11y([("tabs", {"items": [{"title": "A", "html": ""}]})], {"settings": {"kbd_hints": True}})["kbd"]["level"] == "ok", "Klaviatura ko'rsatmalari yoqilgan kurs — «kbd» o'tdi")
+cc_bad, cc_good = a11y([], {"accent": "#F59E0B"})["contrast"], a11y([], {"accent": "#870037"})["contrast"]
+ok(cc_bad["level"] == "bad" and cc_bad["fix"] == "accent" and cc_bad["contrast"]["min"] < 4.5 and cc_good["level"] == "ok", f"Kontrast: #F59E0B — {cc_bad['contrast']['min']}:1 (xato, tuzatish «accent»), #870037 — o'tdi")
+ok(all(K.accent_contrast(h)["ok"] for h in K.PALETTE), "Palitradagi barcha urg'u ranglari: oq matn, havola (oq/kulrang fon) va qorong'i rejim havolasi ≥ 4,5:1")
+ok(K.contrast("#000000", "#ffffff") == 21.0 and K.contrast("#777777", "#ffffff") < 4.5 < K.contrast("#767676", "#ffffff") + 0.01, "WCAG kontrast formulasi (21:1; #767676 chegarasi)")
+ok(all(K.bad_link_text(t) for t in ("Bu yerga bosing!", "batafsil", "  Click here ", "https://isft.uz/x", "ko‘proq", "")) and not any(K.bad_link_text(t) for t in ("Talabalar uchun qo'llanma (PDF)", "Mehnat kodeksi")),
+   "Havola matni: «bu yerga bosing», «batafsil», yalang'och URL — yomon; ma'noli matn — yaxshi")
+ok(K.block_levels("heading_paragraph", {"heading": "A", "html": "<h3>b</h3><h1>c</h1>"}) == [2, 3, 2] and K.block_levels("heading", {"text": "", "level": 3}) == [], "Sarlavha darajalari (h1 → h2; bo'sh sarlavha hisobga olinmaydi)")
+tmpd = Path(tempfile.mkdtemp(prefix="kurs-a11y-"))
+(tmpd / "t.pdf").write_bytes(mkpdf("Salom dunyo")); (tmpd / "s.pdf").write_bytes(mkpdf(""))
+ok(K.pdf_text_layer(tmpd / "t.pdf") is True and K.pdf_text_layer(tmpd / "s.pdf") is False, "PDF matn qatlami: matnli PDF — bor, faqat chizma (skaner) — yo'q")
+shutil.rmtree(tmpd, ignore_errors=True)
+Qf = K.quality_from({"course": {"accent": "#870037", "settings": {}}, "lessons": [{"uid": "l", "type": "blocks", "title": "D", "blocks": [{"uid": 1, "type": "paragraph", "data": {"html": "<p>Salom</p>"}}]}]})
+ok(Qf["a11y"]["passed"] == Qf["a11y"]["total"] == 10 and [i["level"] for i in Qf["issues"]] == ["ok"], "Toza kurs: 10/10 qulaylik qoidasi, «Muammo topilmadi»")
+
+print("== 13b. Qulaylik: kursda tekshiruv va bir bosishli tuzatishlar (server orqali)")
+ac = head.post(P + "/courses", json={"title": "Qulaylik sinovi"}).json()["id"]
+acl = head.get(f"{P}/courses/{ac}").json()["lessons_list"][0]["id"]
+vid = head.post(f"{P}/courses/{ac}/assets?kind=video&name=dars-video.mp4", content=b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom" + b"\x00" * 4000)
+ok(vid.status_code == 200 and vid.json()["kind"] == "video", f"Video yuklandi ({vid.status_code})")
+vid = vid.json()["id"]
+pdf_s = head.post(f"{P}/courses/{ac}/assets?kind=file&name=skan.pdf", content=mkpdf("")).json()["id"]
+pdf_t = head.post(f"{P}/courses/{ac}/assets?kind=file&name=matn.pdf", content=mkpdf("Ma'ruza matni")).json()["id"]
+AL = head.get(f"{P}/lessons/{acl}").json()
+ABL = [{"type": "heading", "data": {"text": "Ichki bo'lim", "level": 3}},
+       {"type": "paragraph", "data": {"html": long_p.replace("</p>", ' <a href="https://lex.uz">bu yerga bosing</a></p>')}},
+       {"type": "table", "data": {"header": False, "caption": "Jadval", "rows": [["Ustun", "Qiymat"], ["a", "1"]]}},
+       {"type": "video", "data": {"source": "file", "asset": vid, "title": "Kirish videosi", "captions": []}},
+       {"type": "tabs", "data": {"items": [{"title": "A", "html": "<p>a</p>"}, {"title": "B", "html": "<p>b</p>"}]}},
+       {"type": "attachment", "data": {"asset": pdf_s, "title": "Skanerlangan qo'llanma"}},
+       {"type": "attachment", "data": {"asset": pdf_t, "title": "Matnli qo'llanma"}}]
+r = head.post(f"{P}/lessons/{acl}", json={"rev": AL["rev"], "blocks": ABL})
+ok(r.status_code == 200, f"Qulaylik muammolari bor dars saqlandi ({r.status_code})")
+AQ = head.get(f"{P}/courses/{ac}/quality").json()
+R_ = {x["key"]: x for x in AQ["a11y"]["rules"]}
+ok({k for k, v in R_.items() if v["level"] != "ok"} == {"headings", "links", "tables", "captions", "long_text", "kbd", "pdf"} and R_["pdf"]["count"] == 1,
+   f"Server hisobot: buzilgan qoidalar — {sorted(k for k, v in R_.items() if v['level'] != 'ok')} (matnli PDF o'tdi, skanerlangani — yo'q)")
+ok(R_["captions"]["items"] and R_["captions"]["items"][0]["asset"] == vid and R_["captions"]["action"] == "captions", "Subtitrsiz video — «Subtitr yaratish» uchun video id bilan")
+ok(json.loads(q("SELECT meta FROM ku_assets WHERE id=?", (pdf_s,))[0]["meta"]).get("text_layer") is False, "PDF matn qatlami natijasi fayl meta'sida keshlandi")
+ai = [i for i in AQ["issues"] if i.get("group") == "a11y"]
+ok(len(ai) == 7 and {i["fix"] for i in ai if i["fix"]} == {"headings", "table_header", "kbd_hints"} and all(i["detail"] for i in ai), "Sifat hisobotida 7 ta qulaylik muammosi, 3 tasida bir bosishli tuzatish")
+nv = len(head.get(f"{P}/courses/{ac}/versions").json()["items"])
+f_h = head.post(f"{P}/courses/{ac}/fix", json={"fix": "headings"}).json()
+f_t = head.post(f"{P}/courses/{ac}/fix", json={"fix": "table_header"}).json()
+f_k = head.post(f"{P}/courses/{ac}/fix", json={"fix": "kbd_hints"}).json()
+f_a = head.post(f"{P}/courses/{ac}/fix", json={"fix": "accent"}).json()
+AB = head.get(f"{P}/lessons/{acl}").json()["blocks"]
+RA = {x["key"]: x["level"] for x in f_k["quality"]["a11y"]["rules"]}
+ok(f_h["changed"] >= 1 and AB[0]["data"]["level"] == 2 and RA["headings"] == "ok", "«Sarlavha darajalarini tuzatish»: H3 → H2, qoida o'tdi")
+ok(f_t["changed"] >= 1 and AB[2]["data"]["header"] is True and RA["tables"] == "ok", "«Sarlavha qatorini yoqish»: jadvalda birinchi qator sarlavha, qoida o'tdi")
+ok(f_k["changed"] == 1 and f_k["course"]["settings"]["kbd_hints"] is True and RA["kbd"] == "ok", "«Klaviatura ko'rsatmalari»: kurs sozlamasi yoqildi, qoida o'tdi")
+ok(f_a["changed"] == 0 and len(head.get(f"{P}/courses/{ac}/versions").json()["items"]) >= nv + 4, "Kontrast joyida — «accent» hech narsani o'zgartirmaydi; har tuzatishdan oldin versiya")
+ok(teach.post(f"{P}/courses/{ac}/fix", json={"fix": "headings"}).status_code == 403 and rek.get(f"{P}/courses/{ac}/quality").status_code == 403, "Begona o'qituvchi tuzata olmaydi, rektor hisobotni ko'rmaydi (403)")
+cj = httpx.get(B + head.get(f"{P}/courses/{ac}/preview-url").json()["url"].split("index.html")[0] + "content.js").text
+ok('"kbd_hints":true' in cj, "Pleyer kontentida settings.kbd_hints = true")
+names_x = set(zipfile.ZipFile(io.BytesIO(zips["xapi"])).namelist())
+ok("a11y.js" in names_x and '<script src="a11y.js">' in zipfile.ZipFile(io.BytesIO(zips["xapi"])).read("index.html").decode(), "Eksport: a11y.js (qulaylik paneli, ovozli o'qish) pleyer bilan birga")
+
+print("== 13c. Subtitr: yozuvlar muharriri (VTT) va avtomatik subtitr navbati")
+vtt0 = head.post(f"{P}/courses/{ac}/assets?kind=vtt&name=kirish.vtt&lang=uz", content="WEBVTT\n\n00:00:01.000 --> 00:00:03.500\nAssalomu alaykum\n\n00:00:04.000 --> 00:00:06.000\na < b & c\n".encode()).json()
+cu = head.get(f"{P}/assets/{vtt0['id']}/cues").json()
+ok(cu["lang"] == "uz" and [c["start"] for c in cu["cues"]] == [1.0, 4.0] and cu["cues"][1]["text"] == "a < b & c", "VTT → yozuvlar ro'yxati (vaqtlar soniyada, matn HTML-belgisiz)")
+sv = head.post(f"{P}/courses/{ac}/vtt", json={"asset": vtt0["id"], "lang": "uz", "cues": [{"start": 0.5, "end": 3.5, "text": "Assalomu alaykum, talabalar!"}, {"start": 4, "end": 6.25, "text": "a < b"}]}).json()
+cu2 = head.get(f"{P}/assets/{sv['id']}/cues").json()["cues"]
+ok(sv["kind"] == "vtt" and sv["id"] != vtt0["id"] and cu2[0] == {"start": 0.5, "end": 3.5, "text": "Assalomu alaykum, talabalar!"} and cu2[1]["end"] == 6.25,
+   "Tahrirlangan yozuvlar → yangi VTT fayl (eski fayl o'zgarmaydi — versiyalar uchun)")
+ok(head.get(f"{P}/assets/{vtt0['id']}/cues").json()["cues"][0]["text"] == "Assalomu alaykum", "Asl VTT fayl o'zgarmagan")
+r1 = head.post(f"{P}/courses/{ac}/vtt", json={"lang": "uz", "cues": [{"start": 3, "end": 2, "text": "x"}]})
+r2 = head.post(f"{P}/courses/{ac}/vtt", json={"lang": "uz", "cues": [{"start": 1, "end": 2, "text": " "}]})
+ok(r1.status_code == 400 and r2.status_code == 400 and head.post(f"{P}/courses/{ac}/vtt", json={"lang": "uz", "cues": []}).status_code == 400, "Noto'g'ri vaqt, bo'sh matn, bo'sh ro'yxat — 400")
+ok(teach.post(f"{P}/courses/{ac}/vtt", json={"lang": "uz", "cues": [{"start": 1, "end": 2, "text": "x"}]}).status_code == 403 and teach.get(f"{P}/assets/{vtt0['id']}/cues").status_code == 403,
+   "Begona o'qituvchi subtitrni o'qimaydi va yozmaydi (403)")
+cr = head.post(f"{P}/courses/{ac}/captions", json={"asset": vid, "lang": "uz"}).json()
+ok(cr["job"]["status"] == "navbatda" and cr["existing"] is False and cr["job"]["asset"] == vid and isinstance(cr["worker"], bool), "«Subtitr yaratish» (masofaviy ta'lim bo'limi): vazifa navbatga qo'yildi")
+ok(head.post(f"{P}/courses/{ac}/captions", json={"asset": vid, "lang": "uz"}).json()["existing"] is True, "Shu video + til uchun ikkinchi so'rov — mavjud vazifa qaytariladi")
+ok(head.post(f"{P}/courses/{ac}/captions", json={"asset": pdf_s, "lang": "uz"}).status_code == 404 and head.post(f"{P}/courses/{ac}/captions", json={"asset": vid, "lang": "xx"}).status_code == 400,
+   "Video bo'lmagan fayl — 404, noma'lum til — 400")
+tcid = q("SELECT id FROM ku_courses WHERE author_id=? AND deleted=0 ORDER BY id LIMIT 1", (teach_uid,))[0]["id"]
+ok(teach.post(f"{P}/courses/{tcid}/captions", json={"asset": vid, "lang": "uz"}).status_code == 403, "O'qituvchi Whisper navbatiga qo'ymaydi (faqat masofaviy ta'lim bo'limi) — 403")
+cl = head.get(f"{P}/courses/{ac}/captions").json()
+ok(cl["can_request"] and cl["items"][0]["asset"] == vid and "docs/kurs.md" in cl["manual"], "Navbat ro'yxati, qo'lda yo'l izohi")
+if not os.environ.get("ISFT_CORE_WORKER_TOKEN"):
+    ok(httpx.post(B + "/api/montaj/kurs-captions/claim", headers={"X-Worker-Token": "x"}).status_code == 503, "Ishchi tokeni sozlanmagan — claim 503 («worker o'chiq»)")
+ok(head.post(f"{P}/captions/{cl['items'][0]['id']}/cancel").status_code == 200 and head.get(f"{P}/courses/{ac}/captions").json()["items"][0]["status"] == "bekor", "Vazifani bekor qilish")
+AL = head.get(f"{P}/lessons/{acl}").json()
+for b in AL["blocks"]:
+    if b["type"] == "video": b["data"]["captions"] = [{"asset": sv["id"], "lang": "uz", "label": "O'zbekcha"}]
+head.post(f"{P}/lessons/{acl}", json={"rev": AL["rev"], "blocks": AL["blocks"]})
+ok(next(x for x in head.get(f"{P}/courses/{ac}/quality").json()["a11y"]["rules"] if x["key"] == "captions")["level"] == "ok", "Subtitr ulangach «Videolar uchun subtitr» qoidasi o'tdi")
+
+print("== 13d. Subtitr ishchisi (jarayon ichida: bazaning nusxasi, ISFT_CORE_WORKER_TOKEN)")
+WORKER_SCRIPT = r'''
+import contextlib, io, json, os, sys
+from pathlib import Path
+sys.path.insert(0, os.environ["ROOT"])
+with contextlib.redirect_stdout(io.StringIO()):
+    from app import main as APP
+from fastapi.testclient import TestClient
+from app import kurs as K, db as DB
+TOKEN = os.environ["ISFT_CORE_WORKER_TOKEN"]; P = "/api/kurs"; W = "/api/montaj/kurs-captions"
+def ok(c, m): print(("✓ " if c else "✗ ") + m)
+assert str(K.store()).startswith(os.environ["ISFT_CORE_DATA_DIR"]), "nusxa emas"
+H = TestClient(APP.app, base_url="http://testserver")
+assert H.post("/api/login", json={"user_id": int(os.environ["HEAD_UID"]), "password": os.environ["PWD"]}).status_code == 200
+WC = TestClient(APP.app, base_url="http://testserver"); WH = {"X-Worker-Token": TOKEN}
+APP.con.execute("UPDATE ku_caption_jobs SET status='bekor' WHERE status IN ('navbatda','ishlanmoqda')"); APP.con.commit()
+cid = H.post(P + "/courses", json={"title": "Subtitr ishchisi"}).json()["id"]
+lid = H.get(f"{P}/courses/{cid}").json()["lessons_list"][0]["id"]
+vid = H.post(f"{P}/courses/{cid}/assets?kind=video&name=v.mp4", content=b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom" + b"\x01" * 3000).json()["id"]
+L = H.get(f"{P}/lessons/{lid}").json()
+r = H.post(f"{P}/lessons/{lid}", json={"rev": L["rev"], "blocks": [{"type": "video", "data": {"source": "file", "asset": vid, "captions": []}},
+                                                                    {"type": "video", "data": {"source": "file", "asset": vid, "captions": []}}]})
+rev0 = r.json()["rev"]
+ok(WC.post(W + "/claim").status_code == 401 and WC.post(W + "/claim", headers={"X-Worker-Token": TOKEN + "x"}).status_code == 401, "Tokensiz / noto'g'ri token — 401")
+ok(WC.post(W + "/claim", headers=WH).status_code == 204, "Navbat bo'sh — 204")
+ok(H.post(W + "/claim").status_code == 401, "Sessiya cookie ishchi tokeni o'rnini bosmaydi (401)")
+j = H.post(f"{P}/courses/{cid}/captions", json={"asset": vid, "lang": "uz"}).json()["job"]
+c = WC.post(W + "/claim", headers=WH).json()
+ok(c["job_id"] == j["id"] and c["lang"] == "uz" and len(c["lease"]) == 16 and c["media_url"] == f"{W}/{j['id']}/media", "claim: vazifa, til, lease, video havolasi")
+m = WC.get(c["media_url"], headers={**WH, "Range": "bytes=4-11"})
+ok(m.status_code == 206 and m.content == b"ftypmp42" and WC.get(c["media_url"]).status_code == 401, "Video — token bilan, Range (206); tokensiz — 401")
+ok(WC.post(f"{W}/{j['id']}/progress", headers={**WH, "X-Worker-Lease": "0" * 16}, json={"stage": "nutq", "pct": 40}).status_code == 409, "Eskirgan lease — 409")
+ok(WC.post(f"{W}/{j['id']}/progress", headers={**WH, "X-Worker-Lease": c["lease"]}, json={"stage": "nutq", "pct": 40}).status_code == 200
+   and H.get(f"{P}/courses/{cid}/captions").json()["items"][0]["pct"] == 40, "progress: bosqich va foiz muharrirda ko'rinadi")
+ok(WC.post(f"{W}/{j['id']}/result", headers={**WH, "X-Worker-Lease": c["lease"], "Content-Type": "text/vtt"}, content=b"not a vtt").status_code == 400, "Buzilgan VTT — 400 (vazifa ochiq qoladi)")
+vtt = "WEBVTT\n\n1\n00:00:00.200 --> 00:00:02.000\nAssalomu alaykum.\n\n2\n00:00:02.100 --> 00:00:04.000\nBugun ma'lumotlar bazasi.\n"
+rr = WC.post(f"{W}/{j['id']}/result", headers={**WH, "X-Worker-Lease": c["lease"], "Content-Type": "text/vtt"}, content=vtt.encode())
+ok(rr.status_code == 200 and rr.json()["cues"] == 2 and rr.json()["attached"] == 2, f"result: 2 yozuv, shu videoli 2 ta blokka ulandi ({rr.text[:120]})")
+L2 = H.get(f"{P}/lessons/{lid}").json()
+caps = [b["data"]["captions"] for b in L2["blocks"]]
+ok(all(len(x) == 1 and x[0]["lang"] == "uz" and x[0]["asset"] == rr.json()["asset"] and "(avto)" in x[0]["label"] for x in caps) and L2["rev"] > rev0,
+   "Bloklarda «O'zbekcha (avto)» subtitr; dars rev oshdi (ochiq muharrir ziddiyatni ko'radi)")
+cu = H.get(f"{P}/assets/{rr.json()['asset']}/cues").json()
+ok(cu["auto"] == "whisper" and cu["cues"][0]["text"] == "Assalomu alaykum.", "Whisper subtitri yozuvlar muharririda (auto=whisper)")
+jl = H.get(f"{P}/courses/{cid}/captions").json()
+ok(jl["items"][0]["status"] == "tayyor" and jl["items"][0]["cues"] == 2 and jl["worker"] is True, "Vazifa — «Tayyor», ishchi yoqilgan")
+q = K.quality(K.rbac.ctx_for(APP.con, int(os.environ["HEAD_UID"])), cid)
+ok(next(r for r in q["a11y"]["rules"] if r["key"] == "captions")["level"] == "ok", "Sifat hisoboti: subtitr qoidasi o'tdi")
+ok(WC.post(f"{W}/{j['id']}/result", headers={**WH, "X-Worker-Lease": c["lease"]}, content=vtt.encode()).status_code == 410, "Tugagan vazifaga qayta natija — 410")
+j2 = H.post(f"{P}/courses/{cid}/captions", json={"asset": vid, "lang": "ru"}).json()["job"]
+c2 = WC.post(W + "/claim", headers=WH).json()
+ok(WC.post(f"{W}/{j2['id']}/fail", headers={**WH, "X-Worker-Lease": c2["lease"]}, json={"error": "Videoda nutq topilmadi"}).status_code == 200
+   and H.get(f"{P}/courses/{cid}/captions").json()["items"][0]["error"] == "Videoda nutq topilmadi", "fail: xato matni muharrirda")
+au = DB.rows(APP.con, "SELECT COUNT(*) n FROM audit_log WHERE action LIKE 'kurs subtitr:%'")[0]["n"]
+ok(au >= 4, f"Ishchi amallari audit jurnalida ({au})")
+'''
+wtmp = Path(tempfile.mkdtemp(prefix="kurs-wk-"))
+try:
+    s_, d_ = sqlite3.connect(DBP), sqlite3.connect(wtmp / "jarvis.db"); s_.backup(d_); s_.close(); d_.close()
+    wenv = dict(os.environ, ROOT=str(ROOT), ISFT_CORE_DATA_DIR=str(wtmp), ISFT_CORE_DB=str(wtmp / "jarvis.db"), ISFT_CORE_SECRETS_DIR=str(wtmp / "secrets"),
+                ISFT_CORE_FILES_DIR=str(wtmp / "portal_files"), ISFT_CORE_STAFFABS_DIR=str(wtmp / "staffabs_files"), ISFT_CORE_WORKER_TOKEN="kurs-ishchi-" + os.urandom(6).hex(),
+                HEAD_UID=str(head_uid), PWD=PW)
+    rr = subprocess.run([sys.executable, "-c", WORKER_SCRIPT], cwd=str(wtmp), env=wenv, capture_output=True, text=True, timeout=300)
+    lines = [ln.strip() for ln in rr.stdout.splitlines() if ln.strip()[:1] in ("✓", "✗")]
+    for ln in lines: ok(ln.startswith("✓"), "[ishchi] " + ln[1:].strip())
+    ok(rr.returncode == 0 and len(lines) >= 15, f"Ishchi sinovi jarayoni ({rr.returncode}, {len(lines)} tekshiruv)" + ("" if rr.returncode == 0 else ":\n" + "\n".join((rr.stdout + rr.stderr).splitlines()[-10:])))
+finally:
+    shutil.rmtree(wtmp, ignore_errors=True)
+
+# =============================================================================================
 print("== 14. Brauzer: pleyer (mock LMS) va muharrir")
 pwj, chrome, node = os.environ.get("PW"), os.environ.get("CHROME"), shutil.which("node")
 if node:
@@ -448,7 +647,7 @@ else:
             if s.startswith("✓"): ok(True, "[pleyer] " + s[1:].strip())
             elif s.startswith("✗"): ok(False, "[pleyer] " + s[1:].strip())
         ok(rr.returncode == 0, f"tools/kurs_player_check.js chiqish kodi 0 ({rr.returncode})" + ("" if rr.returncode == 0 else ":\n" + "\n".join((rr.stdout + rr.stderr).splitlines()[-12:])))
-        env.update(B=B, KU_UID=str(head_uid), KU_PW=PW, KU_CID=str(dc), KU_QCID=str(ic))
+        env.update(B=B, KU_UID=str(head_uid), KU_PW=PW, KU_CID=str(dc), KU_QCID=str(ic), KU_ACID=str(ac))
         rr = subprocess.run([node, str(ROOT / "tools" / "kurs_editor_check.js")], cwd=ROOT, env=env, capture_output=True, text=True, timeout=600)
         for ln in (rr.stdout + rr.stderr).splitlines():
             s = ln.strip()

@@ -1293,6 +1293,19 @@ async function runVisual(br, base) {
     pb: document.querySelector('[role=progressbar]').getAttribute('aria-valuenow'), alt: [...document.querySelectorAll('img')].every(i => i.hasAttribute('alt')), lang: document.documentElement.lang,
     lbl: [...document.querySelectorAll('.nav-i')].every(b => /^\d+-qadam: /.test(b.getAttribute('aria-label'))) }));
   ok(lm.h && lm.n && lm.m && lm.live && lm.pb != null && lm.alt && lm.lang === 'uz' && lm.lbl, 'Landmarklar (header/nav/main), aria-live, progressbar, img alt, lang=uz, qadam tugmalarida aria-label');
+  // qulaylik paneli (a11y.js — kurs pleyeri bilan umumiy): matn o'lchami, kontrast, shrift — localStorage'da; «Tinglash» — speechSynthesis yo'q bo'lsa xabar
+  await dp.click('.top .a11y-b'); await dp.click('[data-a11y="fs+"]'); await dp.click('[data-a11y="hc"]'); await dp.click('[data-a11y="dys"]');
+  await dp.keyboard.press('Escape');
+  await D.ctx.addInitScript(() => { try { Object.defineProperty(window, 'speechSynthesis', { value: undefined, configurable: true }); } catch (e) { /* */ } });
+  await dp.reload(); await waitReady(dp);
+  const pa =await dp.evaluate(() => ({ fs: document.documentElement.style.getPropertyValue('--a11y-fs'), c: document.documentElement.className, bg: getComputedStyle(document.body).backgroundColor, ff: getComputedStyle(document.body).fontFamily }));
+  ok(pa.fs === '1.12' && /a11y-hc/.test(pa.c) && pa.bg === 'rgb(0, 0, 0)' && /Verdana/.test(pa.ff), `Qulaylik paneli: A+ (112%), yuqori kontrast (qorong'i: qora fon), qulay shrift — qayta yuklanganda saqlangan`);
+  await clickStep(dp, await stepIndex(dp, 'text'));
+  const tb = await dp.$('.card .tts-b');
+  if (tb) { await tb.click(); await sleep(100); }
+  ok(!!tb && /qo'llab-quvvatlamaydi/.test(await dp.$eval('.card .tts-m', e => e.textContent)), 'Matn qadamida «Tinglash» tugmasi; speechSynthesis yo\'q — tushunarli xabar');
+  await SHOT(dp, 'a11y_paket_contrast');
+  await dp.evaluate(() => localStorage.removeItem('isft-a11y'));
   ok(D.errs.length === 0, 'Konsol xatolari yo\'q' + (D.errs.length ? ': ' + D.errs.slice(0, 3).join(' | ') : ''));
   await D.ctx.close();
 

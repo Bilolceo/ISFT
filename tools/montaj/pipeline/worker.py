@@ -140,6 +140,26 @@ class Api:
                             headers={"Content-Type": mp.content_type, "Content-Length": str(mp.length), **self._lease(lease)},
                             timeout=600)
 
+    # -------------------------------------------------------------- kurs videolari uchun subtitr navbati («Kurs muharriri»)
+    CAP = "/api/montaj/kurs-captions"
+
+    def claim_captions(self) -> dict | None:
+        st, body = self.request("POST", f"{self.CAP}/claim", json_body={})
+        if st == 204 or not body:
+            return None
+        return json.loads(body) if isinstance(body, (bytes, bytearray)) else body
+
+    def cap_progress(self, job_id, stage, pct, lease=None):
+        return self.request("POST", f"{self.CAP}/{job_id}/progress", json_body={"stage": stage, "pct": pct, "message": ""},
+                            headers=self._lease(lease), timeout=20)
+
+    def cap_fail(self, job_id, error: str, lease=None):
+        return self.request("POST", f"{self.CAP}/{job_id}/fail", json_body={"error": error[:1000]}, headers=self._lease(lease))
+
+    def cap_result(self, job_id, vtt: bytes, lease=None):
+        return self.request("POST", f"{self.CAP}/{job_id}/result", data=vtt,
+                            headers={"Content-Type": "text/vtt; charset=utf-8", "Content-Length": str(len(vtt)), **self._lease(lease)}, timeout=120)
+
     # -------------------------------------------------------------- yuklab olish (Range bilan davom ettirish)
     def download(self, url: str, dest: Path, cancel: CancelToken, retries: int = 6) -> Path:
         url = self.url(url)
@@ -249,6 +269,7 @@ class Worker:
         self.sleep = sleep
         self.current_job = None
         self.upload_ping_s = UPLOAD_PING_S
+        self.captions_on = True               # eski server (404) — subtitr navbati shu sessiyada so'ralmaydi
 
     def install_signals(self):
         def on_int(sig, frm):
@@ -275,6 +296,13 @@ class Worker:
             if job:
                 delay = self.poll_min
                 self.process(job)
+                if once:
+                    break
+                continue
+            cj = self._claim_captions()      # montaj navbati bo'sh — kurs videolari uchun subtitr (Whisper) navbati
+            if cj:
+                delay = self.poll_min
+                self.process_captions(cj)
                 if once:
                     break
                 continue
@@ -373,6 +401,74 @@ class Worker:
             log.error("Ish #%s xato: %s", jid, msg)
             try:
                 self.api.fail(jid, msg, lease=lease)
+            except Exception as e2:
+                log.error("fail yuborilmadi: %s", e2)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+            self.current_job = None
+
+    # -------------------------------------------------------------- kurs videosi → WebVTT (montajsiz: faqat nutq tanish)
+    def _claim_captions(self) -> dict | None:
+        if not self.captions_on:
+            return None
+        try:
+            return self.api.claim_captions()
+        except HttpError as e:
+            if e.status in (404, 405):          # eski ISFT Core — subtitr navbati yo'q
+                log.info("Server subtitr navbatini qo'llamaydi (%s) — faqat montaj", e.status)
+                self.captions_on = False
+            else:
+                log.warning("subtitr claim xatosi: %s", e)
+        except Exception as e:
+            log.warning("subtitr claim xatosi: %s", e)
+        return None
+
+    def process_captions(self, job: dict):
+        """Video → 16 kHz mono WAV → faster-whisper (so'z vaqtlari) → subtitr bo'laklari (2 qator × 42) → WebVTT → /result."""
+        from . import asr, captions
+        from .common import run_ffmpeg
+        from .edl import TimeMap
+        jid, lease = job["job_id"], job.get("lease")
+        self.current_job = jid
+        self.cancel = CancelToken()
+        tmp = Path(tempfile.mkdtemp(prefix=f"cap_{jid}_", dir=self._ensure_dir()))
+
+        def progress(stage, pct):
+            try:
+                self.api.cap_progress(jid, stage, pct, lease=lease)
+            except HttpError as e:
+                if e.status in (404, 409, 410):
+                    self.cancel.cancel()
+            except Exception as e:
+                log.warning("progress xatosi: %s", e)
+
+        try:
+            ext = str(job.get("media_ext") or ".mp4").lower()
+            ext = ext if ext in (".mp4", ".webm", ".mov", ".mkv", ".mp3", ".m4a", ".wav", ".ogg") else ".mp4"
+            log.info("Subtitr #%s: %s (%s)", jid, job.get("name"), job.get("lang"))
+            progress("yuklash", 1)
+            media = self.api.download(job["media_url"], tmp / ("media" + ext), self.cancel)
+            wav = tmp / "audio.wav"
+            run_ffmpeg(["-i", str(media), "-map", "0:a:0", "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(wav)],
+                       cancel=self.cancel, desc="audio ajratish")
+            progress("nutq", 10)
+            tr = asr.transcribe(wav, model=self.model, language=job.get("lang") or "uz", device=self.device, cancel=self.cancel,
+                                on_progress=lambda f: progress("nutq", round(10 + 85 * f, 1)))
+            words = asr.all_words(tr)
+            if not words:
+                raise MontajError("Videoda nutq topilmadi")
+            cues = captions.build_cues(words, TimeMap([(0.0, float(tr.get("duration") or words[-1]["end"]) + 1.0)]))
+            vtt = captions.to_vtt(cues).encode("utf-8")
+            progress("yuborish", 97)
+            self.api.cap_result(jid, vtt, lease=lease)
+            log.info("Subtitr #%s yakunlandi: %d yozuv", jid, len(cues))
+        except Exception as e:
+            msg = "Worker to'xtatildi yoki ish bekor qilindi" if isinstance(e, Cancelled) else str(e) if isinstance(e, MontajError) else f"{type(e).__name__}: {e}"
+            if not isinstance(e, (Cancelled, MontajError)):
+                log.error(traceback.format_exc())
+            log.error("Subtitr #%s xato: %s", jid, msg)
+            try:
+                self.api.cap_fail(jid, msg, lease=lease)
             except Exception as e2:
                 log.error("fail yuborilmadi: %s", e2)
         finally:

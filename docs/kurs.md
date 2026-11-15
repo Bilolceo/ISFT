@@ -86,7 +86,7 @@ avval versiyaga yoziladi). Kurs sozlamalari va darslar tartibi — kursning o'z 
 
 O'zimizniki (Articulate kodi yo'q), tashqi skriptsiz (faqat YouTube nocookie iframe), oflayn ishlaydi. Muqova → yon menyu (darslar, bajarilganlik) →
 dars sahifasi; «Davom etish» bosqichlari; ketma-ket o'tish; test (savollar banki, aralashtirish, urinishlar, o'tish bali, natija); kurs bo'yicha qidiruv;
-telefon birinchi; klaviatura, alt matn, fokus belgisi, `prefers-reduced-motion`, qorong'i rejim; barcha yorliqlar — `content.labels` (o'zbekcha,
+telefon birinchi; klaviatura, alt matn, fokus belgisi, `prefers-reduced-motion`, qorong'i rejim, qulaylik paneli va «Tinglash» (pastda «Qulaylik»); barcha yorliqlar — `content.labels` (o'zbekcha,
 kurs sozlamasida o'zgartiriladi). `#lesson=<uid>&block=<id>` — muharrir ko'rish oynasi shu dars/blokni ochadi; `?preview=1` — «Ko'rish rejimi» banneri.
 
 LMS: `lms.js` (paket pleyeri bilan umumiy) — SCORM 1.2, SCORM 2004 4-nashr, xAPI (launch parametrlari; dars faoliyatlari
@@ -146,6 +146,73 @@ eslatma, «Expand each tab…» → «Har bir yorliqni ochib…»); `mr_single` 
 Haqiqiy namunada: 87/104 to'g'ri javob «B» o'rnida, 88/104 eng uzun, 47/47 rasm alt'siz (+ muqova), 29 ta inglizcha yorliq, test 1–5-darslar ichida
 (6–13-darslar savolsiz), 2 ta «bir nechta javob»da bitta to'g'ri. `shuffle` dan keyin — A/B/C/D: 26/26/26/26; `labels` dan keyin — 0 ta inglizcha.
 
+## Qulaylik (accessibility) — sifat hisobotida, pleyerda, subtitrlar
+
+Tadqiqot tavsiyasi №11 (UNED: ReadSpeaker / Brickfield). Uch qism: muallif uchun tekshiruv, talaba uchun pleyer imkoniyatlari, subtitrlar.
+
+**1. Sifat hisobotidagi «Qulaylik» qoidalari** (`a11y_from`, `GET /courses/{id}/quality` → `a11y: {rules, passed, total, contrast, youtube}`;
+muammolar `issues` ro'yxatida ham — `group: "a11y"`, `key`). Har qoida: qayerda (`where`, «2. Dars · 5-blok (Jadval)»), qanday tuzatiladi (`hint`),
+xavfsiz bo'lsa — bir bosishli tuzatish (`fix`, avval versiya saqlanadi):
+
+| Qoida (`key`) | Nima tekshiriladi | Tuzatish |
+|---|---|---|
+| `alt` | rasm, rasm+matn, galereya, belgili rasm va muqovada alt matn | qo'lda |
+| `contrast` | urg'u rangi: oq matn (tugma), havola oq/kulrang fonda, qorong'i rejim havolasi (#171a21) — WCAG ≥ 4,5:1 | `accent` → standart rang |
+| `headings` | sarlavha darajasi sakramaydi (dars nomi — h1; H2'siz H3; HTML ichidagi h2–h4 ham) | `headings` — sakragan sarlavha bloki bir pog'ona yuqoriga |
+| `links` | havola matni: «bu yerga bosing», «batafsil», «здесь», yalang'och URL; tugma yorlig'i | qo'lda |
+| `tables` | jadval blokida sarlavha qatori; matn ichidagi `<table>` da `<th>` | `table_header` — birinchi qator sarlavha |
+| `captions` | fayl-videoda subtitr (VTT) | «Subtitr yaratish (Whisper)» — bo'lim xodimi (pastda) yoki .vtt yuklash |
+| `transcript` | audio blokida matn (transkript) | qo'lda |
+| `long_text` | ketma-ket matn bloklari sarlavhasiz > 300 so'z (`A11Y_LONG_WORDS`) | qo'lda (H2/H3 yoki akkordeon) |
+| `kbd` | interaktiv bloklar bor, lekin pleyerda klaviatura ko'rsatmasi o'chiq | `kbd_hints` — kurs sozlamasi yoqiladi |
+| `pdf` | PDF ilovada matn qatlami (pypdf; skaner — faqat rasm) — natija fayl meta'sida keshlanadi | qo'lda (OCR qilingan / asl fayl) |
+
+Palitradagi barcha urg'u ranglari kontrastdan o'tadi (test bilan qotirilgan); `contrast` qoidasi palitradan tashqari rang (eski baza, qo'lda
+o'zgartirish) uchun himoya. Muharrirda: «Qulaylik (a11y) N/10» ko'rsatkichi, qoidalar jadvali (holat, joylar, izoh), tuzatish tugmalari.
+
+**2. Pleyer** (`app/kurs_player`, `app/paket_player`): umumiy modul `app/paket_player/a11y.js` (`window.ISFTA11y`; kurs eksportiga `lms.js` kabi
+qo'shiladi; tashqi so'rov va tashqi shrift yo'q):
+
+- **«Aa» qulaylik paneli** (yuqori panelda): matn o'lchami A− / A+ (90–160 %, `<html>` font-size — barcha `rem` o'lchamlar bilan), **yuqori
+  kontrast** (oq/qora, qorong'i rejimda qora/sariq; havolalar tagiga chiziq, qalin chegaralar, qalin fokus), **o'qish uchun qulay shrift**
+  (tizim shriftlari Verdana/Tahoma…, keng harf va so'z oralig'i, kursivsiz), **harakatni kamaytirish** (`prefers-reduced-motion` bilan birga).
+  Sozlamalar `localStorage['isft-a11y']` da — har murojaat try/catch: ko'rish oynasi (sandbox) va maxfiy oynada ishlaydi, faqat eslab qolinmaydi
+  (panelda izoh). Esc — panel yopiladi, fokus «Aa» ga qaytadi.
+- **«Tinglash»** (matn, sarlavha+matn, iqtibos, ro'yxat, rasm+matn, vaqt chizig'i bloklari; paket pleyerida — matn qadamlari): brauzerning
+  Web Speech API'si (`speechSynthesis`), tashqi xizmatsiz. Ovoz: uz-UZ → uz-* → ru-RU → ru-* → standart (xabarda qaysi ovoz); API yo'q
+  bo'lsa yoki qurilmada ovoz yo'q bo'lsa — tushunarli xabar. O'qilayotgan blok ajratiladi (`.reading`), qayta bosish — to'xtatish; matn
+  gaplarga bo'lib o'qiladi; dars almashganda o'qish to'xtaydi.
+- **Klaviatura va ARIA** (barcha blok turlari): skip-link («Asosiy mazmunga o'tish»), akkordeon (`aria-expanded`, panel `role=region` +
+  `aria-labelledby`), yorliqlar (← → Home End, roving tabindex), kartochkalar (Enter/Bo'sh joy, orqa tomon `aria-hidden` almashadi),
+  saralash (faqat klaviatura bilan: element → ««Toifa» toifasiga joylash»; qayta chizilganda fokus yo'qolmaydi), moslashtirish (`<label for>`),
+  jarayon (oxirgi qadamda fokus blok ichida qoladi), belgili rasm (`aria-controls` panelga), test (fieldset/legend, label). **Sarlavhalar
+  ierarxiyasi**: bloklar ichidagi sarlavhalar (akkordeon bandi, jarayon qadami, video nomi…) oldingi muallif sarlavhasidan bir daraja pastda
+  (h1 → h3 sakrashi yo'q). `kbd_hints` yoqilsa — interaktiv blok boshida qisqa klaviatura ko'rsatmasi.
+
+**3. Subtitrlar**
+
+- **Yozuvlar muharriri**: video blokida har subtitr yonida «Tahrirlash» → yozuvlar ro'yxati (boshlanish, tugash — `daqiqa:soniya.ms`, matn;
+  qo'shish/o'chirish). `GET /assets/{id}/cues` → `[{start, end, text}]`; `POST /courses/{id}/vtt {asset?, lang, cues}` → `paket.to_vtt` bilan
+  tekshiriladi va **yangi** «vtt» fayl (eski fayl o'zgarmaydi — versiyalar unga ishora qiladi); muharrir blokdagi havolani almashtiradi.
+- **«Subtitr yaratish (Whisper)»** — faqat `masofaviy`, `masofaviy_xodim` (`POST /courses/{id}/captions {asset, lang}`; bir video + til uchun
+  bitta faol vazifa; `GET /courses/{id}/captions` — holat, `POST /captions/{id}/cancel`). Navbat `ku_caption_jobs`. Bajaruvchi — **studiyaning
+  montaj ishchisi** (`tools/montaj`, o'sha `ISFT_CORE_WORKER_TOKEN`, `X-Worker-Token`): montaj navbati bo'sh bo'lganda
+  `POST /api/montaj/kurs-captions/claim` → `{job_id, lease, lang, media_url}` | 204; `GET …/{id}/media` (token, Range);
+  `POST …/{id}/progress {stage, pct}` (lease uzayadi, `X-Worker-Lease`); `POST …/{id}/result` (tana — WebVTT) | `…/fail {error}`.
+  Ishchi: video → 16 kHz WAV (ffmpeg) → faster-whisper (so'z vaqtlari) → 2 qator × 42 belgi bo'laklar → WebVTT. Server natijani tekshiradi,
+  «vtt» fayl (`meta.auto = "whisper"`) sifatida saqlaydi va shu videoni ishlatgan barcha bloklarga (shu tilda subtitr bo'lmasa) «O'zbekcha
+  (avto)» sifatida ulaydi; dars `rev` oshadi (ochiq muharrir ziddiyatni ko'radi). Lease muddati 2 soat, 3 urinish. Eski server (404) —
+  ishchi subtitr navbatini so'ramaydi. Muallif avtomatik subtitrni «Tahrirlash» orqali tekshiradi.
+- **Qo'lda yo'l** (ishchi o'chiq — `ISFT_CORE_WORKER_TOKEN` yo'q, claim 503): videoni montaj kompyuterida `tools/montaj` (yoki istalgan Whisper
+  vositasi, masalan `whisper video.mp4 --language uz --output_format vtt`) bilan .vtt ga aylantiring → video blokida «Subtitr yuklash» →
+  «Tahrirlash» bilan tekshiring. Navbatdagi vazifa ishchi yoqilganda bajariladi yoki «bekor» qilinadi.
+
+Testlar: `tests/test_kurs.py` 13a–13d (har qoida uchun muammoli va to'g'ri fixture, tuzatishlar, VTT muharriri, navbat ruxsatlari, ishchi
+API — bazaning nusxasida token bilan), `tools/kurs_player_check.js` «Qulaylik» bo'limlari (axe uslubidagi tekshiruvlar: nomlar, ARIA
+havolalari, id takrori, sarlavhalar, Tab bilan har elementga yetish, har blok turi klaviaturada, panel va localStorage, sandbox,
+reduced-motion, TTS — API yo'q / uz / ru / standart / ovoz yo'q), `tools/kurs_editor_check.js` (qulaylik jadvali, yozuvlar muharriri),
+`tools/paket_player_check.js` (panel, TTS), `tools/montaj/tests/test_captions_worker.py` (ishchi tomoni, Whisper o'rniga soxta natija).
+
 ## API (qisqacha)
 
 | Metod | Yo'l | Kim |
@@ -160,6 +227,9 @@ Haqiqiy namunada: 87/104 to'g'ri javob «B» o'rnida, 88/104 eng uzun, 47/47 ras
 | GET | `/courses/{id}/preview-url`, `/pv/{token}/{path}` | mualliflar (imzolangan yo'l) |
 | GET/POST | `/courses/{id}/quality`, `/courses/{id}/fix`, `/import/rise` | mualliflar |
 | GET/POST | `/testbank`, `/testbank/convert` | mualliflar (o'qituvchi — o'z fanlari) |
+| GET / POST | `/assets/{id}/cues`, `/courses/{id}/vtt` | o'qish — kurs ko'ruvchilari; yozish — mualliflar |
+| GET / POST | `/courses/{id}/captions`, `/captions/{id}/cancel` | ro'yxat — kurs ko'ruvchilari; navbatga qo'yish / bekor — `masofaviy`, `masofaviy_xodim` |
+| POST/GET | `/api/montaj/kurs-captions/claim`, `/{id}/media`, `/{id}/progress`, `/{id}/result`, `/{id}/fail` | montaj ishchisi (`X-Worker-Token`) |
 
 ## Cheklovlar
 
