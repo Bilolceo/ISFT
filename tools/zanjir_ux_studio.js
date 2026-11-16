@@ -136,10 +136,12 @@ const MOCK_OUTLINE = { title: 'matn', slides: [
       const n0 = await p.textContent('#stRdN'); const total = +n0.split('/')[1];
       ok(/^1 \/ \d+$/.test(n0) && total >= 2, `O'qish rejimi ochildi: ${n0}`);
       ok(await p.evaluate(() => { const r = document.querySelector('.st-reader').getBoundingClientRect(); return r.width >= innerWidth - 1 && r.height >= innerHeight - 1; }), "O'qish rejimi to'liq ekran");
-      ok(await p.evaluate(() => parseFloat(getComputedStyle(document.querySelector('.st-rd-h')).fontSize) >= 28), 'Slayd sarlavhasi katta shriftda');
+      /* slayd rasmi (PNG) bo'lsa — rasm rejimi (≥1200 px, alt matn bor); eski versiya / mock — matn rejimi */
+      const imgMode = await p.evaluate(() => !!document.querySelector('.st-rd-img'));
+      ok(await p.evaluate(async () => { const i = document.querySelector('.st-rd-img'); if (!i) return parseFloat(getComputedStyle(document.querySelector('.st-rd-h')).fontSize) >= 28; await i.decode().catch(() => {}); return i.naturalWidth >= 1200 && (i.alt || '').length > 3; }), imgMode ? 'Slayd rasmi yuklandi (≥1200 px, alt matn bor)' : 'Slayd sarlavhasi katta shriftda');
       ok(await focusIn(p, '.st-reader'), "O'qish rejimida fokus ichkarida");
       await p.keyboard.press('ArrowRight'); ok((await p.textContent('#stRdN')).startsWith('2 /'), '→ keyingi slayd');
-      ok(await p.evaluate(() => document.querySelectorAll('.st-rd-ul li').length >= 1), 'Slayd bandlari ko\'rsatiladi');
+      ok(await p.evaluate(() => document.querySelectorAll('.st-rd-ul li, .st-rd-sr li').length >= 1), 'Slayd bandlari ko\'rsatiladi (matn yoki ekran o\'quvchi uchun yashirin ro\'yxat)');
       await p.keyboard.press('ArrowLeft'); ok((await p.textContent('#stRdN')).startsWith('1 /'), '← oldingi slayd');
       await p.keyboard.press('End'); ok((await p.textContent('#stRdN')) === `${total} / ${total}`, 'End — oxirgi slayd');
       ok(await p.evaluate(() => document.querySelector('[data-next]').disabled), 'Oxirgi slaydda «Keyingi» o\'chiq');

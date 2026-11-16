@@ -156,6 +156,12 @@
 .st-rd-bar{height:4px;background:var(--track)}.st-rd-bar i{display:block;height:100%;background:var(--teal);width:0;transition:width .2s var(--ease)}
 .st-rd-body{flex:1;min-height:0;overflow:auto;display:flex;justify-content:center;padding:clamp(16px,4vw,56px)}
 .st-rd-slide{width:min(1100px,100%);margin:auto 0;outline:none}
+.st-rd-img-w{width:min(1400px,100%,calc((100vh - 250px) * 16 / 9));width:min(1400px,100%,calc((100dvh - 250px) * 16 / 9))}   /* balandlikka sig'adi: yuqori panel + pastki panel + bo'shliq */
+.st-rd-img{display:block;width:100%;aspect-ratio:16/9;object-fit:contain;background:#fff;border:1px solid var(--line);border-radius:8px}
+.st-rd-sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}   /* ekran o'quvchi uchun slayd bandlari */
+.st-reader:fullscreen .st-rd-body{padding:8px}
+.st-reader:fullscreen .st-rd-img-w{width:min(100%,calc((100vh - 150px) * 16 / 9));width:min(100%,calc((100dvh - 150px) * 16 / 9))}
+.st-rd-fs[aria-pressed=true]{background:var(--teal);color:#fff}
 .st-rd-h{font-size:clamp(28px,4.4vw,60px);line-height:1.15;margin:0 0 .6em;overflow-wrap:anywhere}
 .st-rd-ul{font-size:clamp(20px,2.8vw,40px);line-height:1.4;padding-left:1.1em;margin:0;display:flex;flex-direction:column;gap:.45em;overflow-wrap:anywhere}
 .st-rd-notes{margin-top:2em;padding:14px 18px;border-radius:14px;background:var(--surface-2);border:1px solid var(--line);font-size:clamp(15px,1.6vw,20px);line-height:1.5;color:var(--ink-2);overflow-wrap:anywhere}

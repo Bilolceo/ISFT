@@ -28,6 +28,7 @@ from pydantic import BaseModel, ValidationError
 from . import clock, db, rbac
 from . import taqdimot_extract as EX
 from . import taqdimot_render as RD
+from . import taqdimot_slides as TS
 from .rbac import Ctx, AccessDenied
 
 router = APIRouter()
@@ -86,7 +87,7 @@ CREATE TABLE IF NOT EXISTS pres_sends(id INTEGER PRIMARY KEY, deck_id INT, cours
   UNIQUE(course_id, lkey, version));
 CREATE INDEX IF NOT EXISTS ix_pres_sends ON pres_sends(course_id, lkey);
 """
-_SEND_COLS = (("course_code", "TEXT"), ("outline", "TEXT"))        # course_code — yuborilgan paytdagi fan kodi (id qayta ishlatilsa eski versiyalar ajratiladi); outline — shu versiya reja nusxasi (JSON)
+_SEND_COLS = (("course_code", "TEXT"), ("outline", "TEXT"), ("png_count", "INT"))        # course_code — yuborilgan paytdagi fan kodi (id qayta ishlatilsa eski versiyalar ajratiladi); outline — shu versiya reja nusxasi (JSON); png_count — slides/NN.png soni (eski versiyalarda NULL = rasm yo'q)
 _DECK_COLS = (("course_id", "INT"), ("lkey", "INT"), ("lesson_code", "TEXT"), ("sent_version", "INT DEFAULT 0"), ("sent_at", "TEXT"))
 
 
@@ -928,7 +929,7 @@ def assign_lesson(c: Ctx, did: int, cid: int, lkey: int) -> dict:
 # ---- yuborilgan versiyalar --------------------------------------------------------------------
 def _send_pub(r: dict) -> dict:
     return {"id": r["id"], "version": r["version"], "code": r["code"], "title": r["title"], "slides": r["slides"], "size": r["size"], "note": r["note"] or "",
-            "sent_at": r["sent_at"], "sent_by": (r["sent_by_name"] or "").split(":")[-1].strip(), "deck_id": r["deck_id"], "has_pdf": bool(r["pdf_path"]),
+            "sent_at": r["sent_at"], "sent_by": (r["sent_by_name"] or "").split(":")[-1].strip(), "deck_id": r["deck_id"], "has_pdf": bool(r["pdf_path"]), "png": int(r.get("png_count") or 0),
             "studio_seen": bool(r["studio_ack_at"]), "dept_seen": bool(r["dept_ack_at"]), "paket_ok": not r["paket_error"]}
 
 
@@ -960,10 +961,41 @@ def send_file(cid: int, lkey: int, ver: int, kind: str) -> tuple[dict, Path | No
 def serve_send(cid: int, lkey: int, ver: int, kind: str):
     r, f = send_file(cid, lkey, ver, kind)
     if not f:
-        raise HTTPException(404, "Bu versiyaning PDF nusxasi yo'q (serverda LibreOffice o'rnatilmagan)" if kind == "pdf" else "Fayl diskda topilmadi")
+        raise HTTPException(404, "Bu versiyaning PDF nusxasi yo'q (eski yuborilgan versiya — taqdimotni qayta yuboring)" if kind == "pdf" else "Fayl diskda topilmadi")
     mt = "application/pdf" if kind == "pdf" else "application/vnd.openxmlformats-officedocument.presentationml.presentation"
     return FileResponse(str(f), filename=f"{r['code']}_taqdimot_v{r['version']}.{kind}", media_type=mt,
                         content_disposition_type="inline" if kind == "pdf" else "attachment", headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store"})
+
+
+def make_slides(outline: dict, images_dir: Path, out_dir: Path) -> tuple[bytes, int]:
+    """Taqdimot rejasidan slayd rasmlari (out_dir/slides/NN.png) va PDF baytlari — LibreOffice'siz, Pillow (app/taqdimot_slides.py). Xatoda yarim fayllar o'chiriladi."""
+    sd = out_dir / "slides"
+    try:
+        r = TS.render_deck(outline, images_dir, sd)
+        if not r["slides"] or not r["pdf"]:
+            raise RuntimeError("slayd chizilmadi")
+        return r["pdf"], int(r["slides"])
+    except BaseException:
+        shutil.rmtree(sd, ignore_errors=True)
+        raise
+
+
+def slide_file(cid: int, lkey: int, ver: int, n: int) -> tuple[dict, Path | None]:
+    r = db.one(_con, "SELECT * FROM pres_sends WHERE course_id=? AND lkey=? AND version=?", (int(cid), int(lkey), int(ver)))
+    if not r:
+        raise HTTPException(404, "Taqdimot versiyasi topilmadi")
+    cnt = int(r.get("png_count") or 0)
+    if not cnt or not (1 <= int(n) <= cnt):
+        return r, None
+    f = send_dir(r["course_id"], r["lkey"], r["version"]) / "slides" / f"{int(n):02d}.png"
+    return r, (f if f.is_file() else None)
+
+
+def serve_slide(cid: int, lkey: int, ver: int, n: int):
+    r, f = slide_file(cid, lkey, ver, n)
+    if not f:
+        raise HTTPException(404, "Bu versiyaning slayd rasmi yo'q (eski yuborilgan versiya yoki slayd raqami noto'g'ri)")
+    return FileResponse(str(f), media_type="image/png", headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=3600"})
 
 
 def ack(c: Ctx, cid: int, lkey: int) -> None:
@@ -1152,11 +1184,22 @@ def _send_locked(c: Ctx, did: int, co: dict, les: dict, ref: dict, note: str) ->
         if isinstance(e, sqlite3.IntegrityError):
             _bad("Bu versiya hozirgina yuborildi — sahifani yangilab, qayta urinib ko'ring", 409)
         raise
+    # slayd rasmlari (PNG) va PDF — outline'dan Pillow bilan (LibreOffice kerak emas). Xato bo'lsa yuborish bekor bo'lmaydi: rasm yo'q — avvalgi xulq.
+    from . import office_tools as OT
+    own_pdf, png_n, slides_err, lo = None, 0, None, bool(OT.soffice())
+    try:
+        t0 = time.time()
+        own_pdf, png_n = make_slides(json.loads(d["outline"]), ddir(did) / "img", fd)
+        print(f"taqdimot.send: {png_n} slayd PNG/PDF chizildi, {time.time() - t0:.1f} s")
+    except Exception as e:
+        slides_err = f"{type(e).__name__}: {e}"[:200]
+        print("taqdimot.send → slaydlar:", slides_err)
     # darsning paketiga (pk_assets, purpose='taqdimot'): slaydlar paketga, PDF — montajda slayd sifatida. Xato bo'lsa yuborish bekor bo'lmaydi.
+    # PDF: serverda LibreOffice bo'lsa — u (asl ko'rinish, paket.upload_slides o'zi chizadi); bo'lmasa — bizning Pillow PDF (pdf_raw).
     paket_err, pdf_rel, paket_id = None, None, None
     try:
-        r = PK.upload_slides(c, cid, lkey, raw, f"{code}_taqdimot_v{ver}.pptx")
-        if r.get("pdf_id"):
+        r = PK.upload_slides(c, cid, lkey, raw, f"{code}_taqdimot_v{ver}.pptx", pdf_raw=None if lo else own_pdf)
+        if r.get("pdf_id") and lo:
             a = db.one(PK._con, "SELECT * FROM pk_assets WHERE id=?", (r["pdf_id"],))
             if a and PK._apath(a).is_file():
                 shutil.copyfile(PK._apath(a), send_dir(cid, lkey, ver) / "taqdimot.pdf")
@@ -1175,9 +1218,15 @@ def _send_locked(c: Ctx, did: int, co: dict, les: dict, ref: dict, note: str) ->
         _rollback(); paket_err, paket_id = str(e.detail)[:300], None
     except Exception as e:                                       # kutilmagan xato yuborishni yiqitmasin
         _rollback(); paket_err, paket_id = f"{type(e).__name__}: {e}"[:300], None
+    if own_pdf and not pdf_rel:                                  # LibreOffice yo'q (yoki PDF chizolmadi) — bizning PDF; paket xatosidan qat'i nazar saqlanadi
+        try:
+            (fd / "taqdimot.pdf").write_bytes(own_pdf)
+            pdf_rel = str((fd / "taqdimot.pdf").relative_to(root()))
+        except OSError as e:
+            print("taqdimot.send → pdf yozilmadi:", repr(e))
     try:
         with _lock:
-            _con.execute("UPDATE pres_sends SET pdf_path=?, paket_asset_id=?, paket_error=? WHERE id=?", (pdf_rel, paket_id, paket_err, sid)); _con.commit()
+            _con.execute("UPDATE pres_sends SET pdf_path=?, paket_asset_id=?, paket_error=?, png_count=? WHERE id=?", (pdf_rel, paket_id, paket_err, png_n or None, sid)); _con.commit()
     except BaseException:
         _rollback(); raise
     try:
@@ -1186,10 +1235,10 @@ def _send_locked(c: Ctx, did: int, co: dict, les: dict, ref: dict, note: str) ->
     except Exception as e:
         _rollback()
         print("taqdimot.send → studiya:", repr(e))
-    rbac.audit(_con, c, "taqdimot: studiyaga va bo'limga yuborildi", RES, True, f"#{did} · {code} · v{ver}" + (f" · paket: {paket_err}" if paket_err else ""))
+    rbac.audit(_con, c, "taqdimot: studiyaga va bo'limga yuborildi", RES, True, f"#{did} · {code} · v{ver}" + (f" · paket: {paket_err}" if paket_err else "") + (f" · slaydlar: {slides_err}" if slides_err else ""))
     out = view(c, did)
     out["send"] = _send_pub(db.one(_con, "SELECT * FROM pres_sends WHERE id=?", (sid,)))
-    out["version"], out["unchanged"], out["paket_error"] = ver, False, paket_err
+    out["version"], out["unchanged"], out["paket_error"], out["slides_error"] = ver, False, paket_err, slides_err
     return out
 
 
@@ -1392,19 +1441,36 @@ def api_send(request: Request, did: int, body: SendIn):
     return send(c, did, body.note)
 
 
-@router.get(P + "/decks/{did}/sends/{ver}/{kind}")
-def api_send_file(request: Request, did: int, ver: int, kind: str):
-    """Yuborilgan versiyani yuklab olish. Versiya shu taqdimotniki (yoki shu muallifning boshqa taqdimotidan yuborilgan) bo'lishi va chaqiruvchi shu darsning
-    HOZIRGI kursiga ega (yoki kafedra ko'lamida) bo'lishi shart — kurs boshqaga o'tsa eski o'qituvchi yangisining versiyalarini ololmaydi (IDOR)."""
-    c = C(request); guard(c, "yuborilgan versiyani yuklab olish", f"#{did} · v{ver} · {kind}")
+def _send_gate(c: Ctx, did: int, ver: int, what: str):
+    """Yuborilgan versiya faylini olish ruxsati (pptx / pdf / slayd rasmi uchun bir xil): taqdimot egasi yoki o'z kafedra mudiri; darsning HOZIRGI kursiga ega bo'lish
+    va versiya shu taqdimotniki (yoki shu muallifning boshqasidan) bo'lishi shart (IDOR). → (taqdimot, versiya yozuvi)."""
     d = _deck(c, did)
     if not d["course_id"] or not d["lkey"]:
         raise HTTPException(404, "Taqdimot darsga bog'lanmagan")
     if not _scope_ok(c, d):
         rbac.audit_deny(_con, c, "taqdimot: begona dars versiyasi", RES, f"#{did} · v{ver}")
         raise AccessDenied("⛔ Bu dars endi sizning yuklamangizda emas — yuborilgan versiyalarni yuklab olish mumkin emas. So'rov audit jurnaliga yozildi.")
-    r, f = send_file(d["course_id"], d["lkey"], ver, kind)
-    if r["deck_id"] != did and r["sent_by"] != d["user_id"]:
+    r = db.one(_con, "SELECT * FROM pres_sends WHERE course_id=? AND lkey=? AND version=?", (d["course_id"], d["lkey"], int(ver)))
+    if r and r["deck_id"] != did and r["sent_by"] != d["user_id"]:
         rbac.audit_deny(_con, c, "taqdimot: begona versiya", RES, f"#{did} · v{ver}")
         raise HTTPException(404, "Taqdimot versiyasi topilmadi")
+    return d, r
+
+
+@router.get(P + "/decks/{did}/sends/{ver}/slides/{n}.png")
+def api_send_slide(request: Request, did: int, ver: int, n: int):
+    """Yuborilgan versiyaning n-slaydi (PNG, 1600×900). Ruxsat — pdf/pptx bilan bir xil; har rasm uchun audit yozilmaydi (faqat rad etish)."""
+    c = C(request)
+    if not mode(c):
+        guard(c, "slayd rasmini ochish", f"#{did} · v{ver} · {n}")        # ruxsat yo'q — audit + 403
+    d, _r = _send_gate(c, did, ver, "slayd")
+    return serve_slide(d["course_id"], d["lkey"], ver, n)
+
+
+@router.get(P + "/decks/{did}/sends/{ver}/{kind}")
+def api_send_file(request: Request, did: int, ver: int, kind: str):
+    """Yuborilgan versiyani yuklab olish. Versiya shu taqdimotniki (yoki shu muallifning boshqa taqdimotidan yuborilgan) bo'lishi va chaqiruvchi shu darsning
+    HOZIRGI kursiga ega (yoki kafedra ko'lamida) bo'lishi shart — kurs boshqaga o'tsa eski o'qituvchi yangisining versiyalarini ololmaydi (IDOR)."""
+    c = C(request); guard(c, "yuborilgan versiyani yuklab olish", f"#{did} · v{ver} · {kind}")
+    d, _r = _send_gate(c, did, ver, kind)
     return serve_send(d["course_id"], d["lkey"], ver, kind)

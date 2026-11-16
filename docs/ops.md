@@ -130,7 +130,11 @@ Muhit o'zgaruvchilari va volume'ni esa Railway panelida qo'lda sozlash kerak.
 5. **To'xtatish.**
    - Railway SIGTERM yuboradi: uvicorn bot polling'ini, fon vazifalarini va qulfni toza yopadi.
    - `drainingSeconds: 15` — SIGKILL'dan oldingi kutish vaqti.
-6. **AI.** Railway'da Ollama yo'q, shuning uchun tizim «Tahlil rejimi»da ishlaydi (5-bo'lim). Bulutdagi demo serverga institut tashqarisidagi modelni ulamang.
+6. **LibreOffice yo'q — taqdimot baribir to'liq ishlaydi.** Railway'da `soffice` yo'q, lekin «Taqdimot» modulida BIZ yaratgan taqdimotning slayd rasmlari (PNG) va PDF nusxasi rejadan Pillow bilan chiziladi
+   (`app/taqdimot_slides.py`; tashqi vosita, tarmoq va qo'shimcha o'rnatish kerak emas). Shriftlar repoda (`app/assets/fonts/`: Liberation Serif, STIX General — OFL, litsenziya fayllari bilan, ≈1,5 MB) — serverga
+   Times New Roman o'rnatish shart emas. Fayllar `ISFT_CORE_DATA_DIR/taqdimot/sends/<kurs>_<dars>/vN/{taqdimot.pptx, taqdimot.pdf, slides/NN.png}` da (volume'da; versiya boshiga ≈ 0,1 MB × slayd). 20 slayd ≈ 0,3 s,
+   `send` so'rovini sezilarli sekinlashtirmaydi. O'qituvchi yuklagan tayyor .pptx uchun bu qo'llanmaydi (`docs/taqdimot.md` «Slayd rasmlari va PDF» — cheklov).
+7. **AI.** Railway'da Ollama yo'q, shuning uchun tizim «Tahlil rejimi»da ishlaydi (5-bo'lim). Bulutdagi demo serverga institut tashqarisidagi modelni ulamang.
 
 ## 4. Seed (demo ma'lumotlar) — FAQAT DEMO UCHUN
 

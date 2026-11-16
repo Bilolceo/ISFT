@@ -196,7 +196,8 @@ ok(f1.is_file() and f2.is_file() and f1.read_bytes() != f2.read_bytes(), "Ikkala
 ok(q1("SELECT COUNT(*) FROM pres_sends WHERE course_id=? AND lkey=?", (CID, LK)) == 2 and q1("SELECT MAX(version) FROM pres_sends WHERE course_id=? AND lkey=?", (CID, LK)) == 2, "pres_sends: 2 qator (har versiya)")
 r1, r2 = OQ.get(P + f"/decks/{did}/sends/1/pptx"), OQ.get(P + f"/decks/{did}/sends/2/pptx")
 ok(r1.status_code == 200 and r2.status_code == 200 and r1.content == f1.read_bytes() and r2.content == f2.read_bytes() and "v2" in r2.headers.get("content-disposition", ""), "O'qituvchi eski va yangi versiyani yuklab oladi")
-ok(OQ.get(P + f"/decks/{did}/sends/1/pdf").status_code == 404 and OQ.get(P + f"/decks/{did}/sends/9/pptx").status_code == 404, "PDF (LibreOffice yo'q) va yo'q versiya — 404")
+pdf1 = OQ.get(P + f"/decks/{did}/sends/1/pdf")
+ok(pdf1.status_code == 200 and pdf1.content[:5] == b"%PDF-" and OQ.get(P + f"/decks/{did}/sends/9/pptx").status_code == 404, "PDF nusxa LibreOffice'siz ham bor (Pillow, app/taqdimot_slides.py) — 200; yo'q versiya — 404")
 ok(KAF.get(P + f"/decks/{did}/sends/2/pptx").status_code == 200, "Kafedra mudiri (o'z kafedrasi): yuborilgan versiyani yuklab oladi")
 ok(KAF2.get(P + f"/decks/{did}/sends/2/pptx").status_code == 403, "Boshqa kafedra — 403")
 ok(J(OQ.get(P + "/decks"))["items"][0]["sent_version"] == 2, "Ro'yxatda sent_version = 2")
@@ -369,7 +370,7 @@ from app import office_tools as OT
 env_tools = {k: v for k, v in os.environ.items() if k not in ("ISFT_CORE_OFFICE", "ISFT_CORE_OCR")}
 os.environ.pop("ISFT_CORE_OFFICE", None)
 if not OT.soffice():
-    print("  – soffice yo'q — PDF qismi o'tkazib yuborildi (server shunda ham ishlaydi: PDF nusxasi bo'lmaydi, 404)")
+    print("  – soffice yo'q — LibreOffice qismi o'tkazib yuborildi (PDF nusxa shunda ham bor: Pillow, test_taqdimot_slides)")
 else:
     s_ = socket.socket(); s_.bind(("127.0.0.1", 0)); port = s_.getsockname()[1]; s_.close()
     log = open(Path(tempfile.gettempdir()) / f"zanjir_office_{port}.log", "w")

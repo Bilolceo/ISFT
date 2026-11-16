@@ -5,7 +5,8 @@ O'qituvchi ma'ruza materialini yuklaydi. Tizim **ISFT rasmiy shablonida** taqdim
 Kod joylashuvi:
 - `app/taqdimot.py`: API, AI, dars bilan bog'lash va yuborish (versiyalar).
 - `app/taqdimot_extract.py`: materialni o'qish.
-- `app/taqdimot_render.py`: .pptx yaratish.
+- `app/taqdimot_render.py`: .pptx yaratish (o'lcham tanlash va sahifalarga bo'lish mantig'i shu yerda).
+- `app/taqdimot_slides.py`: shu rejadan slayd rasmlari (PNG) va PDF — **LibreOffice'siz** (Pillow); `app/assets/fonts/` (Liberation Serif, STIX General — OFL) va `app/assets/isft_logo.png`.
 - `app/assets/taqdimot_shablon.pptx`: shablon.
 - `static/taqdimot.js`, `static/taqdimot.css`: sahifa.
 - `static/lesson_picker.js`, `static/lesson_picker.css`: umumiy dars tanlagich (kurs → yo'nalish → fan → dars); «Dars tayyorlash → Fanlar» daraxti (`static/dars.js`) ham shu `lpLevels` dan foydalanadi.
@@ -96,7 +97,7 @@ Yuborilgan taqdimotning darsi o'zgartirilmaydi (409).
 
 **3. Yuborish** (`POST /decks/{id}/send {note?}`) — shartlar: dars belgilangan, PPTX yaratilgan (tahrirdan keyin qayta yaratilmaguncha yuborilmaydi — eskirgan fayl ketmasin), fan o'qituvchining o'ziniki
 (boshqa fan — **403 + audit** `taqdimot: begona fan`; kafedra mudiri va boshqa rollar — 403). Bitta amalda:
-- yangi **versiya** (`pres_sends`, `UNIQUE(course_id, lkey, version)`): dars kodi o'zgarmaydi, v1 → v2; pptx (va serverda LibreOffice bo'lsa PDF) `db.DATA_DIR/taqdimot/sends/<kurs>_<dars>/vN/` ga saqlanadi,
+- yangi **versiya** (`pres_sends`, `UNIQUE(course_id, lkey, version)`): dars kodi o'zgarmaydi, v1 → v2; pptx, **PDF** va **slayd rasmlari** (`slides/01.png` …) `db.DATA_DIR/taqdimot/sends/<kurs>_<dars>/vN/` ga saqlanadi (`## Slayd rasmlari va PDF`),
   **eski versiyalar fayli bilan tarixda qoladi** (taqdimot o'chirilsa ham);
 - taqdimot darsning paketiga qo'yiladi (`paket.upload_slides` — ilgak, qayta yozilmagan; `pk_topics.deck_id` bog'lanadi): montajda slaydlar PDF'dan, «Dars yaratish»da taqdimot slaydlari paketdan olinadi.
   Paketga qo'yish xato bersa yuborish bekor bo'lmaydi (`paket_error`);
@@ -108,8 +109,34 @@ Yuborilgan taqdimotning darsi o'zgartirilmaydi (409).
 
 **4. Versiyalar.** Muharrirda «Yuborilgan versiyalar» oynasi: v2, v1 … (sana, slayd, yuborgan, izoh, studiya / bo'lim ko'rdimi, .pptx va .pdf yuklab olish). Studiya va masofaviy bo'lim doim eng yangisini ko'radi.
 
-**Cheklovlar (zanjir).** Taqdimot faqat L va A darslariga bog'lanadi (studiya darslari). Kafedra mudiri (o'z yuklamasi bo'lmasa) taqdimotni darssiz yaratadi, yubora olmaydi. PDF nusxa faqat serverda LibreOffice
-bo'lsa saqlanadi (aks holda faqat .pptx; PDF so'ralsa 404). Xabarlar «Mening vazifalarim» (pull) orqali — Telegram'ga alohida push yo'q. Yuborish fon hisobida kunlik AI cheklovga kirmaydi.
+**Cheklovlar (zanjir).** Taqdimot faqat L va A darslariga bog'lanadi (studiya darslari). Kafedra mudiri (o'z yuklamasi bo'lmasa) taqdimotni darssiz yaratadi, yubora olmaydi. PDF nusxa va slayd rasmlari BIZ yaratgan taqdimotlar uchun har doim chiqadi (LibreOffice shart emas). Faqat shu qo'shilishdan OLDIN yuborilgan eski versiyalarda ular yo'q
+(`png = 0`, PDF — 404; o'qish rejimi matnli ko'rinishda ishlaydi) — taqdimotni qayta yuborsangiz yangi versiya rasmlar bilan chiqadi. Xabarlar «Mening vazifalarim» (pull) orqali — Telegram'ga alohida push yo'q. Yuborish fon hisobida kunlik AI cheklovga kirmaydi.
+
+## Slayd rasmlari va PDF (LibreOffice'siz)
+
+Railway'da LibreOffice yo'q, Claude API ham .pptx ni rasmga aylantira olmaydi. Shuning uchun BIZ yaratgan taqdimotning slayd rasmi .pptx dan emas, **rejadan (outline) va ISFT shablon
+qoidalaridan** bevosita chiziladi (`app/taqdimot_slides.py`, Pillow; tashqi xizmat va tarmoq kerak emas).
+
+- **Chiqish:** har slayd — `slides/NN.png` (16:9, **1600×900** px; 1 pt = 1,667 px) va hammasidan bitta ko'p sahifali PDF (960×540 pt sahifa, har sahifa — bitta rasm). Slaydlar tartibi va soni
+  .pptx bilan bir xil: titul, REJA, kontent sahifalari, «E'TIBORINGIZ UCHUN RAHMAT!». 20 slaydli taqdimot ≈ 0,3 s (tekshiruv: 5 s dan kam).
+- **Mantiq umumiy:** bo'linish («(davomi)»), shrift tanlash va joylashuv `taqdimot_render.draw()` / `plan_pages()` ning o'zi — nusxalanmagan. U slaydga `box()` va `_pic()` orqali chizadi: pptx'da bular
+  python-pptx shakllari, PNG'da — `taqdimot_slides.Canvas`. Titul matni (`title_lines`) va reja (`plan_fit`) ham ikkala tomonga umumiy.
+- **Dizayn:** qizil sarlavha paneli (#B00000, oq 26 pt), logotip, chapi bo'sh (kontent x = 285…920 pt), kartochka #FBEAEA, kulrang #F2F2F2, titul chap qizil chiziq. Matn 14 pt dan kichik emas
+  (≈ 23 px; asosiy matn 20 pt ≈ 33 px). Real o'lchamda matn sig'masa shrift ko'pi bilan 20 % kichrayadi.
+- **Shriftlar** (`app/assets/fonts/`, litsenziya fayllari bilan): Liberation Serif (Times New Roman bilan metrik mos; Regular/Bold/Italic) va formulalar uchun STIX General (Cambria Math o'rniga).
+  Belgi shriftda bo'lmasa — boshqasidan olinadi (∈ → STIX, formuladagi kirill → Liberation). ʻ (U+02BB) va o'zbek kirill (Ў ў Қ қ Ғ ғ Ҳ ҳ) Liberation Serif'da bor. Shrift fayllari topilmasa —
+  tizim shriftlari, u ham yo'q bo'lsa Pillow'ning ichki shrifti (xato bermaydi, ko'rinish soddaroq).
+- **Formula:** `$x^{2}$` daraja, `$a_{1}$` indeks, ichma-ich ham (`e^{x^{2}}` — yana kichikroq); kasr, ildiz, integral belgilari matn sifatida (soddalashtirilgan — LaTeX buyruqlari tushunilmaydi, pptx'dagidek).
+- **Rasmli slayd:** materialdagi rasm (`img/`) slaydga joylanadi (keng — tepada, tik — o'ngda); fayl ochilmasa — kulrang ramka. Bitta slaydda kutilmagan xato bo'lsa — shu slayd faqat shablon bilan
+  qoladi, taqdimot to'xtamaydi.
+- **Ulanish (`send`):** DB yozuvidan keyin rasmlar va PDF chiziladi (`make_slides`), `pres_sends.png_count` (ustun `ALTER` bilan qo'shiladi, `init` takror ishlaydi) yoziladi. Xato bo'lsa yuborish bekor
+  bo'lmaydi (`slides_error`, audit izohida), rasm yo'q — avvalgi xulq. PDF: serverda LibreOffice bo'lsa — u (asl ko'rinish, `paket.upload_slides` chizadi), bo'lmasa — bizning PDF.
+- **Paket:** LibreOffice bo'lmaganda ham `paket.upload_slides(..., pdf_raw=bizning PDF)` .pptx'dan KEYIN PDF'ni qo'yadi — pleyer PDF sahifalarini slayd rasmi qiladi (avval: sarlavha + bandlar + eng katta rasm),
+  sarlavha/izohlar .pptx'dan, studiya montaji ham shu PDF'dan slayd oladi.
+- **Studiya:** syomkada «Taqdimotni ochish» endi slayd RASMLARINI ko'rsatadi (←/→, Home/End, F — to'liq ekran, Esc, telefonda surish; keyingi slayd oldindan yuklanadi); rasm bo'lmasa (eski versiya) — matnli ko'rinish.
+- **Cheklov (o'qituvchi yuklagan tayyor .pptx):** bu vazifaga kirmaydi — python-pptx bilan taxminiy render QILINMAYDI. Bunday fayl uchun avvalgi xulq saqlanadi: LibreOffice bo'lsa PDF/rasmlar,
+  bo'lmasa pleyer soddalashtirilgan ko'rinish chizadi (`docs/paket.md`). Aniq ko'rinish kerak bo'lsa — o'qituvchi PDF'ni ham yuklasin. Bizning PNG ham .pptx'ning piksel-aniq nusxasi emas
+  (PowerPoint o'z shrifti/qator balandligi bilan chizadi) — tuzilma va rang bir xil, qator uzilishi biroz farq qilishi mumkin.
 
 ## Tuzatish bosqichi: xavfsizlik, versiyalar, kod barqarorligi
 
@@ -143,7 +170,8 @@ bo'lsa saqlanadi (aks holda faqat .pptx; PDF so'ralsa 404). Xabarlar «Mening va
 | `POST /decks/text` | Matndan reja tuzish (JSON: `text`, `course_id`, `lkey`, `title`, `slides`, `audience`; darssiz — `subject`, `topic_no`) |
 | `POST /decks/{id}/lesson` `{course_id, lkey}` | **Darsni belgilash** (bog'lanmagan taqdimotni darsga bog'lash) |
 | `POST /decks/{id}/send` `{note?}` | **Studiyaga va masofaviy bo'limga yuborish** → yangi versiya (`send`: version, code …), `sends` — tarix |
-| `GET /decks/{id}/sends/{ver}/{pptx\|pdf}` | Yuborilgan versiyani yuklab olish (egasi, o'z kafedra mudiri) |
+| `GET /decks/{id}/sends/{ver}/{pptx\|pdf}` | Yuborilgan versiyani yuklab olish (egasi, o'z kafedra mudiri). PDF — BIZ yaratgan taqdimot uchun doim 200; eski versiya (PDF yo'q) — 404 |
+| `GET /decks/{id}/sends/{ver}/slides/{n}.png` | Yuborilgan versiyaning n-slayd rasmi (PNG 1600×900, n = 1…`png`). Ruxsat pdf bilan bir xil (egasi, o'z kafedra mudiri; begona 403). Eski versiya / yo'q n — 404. Har rasm uchun audit yozilmaydi (faqat rad etish) |
 | `GET /decks?scope=mine\|dept` | Mening taqdimotlarim yoki kafedra taqdimotlari (har birida `lesson_code`, `sent_version`) |
 | `GET /decks/{id}` | Taqdimot va uning rejasi; `lesson` (kod, kafedra, o'qituvchi …), `sent_version`, `sends` (versiyalar) |
 | `POST /decks/{id}/outline` | Tahrirlangan rejani saqlash |
@@ -157,6 +185,9 @@ bo'lsa saqlanadi (aks holda faqat .pptx; PDF so'ralsa 404). Xabarlar «Mening va
 
 `tests/test_zanjir.py` (+ `tools/zanjir_check.js`, brauzer: 1440 va 390 px) — Taqdimot → Studiya → Masofaviy bo'lim zanjiri: migratsiya, dars tanlash, versiyalar (v1 → v2 → v3), studiya va bo'lim ko'rishi,
 bildirishnomalar, masofaviy bo'limga yuborish, dars kartochkasi, «Dars yaratish», ZIP, ruxsatlar va audit (`python tests/run_all.py --only zanjir`).
+
+`tests/test_taqdimot_slides.py` (+ `tools/taqdimot_slides_check.js`, brauzer: 1440 va 390 px) — slayd rasmlari va PDF: serversiz (PNG o'lchami, PDF sahifa soni = slaydlar = pptx, piksel dispersiyasi, 6+ tur, bo'linish, ʻ/kirill,
+daraja/indeks, shrift zaxirasi, tezlik, migratsiya) va HTTP (yuborish → fayllar, endpointlar, ruxsat, studiya, paket, eski versiya) (`python tests/run_all.py --only taqdimot_slides`).
 
 `tests/test_taqdimot.py` ikki qismdan iborat:
 - **Serversiz qism:** soxta AI va qoidaviy reja asosida haqiqiy .pptx yaratiladi.

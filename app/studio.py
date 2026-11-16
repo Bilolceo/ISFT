@@ -1065,7 +1065,15 @@ def taqdimot_outline(c: Ctx, cid: int, lkey: int, ver: int) -> dict:
     o = _TQ().send_outline(r)
     slides = [{"n": int(x.get("n") or i), "kind": str(x.get("kind") or "slide"), "title": str(x.get("title") or ""),
                "bullets": [str(b) for b in (x.get("bullets") or [])][:8], "notes": str(x.get("notes") or "")} for i, x in enumerate(o.get("slides") or [], 1)]
-    return {"title": o.get("title") or r["title"] or "", "version": r["version"], "slides": slides}
+    return {"title": o.get("title") or r["title"] or "", "version": r["version"], "slides": slides, "images": int(r.get("png_count") or 0)}
+
+def taqdimot_slide(c: Ctx, cid: int, lkey: int, ver: int, n: int):
+    """Studiya: yuborilgan taqdimotning n-slaydi (PNG) — syomkada o'qish rejimi uchun. Ruxsat taqdimot_file bilan bir xil (bo'lim, operator, kursning o'z o'qituvchisi);
+    har rasm uchun audit yozilmaydi (bitta o'qishda 20+ so'rov) — faqat rad etish yoziladi."""
+    if not (c.role.key in OPS + (TEACH,) and c.channel == "web"):
+        guard(c, "taqdimot slaydi", OPS + (TEACH,), f"kurs #{cid} · {lkey} · v{ver} · {n}")     # audit (allowed=0) + 403
+    co = _course(c, cid); les = _lesson(co, lkey)
+    return _TQ().serve_slide(co["id"], les["key"], ver, n)
 
 def taqdimot_file(c: Ctx, cid: int, lkey: int, ver: int, kind: str):
     """Studiya: darsning yuborilgan taqdimoti (pptx / pdf) — operator syomkada ochadi; o'qituvchi faqat o'z darsini."""
@@ -2047,6 +2055,9 @@ def api_send_dept(jid: int, body: DeptIn, request: Request): return send_dept(C(
 
 @router.get(P + "/lessons/{cid}/{lkey}/taqdimot/{ver}/outline")
 def api_taqdimot_outline(cid: int, lkey: int, ver: int, request: Request): return taqdimot_outline(C(request), cid, lkey, ver)
+
+@router.get(P + "/lessons/{cid}/{lkey}/taqdimot/{ver}/slides/{n}.png")
+def api_taqdimot_slide(cid: int, lkey: int, ver: int, n: int, request: Request): return taqdimot_slide(C(request), cid, lkey, ver, n)
 
 @router.get(P + "/lessons/{cid}/{lkey}/taqdimot/{ver}/{kind}")
 def api_taqdimot_file(cid: int, lkey: int, ver: int, kind: str, request: Request): return taqdimot_file(C(request), cid, lkey, ver, kind)

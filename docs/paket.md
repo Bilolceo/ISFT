@@ -409,6 +409,7 @@ Mavzu boshiga **har bir paket turi (SCORM 1.2 / SCORM 2004 / xAPI / oddiy) bo'yi
   `PowerPoint Document` / `WordDocument`, kengaytmaga qaralmaydi). Har `.pptx` yuklanganda undan PDF ham chiziladi (keyingi asset, «taqdimot» `pdf`):
   paketda slaydlar asl ko'rinishida (rasm), sarlavha/izohlar `.pptx` dan, slayd matni PDF'dan (`slides[].text` — ekran o'quvchi/qidiruv).
   Yuklab olish kartochkasida asl nomlar (`file_name`, `pdf_name`) va hajm (`file_size`, `pdf_size`). Chizish xato bo'lsa — `.pptx` o'zi qoladi (`render_error`).
+  `upload_slides(c, cid, no, raw, name, pdf_raw=None)`: chaqiruvchi o'zi chizgan PDF'ni bersa (taqdimot moduli), LibreOffice chaqirilmaydi — shu PDF `.pptx` dan keyin yuklanadi.
 - **Tesseract OCR** (`uzb.traineddata` — tessdata_best; bo'lmasa `eng`): matn qatlami yo'q (skaner) PDF ma'ruza → har sahifa rasm + OCR matni
   (`pk_assets.meta.ocr`, `pages`). Paketda «MA'RUZA MATNI» — sahifalar galereyasi (NEXTID kabi), OCR matni har sahifada yashirin (`slides[].text`); reja va
   ko'rinadigan matn bloki chiqmaydi (formula/jadvallar OCR'da buziladi — asl sahifa ko'rsatiladi). Asl PDF yuklab olish uchun qoladi.
@@ -744,8 +745,9 @@ brauzer (`tools/paket_build_check.js`): muqova qadami, `<video>` + `<track>` + p
   «Savollar» bo'limi faqat ma'lum sarlavhalar bo'yicha aniqlanadi (boshqacha nomlangan bo'lsa — savollarni qo'lda kiriting); ko'rishda (sandbox) subtitr yuklanishi
   uchun pleyer `<video crossorigin>` qo'yishi kerak (server CORS sarlavhasini beradi).
 
-- LibreOffice bo'lmagan serverda PPTX slaydlari rasmga aylantirilmaydi: faqat .pptx bo'lsa pleyer slaydni sarlavha + bandlar + eng katta rasm sifatida chizadi;
-  aniq ko'rinish uchun PDF'ni ham yuklang (sahifalar rasmga chiziladi). «Bir xil taqdimot»ni server tekshirmaydi — eng oxirgi yuklangan
+- LibreOffice bo'lmagan serverda O'QITUVCHI YUKLAGAN tayyor PPTX slaydlari rasmga aylantirilmaydi: faqat .pptx bo'lsa pleyer slaydni sarlavha + bandlar + eng katta rasm sifatida chizadi (python-pptx bilan
+  taxminiy render qilinmaydi); aniq ko'rinish uchun PDF'ni ham yuklang (sahifalar rasmga chiziladi). **Istisno — «Taqdimot» modulida BIZ yaratgan taqdimot** (`taqdimot.send`): slayd rasmlari va PDF
+  rejadan Pillow bilan chiziladi (`app/taqdimot_slides.py`, `docs/taqdimot.md`) va `upload_slides(..., pdf_raw=…)` orqali .pptx'dan keyin PDF sifatida qo'yiladi — LibreOffice'siz ham pleyerda aniq slayd rasmlari chiqadi. «Bir xil taqdimot»ni server tekshirmaydi — eng oxirgi yuklangan
   taqdimot hal qiladi: PDF `.pptx` dan keyin yuklangan bo'lsa PDF rasmlari, aks holda `.pptx` (PDF'ni `.pptx` dan oldin yuklasangiz, PDF'ni qayta yuklang). Animatsiya, SmartArt, diagrammalar `.pptx` matniga to'liq o'tmaydi.
 - Word: formulalar MathML bo'lib chiqadi; eski brauzerlarda (Chrome < 109) «yassi» (kasr/ildizsiz) ko'rinadi. Tenglamalar tizimidagi tekislash
   nuqtalari (`&`), `borderBox` ramkasi, formuladagi rang — e'tiborsiz; eski Equation 3.0 / MathType (OLE obyekt, WMF ko'rinish) — formula sifatida

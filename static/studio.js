@@ -311,7 +311,7 @@ function stPresHtml(L, T) {
 function stPresBind(m, L, T) {
   m.querySelectorAll("[data-read]").forEach(b => b.onclick = () => stBusy(b, () => stRead(m, L, T, +b.dataset.read)));
 }
-/* slayd matni — outline endpointidan (studiya syomkada PowerPoint bo'lmasa ham o'qiy oladi) */
+/* slayd rasmlari (PNG, `${T.url}/<ver>/slides/NN.png`) — outline javobida `images` > 0 bo'lsa; yo'q bo'lsa (eski versiya) — avvalgi matnli ko'rinish */
 async function stRead(m, L, T, ver) {
   const fail = t => { if (m && m.err) m.err(t); else toast(t); };
   let o;
@@ -322,21 +322,46 @@ async function stRead(m, L, T, ver) {
     return;
   }
   const sl = (o && o.slides) || [];
-  if (!sl.length) { fail("Bu taqdimotda o'qish uchun matn topilmadi — .pptx faylini yuklab oling."); return; }
-  stReader(o, ver, L);
+  const imgs = Math.max(0, +(o && o.images) || 0);
+  if (!sl.length && !imgs) { fail("Bu taqdimotda o'qish uchun matn topilmadi — .pptx faylini yuklab oling."); return; }
+  stReader(o, ver, L, imgs ? `${T.url}/${ver}/slides/` : "");
 }
-function stReader(o, ver, L) {
-  const S = o.slides; let i = 0, notes = true;
+/* base — slayd rasmlari manzili (bo'sh bo'lsa matn rejimi). Rasm rejimida slayd n ning sarlavhasi/izohi outline dagi `n` bo'yicha (bo'lingan «davomi» slaydlarda — oldingi sarlavha) */
+function stReader(o, ver, L, base) {
+  let S = o.slides;
+  if (base) {
+    let last = "";
+    S = Array.from({length: +o.images}, (_, k) => {
+      const x = o.slides.find(y => +y.n === k + 1);
+      if (x) last = x.title || "";
+      return {title: x ? x.title : last ? `${last} (davomi)` : "", notes: x ? x.notes : "", img: `${base}${k + 1}.png`, bullets: x ? x.bullets : []};
+    });
+  }
+  let i = 0, notes = true;
   const el = document.createElement("div"); el.className = "st-reader";
   const head = `${stPT(o.title)} · ${L.full_code || L.code} · v${ver}`;
   el.innerHTML = `<div class="st-reader-in" role="dialog" aria-modal="true" aria-label="Taqdimotni o'qish: ${esc(head)}" tabindex="-1">
-      <div class="st-rd-top"><span class="st-rd-t">${esc(head)}</span><span class="st-rd-n" id="stRdN"></span><button type="button" class="st-rd-x" data-x aria-label="Yopish (Esc)" title="Yopish (Esc)">×</button></div>
+      <div class="st-rd-top"><span class="st-rd-t">${esc(head)}</span><span class="st-rd-n" id="stRdN"></span>${base ? `<button type="button" class="st-rd-x st-rd-fs" data-fs aria-pressed="false" aria-label="To'liq ekran (F)" title="To'liq ekran (F)"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>` : ""}<button type="button" class="st-rd-x" data-x aria-label="Yopish (Esc)" title="Yopish (Esc)">×</button></div>
       <div class="st-rd-bar" aria-hidden="true"><i id="stRdP"></i></div>
       <div class="st-rd-body"><div class="st-rd-slide" id="stRdS" tabindex="-1" aria-live="polite"></div></div>
       <div class="st-rd-nav"><button type="button" class="btn" data-prev>${ico("chevl", 18)} Oldingi</button><button type="button" class="btn ghost" data-notes aria-pressed="true">Izoh</button><button type="button" class="btn primary" data-next>Keyingi ${ico("chevr", 18)}</button></div></div>`;
   const q = s => el.querySelector(s);
   const draw = () => {
     const s = S[i], bl = (s.bullets || []).filter(Boolean);
+    if (base) {
+      const lab = `${i + 1}-slayd, jami ${S.length} ta${s.title ? ": " + s.title : ""}`;
+      q("#stRdS").className = "st-rd-slide st-rd-img-w";
+      q("#stRdS").innerHTML = `<img class="st-rd-img" src="${esc(s.img)}" alt="${esc(lab)}" decoding="async">
+        ${bl.length ? `<ul class="st-rd-sr">${bl.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
+        ${s.notes ? `<aside class="st-rd-notes" ${notes ? "" : "hidden"}><b>Izoh:</b> ${esc(s.notes)}</aside>` : ""}`;
+      q(".st-rd-img").onerror = ev => { ev.target.replaceWith(Object.assign(document.createElement("p"), {className: "muted", textContent: `${s.title || i + 1 + "-slayd"} — slayd rasmi yuklanmadi. .pptx faylini yuklab oling.`})); };
+      if (i + 1 < S.length) { const pre = new Image(); pre.src = S[i + 1].img; }          /* keyingi slaydni oldindan yuklash */
+      q("#stRdN").textContent = `${i + 1} / ${S.length}`;
+      q("#stRdP").style.width = `${100 * (i + 1) / S.length}%`;
+      q("[data-prev]").disabled = i === 0; q("[data-next]").disabled = i === S.length - 1;
+      q("#stRdS").scrollTop = 0;
+      return;
+    }
     q("#stRdS").innerHTML = `<h2 class="st-rd-h">${esc(s.title || `${i + 1}-slayd`)}</h2>${bl.length ? `<ul class="st-rd-ul">${bl.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
       ${s.notes ? `<aside class="st-rd-notes" ${notes ? "" : "hidden"}><b>Izoh:</b> ${esc(s.notes)}</aside>` : ""}`;
     q("#stRdN").textContent = `${i + 1} / ${S.length}`;
@@ -350,7 +375,14 @@ function stReader(o, ver, L) {
     else if (e.key === "ArrowLeft" || e.key === "PageUp") { e.preventDefault(); go(i - 1); }
     else if (e.key === "Home") { e.preventDefault(); go(0); }
     else if (e.key === "End") { e.preventDefault(); go(S.length - 1); }
-  }});
+    else if ((e.key === "f" || e.key === "F") && base) { e.preventDefault(); fs(); }
+  }, onClose: () => { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); }});
+  const fs = () => {                                              /* to'liq ekran (Esc — chiqish) */
+    if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); return; }
+    (el.requestFullscreen ? el.requestFullscreen() : Promise.reject()).catch(() => toast("Brauzer to'liq ekranga ruxsat bermadi"));
+  };
+  if (q("[data-fs]")) q("[data-fs]").onclick = fs;
+  el.addEventListener("fullscreenchange", () => { const b = q("[data-fs]"); if (b) b.setAttribute("aria-pressed", String(document.fullscreenElement === el)); });
   q("[data-prev]").onclick = () => go(i - 1); q("[data-next]").onclick = () => go(i + 1);
   q("[data-notes]").onclick = e => { notes = !notes; e.currentTarget.setAttribute("aria-pressed", String(notes)); el.querySelectorAll(".st-rd-notes").forEach(x => { x.hidden = !notes; }); };
   q("[data-x]").onclick = () => L2.request();

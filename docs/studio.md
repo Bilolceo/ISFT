@@ -1,10 +1,10 @@
 # «Studiya» — dars ishlab chiqarish oqimi
 
 **Kod:** `app/studio.py` (oqim, API, ishchi API), `app/studio_yt.py` (YouTube yuklovchisi), `static/studio.js`, `static/studio.css`
-**Dars kartochkasi:** `app/lesson_card.py`, `static/dars_card.js`, `static/dars_card.css` (`/api/dars/card/*`) · **Taqdimot yuborish:** `app/taqdimot.py` (`docs/taqdimot.md`) · **Dars tanlagich:** `static/lesson_picker.js`
+**Dars kartochkasi:** `app/lesson_card.py`, `static/dars_card.js`, `static/dars_card.css` (`/api/dars/card/*`) · **Taqdimot yuborish:** `app/taqdimot.py` (`docs/taqdimot.md`); slayd rasmlari va PDF — `app/taqdimot_slides.py` (LibreOffice'siz) · **Dars tanlagich:** `static/lesson_picker.js`
 **Paket ilgaklari:** `app/paket.py` — «Studiya ilgaklari» bo'limi (`studio_lesson`, `studio_slides_pdf`, `studio_logo`, `studio_set_video`,
 `studio_set_youtube`, `studio_build`)
-**Testlar:** `tests/test_zanjir.py` (+ `tools/zanjir_check.js`) — taqdimot → studiya → bo'lim zanjiri; `tests/test_studio.py` (A — server orqali, B — jarayon ichida bazaning nusxasida; YouTube HTTP — `httpx.MockTransport`)
+**Testlar:** `tests/test_zanjir.py` (+ `tools/zanjir_check.js`) — taqdimot → studiya → bo'lim zanjiri; `tests/test_taqdimot_slides.py` (+ `tools/taqdimot_slides_check.js`) — slayd rasmlari va o'qish rejimi; `tests/test_studio.py` (A — server orqali, B — jarayon ichida bazaning nusxasida; YouTube HTTP — `httpx.MockTransport`)
 **API:** `/api/studio/*` (sessiya), `/api/montaj/*` (montaj ishchisi, `X-Worker-Token`)
 **Ruxsat resursi:** `rbac.STUDIO` · **Bo'lim kaliti:** `studio` (standart yoqilgan, `app/modules.py`)
 **Montaj ishchisi** (studiya kompyuterida, Python + ffmpeg) — alohida dastur: `tools/montaj/`, `docs/montaj.md`.
@@ -39,6 +39,9 @@ fan kodi `<kurs>_<YO'NALISH>_<fan>` + `_L2`). **Yangi identifikator yaratilmagan
 **Studiyada ko'rinishi.** `lesson_detail` (`GET /lessons/{cid}/{lkey}`): `lesson.full_code` (kod, kafedra, o'qituvchi, fan), `taqdimot.latest` (oxirgi versiya) va `taqdimot.history` (v2, v1 …), `dept_sends`.
 Kun rejasi (`/day`) va «Mening darslarim» (`my_bookings`) bandlarida `full_code` va `pres` (taqdimot versiyasi, «yangi» belgisi); darslar ro'yxati (`states`) — `full_code`, `pres_version`, `dept_sent`.
 Operator syomkada taqdimotni shu yerdan ochadi: `GET /lessons/{cid}/{lkey}/taqdimot/{ver}/{pptx|pdf}` (operator, bo'lim; o'qituvchi — faqat o'z darsi; rektor 403). Ochilganda «yangi taqdimot» xabari «ko'rildi» bo'ladi.
+PDF endi LibreOffice'siz ham bor (rejadan Pillow bilan chiziladi — `docs/taqdimot.md` «Slayd rasmlari va PDF»); eski (rasm qo'shilishidan oldingi) versiyalarda PDF yo'q — havola ko'rinmaydi.
+**O'qish rejimi** (to'liq ekran, syomkada PowerPoint bo'lmasa ham): slayd RASMLARINI ko'rsatadi — `GET /lessons/{cid}/{lkey}/taqdimot/{ver}/slides/{n}.png` (PNG 1600×900; ruxsat pdf bilan bir xil, har rasm uchun audit yozilmaydi — faqat rad etish);
+boshqaruv: ←/→, Home/End, F (to'liq ekran), Esc, telefonda surish; keyingi slayd oldindan yuklanadi; ekran o'quvchi uchun slayd bandlari yashirin ro'yxatda. Rasm bo'lmasa (eski versiya) — avvalgi matnli ko'rinish.
 Taqdimot yuborilganda kurs ishlab chiqarish rejasiga (`st_plan`) qo'shiladi va `st_log` ga «taqdimot yuborildi» yoziladi. `derive()` (10 bosqich) o'zgarmagan.
 
 **Montajdan keyin — «Masofaviy bo'limga yuborish»** (`POST /jobs/{id}/send-dept {note?}`, operator va bo'lim). Tasdiqlash (`approve`) oqimi o'zgarmadi (video darsga qo'yiladi, YouTube / paket); tasdiqlangach
@@ -123,7 +126,7 @@ faqat bosqich egasiga (5 tadan ko'p bo'lsa — bitta jamlangan qator). Operator 
   «Bu darsning yangiroq montaji bor». Darsga taqdimot yuborilmagan bo'lsa yuboriladi, javobda `warnings:["Bu darsga taqdimot yuborilmagan"]`.
 - `dept_info` va dars kartochkasi video holati: `dept_sent`, `video_wait` (eng yangi tasdiqlangan montaj bo'yicha), `pres_sent`.
 - `GET /lessons/{cid}/{lkey}/taqdimot/{ver}/outline` → `{title, version, slides:[{n, kind, title, bullets(≤8), notes}]}` — yuborilgan versiya paytidagi reja
-  (n — PPTX slayd raqami: titul 1, reja 2, kontent 3 dan). Eski yozuv: PPTX dan, bo'lmasa taqdimot rejasidan, bo'lmasa `slides: []`. Ruxsat: bo'lim, operator, kursning o'z o'qituvchisi; begona — 403.
+  (n — PPTX slayd raqami: titul 1, reja 2, kontent 3 dan; `n` slayd rasmi raqamiga ham mos); qo'shimcha `images` — slayd rasmlari soni (0 — eski versiya, o'qish rejimi matnli). Eski yozuv: PPTX dan, bo'lmasa taqdimot rejasidan, bo'lmasa `slides: []`. Ruxsat: bo'lim, operator, kursning o'z o'qituvchisi; begona — 403.
 - «Mening vazifalarim»: yangi taqdimot / video xabarlarida `due=null`, `fresh:true`; operatorga «Masofaviy bo'limga yuborilmagan montaj: N ta» qatori (`st-dw`).
 - Montaj ishchisi ulanmagan: `worker_note` (`/meta`, `/jobs`) — texnik matn (ISFT_CORE_WORKER_TOKEN) faqat IT va bo'lim boshlig'iga; qolganlarga «Montaj hozircha ishlamayapti — IT bilan bog'laning».
 - **ZIP siyosati:** video faqat video havolasini ko'ra oladigan rollarga (bo'lim, operator); o'qituvchi va kafedra ZIP'ida video yo'q, `meta.json`: `video: "ruxsat yo'q"`.
@@ -299,6 +302,7 @@ Rahbariyat — o'sha raqamlar, video/fayl havolalarisiz. Bosh panelda (rektor, o
 | POST | `/api/studio/jobs/{id}/approve`, `/redo` `{note, template?}`, `/retry`, `/cancel` | bo'lim, operator |
 | POST | `/api/studio/jobs/{id}/send-dept` `{note?}` | bo'lim, operator (tasdiqlangan montaj → masofaviy bo'lim; kod avtomatik) |
 | GET | `/api/studio/lessons/{cid}/{lkey}/taqdimot/{ver}/{pptx\|pdf}` | bo'lim, operator, o'qituvchi (o'z darsi) |
+| GET | `/api/studio/lessons/{cid}/{lkey}/taqdimot/{ver}/slides/{n}.png` | slayd rasmi (o'qish rejimi); ruxsat xuddi shunday |
 | GET/POST | `/api/dars/card/{cid}/{lkey}[/create\|/zip\|/text\|/video\|/taqdimot/{ver}/{pptx\|pdf}]` | dars kartochkasi (yuqorida) |
 | POST | `/api/studio/youtube/{id}/retry` | bo'lim, operator |
 | GET | `/api/studio/settings`; POST `/api/studio/rooms`, `/api/studio/sla` `{sla: {bosqich: kun}}` | xonalar — boshliq, operator; SLA — boshliq |

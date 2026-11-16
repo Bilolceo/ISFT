@@ -1882,10 +1882,12 @@ def _office_convert(raw: bytes, src_ext: str, to: str) -> bytes:
     try: return OT.convert(raw, src_ext, to)
     except OT.ToolError as e: raise HTTPException(415, str(e))
 
-def upload_slides(c: Ctx, cid: int, no: int, raw: bytes, name: str, _derived: bool = False) -> dict:
+def upload_slides(c: Ctx, cid: int, no: int, raw: bytes, name: str, _derived: bool = False, pdf_raw: bytes | None = None) -> dict:
     """Taqdimot: .pptx (tahlil + rasmlar) / .pdf (har sahifa → slayd rasmi, pypdfium2) / .png / .jpg (slayd rasmlari to'plami).
     Serverda LibreOffice bo'lsa (app/office_tools.py): eski .ppt → .pptx ga o'giriladi; .pptx dan PDF ham chiziladi (keyingi asset) —
-    paketda slaydlar asl ko'rinishida (rasm), sarlavha/izohlar esa .pptx dan."""
+    paketda slaydlar asl ko'rinishida (rasm), sarlavha/izohlar esa .pptx dan.
+    pdf_raw — chaqiruvchi (taqdimot.send) o'zi chizgan PDF (app/taqdimot_slides.py, Pillow): LibreOffice bo'lmaganda ham pleyerda aniq slayd rasmlari chiqadi.
+    Berilsa .pptx dan keyin shu PDF yuklanadi (LibreOffice chaqirilmaydi); berilmasa va LibreOffice bo'lsa — u chizadi; ikkalasi ham yo'q — faqat .pptx (soddalashtirilgan ko'rinish)."""
     from . import office_tools as OT
     co = _course(c, cid, write=True); l = _check_topic(co, no)
     _read_upload_guard(raw)
@@ -1933,10 +1935,10 @@ def upload_slides(c: Ctx, cid: int, no: int, raw: bytes, name: str, _derived: bo
     with _lock: _log(c, cid, no, "taqdimot yuklandi", f"{name[:80]} · {kind}" + (" · .ppt dan o'girildi" if converted else "") + (" · .pptx dan chizildi" if _derived else "")); _con.commit()
     rbac.audit(_con, c, "paket: taqdimot yuklandi", RES, True, f"kurs #{cid} · {l['code']} · {name[:60]} · {kind}")
     out = {"ok": True, "id": aid, "kind": kind, "converted": converted, **meta}
-    if kind == "pptx" and not _derived and OT.soffice():
+    if kind == "pptx" and not _derived and (pdf_raw or OT.soffice()):
         # aniq ko'rinish: .pptx → PDF → slayd rasmlari (python-pptx faqat matn va eng katta rasmni oladi); xato bo'lsa — .pptx o'zi qoladi
         try:
-            pdf_raw = OT.convert(raw, "pptx", "pdf")
+            pdf_raw = pdf_raw or OT.convert(raw, "pptx", "pdf")
             r = upload_slides(c, cid, no, pdf_raw, re.sub(r"\.[A-Za-z0-9]{1,5}$", "", name) + ".pdf", _derived=True)
             out.update(rendered=True, pdf_id=r["id"], pages=r.get("pages"), images=r.get("images", out.get("images")))
         except (OT.ToolError, HTTPException) as e:

@@ -155,7 +155,14 @@ def para(text, size, color=BLACK, bold=False, align="l", bullet=None, num=None, 
     return {"t": text, "size": size, "color": color, "bold": bold, "align": align, "bullet": bullet, "num": num, "space": space, "italic": italic}
 
 
+def is_canvas(slide) -> bool:
+    """app/taqdimot_slides.Canvas (Pillow) — python-pptx slaydi o'rniga PNG chizadi; mantiq (o'lcham, bo'linish) shu fayldagi draw() ning o'zi."""
+    return hasattr(slide, "canvas_box")
+
+
 def box(slide, x, y, w, h, paras, fill=None, line=None, line_w=1.0, anchor="t", inset=6, shape=MSO_SHAPE.RECTANGLE):
+    if is_canvas(slide):
+        return slide.canvas_box(x, y, w, h, paras, fill, line, line_w, anchor, inset, "oval" if shape == MSO_SHAPE.OVAL else "rect")
     if fill or line or shape != MSO_SHAPE.RECTANGLE:
         sh = slide.shapes.add_shape(shape, Pt(x), Pt(y), Pt(w), Pt(h))
         sh.shadow.inherit = False
@@ -480,11 +487,17 @@ def draw(slide, pg: dict, images_dir: Path | None):
             for j, c in enumerate(r):
                 box(slide, X0 + j * 324, y, 310, h, [para(c.get("title", ""), size + 1, ACCENT, True), para(c.get("text", ""), size, space=3)], fill=CARD, inset=10)
             y += h + 12
-    if pg.get("notes"):
+    if pg.get("notes") and not is_canvas(slide):
         try:
             slide.notes_slide.notes_text_frame.text = pg["notes"][:4000]
         except Exception:
             pass
+
+
+def _pic(slide, path, x, y, w, h):
+    if is_canvas(slide):
+        return slide.canvas_picture(path, x, y, w, h)
+    slide.shapes.add_picture(str(path), Pt(x), Pt(y), Pt(w), Pt(h))
 
 
 def _draw_image(slide, pg, images_dir):
@@ -510,7 +523,7 @@ def _draw_image(slide, pg, images_dir):
             box_w, box_h = CW - bw - 18, Y1 - Y0 - cap_h
             w = min(box_w, box_h * ratio); h = w / ratio
             x = X0 + bw + 18 + (box_w - w) / 2
-            slide.shapes.add_picture(str(path), Pt(x), Pt(Y0), Pt(w), Pt(h))
+            _pic(slide, path, x, Y0, w, h)
             if cap: box(slide, X0 + bw + 18, Y0 + h + 4, box_w, cap_h, [para(cap, MIN_PT, NOTE, align="ctr", italic=True)])
             blocks = _blocks_of({"type": "theory", "text": pg.get("text", ""), "bullets": bullets})
             size = 18
@@ -525,7 +538,7 @@ def _draw_image(slide, pg, images_dir):
         th = sum(text_h(b, MIN_PT + 1, CW, indent=27) + 6 for b in tb) + 6
         box_h = max(150, Y1 - Y0 - th - cap_h - 6)
         w = min(CW, box_h * ratio); h = w / ratio
-        slide.shapes.add_picture(str(path), Pt(X0 + (CW - w) / 2), Pt(Y0), Pt(w), Pt(h))
+        _pic(slide, path, X0 + (CW - w) / 2, Y0, w, h)
         y = Y0 + h + 4
         if cap: box(slide, X0, y, CW, cap_h, [para(cap, MIN_PT, NOTE, align="ctr", italic=True)]); y += cap_h
         ps = ([para(pg["text"], MIN_PT + 1)] if pg.get("text") else []) + [para(b, MIN_PT + 1, bullet="dot", space=4) for b in bullets]
@@ -533,7 +546,7 @@ def _draw_image(slide, pg, images_dir):
         return
     box_h = Y1 - Y0 - cap_h
     w = min(CW, box_h * ratio); h = w / ratio
-    slide.shapes.add_picture(str(path), Pt(X0 + (CW - w) / 2), Pt(Y0 + (box_h - h) / 2), Pt(w), Pt(h))
+    _pic(slide, path, X0 + (CW - w) / 2, Y0 + (box_h - h) / 2, w, h)
     if cap:
         box(slide, X0, Y0 + (box_h + h) / 2 + 4, CW, cap_h, [para(cap, MIN_PT, NOTE, align="ctr", italic=True)])
 
@@ -588,6 +601,24 @@ def plan_items(outline: dict) -> list[str]:
     return [s.get("title") for s in outline.get("slides") or [] if s.get("type") not in ("title", "plan", "references") and s.get("title")][:7]
 
 
+def title_lines(outline: dict) -> list[tuple]:
+    """Titul slaydi matni: [(matn, pt, rang, qalin)] — fan (qizil), «N-mavzu:», mavzu nomi, qo'shimcha satr. pptx va PNG uchun umumiy."""
+    subj = (outline.get("subject") or "").strip().upper()
+    topic = (outline.get("title") or "").strip()
+    no = str(outline.get("topic_no") or "").strip()
+    sub = (outline.get("subtitle") or "").strip()
+    lines = []
+    if subj:
+        lines.append((subj, 40 if len(subj) <= 22 else (32 if len(subj) <= 40 else 26), "FF0000", True))
+    if no:
+        lines.append((f"{no}-mavzu:" if not no.lower().endswith("mavzu") else no + ":", 34, BLACK, True))
+    if topic:
+        lines.append((topic, 30 if len(topic) <= 40 else (26 if len(topic) <= 80 else 22), BLACK, True))
+    if sub:
+        lines.append((sub, 22 if len(sub) <= 70 else 18, "404040", False))
+    return lines or [(" ", 30, BLACK, True)]
+
+
 def _fill_title(prs, outline):
     sl = prs.slides[0]
     target = None
@@ -602,20 +633,7 @@ def _fill_title(prs, outline):
     txBody = tf._txBody
     for p in list(txBody.findall(qn("a:p"))):
         txBody.remove(p)
-    subj = (outline.get("subject") or "").strip().upper()
-    topic = (outline.get("title") or "").strip()
-    no = str(outline.get("topic_no") or "").strip()
-    sub = (outline.get("subtitle") or "").strip()
-    lines = []
-    if subj:
-        lines.append((subj, 40 if len(subj) <= 22 else (32 if len(subj) <= 40 else 26), "FF0000", True))
-    if no:
-        lines.append((f"{no}-mavzu:" if not no.lower().endswith("mavzu") else no + ":", 34, BLACK, True))
-    if topic:
-        lines.append((topic, 30 if len(topic) <= 40 else (26 if len(topic) <= 80 else 22), BLACK, True))
-    if sub:
-        lines.append((sub, 22 if len(sub) <= 70 else 18, "404040", False))
-    for txt, size, color, bold in lines or [(" ", 30, BLACK, True)]:
+    for txt, size, color, bold in title_lines(outline):
         p = etree.SubElement(txBody, qn("a:p"))
         pPr = etree.SubElement(p, qn("a:pPr")); pPr.set("algn", "ctr")
         from pptx.text.text import _Paragraph
@@ -623,8 +641,8 @@ def _fill_title(prs, outline):
         _run(par, txt, size, color, bold)
 
 
-def _fill_plan(prs, items):
-    sl = prs.slides[1]
+def plan_fit(items: list[str]) -> tuple[list[str], int]:
+    """REJA slaydi: raqamsiz bandlar va shrift o'lchami (sig'maganini qisqartiradi). pptx va PNG uchun umumiy."""
     items = [re.sub(r"^\s*\d{1,2}\s*[.)]\s*", "", x) for x in items]     # «1. Bo'lim» → «Bo'lim» (raqam rejada o'zi qo'yiladi)
     size = 22
     hh = lambda sz: sum(text_h(x, sz, CW, indent=27) + sz * 0.5 for x in items)
@@ -632,7 +650,16 @@ def _fill_plan(prs, items):
         size -= 1
     while items and hh(size) > 400:
         items = items[:-1]
-    box(sl, X0, 100, CW, 400, [para(x, size, num=i + 1, space=size * 0.5) for i, x in enumerate(items)])
+    return items, size
+
+
+def draw_plan(slide, items):
+    items, size = plan_fit(items)
+    box(slide, X0, 100, CW, 400, [para(x, size, num=i + 1, space=size * 0.5) for i, x in enumerate(items)])
+
+
+def _fill_plan(prs, items):
+    draw_plan(prs.slides[1], items)
 
 
 def render(outline: dict, out_path: Path, images_dir: Path | None = None) -> dict:
