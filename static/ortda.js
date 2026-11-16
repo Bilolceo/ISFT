@@ -36,8 +36,6 @@ async function renderOrtda(tab) {
   const demo = M.source !== "lrs";
   v.innerHTML = `<div class="dl-head"><div><h2>Ortda qolganlar</h2><span class="muted">${esc(M.scope)} · semestrning ${M.week}-haftasi · ${dlD(M.today)}</span></div>
       <div class="dl-acts">${!document.querySelector('#nav a[data-v="masofaviy"]')?.classList.contains("hidden") ? `<button type="button" class="btn sm ghost" data-dl>${ico("monitor", 15)} Masofaviy ta'lim</button>` : ""}</div></div>
-    ${demo ? `<div class="dl-demo">${ico("info", 15)}<span><b>Namuna ma'lumot.</b> Statementlar sun'iy (NEXTID hozircha xAPI natijalarini yubormaydi). Haqiqiy natijalar ISFT Core LRS orqali
-      to'g'ridan-to'g'ri ishga tushirilgan darslardan keladi${M.source === "mixed" ? " — ro'yxatda namuna va haqiqiy yozuvlar aralash" : ""}.</span></div>` : ""}
     <div class="dl-tabs" role="tablist">${tabs.map(t => `<button type="button" role="tab" aria-selected="${t === OQ.tab}" class="${t === OQ.tab ? "on" : ""}" data-t="${t}">${esc(OR_TABS[t])}</button>`).join("")}</div>
     <div id="orBox"><div class="dl-empty">Yuklanmoqda…</div></div>`;
   v.querySelectorAll(".dl-tabs [data-t]").forEach(b => b.onclick = () => renderOrtda(b.dataset.t));

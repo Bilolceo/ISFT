@@ -55,15 +55,22 @@ const lrs = http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x'); let body = ''; req.on('data', c => body += c);
   req.on('end', () => {
     if (req.method === 'OPTIONS') { res.writeHead(204, cors); res.end(); return; }
-    if (u.pathname === '/xapi/statements' && req.method === 'POST') {
-      let a; try { a = JSON.parse(body); } catch (e) { res.writeHead(400, cors); res.end(); return; }
-      (Array.isArray(a) ? a : [a]).forEach(s => LRS.statements.push(s));
+    const alt = u.searchParams.get('method'), form = alt ? Object.fromEntries(new URLSearchParams(body)) : null;   // xAPI 1.0.x muqobil sintaksisi (yopilishda)
+    const eff = (alt || req.method).toUpperCase(), P = Object.assign(Object.fromEntries(u.searchParams), form || {}), content = form ? form.content : body;
+    if (u.pathname === '/xapi/statements' && (eff === 'POST' || eff === 'PUT')) {   // PUT ?statementId= — bitta statement (Rise kabi)
+      let a; try { a = JSON.parse(content); } catch (e) { res.writeHead(400, cors); res.end(); return; }
+      (Array.isArray(a) ? a : [a]).forEach(s => LRS.statements.push(Object.assign({ _m: eff }, s)));
+      if (eff === 'PUT') { res.writeHead(204, cors); res.end(); return; }
       res.writeHead(200, Object.assign({ 'Content-Type': 'application/json' }, cors)); res.end('[]'); return;
     }
+    if (u.pathname === '/xapi/statements' && req.method === 'PUT' && u.searchParams.get('statementId')) {   // xAPI: PUT ?statementId=… (bitta bayonot, 204)
+      let st; try { st = JSON.parse(body); } catch (e) { res.writeHead(400, cors); res.end(); return; }
+      LRS.statements.push(Object.assign({ id: u.searchParams.get('statementId') }, st)); res.writeHead(204, cors); res.end(); return;
+    }
     if (u.pathname === '/xapi/activities/state') {
-      const key = u.searchParams.get('activityId') + '|' + u.searchParams.get('stateId');
-      if (req.method === 'GET') { if (key in LRS.state) { res.writeHead(200, cors); res.end(LRS.state[key]); } else { res.writeHead(404, cors); res.end(); } return; }
-      if (req.method === 'PUT') { LRS.state[key] = body; res.writeHead(204, cors); res.end(); return; }
+      const key = P.activityId + '|' + P.stateId;
+      if (eff === 'GET') { if (key in LRS.state) { res.writeHead(200, cors); res.end(LRS.state[key]); } else { res.writeHead(404, cors); res.end(); } return; }
+      if (eff === 'PUT') { LRS.state[key] = content; res.writeHead(204, cors); res.end(); return; }
     }
     res.writeHead(404, cors); res.end();
   });
@@ -270,7 +277,7 @@ async function runScorm2004(br, base) {
 }
 
 async function runXapi(br, base, lrsBase) {
-  section('xAPI: darslar va savollar faoliyatlari, passed / completed');
+  section('xAPI: darslar va savollar faoliyatlari, Rise moslik (attempted / progressed / passed)');
   const { ctx, page, errs } = await newCtx(br);
   await page.goto(base + '/lms.html');
   const act = CONTENT.tracking.activity_id;
@@ -283,14 +290,20 @@ async function runXapi(br, base, lrsBase) {
   await sleep(2500);
   const S = LRS.statements, verb = s => s.verb.id.split('/').pop();
   const exp = S.filter(s => verb(s) === 'experienced').map(s => s.object.id);
-  ok(VIEW.every(l => exp.includes(act + '/lesson/' + l.id)), `experienced — har dars uchun «${act}/lesson/<uid>»`);
+  ok(VIEW.every(l => exp.includes(act + '/lesson/' + l.id)) && S.filter(s => verb(s) === 'experienced').every(s => s._m === 'PUT' && s.context.contextActivities.parent[0].id === act),
+    `experienced — har dars uchun «${act}/lesson/<uid>», PUT, ota — kurs (Rise ko'p darsli kurs kabi)`);
+  ok(S[0] && verb(S[0]) === 'attempted' && S[0]._m === 'PUT' && S[0].object.id === act && S.every(s => !/^(initialized|terminated|resumed|suspended)$/.test(verb(s))),
+    'Ochilish: PUT attempted (kurs); initialized/terminated yo\'q');
   ok(VIEW.every(l => S.some(s => verb(s) === 'completed' && s.object.id === act + '/lesson/' + l.id)), 'Dars yakunlanishi — completed (…/lesson/<uid>)');
   const ans = S.filter(s => verb(s) === 'answered');
   ok(ans.length >= (QUIZ ? QUIZ.questions.length : 1) && ans.every(s => s.object.id.startsWith(act + '/lesson/') && /\/q\//.test(s.object.id)), `answered: ${ans.length} ta, id «…/lesson/<uid>/q/<id>»`);
   const ch = ans.find(s => s.object.definition.interactionType === 'choice');
   ok(!ch || (ch.object.definition.choices.every((c, i) => c.id === 'abcdefghij'[i]) && ch.result.success === true), 'choice: variantlar a, b, c… (asl tartib), javob to\'g\'ri');
   if (QUIZ) ok(S.some(s => verb(s) === 'passed' && s.object.id === act + '/lesson/' + QUIZ.id && s.result.score.raw === 100), 'Test: passed (…/lesson/<test uid>, ball 100)');
-  ok(S.some(s => verb(s) === 'completed' && s.object.id === act), 'Kurs: completed');
+  const kp = S.filter(s => s.object.id === act && verb(s) === 'passed'), pv = S.filter(s => verb(s) === 'progressed').map(s => s.result.extensions['https://w3id.org/xapi/cmi5/result/extensions/progress']);
+  ok(kp.length >= 1 && kp.every(s => s._m === 'POST' && s.result.completion === true && s.result.success === true && /^PT/.test(s.result.duration)) && !S.some(s => s.object.id === act && verb(s) === 'completed'),
+    'Kurs: passed {success, completion, duration} — POST (Rise «passed/incomplete»; kurs completed yo\'q)');
+  ok(pv.length && pv[pv.length - 1] === 100 && pv.every((x, i) => i === 0 || x > pv[i - 1]), 'Kurs: progressed (PUT) o\'sib boradi, oxiri 100 (' + pv.join(',') + ')');
   ok(!errs.length, 'Konsol xatosiz' + (errs.length ? ': ' + errs.slice(0, 3).join(' | ') : ''));
   await ctx.close();
 }
@@ -301,7 +314,7 @@ async function runPhone(br, base) {
   await page.goto(base + '/kurs/xapi/index.html?preview=1#lesson=' + VIEW[0].id);
   await page.waitForFunction(() => window.ISFTKurs && window.ISFTKurs.ready);
   ok(await page.$eval('main h1', e => e.textContent.trim()) === VIEW[0].title, '#lesson=<uid> — dars to\'g\'ridan-to\'g\'ri ochildi');
-  ok(!!(await page.$('.banner')) && /Ko'rish rejimi/.test(await page.$eval('.banner', e => e.textContent)), '?preview=1 — «Ko\'rish rejimi» banneri');
+  ok(!!(await page.$('.banner')) && /Ko['\u02bb]rish rejimi/.test(await page.$eval('.banner', e => e.textContent)), '?preview=1 — «Ko\'rish rejimi» banneri');
   const wide = async () => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
   ok(await wide(), '390px: gorizontal aylantirish yo\'q (dars)');
   await page.screenshot({ path: path.join(OUT, 'player-phone.png'), fullPage: false });
@@ -367,12 +380,13 @@ async function runPhone(br, base) {
   ok(CSP.includes("script-src 'self'") && await cs.page.evaluate(() => !!(window.ISFTKurs && window.ISFTKurs.ready) && String(window.origin) === 'null'), 'PREVIEW_CSP bilan ishga tushdi (sandbox — opaque origin)');
   ok(!viol.length && !cs.errs.length, 'CSP buzilishi va konsol xatosi yo\'q' + (viol.length || cs.errs.length ? ': ' + viol.concat(cs.errs).slice(0, 3).join(' | ') : ''));
   await cs.ctx.close();
-  section("Qorong'i rejim");
+  section("OS qorong'i rejimida ham yorug' (Rise kabi)");
   const d = await newCtx(br, { colorScheme: 'dark' });
   await d.page.goto(base + '/kurs/xapi/index.html');
   await d.page.waitForFunction(() => window.ISFTKurs && window.ISFTKurs.ready);
-  const bg = await d.page.evaluate(() => getComputedStyle(document.body).backgroundColor.match(/\d+/g).slice(0, 3).map(Number));
-  ok(bg.every(x => x < 60), `Fon to'q (${bg.join(',')})`);
+  const bg = await d.page.evaluate(() => ({ b: getComputedStyle(document.body).backgroundColor.match(/\d+/g).slice(0, 3).map(Number), c: getComputedStyle(document.body).color.match(/\d+/g).slice(0, 3).map(Number),
+    cs: getComputedStyle(document.documentElement).colorScheme }));
+  ok(bg.b.every(x => x > 245) && bg.c.every(x => x < 60) && bg.cs === 'light', `Fon oq, matn qora, color-scheme: light (${bg.b.join(',')} / ${bg.c.join(',')} / ${bg.cs})`);
   await d.page.screenshot({ path: path.join(OUT, 'player-dark.png') });
   ok(!d.errs.length, 'Konsol xatosiz');
   await d.ctx.close();
@@ -457,7 +471,7 @@ async function runA11y(br, base) {
     const miss = need.filter(e => !window.__seen.has(e));
     return { need: need.length, miss: miss.map(e => e.outerHTML.slice(0, 80)) };
   });
-  ok(reach.need > 20 && !reach.miss.length, `Tab bilan ${reach.need} ta element(ning) hammasiga yetib borildi` + (reach.miss.length ? ' — yetilmadi: ' + reach.miss.slice(0, 3).join(' | ') : ''));
+  ok(reach.need >= 15 && !reach.miss.length, `Tab bilan ${reach.need} ta element(ning) hammasiga yetib borildi` + (reach.miss.length ? ' — yetilmadi: ' + reach.miss.slice(0, 3).join(' | ') : ''));
   // klaviatura ko'rsatmalari (kbd_hints)
   const kh = await pg.$$eval('.kbd-h', ps => ps.map(p => p.parentElement.className.split(' ')[1] + (p === p.parentElement.firstElementChild ? '' : '!')));
   ok(['b-accordion', 'b-tabs', 'b-flashcards', 'b-sorting', 'b-matching', 'b-process', 'b-labeled_graphic', 'b-gallery'].every(t => kh.includes(t)), `kbd_hints: klaviatura ko'rsatmasi blok boshida (${kh.length} ta)`);
@@ -506,78 +520,66 @@ async function runA11y(br, base) {
   ok(!x.errs.length, 'Konsol xatosiz' + (x.errs.length ? ': ' + x.errs.slice(0, 3).join(' | ') : ''));
   await x.ctx.close();
 
-  section('Qulaylik paneli: matn o\'lchami, yuqori kontrast, o\'qish uchun qulay shrift (localStorage)');
+  section('«Aa» qulaylik paneli olib tashlangan (foydalanuvchi talabi)');
   x = await a11yCtx(br, base); pg = x.page;
   await pg.goto(url); await pg.waitForFunction(() => window.ISFTKurs && window.ISFTKurs.ready);
-  const fs0 = await pg.evaluate(() => parseFloat(getComputedStyle(document.body).fontSize));
-  const ab = await pg.$eval('.top .a11y-b', b => ({ exp: b.getAttribute('aria-expanded'), ctl: b.getAttribute('aria-controls'), lab: b.getAttribute('aria-label') }));
-  await pg.click('.top .a11y-b');
-  const p1 = await pg.evaluate(id => ({ vis: !document.getElementById(id).hidden, exp: document.querySelector('.a11y-b').getAttribute('aria-expanded'), inside: !!document.activeElement.closest('#' + id) }), ab.ctl);
-  ok(ab.exp === 'false' && ab.lab && p1.vis && p1.exp === 'true' && p1.inside, '«Aa» tugmasi: aria-expanded / aria-controls, panel ochilganda fokus panel ichida');
-  await pg.click('[data-a11y="fs+"]'); await pg.click('[data-a11y="fs+"]');
-  const fs1 = await pg.evaluate(() => ({ v: document.documentElement.style.getPropertyValue('--a11y-fs'), px: parseFloat(getComputedStyle(document.body).fontSize), out: document.querySelector('.a11y-v').textContent }));
-  ok(fs1.v === '1.25' && Math.abs(fs1.px - fs0 * 1.25) < 0.6 && fs1.out === '125%', `A+ ×2: matn ${fs0}px → ${fs1.px}px (125%)`);
-  await pg.click('[data-a11y="hc"]'); await pg.click('[data-a11y="dys"]');
-  const hc = await pg.evaluate(() => ({ c: document.documentElement.className, bg: getComputedStyle(document.body).backgroundColor, ink: getComputedStyle(document.body).color, ff: getComputedStyle(document.body).fontFamily,
-    pressed: [...document.querySelectorAll('.a11y-t')].map(b => b.getAttribute('aria-pressed')).join(',') }));
-  ok(/a11y-hc/.test(hc.c) && hc.bg === 'rgb(255, 255, 255)' && hc.ink === 'rgb(0, 0, 0)' && /Verdana/.test(hc.ff) && hc.pressed === 'true,true,false', `Yuqori kontrast (oq/qora) va qulay shrift (${hc.ff.split(',')[0]}), tugmalar aria-pressed`);
-  await pg.screenshot({ path: path.join(SHOTS, 'a11y-panel.png') });
-  await pg.keyboard.press('Escape');
-  ok(await pg.evaluate(() => document.querySelector('.a11y-p').hidden && document.activeElement.classList.contains('a11y-b')), 'Esc — panel yopiladi, fokus «Aa» tugmasiga qaytadi');
-  await pg.screenshot({ path: path.join(SHOTS, 'a11y-contrast-dyslexia.png'), fullPage: false });
+  ok((await pg.$$('.a11y-b, .a11y-p, [data-a11y]')).length === 0, "«Aa» tugmasi va qulaylik paneli yo'q");
+  // eski sozlamalar (localStorage «isft-a11y») e'tiborga olinmaydi — foydalanuvchi o'chirib ololmay qolmasin
+  await pg.evaluate(() => localStorage.setItem('isft-a11y', JSON.stringify({ fs: 160, hc: true, dys: true, rm: true })));
   await pg.reload(); await pg.waitForFunction(() => window.ISFTKurs && window.ISFTKurs.ready);
-  const kept = await pg.evaluate(() => ({ v: document.documentElement.style.getPropertyValue('--a11y-fs'), c: document.documentElement.className, ls: localStorage.getItem('isft-a11y') }));
-  ok(kept.v === '1.25' && /a11y-hc/.test(kept.c) && /a11y-dys/.test(kept.c) && JSON.parse(kept.ls).fs === 125, 'Qayta yuklanganda sozlamalar saqlangan (localStorage «isft-a11y»)');
-  await pg.click('.top .a11y-b'); await pg.click('[data-a11y="rm"]');
-  ok(await pg.$eval('#b-ax0000004 .fc-in', e => getComputedStyle(e).transitionDuration.split(',').every(d => parseFloat(d) === 0)), '«Harakatni kamaytirish» — kartochka animatsiyasi o\'chadi');
+  const old = await pg.evaluate(() => ({ c: document.documentElement.className, v: document.documentElement.style.getPropertyValue('--a11y-fs'), px: parseFloat(getComputedStyle(document.body).fontSize) }));
+  ok(!/a11y-/.test(old.c) && old.v === '' && old.px < 24, `Eski saqlangan sozlamalar qo'llanmaydi (sinf «${old.c}», shrift ${old.px}px)`);
   await pg.evaluate(() => localStorage.removeItem('isft-a11y'));
   ok(!x.errs.length, 'Konsol xatosiz' + (x.errs.length ? ': ' + x.errs.slice(0, 3).join(' | ') : ''));
   await x.ctx.close();
-  // prefers-reduced-motion (tizim sozlamasi) va sandbox (localStorage yo'q)
+  // prefers-reduced-motion (tizim sozlamasi) saqlanadi
   x = await a11yCtx(br, base, { reducedMotion: 'reduce' }); pg = x.page;
   await pg.goto(url); await pg.waitForFunction(() => window.ISFTKurs && window.ISFTKurs.ready);
   ok(await pg.$eval('#b-ax0000004 .fc-in', e => getComputedStyle(e).transitionDuration.split(',').every(d => parseFloat(d) === 0)) && await pg.evaluate(() => window.ISFTA11y.reduced()), 'prefers-reduced-motion: reduce — animatsiyalar o\'chiq');
   await x.ctx.close();
-  x = await a11yCtx(br, base); pg = x.page;
-  await pg.goto(base + '/csp/xapi/index.html?preview=1#lesson=' + L0); await pg.waitForFunction(() => window.ISFTKurs && window.ISFTKurs.ready);
-  await pg.click('.top .a11y-b'); await pg.click('[data-a11y="fs+"]');
-  ok(await pg.evaluate(() => document.documentElement.style.getPropertyValue('--a11y-fs') === '1.12' && /saqlashga ruxsat bermadi/.test(document.querySelector('.a11y-note').textContent)) && !x.errs.length,
-    'Sandbox (localStorage yo\'q): A+ ishlaydi, «saqlanmaydi» izohi, konsol xatosiz');
-  await x.ctx.close();
 
-  section('Ovozli o\'qish («Tinglash», Web Speech API)');
-  const mock = { fn: voices => {
-    window.__spoken = [];
-    const ss = { getVoices: () => voices.map(l => ({ lang: l, name: l, default: l === 'en-US' })), speaking: false,
-      speak(u) { window.__spoken.push({ text: u.text, voice: u.voice && u.voice.lang, lang: u.lang }); setTimeout(() => u.onend && u.onend(), 400); },
-      cancel() {}, addEventListener() {} };
-    Object.defineProperty(window, 'speechSynthesis', { value: ss, configurable: true });
-    window.SpeechSynthesisUtterance = function (t) { this.text = t; };
-  } };
-  x = await a11yCtx(br, base, null, { fn: () => { try { Object.defineProperty(window, 'speechSynthesis', { value: undefined, configurable: true }); } catch (e) { /* */ } window.SpeechSynthesisUtterance = undefined; }, arg: null }); pg = x.page;
+  section('«Tinglash» funksiyasi olib tashlangan');
+  x = await a11yCtx(br, base, null, null); pg = x.page;
   await pg.goto(url); await pg.waitForFunction(() => window.ISFTKurs && window.ISFTKurs.ready);
-  const nT = (await pg.$$('.b-paragraph .tts-b, .b-heading_paragraph .tts-b, .b-list .tts-b')).length;
-  await pg.click('#b-ax0000001 .tts-b'); await sleep(100);
-  ok(nT >= 2 && /qo'llab-quvvatlamaydi/.test(await pg.$eval('#b-ax0000001 .tts-m', e => e.textContent)) && await pg.$eval('#b-ax0000001 .tts-b', b => b.getAttribute('aria-pressed') === 'false') && !x.errs.length,
-    `«Tinglash» tugmasi matn bloklarida (${nT} ta); speechSynthesis yo'q — tushunarli xabar, xatosiz`);
+  ok((await pg.$$('.tts, .tts-b')).length === 0, "Matn bloklarida «Tinglash» tugmasi yo'q");
   await x.ctx.close();
-  x = await a11yCtx(br, base, null, { fn: mock.fn, arg: ['en-US', 'ru-RU', 'uz-UZ'] }); pg = x.page;
-  await pg.goto(url); await pg.waitForFunction(() => window.ISFTKurs && window.ISFTKurs.ready);
-  await pg.click('#b-ax0000001 .tts-b'); await sleep(80);
-  const rd = await pg.evaluate(() => ({ cls: document.getElementById('b-ax0000001').classList.contains('reading'), p: document.querySelector('#b-ax0000001 .tts-b').getAttribute('aria-pressed'), sp: window.__spoken.slice(), m: document.querySelector('#b-ax0000001 .tts-m').textContent }));
-  await pg.screenshot({ path: path.join(SHOTS, 'a11y-tts-reading.png') });
-  ok(rd.cls && rd.p === 'true' && rd.sp.length >= 1 && rd.sp[0].voice === 'uz-UZ' && /qulaylik tekshiruvi/.test(rd.sp[0].text) && /o'zbekcha ovoz/.test(rd.m), `O'qilayotgan blok ajratildi, ovoz uz-UZ (${rd.sp[0] && rd.sp[0].voice})`);
-  await pg.waitForFunction(() => !document.getElementById('b-ax0000001').classList.contains('reading'), null, { timeout: 5000 }).catch(() => {});
-  const fin = await pg.evaluate(() => ({ n: window.__spoken.length, p: document.querySelector('#b-ax0000001 .tts-b').getAttribute('aria-pressed') }));
-  ok(fin.p === 'false' && fin.n >= 1, `O'qish tugadi — ajratish olib tashlandi (${fin.n} bo'lak)`);
-  await x.ctx.close();
-  for (const [vs, re, lbl] of [[['en-US', 'ru-RU'], /ruscha ovoz/, 'uz yo\'q → ru-RU'], [['en-US'], /standart ovoz/, 'faqat en-US → standart'], [[], /ovoz topilmadi/i, 'ovoz yo\'q → xabar']]) {
-    x = await a11yCtx(br, base, null, { fn: mock.fn, arg: vs }); pg = x.page;
-    await pg.goto(url); await pg.waitForFunction(() => window.ISFTKurs && window.ISFTKurs.ready);
-    await pg.click('#b-ax0000012 .tts-b'); await sleep(vs.length ? 80 : 1200);
-    const r = await pg.evaluate(() => ({ m: document.querySelector('#b-ax0000012 .tts-m').textContent, v: (window.__spoken[0] || {}).voice }));
-    ok(re.test(r.m) && !x.errs.length, `Ovoz tanlash: ${lbl} («${r.m}»${r.v ? ', ' + r.v : ''})`);
-    await x.ctx.close();
+}
+
+
+// ---------------------------------------------------------------- imlo (oʻ / gʻ → ʻ)
+async function runUz(br, base) {
+  section("Imlo (oʻ/gʻ)");
+  for (const [W, H, mob] of [[1280, 860, false], [390, 800, true]]) {
+    const { ctx, page, errs } = await newCtx(br, { viewport: { width: W, height: H }, isMobile: mob, hasTouch: mob });
+    await page.goto(base + '/kurs/xapi/index.html'); await page.waitForFunction(() => window.ISFTKurs && window.ISFTKurs.ready); await sleep(400);
+    await page.screenshot({ path: path.join(OUT, `uz-cover-${W}.png`) });
+    const sc = await page.evaluate(() => {
+      const w = document.createTreeWalker(document.body, 4), bad = []; let n, good = 0;
+      while ((n = w.nextNode())) {
+        if (n.parentNode.closest('script,style,code,pre,textarea,math')) continue;
+        if (/[oOgG]'(?=\p{L})(?!s(?!\p{L}))/u.test(n.nodeValue) && !/:\/\//.test(n.nodeValue)) bad.push(n.nodeValue.slice(0, 40));
+        if (/[oOgG]\u02bb/.test(n.nodeValue)) good++;
+      }
+      return { bad, good, ids: [...document.querySelectorAll('[id]')].filter(e => /\u02bb/.test(e.id)).length };
+    });
+    ok(sc.bad.length === 0 && sc.good > 0 && sc.ids === 0, `${W}px: ko'rinadigan matnda oʻ/gʻ ʻ bilan (${sc.good} tugun), ASCII qolmagan${sc.bad.length ? ': ' + sc.bad.join(' | ') : ''}, id lar o'zgarmagan`);
+    if (!mob) {
+      await page.evaluate(() => {
+        const d = document.createElement('div'); d.id = 'uzt';
+        d.innerHTML = '<p id="u1">To\'liq o\'zlashtirish, G\'oya</p><p id="u2">ma\'ruza a\'zo dog\'s</p><code id="u3">to\'liq</code><pre id="u4">o\'z</pre><input id="u5" value="to\'liq"><textarea id="u6">o\'z</textarea>'
+          + '<math id="u7"><mi>o\'z</mi></math><a id="u8" href="https://x.uz/o\'z" title="to\'liq">https://x.uz/o\'z</a>';
+        document.body.appendChild(d);
+      });
+      await sleep(150);
+      const u = await page.evaluate(() => { const g = id => document.getElementById(id); return { u1: g('u1').textContent, u2: g('u2').textContent, ex: ['u3', 'u4', 'u7', 'u8'].map(i => g(i).textContent).join('|'), v: g('u5').value + '|' + g('u6').value, t: g('u8').title, uz: window.ISFTA11y.uz("o'q g'oya ma'no") }; });
+      ok(u.u1 === 'To\u02bbliq o\u02bbzlashtirish, G\u02bboya' && u.u2 === "ma'ruza a'zo dog's", `oʻ/gʻ almashadi, tutuq (ma'ruza) va dog's o'zgarmaydi: «${u.u1}»`);
+      ok(u.ex === "to'liq|o'z|o'z|https://x.uz/o'z" && u.v === "to'liq|o'z" && u.t === "to'liq" && u.uz === "o\u02bbq g\u02bboya ma'no", "code / pre / MathML / URL / input / textarea / atribut o'zgarmaydi");
+      // bo'sh joy javobi: asl ma'lumot bilan solishtiriladi (ʻ, ', ‘, ’ teng)
+      const g = await page.evaluate(() => ['\'', '\u02bb', '\u2018', '\u2019'].every(c => window.ISFTKurs.grade({ kind: 'fill', accept: ["O'zbekiston"] }, 'o' + c + 'zbekiston ')));
+      ok(g, "Bo'sh joy javobi: o'zbekiston = oʻzbekiston = o‘zbekiston = o’zbekiston");
+    }
+    ok(errs.length === 0, `${W}px: konsol/tarmoq xatolari yo'q` + (errs.length ? ': ' + errs.slice(0, 2).join(' | ') : ''));
+    await ctx.close();
   }
 }
 
@@ -591,6 +593,7 @@ async function runA11y(br, base) {
     await runXapi(br, base, lrsBase);
     await runPhone(br, base);
     await runA11y(br, base);
+    await runUz(br, base);
   } catch (e) { ok(false, 'Kutilmagan xato: ' + (e && e.stack || e).toString().slice(0, 500)); }
   await br.close(); srv.close(); lrs.close();
   console.log('\n' + Object.entries(counts).map(([s, c]) => `${s}: ${c[0]} ✓ ${c[1]} ✗`).join('\n'));

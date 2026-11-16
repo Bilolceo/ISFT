@@ -45,7 +45,6 @@ window.LOGIN_HTML = `
     <button id="loginBtn" type="button" class="v1-btn" disabled><span id="loginTxt">Kirish</span><span class="v1-btn-ic" data-ico="arrow"></span></button>
   </form>
 
-  <p class="v1-foot">Namuna ma'lumot — haqiqiy tizimlar (HEMIS, NEXTID) hali ulanmagan</p>
 </div>`;
 
 window.LOGIN_AFTER = function () {

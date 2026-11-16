@@ -214,7 +214,7 @@ async function tbTopicPanel(el, d) {
       <fieldset class="tb-fs"><legend>Mavzular</legend><div class="tb-checks">${withSrc.length ? withSrc.map(x => `<label><input type="checkbox" name="tbGt" value="${x.no}" ${x.no === t.no ? "checked" : ""}> ${x.no}. ${esc(x.label)}</label>`).join("") : `<span class="muted">Avval mavzu matnini yuklang</span>`}</div></fieldset>
       <div class="tb-form">
         <label>Mavzu boshiga savollar<input type="number" id="tbGn" min="1" max="${M.limits.max_n}" value="10"></label>
-        <fieldset class="tb-fs"><legend>Turlar</legend><div class="tb-checks row">${Object.entries(M.qtypes).map(([k, v]) => `<label><input type="checkbox" name="tbGy" value="${k}" ${k === "mcq" ? "checked" : ""}> ${esc(v)}</label>`).join("")}</div></fieldset>
+        <fieldset class="tb-fs"><legend>Turlar</legend><div class="tb-checks row">${Object.entries(M.gen_qtypes || M.qtypes).map(([k, v]) => `<label><input type="checkbox" name="tbGy" value="${k}" ${k === "mcq" ? "checked" : ""}> ${esc(v)}</label>`).join("")}</div></fieldset>
         <fieldset class="tb-fs"><legend>Qiyinlik ulushi, %</legend><div class="tb-mix">${[["oson", 30], ["orta", 50], ["qiyin", 20]].map(([k, v]) => `<label>${esc(M.difficulty[k])}<input type="number" min="0" max="100" value="${v}" data-mix="${k}"></label>`).join("")}</div></fieldset>
       </div>
       <div class="tb-acts"><button type="button" class="btn primary" id="tbGo" ${M.ai.on && withSrc.length ? "" : "disabled"}>${ico("spark", 15)} Savollarni tuzish</button></div>
@@ -313,7 +313,7 @@ async function tbQAction(id, act, items, no, reload) {
 function tbEdit(q, no, reload) {
   const M = TB.meta, isNew = !q;
   q = q || {qtype: "mcq", stem: "", options: ["", "", "", ""], correct: [0], answers: [], explanation: "", difficulty: "orta", bloom: "tushunish", source_quote: ""};
-  const optsHtml = (opts, corr) => opts.map((o, i) => `<div class="tb-opt"><input type="radio" name="tbEc" value="${i}" ${corr.includes(i) ? "checked" : ""} aria-label="${tbL(i)} — to'g'ri javob">
+  const optsHtml = (opts, corr, multi) => opts.map((o, i) => `<div class="tb-opt"><input type="${multi ? "checkbox" : "radio"}" name="tbEc" value="${i}" ${corr.includes(i) ? "checked" : ""} aria-label="${tbL(i)} — to'g'ri javob">
       <span class="l">${tbL(i)}</span><input type="text" data-opt="${i}" value="${esc(o)}" aria-label="${tbL(i)} variant"></div>`).join("");
   const m = tbModal(isNew ? `${no}-mavzu: yangi savol` : `Savol #${q.id}: tahrirlash`, `
     ${!isNew && q.status !== "qoralama" ? `<p class="tb-note">Saqlangach savol qoralamaga qaytadi va qayta tekshiruvga yuboriladi.</p>` : ""}
@@ -330,25 +330,26 @@ function tbEdit(q, no, reload) {
                   options: [], correct: [], answers: []};
     if (t === "fill") body.answers = m2.querySelector("#tbEa").value.split("\n").map(s => s.trim()).filter(Boolean);
     else if (t === "tf") body.correct = [+(m2.querySelector('input[name="tbEtf"]:checked')?.value ?? 0)];
-    else { body.options = [...m2.querySelectorAll("[data-opt]")].map(x => x.value.trim()); const c = m2.querySelector('input[name="tbEc"]:checked'); body.correct = c ? [+c.value] : []; }
+    else { body.options = [...m2.querySelectorAll("[data-opt]")].map(x => x.value.trim()); body.correct = [...m2.querySelectorAll('input[name="tbEc"]:checked')].map(x => +x.value); }
     const r = isNew ? await tbApi(`/api/testbank/courses/${TB.cid}/topics/${no}/questions`, body) : await tbApi(`/api/testbank/questions/${q.id}`, body, "PUT");
     if (r) { toast(r.flags?.length ? `Saqlandi · sifat belgilari: ${r.flags.length}` : "Saqlandi"); reload(); return true; }
   }, "Saqlash", true);
-  let opts = q.qtype === "mcq" ? q.options.slice() : ["", "", "", ""], corr = q.qtype === "mcq" ? q.correct.slice() : [0];
+  const isOpt = k => k === "mcq" || k === "multi";
+  let opts = isOpt(q.qtype) ? q.options.slice() : ["", "", "", ""], corr = isOpt(q.qtype) ? q.correct.slice() : [0];
   const draw = () => {
     const t = m.querySelector("#tbEt").value, box = m.querySelector("#tbEo");
     if (t === "fill") box.innerHTML = `<label>Qabul qilinadigan javoblar (har biri yangi qatorda)<textarea id="tbEa" rows="3">${esc((q.qtype === "fill" ? q.answers : []).join("\n"))}</textarea></label>`;
     else if (t === "tf") box.innerHTML = `<fieldset class="tb-fs"><legend>To'g'ri javob</legend><div class="tb-checks row">${["To'g'ri", "Noto'g'ri"].map((l, i) => `<label><input type="radio" name="tbEtf" value="${i}" ${(q.qtype === "tf" ? q.correct[0] : 0) === i ? "checked" : ""}> ${l}</label>`).join("")}</div></fieldset>`;
     else {
-      box.innerHTML = `<fieldset class="tb-fs"><legend>Variantlar (to'g'risini belgilang)</legend><div id="tbEol">${optsHtml(opts, corr)}</div>
+      box.innerHTML = `<fieldset class="tb-fs"><legend>Variantlar (${t === "multi" ? "to'g'ri javoblarni belgilang — kamida 2 ta" : "to'g'risini belgilang"})</legend><div id="tbEol">${optsHtml(opts, corr, t === "multi")}</div>
         <div class="tb-acts"><button type="button" class="btn sm ghost" id="tbEp" ${opts.length >= 6 ? "disabled" : ""}>+ Variant</button><button type="button" class="btn sm ghost" id="tbEm" ${opts.length <= 3 ? "disabled" : ""}>− Variant</button></div></fieldset>`;
-      const sync = () => { opts = [...box.querySelectorAll("[data-opt]")].map(x => x.value); const c = box.querySelector('input[name="tbEc"]:checked'); corr = c ? [+c.value] : []; };
+      const sync = () => { opts = [...box.querySelectorAll("[data-opt]")].map(x => x.value); corr = [...box.querySelectorAll('input[name="tbEc"]:checked')].map(x => +x.value); if (t !== "multi") corr = corr.slice(0, 1); };
       box.querySelector("#tbEp").onclick = () => { sync(); opts.push(""); draw(); };
       box.querySelector("#tbEm").onclick = () => { sync(); opts.pop(); corr = corr.filter(i => i < opts.length); draw(); };
       box.querySelectorAll("input").forEach(x => x.addEventListener("change", sync));
     }
   };
-  m.querySelector("#tbEt").onchange = draw;
+  m.querySelector("#tbEt").onchange = () => { const box = m.querySelector("#tbEo"); if (box.querySelector("[data-opt]")) { opts = [...box.querySelectorAll("[data-opt]")].map(x => x.value); corr = [...box.querySelectorAll('input[name="tbEc"]:checked')].map(x => +x.value); if (m.querySelector("#tbEt").value !== "multi") corr = corr.slice(0, 1); } draw(); };
   draw();
 }
 

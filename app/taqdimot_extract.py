@@ -26,8 +26,32 @@ class BadFile(ValueError):
     pass
 
 
+MSG_TYPE = "Faqat .docx, .pdf yoki .txt yuklash mumkin"
+MSG_DOCX = "Fayl buzilgan yoki Word (.docx) emas. Wordda qayta saqlab ko'ring"
+MSG_PDF = "PDF ochilmadi — faylni qayta yuklab oling yoki Word variantini yuklang"
+# Ikkilik fayl turlari (sehrli baytlar): rasm, arxiv, ofis (eski .doc/.xls/.ppt — OLE2), bajariluvchi — hech qachon «matn» deb qabul qilinmaydi
+_BINARY_MAGIC = (b"\x89PNG", b"\xff\xd8\xff", b"GIF87a", b"GIF89a", b"II*\x00", b"MM\x00*", b"\x00\x00\x01\x00", b"7z\xbc\xaf", b"Rar!", b"\x1f\x8b",
+                 b"\xd0\xcf\x11\xe0", b"MZ\x90\x00", b"\x7fELF", b"\xca\xfe\xba\xbe", b"\xcf\xfa\xed\xfe", b"\xfd7zXZ", b"OggS", b"fLaC", b"ID3\x03", b"ID3\x04",
+                 b"{\\rtf", b"%!PS-Adobe", b"wOFF", b"\x1aE\xdf\xa3")
+
+
+def _looks_binary(raw: bytes) -> bool:
+    head = raw[:8192]
+    if any(head.startswith(m) for m in _BINARY_MAGIC) or head[4:8] == b"ftyp":
+        return True
+    if head[:2] == b"BM" and head[6:10] == b"\x00\x00\x00\x00":      # BMP
+        return True
+    if head[:4] == b"RIFF" and head[8:12] in (b"WAVE", b"WEBP", b"AVI "):
+        return True
+    if b"\x00" in head and raw[:2] not in (b"\xff\xfe", b"\xfe\xff"):
+        return True
+    ctrl = sum(1 for x in head if x < 9 or 13 < x < 32)
+    return bool(head) and ctrl / len(head) > 0.02
+
+
 def sniff(raw: bytes) -> str:
-    """Fayl turi: 'docx' | 'pdf' | 'txt'; mos kelmasa — BadFile."""
+    """Fayl turi SEHRLI BAYTLAR bo'yicha (kengaytma/nomga ishonilmaydi): 'docx' | 'pdf' | 'txt'; mos kelmasa — BadFile (o'zbekcha xabar).
+    Ikkilik fayl (PNG, JPEG, arxiv, eski .doc …) «matn»ga aylanmaydi."""
     if raw[:5] == b"%PDF-":
         return "pdf"
     if raw[:4] == b"PK\x03\x04":
@@ -36,10 +60,10 @@ def sniff(raw: bytes) -> str:
                 if "word/document.xml" in z.namelist():
                     return "docx"
         except zipfile.BadZipFile:
-            pass
-        raise BadFile("Faqat Word (.docx), PDF yoki matn (.txt) fayl qabul qilinadi")
-    if b"\x00" in raw[:4096]:
-        raise BadFile("Faqat Word (.docx), PDF yoki matn (.txt) fayl qabul qilinadi")
+            raise BadFile(MSG_DOCX)                # arxiv boshlangan, lekin buzilgan (yuklash uzilgan) — Word fayli bo'lishi mumkin
+        raise BadFile(MSG_TYPE)                    # yaxshi arxiv, lekin Word emas (.xlsx, .pptx, .zip)
+    if _looks_binary(raw):
+        raise BadFile(MSG_TYPE)
     decode_text(raw)
     return "txt"
 
@@ -206,7 +230,7 @@ def _pdf(raw: bytes, out_dir: Path | None):
     except BadFile:
         raise
     except Exception:
-        raise BadFile("PDF faylni o'qib bo'lmadi")
+        raise BadFile(MSG_PDF)
     blocks, images = [], []
     for pi, page in enumerate(rd.pages):
         try:
@@ -300,7 +324,7 @@ def extract(raw: bytes, kind: str, out_dir: Path | None = None) -> dict:
         except BadFile:
             raise
         except Exception:
-            raise BadFile("Word faylni o'qib bo'lmadi (fayl buzilgan yoki .docx emas)")
+            raise BadFile(MSG_DOCX)
     elif kind == "pdf":
         blocks, images = _pdf(raw, out_dir)
     else:

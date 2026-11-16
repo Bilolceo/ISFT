@@ -82,7 +82,7 @@ ok(not any(D.tpl_key(b["id"]) == "refs" for b in nb) and diff["removed"] >= 1, "
 ok(any(b["type"] == "list" and b["data"]["items"] == ["To'ldirilgan xulosa"] and D.tpl_key(b["id"]) is None for b in nb) and diff["detached"] == 1,
    "Olib tashlangan, lekin to'ldirilgan band (xulosalar) — muallif blokiga aylandi (yo'qolmadi)")
 ok(any(D.tpl_key(b["id"]) == "cont" and b["type"] == "continue" for b in nb) and diff["added"] == 1, "Yangi band («Davom etish») qo'shildi")
-ok(any(b["type"] == "heading" and b["data"]["text"] == "MA'RUZA MATNI VA RASMLAR" for b in nb) and diff["updated"] == 1, "Statik band (bo'lim sarlavhasi) matni shablondan yangilandi")
+ok(any(b["type"] == "continue" and b["data"]["label"] == "MA'RUZA MATNI VA RASMLAR" for b in nb) and diff["updated"] == 1, "Statik band (bo'lim sarlavhasi) matni shablondan yangilandi")
 ok(diff["moved"] >= 1 and diff["author"] == 1 and diff["changed"], f"Farq: {json.dumps({k: diff[k] for k in ('added', 'removed', 'updated', 'moved', 'author', 'detached')})}")
 nb2, d2 = D.reapply(nb, new_items, new_items, "1-MAVZU: SINOV")
 ok(not d2["changed"] and [b["id"] for b in nb2] == ids, "Bir xil shablonni qayta qo'llash — o'zgarishsiz (idempotent)")
@@ -171,6 +171,9 @@ print("== 4. Menyu: bitta «Dars tayyorlash» bandi, «Kurs muharriri» — taxa
 idx = (ROOT / "static" / "index.html").read_text()
 ok('data-v="paket"' in idx and 'data-v="kurs"' not in idx and 'id="v-kurs"' in idx and '<script src="dars.js"></script>' in idx,
    "index.html: menyuda bitta «Dars tayyorlash», muharrir ko'rinishi (v-kurs) va dars.js bor")
+_dj = (ROOT / "static" / "dars.js").read_text()
+ok('id="dsBulkUp"' in _dj and "dsProgress(l)" in _dj and "dsTitle(l)" in _dj and "Mavzu nomi kiritilmagan" in _dj and 'dsYes(l.package || l.export, "Paket")' in _dj,
+   "dars.js: «Ko'p faylni yuklash», 3 qadamli tayyorlik (Material · Video · Paket), nomi yo'q dars — «Mavzu nomi kiritilmagan»; B qatorida ham «Paket»")
 appjs = (ROOT / "static" / "app.js").read_text()
 ok('MOD_ALIAS = {kurs: "paket"}' in appjs and "MOD_ALIAS[v] || v" in appjs, "app.js: go(\"kurs\") — menyuda «Dars tayyorlash» belgilanadi")
 from app import modules as M
@@ -284,7 +287,7 @@ b1 = head.get(f"/api/kurs/lessons/{head.get(f'/api/kurs/courses/{kl1}').json()['
 ok([D.tpl_key(b["id"]) for b in b1][:3] == ["cover", "secvideo", "video"] and any(b["type"] == "video" for b in b1), "Skelet darsi — shablon bloklari (muqova, VIDEODARS, video …)")
 ka1 = a1["kurs"]["id"]
 ba1 = head.get(f"/api/kurs/lessons/{head.get(f'/api/kurs/courses/{ka1}').json()['lessons_list'][0]['id']}").json()["blocks"]
-ok(any(b["type"] == "heading" and b["data"]["text"] == "AMALIY MASHG'ULOT" for b in ba1) and not any(D.tpl_key(b["id"]) == "keypoints" for b in ba1), "Amaliy dars — amaliy shablon bo'yicha")
+ok(any(b["type"] == "continue" and b["data"]["label"] == "AMALIY MASHG'ULOT" for b in ba1) and not any(D.tpl_key(b["id"]) == "keypoints" for b in ba1), "Amaliy dars — amaliy shablon bo'yicha")
 ap2 = head.post(f"/api/dars/subjects/{SK}/skeleton", json={"ratio": 2, "apply": True}).json()
 ok(ap2["created"] == 0 and q("SELECT COUNT(*) n FROM pk_lessons WHERE course_id=? AND deleted=0", (SK,))[0]["n"] == 30, "Qayta bosish — dublikat yo'q (idempotent)")
 
@@ -327,7 +330,7 @@ ok(vb["data"]["yt_id"] == "dQw4w9WgXcQ" and next(b for b in after if D.tpl_key(b
    "Shablon bloklaridagi muallif mazmuni (video havola, matn) saqlandi")
 ok(ids_.index(AUTH["id"]) == ids_.index(vb["id"]) + 1, "Muallif bloki o'z langari (video) ortida")
 ok(not any(D.tpl_key(b["id"]) == "refs" for b in after) and any(D.tpl_key(b["id"]) == "cont" for b in after) and any(D.tpl_key(b["id"]) == "div" for b in after)
-   and any(b["type"] == "heading" and b["data"]["text"] == "VIDEO DARS" for b in after), "Shablon o'zgarishlari: adabiyotlar olindi, «Davom etish» va ajratgich qo'shildi, sarlavha yangilandi")
+   and any(b["type"] == "continue" and b["data"]["label"] == "VIDEO DARS" for b in after), "Shablon o'zgarishlari: adabiyotlar olindi, «Davom etish» va ajratgich qo'shildi, sarlavha yangilandi")
 ok(q("SELECT COUNT(*) n FROM ku_versions WHERE course_id=? AND note LIKE 'Shablon qo%'", (kl1,))[0]["n"] == 1, "Qo'llashdan oldin versiya saqlandi (tiklash mumkin)")
 nv2 = head.post(f"/api/dars/subjects/{SK}/template/apply", json={"template_id": ts2["template"]["id"], "preview": True}).json()
 ok(nv2["total"]["changed"] == 0, "Qayta ko'rish — o'zgarish yo'q")

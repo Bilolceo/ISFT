@@ -46,12 +46,14 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response, FileResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from . import clock, db, rbac
+from . import omml as OM
+from . import office_tools as _OFFICE
 from .rbac import Ctx, AccessDenied
 
 router = APIRouter()
 _con = None
 _ctx = None
-_lock = threading.RLock()
+_lock = db.TxLock(lambda: _con)      # RLock + blokdan istisno bilan chiqsa — rollback
 P = "/api/paket"
 RES = rbac.PAKET
 
@@ -75,16 +77,16 @@ BLOCKS = {"cover": "Muqova", "sections": "Bo'lim sarlavhalari", "video": "Videod
 REQUIRED = ("text", "slides", "video", "quiz")    # «manbasi to'liq» (qamrov): sozlamada yoqilganlarining hammasi
 CORE = ("text", "slides", "video")                # bo'limga yuborish («tayyor») uchun kerak; test va mashqlar — ixtiyoriy
 LSTATE = {"bosh": "Bo'sh", "tayyorlanmoqda": "Tayyorlanmoqda", "kutilmoqda": "Tasdiq kutilmoqda", "tasdiqlangan": "Tasdiqlangan"}
-LAYOUTS = {"steps": "Qadamlar (Articulate Rise kabi)", "scroll": "Bitta sahifa (aylantirish)"}
-SECTIONS = {"video": "VIDEODARS", "text": "MA'RUZA MATNI", "slides": "DARS TAQDIMOTI", "practice": "MASHQ VA TOPSHIRIQLAR"}   # kafedra shabloni — bo'lim sarlavhalari
+LAYOUTS = {"rise": "NEXTID (Rise) ko'rinishi", "steps": "Qadamlar (o'ngda raqamli qadamlar)", "scroll": "Bitta sahifa (aylantirish)"}   # standart — rise
+SECTIONS = {"video": "VIDEODARS", "text": "MA'RUZA MATNI", "slides": "TAQDIMOT", "practice": "MASHQ VA TOPSHIRIQLAR"}   # kafedra shabloni — bo'lim sarlavhalari
 REFLECT = {"title": "O'z-o'zini baholash", "question": "Darsni to'liq o'zlashtirdingizmi?",
            "options": [{"text": "Ha, albatta", "feedback": "Ajoyib! Keyingi darsga o'tishingiz mumkin."},
                        {"text": "Yo'q, to'liq o'zlashtirmadim", "feedback": "Ma'ruza matni va videodarsni qayta ko'rib chiqing."}]}
 ASSIGNMENT = {"title": "Topshiriq", "text": "Quyidagi topshiriqni bajarib PDF shaklda LMS platformasiga joylang", "author": "Sizning professor-o'qituvchingiz"}
 VIDEO_SOURCES = {"file": "Yuklangan video fayl", "youtube": "YouTube havola"}    # ikkalasi ham bo'lsa qaysi biri paketga kiradi
 DEFAULTS = {"mode": "xapi", "completion": "view_and_quiz", "mastery": 60, "quiz_n": 0, "shuffle": True, "attempts": 0,
-            "show_feedback": True, "blocks": {k: True for k in BLOCKS}, "layout": "steps", "sections": dict(SECTIONS), "reflect": REFLECT,
-            "assignment": dict(ASSIGNMENT), "video_source": "file"}
+            "show_feedback": True, "blocks": {k: True for k in BLOCKS}, "layout": "rise", "sections": dict(SECTIONS), "reflect": REFLECT,
+            "assignment": dict(ASSIGNMENT), "video_source": "file", "video_min": 0, "auto_captions": False}
 _OLD_DEFAULTS = {"mode": "scorm12", "completion": "view_and_quiz", "mastery": 60, "quiz_n": 0, "shuffle": True, "attempts": 0, "show_feedback": True}
 
 # Darslar (NEXTID «Articulate» yorlig'i: «L1-1-dars: …», «A1- AMALIY MASHG'ULOT: …»). Ichki kalit (pk_*.topic_no ustuni) = asos + raqam:
@@ -106,6 +108,13 @@ AUDIO_KINDS = ("mp3", "m4a", "ogg", "wav")
 SUB_LANGS = {"uz": "O'zbekcha", "ru": "Ruscha", "en": "Inglizcha", "kk": "Qoraqalpoqcha", "tj": "Tojikcha"}
 MAX_EXERCISES = 30                 # bitta darsdagi mashqlar
 MAX_TEXT_CHARS = 200_000
+
+def _cut_text(t: str, n: int = MAX_TEXT_CHARS) -> str:
+    """n belgigacha kesadi, lekin formula belgisi ⟦m:…⟧ o'rtasidan emas (kesilgan belgi ko'rinadigan «axlat» matn bo'lib qolmasin)."""
+    if len(t) <= n: return t
+    t = t[:n]; i = t.rfind("⟦m:")
+    if i != -1 and t.find("⟧", i) == -1: t = t[:i]
+    return t
 MAX_SLIDES = 200
 KEEP_VERSIONS = 3
 IMG_MAX_PX = 1600
@@ -142,6 +151,10 @@ CREATE INDEX IF NOT EXISTS ix_pk_ai ON pk_ai(user_id, day);
 CREATE TABLE IF NOT EXISTS pk_exercises(id INTEGER PRIMARY KEY, course_id INT, topic_no INT, kind TEXT, title TEXT, data TEXT, explanation TEXT DEFAULT '',
   status TEXT DEFAULT 'faol', src TEXT DEFAULT '', pos INT DEFAULT 0, user_id INT, user_name TEXT, ts TEXT, updated_at TEXT, deleted INT DEFAULT 0);
 CREATE INDEX IF NOT EXISTS ix_pk_ex ON pk_exercises(course_id, topic_no, deleted);
+CREATE TABLE IF NOT EXISTS pk_import_pending(upload_id TEXT PRIMARY KEY, course_id INT, topic_no INT, user_id INT, file TEXT, created_at TEXT,
+  status TEXT DEFAULT 'kutilmoqda', items TEXT);
+CREATE INDEX IF NOT EXISTS ix_pk_imp_pend ON pk_import_pending(course_id, topic_no, status);
+CREATE TABLE IF NOT EXISTS course_code_store(course_id INTEGER PRIMARY KEY, code TEXT UNIQUE NOT NULL, created_at TEXT);
 """
 
 
@@ -172,6 +185,13 @@ def init(con):
         con.commit()
     except Exception as e:
         print("paket.init:", e); return
+    try:
+        if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dl_courses'").fetchone():
+            con.execute("CREATE TRIGGER IF NOT EXISTS trg_dlc_code_del AFTER DELETE ON dl_courses BEGIN DELETE FROM course_code_store WHERE course_id=OLD.id; END")   # kurs o'chirilsa kodi darhol bo'shaydi
+            con.commit()
+            _sync_course_codes(con)   # dars kodlari: bir martalik to'ldirish (takror ishga tushirish — hech narsa o'zgarmaydi)
+    except Exception as e: print("paket.course_code_store:", repr(e))
+    from . import paket_captions as PC; PC.init(con)       # avtomatik subtitr: jadval + kurs ishchi yo'llariga ulanish (docs/paket.md)
     try: sweep_tmp()
     except Exception as e: print("paket.sweep_tmp:", repr(e))
     if not db.one(con, "SELECT 1 x FROM users"): return
@@ -202,9 +222,10 @@ def migrate(con) -> dict:
     """Darslar modeli (NEXTID) — idempotent: necha marta chaqirilsa ham natija bir xil.
       1) pk_lessons, pk_ai, pk_exercises jadvallari (SCHEMA); pk_topics.keypoints / extra, pk_packages.lesson ustunlari (yo'q bo'lsa);
       2) mavjud mavzu paketlari — L darslar: pk_packages.lesson = 'L<N>' (kurs paketi — 'kurs'), faqat bo'sh qatorlarda;
-      3) standart sozlama hech o'zgartirilmagan bo'lsa (eski DEFAULTS bilan bir xil) — paket turi xAPI (NEXTID), bir marta (pk_meta.nextid_v1)."""
+      3) standart sozlama hech o'zgartirilmagan bo'lsa (eski DEFAULTS bilan bir xil) — paket turi xAPI (NEXTID), bir marta (pk_meta.nextid_v1);
+      4) standart ko'rinish «steps» bo'lsa — «rise», bir marta (pk_meta.rise_v1)."""
     con.executescript(SCHEMA)
-    out = {"columns": [], "packages": 0, "defaults": False}
+    out = {"columns": [], "packages": 0, "defaults": False, "layout": False}
     if "keypoints" not in _cols(con, "pk_topics"):
         con.execute("ALTER TABLE pk_topics ADD COLUMN keypoints TEXT"); out["columns"].append("pk_topics.keypoints")
     if "extra" not in _cols(con, "pk_topics"):       # muqova muallifi, topshiriq savollari (qo'lda), slayd izohlari — JSON
@@ -224,6 +245,17 @@ def migrate(con) -> dict:
                 cur["mode"] = "xapi"
                 con.execute("UPDATE pk_meta SET v=? WHERE k='defaults'", (json.dumps(cur),)); out["defaults"] = True
         con.execute("INSERT OR REPLACE INTO pk_meta(k,v) VALUES('nextid_v1', ?)", (_now(),))
+    if not con.execute("SELECT 1 FROM pk_meta WHERE k='rise_v1'").fetchone():
+        # 4) standart ko'rinish — «rise» (NEXTID'dagi Rise darslari kabi), bir marta: eski standart («steps») saqlangan bo'lsa almashtiriladi;
+        #    dars bo'yicha tanlangan ko'rinish (pk_topics.settings) o'zgarmaydi
+        r = con.execute("SELECT v FROM pk_meta WHERE k='defaults'").fetchone()
+        if r:
+            try: cur = json.loads(r[0])
+            except (TypeError, ValueError): cur = {}
+            if isinstance(cur, dict) and cur.get("layout") in (None, "steps"):
+                cur["layout"] = "rise"
+                con.execute("UPDATE pk_meta SET v=? WHERE k='defaults'", (json.dumps(cur),)); out["layout"] = True
+        con.execute("INSERT OR REPLACE INTO pk_meta(k,v) VALUES('rise_v1', ?)", (_now(),))
     con.commit()
     return out
 
@@ -240,11 +272,11 @@ def _clean_settings(s: dict, base: dict) -> dict:
     out = json.loads(json.dumps(base))
     if s.get("mode") in MODES: out["mode"] = s["mode"]
     if s.get("completion") in COMPLETION: out["completion"] = s["completion"]
-    for k, lo, hi in (("mastery", 0, 100), ("quiz_n", 0, 200), ("attempts", 0, 20)):
+    for k, lo, hi in (("mastery", 0, 100), ("quiz_n", 0, 200), ("attempts", 0, 20), ("video_min", 0, 100)):
         if k in s:
             try: out[k] = max(lo, min(hi, int(s[k])))
             except (TypeError, ValueError): pass
-    for k in ("shuffle", "show_feedback"):
+    for k in ("shuffle", "show_feedback", "auto_captions"):     # auto_captions — video fayl yuklangach avtomatik subtitr (Whisper) navbatga (paket_captions)
         if k in s: out[k] = bool(s[k])
     if isinstance(s.get("blocks"), dict):
         for k in BLOCKS:
@@ -355,7 +387,7 @@ def parse_bulk(text: str, n_topics: int, valid_keys=None) -> list[dict]:
         r = {"line": i, "topic_no": no, "code": lesson_code(no), "url": url}
         v = parse_video(url)
         if no not in valid:
-            r.update(ok=False, error=f"Mavzu raqami 1–{n_topics} oralig'ida bo'lishi kerak" if no < 1000 else
+            r.update(ok=False, error="Dars raqami 1 dan boshlanadi" if no < 1 else
                      f"{lesson_code(no)} darsi yo'q — avval «Darslar ro'yxati»ga qo'shing")
         elif not v["ok"]: r.update(ok=False, error=v["error"])
         else: r.update(ok=True, error="", video=v)
@@ -386,6 +418,122 @@ def split_key(key: int) -> tuple[str, int]:
 def lesson_code(key: int) -> str:
     kind, no = split_key(key)
     return f"{KINDS[kind][0]}{no}"
+
+_DIR_STOP = {"va", "hamda", "bo'yicha", "bo‘yicha", "boʼyicha", "sohasida", "и", "ва", "ҳамда", "бўйича", "соҳасида"}
+_APO_RM = str.maketrans("", "", "ʻʼ‘’`´'")
+_CYR_SLUG = {"а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "ё": "yo", "ж": "j", "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m", "н": "n",
+             "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u", "ф": "f", "х": "x", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "sh", "ъ": "", "ы": "i",
+             "ь": "", "э": "e", "ю": "yu", "я": "ya", "ў": "o", "қ": "q", "ғ": "g", "ҳ": "h", "ѐ": "e", "і": "i", "ї": "yi", "є": "ye", "ґ": "g", "ә": "a",
+             "ө": "o", "ү": "u", "ң": "n", "һ": "h"}
+_CYR_VOW = set("аеёиоуэюяўыіїєәөү")
+_CYR_ANY = re.compile(r"[Ѐ-ӿ]")
+
+def slug_translit(s: str) -> str:
+    """Kirill (o'zbek va rus) harflarni lotinga o'giradi (kod/slug uchun: ʻ ' ‘ ’ tushiriladi); lotin harflar o'zgarmaydi — shuning uchun
+    avvalgi lotin kodlar bir xil qoladi. «Дастурий инжиниринг» → «dasturiy injiniring»."""
+    s = str(s or "")
+    if not _CYR_ANY.search(s): return s
+    out = []
+    for i, ch in enumerate(s):
+        low = ch.lower()
+        if low == "е":
+            prev = s[i - 1].lower() if i > 0 else ""
+            out.append("ye" if (not prev or not prev.isalpha() or prev in _CYR_VOW or prev in "ъь") else "e")
+        elif low in _CYR_SLUG: out.append(_CYR_SLUG[low])
+        else: out.append(ch)
+    return "".join(out)
+
+def dir_abbr(direction: str) -> str:
+    """Ta'lim yo'nalishi qisqartmasi: ko'p so'zli — bosh harflar (bog'lovchilarsiz, qavs ichisiz): «Axborot tizimlari va texnologiyalari» → ATT;
+    bir so'zli — dastlabki 3 harf: «Marketing» → MAR. Kirill nom lotinga o'giriladi (bo'sh «XXX» chiqmasin); ʻ ' ‘ ’ qisqartmaga kirmaydi."""
+    d = slug_translit(re.sub(r"\(.*?\)", " ", str(direction or "")))
+    w = [x for x in re.split(r"[\s,/\-]+", d) if x and x.lower() not in _DIR_STOP]
+    w = [re.sub(r"[^A-Za-z0-9]", "", x.translate(_APO_RM)) for x in w]
+    w = [x for x in w if x]
+    if not w: return "XXX"
+    if len(w) == 1: return w[0][:3].upper()
+    return "".join(x[0] for x in w).upper()
+
+def subject_slug(subject: str) -> str:
+    """«Dasturiy injiniring» → dasturiyinjiniring (kichik harf, bo'shliq/tinish belgilarsiz; ʻ ' ‘ ’ olib tashlanadi; kirill — lotinga o'giriladi),
+    ko'pi bilan 40 belgi."""
+    t = re.sub(r"[^0-9a-z]", "", slug_translit(str(subject or "")).lower().translate(_APO_RM))
+    return t[:40] or "fan"
+
+def course_code(co: dict, dup_sem: bool = False) -> str:
+    """Fanning BOSHLANG'ICH kodi: «<kurs>_<YO'NALISH>_<fan>» — masalan 2_ATT_dasturiyinjiniring. Bir xil kod boshqa semestrda ham bo'lsa — «_<sem>s» qo'shiladi.
+    Kod BIR MARTA beriladi va course_code_store jadvalida SAQLANADI (course_codes()) — keyin fan/yo'nalish nomi yoki yangi semestr qo'shilsa ham o'zgarmaydi.
+    Dars kodi shu kodga «_L2» bo'lib qo'shiladi (lesson_full_code)."""
+    c = f"{int(co.get('course') or 0)}_{dir_abbr(co.get('direction'))}_{subject_slug(co.get('subject'))}"
+    return f"{c}_{int(co.get('semester') or 0)}s" if dup_sem else c
+
+def _legacy_codes(rows: list[dict]) -> dict:
+    """Bir martalik to'ldirish (backfill): HOZIRGI qoida — takrorlanganlarning hammasiga «_<sem>s»; hali ham to'qnashsa — «_<id>» (UNIKAL)."""
+    base = {r["id"]: course_code(r) for r in rows}
+    cnt: dict = {}
+    for v in base.values(): cnt[v] = cnt.get(v, 0) + 1
+    out, used = {}, set()
+    for r in sorted(rows, key=lambda r: r["id"]):
+        c = course_code(r, True) if cnt[base[r["id"]]] > 1 else base[r["id"]]
+        if c in used: c = f"{c}_{r['id']}"
+        out[r["id"]] = c; used.add(c)
+    return out
+
+def _sync_course_codes(con) -> dict:
+    """course_code_store ni dl_courses bilan moslaydi → {kurs id: kod}. Mavjud kodlar O'ZGARMAYDI. Yangi kurs: bo'sh kodlar bazasi bo'lsa — hozirgi qoida bilan
+    to'ldiriladi (backfill); keyin qo'shilgan kurs: asosiy kod band bo'lsa «_<sem>s», u ham band bo'lsa «_<kurs id>» — UNIKAL. O'chirilgan kurs yozuvi
+    tozalanadi (id qayta ishlatilsa yangi kurs eski kodni olmasin) va uning yuborilgan taqdimotlari «yetim» bo'ladi (pres_sends.course_id manfiy)."""
+    st = {r[0]: r[1] for r in con.execute("SELECT course_id, code FROM course_code_store")}
+    rows = [dict(r) if not isinstance(r, dict) else r for r in db.rows(con, "SELECT id, subject, direction, course, semester FROM dl_courses")]
+    ids = {r["id"] for r in rows}
+    gone = [i for i in st if i not in ids]
+    new = [r for r in rows if r["id"] not in st]
+    if not gone and not new: return st
+    tx0 = con.in_transaction
+    try:
+        for i in gone:
+            con.execute("DELETE FROM course_code_store WHERE course_id=?", (i,)); st.pop(i, None)
+            if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='pres_sends'").fetchone():
+                con.execute("UPDATE pres_sends SET course_id=-id WHERE course_id=?", (i,))
+        if new:
+            used = set(st.values())
+            if not st:                                       # birinchi marta: hozirgi qoida bilan (mavjud kodlar o'zgarmaydi)
+                assigned = _legacy_codes(new)
+            else:
+                assigned = {}
+                for r in sorted(new, key=lambda r: r["id"]):
+                    c = course_code(r)
+                    if c in used: c = course_code(r, True)
+                    if c in used: c = f"{course_code(r, True)}_{r['id']}"
+                    assigned[r["id"]] = c; used.add(c)
+            ts = _now()
+            for r in sorted(new, key=lambda r: r["id"]):
+                c = assigned[r["id"]]
+                while con.execute("SELECT 1 FROM course_code_store WHERE code=?", (c,)).fetchone(): c = f"{c}_{r['id']}"
+                con.execute("INSERT INTO course_code_store(course_id, code, created_at) VALUES(?,?,?)", (r["id"], c, ts)); st[r["id"]] = c
+        if not tx0: con.commit()                         # chaqiruvchining ochiq tranzaksiyasi bo'lsa — uni chaqiruvchi saqlaydi (muddatidan oldin commit qilinmaydi)
+    except BaseException:
+        if not tx0:
+            try: con.rollback()
+            except Exception: pass
+        raise
+    return st
+
+def course_codes() -> dict:
+    """{kurs id: unikal kod} — SAQLANGAN (course_code_store): nom/semestr o'zgarsa ham o'zgarmaydi. Yangi kurslarga birinchi chaqiruvda lazily beriladi.
+    So'rov ichida bir marta hisoblang va `codes` sifatida uzating (lesson_unique_code, lesson_ref)."""
+    with _lock:
+        return _sync_course_codes(_con)
+
+def lesson_full_code(co_code: str, key: int) -> str:
+    """Dars to'liq kodi: 2_ATT_dasturiyinjiniring_L2."""
+    return f"{co_code}_{lesson_code(key)}"
+
+def lesson_unique_code(cid: int, key: int, codes: dict | None = None) -> str:
+    """Darsning UNIKAL kodi kurs id va dars kaliti bo'yicha: 2_ATT_dasturiyinjiniring_L2 (Taqdimot → Studiya → Masofaviy bo'lim zanjirining yagona kaliti).
+    `codes` — course_codes() natijasi (ko'p dars uchun bir marta hisoblash)."""
+    codes = codes if codes is not None else course_codes()
+    return lesson_full_code(codes.get(int(cid)) or f"{int(cid)}_XXX_fan", key)
 
 def lesson_file_code(key: int) -> str:
     kind, no = split_key(key)
@@ -436,8 +584,36 @@ ALLOWED_TAGS = {"h2", "h3", "h4", "p", "ul", "ol", "li", "strong", "em", "b", "i
                 "br", "sup", "sub", "code", "pre", "a", "figure", "figcaption", "img"}
 # Mazmuni bilan tashlanadigan teglar (ichidagi matn ham ko'rinmaydi): skript/uslub, xom matnli (textarea, title, xmp…), o'rnatilgan
 # kontent va SVG/MathML. Bo'sh (void) teglar (embed, frame, param …) bu yerda emas — ular yopilmaydi, «skip» rejimiga kirmasdan tashlanadi.
-_DROP_TAGS = {"script", "style", "iframe", "object", "noscript", "template", "svg", "math", "textarea", "title", "head", "xmp", "plaintext",
-              "noembed", "noframes", "frameset", "applet", "xml", "video", "audio", "canvas"}
+_DROP_TAGS = {"script", "style", "iframe", "object", "noscript", "template", "svg", "textarea", "title", "head", "xmp", "plaintext",
+              "noembed", "noframes", "frameset", "applet", "xml", "video", "audio", "canvas", "annotation", "annotation-xml"}
+# MathML Core (formulalar; brauzer o'zi chizadi). Faqat <math> ichida; ichida HTML teglari yo'q (teg tashlanadi, matni qoladi).
+# maction, mglyph, malignmark, menclose … — oq ro'yxatda emas: teg tashlanadi, mazmuni qoladi; annotation(-xml) — mazmuni bilan.
+MATH_TAGS = {"math", "semantics", "mrow", "mi", "mn", "mo", "ms", "mtext", "mspace", "mfrac", "msqrt", "mroot", "msub", "msup", "msubsup",
+             "munder", "mover", "munderover", "mmultiscripts", "mprescripts", "none", "mtable", "mtr", "mtd", "mstyle", "mpadded", "mphantom"}
+# Xavfsiz atributlar (href, style, class, id, on*, xlink:*, src … — yo'q). Qiymat: harf/raqam/bo'shliq/.,%#+- (url(), «:» yo'q); alttext — matn.
+_MATH_ATTRS = {"display", "alttext", "mathvariant", "displaystyle", "scriptlevel", "linethickness", "stretchy", "fence", "separator", "form",
+               "lspace", "rspace", "accent", "accentunder", "columnalign", "rowalign", "columnspacing", "rowspacing", "columnlines", "rowlines",
+               "frame", "largeop", "movablelimits", "symmetric", "minsize", "maxsize", "width", "height", "depth", "voffset", "columnspan", "rowspan"}
+_MATH_VAL_RX = re.compile(r"^[A-Za-z0-9 .,%#+\-]{0,100}$")
+
+def _math_attrs(attrs) -> list[tuple[str, str]] | None:
+    """MathML atributlari → xavfsizlari (yoki birinchi xavflisi uchun None — audit uchun)."""
+    out = []
+    for k, v in attrs:
+        k = (k or "").lower(); v = v or ""
+        if k not in _MATH_ATTRS: return None
+        if k == "alttext": out.append((k, re.sub(r"\s+", " ", v).strip()[:500])); continue
+        if k == "display" and v not in ("block", "inline"): return None
+        if not _MATH_VAL_RX.match(v): return None
+        out.append((k, v))
+    return out
+
+def _math_tag(tag, attrs) -> str:
+    keep = []
+    for k, v in attrs:                     # sanitize: xavfli atribut — faqat o'zi tashlanadi
+        r = _math_attrs([(k, v)])
+        if r: keep += r
+    return f"<{tag}" + "".join(f' {k}="{html.escape(v, quote=True)}"' for k, v in keep) + ">"
 _RECOVER = {"textarea", "title", "xmp"}   # yopilmay qolsa — hujjat oxirida ichidagi matni (escape qilingan) qaytariladi
 # Faqat tegning o'zi tashlanadi, ichidagi matn qoladi (oq ro'yxatdan tashqari boshqa teglar ham shunday): button, form, select, label …
 _MAP_TAGS = {"h1": "h2", "h5": "h4", "h6": "h4"}
@@ -474,13 +650,17 @@ class _Sanitizer(HTMLParser):
         if self.skip:
             if tag == self.skip: self.skip_n += 1
             return
+        if tag in _DROP_TAGS:
+            self.skip, self.skip_n, self.held = tag, 1, []; return
+        in_math = "math" in self.stack
+        if tag in MATH_TAGS or in_math:            # MathML: faqat <math> ichida va faqat MathML teglari (HTML teglari, rasm — tashlanadi)
+            if tag not in MATH_TAGS or (tag == "math") == in_math: return
+            self.out.append(_math_tag(tag, attrs)); self.stack.append(tag); return
         if tag == "img":                            # faqat nisbiy «assets/…» rasm (src + alt), boshqa atributlar tashlanadi
             t = _img_tag(attrs)
             if t: self.out.append(t)
             return
         if tag in _VOID: return                     # yopilmaydi — «skip» rejimiga kirmaydi (aks holda qolgan matn yo'qolardi)
-        if tag in _DROP_TAGS:
-            self.skip, self.skip_n, self.held = tag, 1, []; return
         tag = _MAP_TAGS.get(tag, tag)
         if tag not in ALLOWED_TAGS: return
         if tag == "br": self.out.append("<br>"); return
@@ -507,6 +687,7 @@ class _Sanitizer(HTMLParser):
             return
         tag = _MAP_TAGS.get(tag, tag)
         if tag not in self.stack: return
+        if "math" in self.stack and tag not in MATH_TAGS: return     # <math> ichida HTML yopuvchi tegi — e'tiborsiz
         while self.stack:
             t = self.stack.pop(); self.out.append(f"</{t}>")
             if t == tag: break
@@ -528,6 +709,9 @@ class _Audit(HTMLParser):
         super().__init__(convert_charrefs=True); self.bad = None
     def handle_starttag(self, tag, attrs):
         if self.bad: return
+        if tag in MATH_TAGS:
+            if _math_attrs(attrs) is None: self.bad = f"<{tag} {' '.join(k for k, _ in attrs)}>"
+            return
         if tag not in ALLOWED_TAGS: self.bad = f"<{tag}>"; return
         for k, v in attrs:
             if tag == "a" and k == "href" and safe_href(v or ""): continue
@@ -574,10 +758,24 @@ _ASSIGN_RX = re.compile(r"^(?:#{1,6}\s*)?(?:\d{1,2}[.)]\s*)?(nazorat\s+savollari
 _END_P = (".", "!", "?", "…", ":", ";", "»", '"', "”", ")")
 
 def _inline(t: str) -> str:
+    maths = []
+    if "⟦m:" in t:                                   # formula belgilari → MathML (keyin butun HTML sanitize'dan o'tadi)
+        def hold(m): maths.append(OM.marker_html(m)); return f"\x00{len(maths) - 1}\x00"
+        t = OM.MARKER_RX.sub(hold, t.replace("\x00", ""))
     t = html.escape(t, quote=False)
-    return re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", t)
+    t = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", t)
+    return re.sub(r"\x00(\d+)\x00", lambda m: maths[int(m.group(1))], t) if maths else t
+
+def _vis(t: str) -> str:
+    """Ko'rinadigan matn: formula belgilari — chiziqli shaklda (uzunlik/sarlavha qoidalari uchun)."""
+    return OM.linearize(t)
+
+def _math_block(line: str) -> str:
+    """Alohida qatordagi formula(lar) → <math display="block"> (qator ichidagi shakl bo'lsa ham blok qilinadi)."""
+    return "".join(re.sub(r"^<math(?![^>]*\bdisplay=)", '<math display="block"', OM.marker_html(m)) for m in OM.MARKER_RX.finditer(line))
 
 def _is_caps(line: str) -> bool:
+    line = _vis(line)
     letters = [ch for ch in line if ch.isalpha()]
     return len(letters) >= 3 and all(ch.isupper() for ch in letters) and len(line) <= 90
 
@@ -600,7 +798,7 @@ def _tokens(text: str) -> list[tuple]:
         in_plan = False
         if plan:
             m1, mb = _OL1_RX.match(line), _BUL_RX.match(line)
-            if _MD_RX.match(line) or _PLAN_RX.match(line) or _FIG_RX.match(line) or _TBL_RX.match(line) or plan_n >= 20: pass
+            if _MD_RX.match(line) or _PLAN_RX.match(line) or _FIG_RX.match(line) or _TBL_RX.match(line) or OM.is_math_line(line) or plan_n >= 20: pass
             elif m1 and pkind != "plain":
                 k_ = int(m1.group(1))
                 if k_ > plan_last and (not gap or k_ == plan_last + 1): in_plan = True; plan_last = k_
@@ -614,6 +812,7 @@ def _tokens(text: str) -> list[tuple]:
         if m: out.append(("img", m.group(1))); continue
         m = _TBL_RX.match(line)
         if m: out.append(("tbl", m.group(1))); continue
+        if OM.is_math_line(line): out.append(("math", line)); continue
         m = None if in_plan else _REFS_RX.match(line)
         if m and len(line) <= 2000 and (not m.group(2) or re.match(r"^(?:\d{1,2}[.)]|[-•*–])\s", m.group(2))):
             out.append(("refs", m.group(2).strip())); continue
@@ -680,7 +879,7 @@ def _assign_one(toks: list, budget: int = ASSIGN_MAX) -> tuple[list, list, dict]
         if t[0] == "assign":
             if j > i and not items: break
             inline(t[1]); blanks = 0; fresh = not t[1]; j += 1; continue
-        if t[0] in ("plan", "img", "tbl", "refs", "h"): break
+        if t[0] in ("plan", "img", "tbl", "refs", "h", "math"): break
         line = t[1]
         if t[0] == "t" and _refs_stop(line): break
         if t[0] in ("ul", "ol", "ol1", "num"):
@@ -729,6 +928,13 @@ def _refs_stop(line: str) -> bool:
     if _REFS_STOP_RX.match(line) and len(line) <= 120: return True
     return line.endswith(":") and len(line) <= 80 and len(line.split()) <= 8
 
+_REF_LIKE_RX = re.compile(r"(?:19|20)\d{2}|https?://|www\.|\s[—–]\s|//|\b[ТTМMСS]\.\s*:|\bpp?\.\s*\d|\b[bс]\.\s*\d|isbn|doi\b|\bnashr|издат|\bpress\b", re.I)
+REFS_MAX_ITEMS, REFS_MAX_CHARS = 300, 2000
+
+def _looks_ref(line: str) -> bool:
+    """Adabiyot bandiga o'xshaydi: yil, havola, «— », «T.:», sahifa, ISBN/DOI, nashriyot."""
+    return bool(_REF_LIKE_RX.search(line))
+
 def _refs_split(toks: list) -> tuple[list, list]:
     """«Foydalanilgan adabiyotlar» sarlavhasi va undan keyingi ro'yxat → (qolgan tokenlar, adabiyotlar).
     Ro'yxat tugaydi: sarlavha (raqamsiz), reja, rasm/jadval, ma'lum bo'lim («Nazorat savollari», «Savollar», «Topshiriqlar», «Glossariy» …)
@@ -748,13 +954,15 @@ def _refs_split(toks: list) -> tuple[list, list]:
         t = toks[j]
         if t[0] == "blank": prev_blank = True; j += 1; continue
         if t[0] == "refs": inline(t[1]); prev_blank = False; j += 1; continue
-        if t[0] in ("plan", "img", "tbl") or (t[0] == "h" and not (t[1][:1].isdigit())): break
+        if t[0] in ("plan", "img", "tbl", "math") or (t[0] == "h" and not (t[1][:1].isdigit())): break
         line = t[1]
         if t[0] in ("t", "h") and _refs_stop(line): break
         if t[0] in ("ul", "ol", "ol1", "num"):
             items.append(_ref_item(line)); numbered = numbered or t[0] != "ul"
         elif items and numbered and prev_blank:
             break                                                 # ro'yxatdan keyin bo'sh qator va oddiy matn — matn davom etadi
+        elif not numbered and items and not _looks_ref(line) and (prev_blank or len(line) > 250):
+            break                                                 # raqamsiz ro'yxat: adabiyotga o'xshamagan xatboshi — matn davom etadi
         elif t[0] == "h":
             items.append(_ref_item(line))
         elif items and numbered:
@@ -762,7 +970,10 @@ def _refs_split(toks: list) -> tuple[list, list]:
         else:
             items.append(_ref_item(line))
         prev_blank = False; j += 1
-    return toks[:i] + toks[j:], [x[:600] for x in items if x][:80]
+    items = [x for x in items if x]
+    if len(items) > REFS_MAX_ITEMS:                               # juda uzun — ortiqchasi yo'qolmasin: matnga qaytadi
+        toks = toks[:j] + [("t", x) for x in items[REFS_MAX_ITEMS:]] + toks[j:]; items = items[:REFS_MAX_ITEMS]
+    return toks[:i] + toks[j:], [x[:REFS_MAX_CHARS] for x in items]
 
 def _fig_html(fn: str, media: dict, caption: str = "") -> str:
     im = (media or {}).get("images", {}).get(fn)
@@ -773,13 +984,35 @@ def _fig_html(fn: str, media: dict, caption: str = "") -> str:
             (f"<figcaption>{html.escape(cap, quote=False)}</figcaption>" if cap else "") + "</figure>")
 
 def _table_html(rows: list) -> str:
-    rows = [[re.sub(r"\s+", " ", str(c or "")).strip()[:2000] for c in r] for r in (rows or []) if isinstance(r, list) and any(str(c or "").strip() for c in r)]
+    cut = lambda c: c[:60000] if "⟦m:" in c else c[:2000]          # formula belgisi uzun — kesilib buzilmasin
+    rows = [[cut(re.sub(r"\s+", " ", str(c or "")).strip()) for c in r] for r in (rows or []) if isinstance(r, list) and any(str(c or "").strip() for c in r)]
     if not rows: return ""
     w = max(len(r) for r in rows)
     rows = [r + [""] * (w - len(r)) for r in rows[:400]]
     head, body = (rows[0], rows[1:]) if len(rows) > 1 else (None, rows)
     return ("<table>" + (f"<thead><tr>{''.join(f'<th>{_inline(c)}</th>' for c in head)}</tr></thead>" if head else "") +
             "<tbody>" + "".join("<tr>" + "".join(f"<td>{_inline(c)}</td>" for c in r) + "</tr>" for r in body) + "</tbody></table>")
+
+def _split_inline_numbered(items: list) -> list:
+    """Bitta qatorga yozilgan raqamlangan ro'yxat «Bir … 2. Ikki … 3. Uch …» → alohida bandlar (Word'da Reja / savollar ko'pincha shunday).
+    Faqat ketma-ket raqamlar (2, 3, 4 …) topilganda bo'linadi; bitta band bo'lsa — kamida «2.» bo'lishi kifoya, bir nechta bo'lsa — kamida «2.» va «3.»."""
+    out = []
+    for it in items:
+        t = str(it or "")
+        cuts, pos, n = [], 0, 2
+        while n <= 30:
+            m = re.compile(r"(?<=[\s.;:?!])" + str(n) + r"[.)]\s+(?=\S)").search(t, pos)
+            if not m: break
+            cuts.append((m.start(), m.end())); pos = m.end(); n += 1
+        if len(cuts) >= (1 if len(items) == 1 else 2):
+            segs, prev = [], 0
+            for a, b in cuts:
+                segs.append(t[prev:a]); prev = b
+            segs.append(t[prev:])
+            segs = [re.sub(r"^\s*1[.)]\s+", "", x).strip() for x in segs]
+            if all(len(x) >= 3 for x in segs): out += segs; continue
+        out.append(it)
+    return out
 
 def structure_text(text: str, topic_title: str = "", media: dict | None = None, assign: bool = False) -> dict:
     """Matn (oddiy, «# sarlavha / - band» belgili yoki docx'dan) → {"plan", "html", "explicit_plan", "refs", "images", "questions", "q_warn"}.
@@ -799,10 +1032,10 @@ def structure_text(text: str, topic_title: str = "", media: dict | None = None, 
         if t[0] == "ol1":
             p, n = nb(i, -1), nb(i, 1)
             run = (p is not None and p[0] == "ol1" and p[2] == t[2] - 1) or (n is not None and n[0] == "ol1" and n[2] == t[2] + 1)
-            heading = not run and len(t[1]) <= 90 and not t[1].endswith(_END_P[:-1]) and (n is None or n[0] in ("t", "h", "num"))
+            heading = not run and len(_vis(t[1])) <= 90 and not t[1].endswith(_END_P[:-1]) and (n is None or n[0] in ("t", "h", "num"))
             res.append(("h", t[1], 1) if heading else ("ol", t[1], t[2]))
         elif t[0] == "num":
-            res.append(("h", t[1], min(3, t[2])) if len(t[1]) <= 120 and len(t[1].split()) <= 16 else ("ol", t[1]))
+            res.append(("h", t[1], min(3, t[2])) if len(_vis(t[1])) <= 120 and len(_vis(t[1]).split()) <= 16 else ("ol", t[1]))
         else:
             res.append(t)
     # 2-o'tish: reja bo'limi
@@ -829,8 +1062,8 @@ def structure_text(text: str, topic_title: str = "", media: dict | None = None, 
                         if u[2] <= last_no: break
                         last_no = u[2]
                     plan.append(_clean_item(u[1])); plain = False; i += 1; continue
-                if u[0] in ("img", "tbl"): break
-                if u[0] == "t" and plain is not False and len(u[1]) <= 120 and not u[1].endswith(".") and len(plan) < 12:
+                if u[0] in ("img", "tbl", "math"): break
+                if u[0] == "t" and plain is not False and len(_vis(u[1])) <= 120 and not u[1].endswith(".") and len(plan) < 12:
                     plan.append(_clean_item(u[1])); plain = True; i += 1; continue
                 break
             plan = [p for p in plan if p]
@@ -866,6 +1099,8 @@ def structure_text(text: str, topic_title: str = "", media: dict | None = None, 
         k = t[0]
         if idx in skip_cap: continue
         if k == "blank": flush_p(); continue
+        if k == "math":
+            flush_p(); flush_l(); parts.append(_math_block(t[1])); continue
         if k in ("img", "tbl"):
             flush_p(); flush_l()
             if k == "tbl":
@@ -892,7 +1127,7 @@ def structure_text(text: str, topic_title: str = "", media: dict | None = None, 
         if k == "plan":   # ikkinchi «Reja» qatori — oddiy matn
             flush_p(); parts.append(f"<p><strong>Reja:</strong> {_inline(t[1])}</p>"); continue
         line = t[1]
-        if len(line) <= 70 and line.endswith(":") and len(line.split()) <= 8 and not para:
+        if len(_vis(line)) <= 70 and line.endswith(":") and len(_vis(line).split()) <= 8 and not para:
             parts.append(f"<p><strong>{_inline(line)}</strong></p>"); continue
         para.append(line)
         if line.endswith(_END_P): flush_p()
@@ -901,7 +1136,9 @@ def structure_text(text: str, topic_title: str = "", media: dict | None = None, 
         top = [h for l, h in headings if l == 1 and h]
         plan = top if len(top) >= 2 else [h for l, h in headings if l <= 2 and h]
         if len(plan) < 2: plan = []
-    return {"plan": plan[:20], "html": sanitize("".join(parts)), "explicit_plan": explicit, "refs": refs, "images": used_imgs, "questions": questions, "q_warn": q_warn}
+    lin = lambda xs: [_vis(x) for x in xs]          # reja, adabiyotlar, savollar — oddiy matn (formula — chiziqli shaklda)
+    return {"plan": lin(_split_inline_numbered(plan)[:20]), "html": sanitize("".join(parts)), "explicit_plan": explicit, "refs": lin(refs), "images": used_imgs,
+            "questions": lin(_split_inline_numbered(questions)), "q_warn": q_warn}
 
 
 # =============================================================================================
@@ -1033,7 +1270,7 @@ def _course(c: Ctx, cid: int, write=False) -> dict:
                          LEFT JOIN teachers t ON t.id=c.teacher_id WHERE c.id=? AND {sw}""", (int(cid), *sa))
     if not r:
         if db.one(_con, "SELECT 1 x FROM dl_courses WHERE id=?", (int(cid),)):
-            rbac.audit(_con, c, "paket: begona kurs", RES, False, f"kurs #{cid}")
+            rbac.audit_deny(_con, c, "paket: begona kurs", RES, f"kurs #{cid}")
             raise AccessDenied("⛔ Bu kurs sizning ko'lamingizda emas. So'rov audit jurnaliga yozildi.")
         raise HTTPException(404, "Kurs topilmadi")
     if write and c.role.key not in AUTHORS:
@@ -1041,8 +1278,14 @@ def _course(c: Ctx, cid: int, write=False) -> dict:
         raise AccessDenied("⛔ Kafedra mudiri paketlarni faqat ko'radi va yuklab oladi — manba va yig'ish o'qituvchi va Masofaviy ta'lim bo'limida. So'rov audit jurnaliga yozildi.")
     return r
 
+_TBL_OK: set = set()
+
 def _has_table(name: str) -> bool:
-    return bool(db.one(_con, "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (name,)))
+    """Jadval bormi? Topilgan jadval keshlanadi (jadvallar o'chirilmaydi) — kun rejasi kabi ro'yxatlarda har band uchun sqlite_master so'rovi bo'lmasin."""
+    if name in _TBL_OK: return True
+    ok = bool(db.one(_con, "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (name,)))
+    if ok: _TBL_OK.add(name)
+    return ok
 
 def _syl_titles(subject: str) -> dict:
     """TASDIQLANGAN sillabusdagi mavzu nomlari {mavzu raqami: nom} (fan bo'yicha; yo'q bo'lsa — bo'sh)."""
@@ -1363,19 +1606,30 @@ def docx_lecture(raw: bytes) -> dict:
         images.setdefault(fn, {"data": r[0], "caption": ""})
         return fn
     def ln(node): return etree.QName(node).localname if isinstance(node.tag, str) else ""
-    def para(pel):
-        txt, imgs, bold_all, any_run = [], [], True, False
+    def para(pel, cell=False):
+        txt, imgs, bold_all, any_run, has_math = [], [], True, False, False
+        # formulalar (OMML) → MathML belgisi «⟦m:…|chiziqli⟧» (app/omml.py); paragrafdagi yagona formula — blok (Word ham shunday ko'rsatadi)
+        maths = [x for x in pel.iter(f"{{{OM.M_NS}}}oMath") if not any(ln(a) == "oMath" for a in x.iterancestors())]
+        alone = not cell and len(maths) == 1 and not "".join(t.text or "" for t in pel.iter(f"{{{W}}}t") if not any(ln(a) == "oMath" for a in t.iterancestors())).strip()
         for node in pel.iter():
             tag = ln(node)
             par = node.getparent()
-            if tag == "oMath" and par is not None and ln(par) != "oMathPara": txt.append(" " + EX.omml(node) + " ")
-            elif tag == "oMathPara": txt.append(" " + " ".join(EX.omml(x) for x in node if ln(x) == "oMath") + " ")
+            if tag in ("oMath", "oMathPara") and etree.QName(node).namespace == OM.M_NS:
+                if any(ln(a) in ("oMath", "oMathPara") for a in node.iterancestors()): continue
+                for one in ([x for x in node if ln(x) == "oMath"] if tag == "oMathPara" else [node]):
+                    try: ml, lt = OM.convert(one, display=tag == "oMathPara" or alone)
+                    except Exception: ml, lt = None, EX.omml(one)
+                    txt.append(f" {OM.marker(ml, lt)} " if ml else f" {lt} "); has_math = True
             elif tag == "t" and par is not None and ln(par) == "r" and etree.QName(par).namespace == W:
                 if any(ln(x) == "oMath" for x in node.iterancestors()): continue
                 txt.append(node.text or ""); any_run = True
                 rpr = par.find(f"{{{W}}}rPr")
                 if (node.text or "").strip() and not run_bold(rpr): bold_all = False
-            elif tag in ("tab", "br") and etree.QName(node).namespace == W: txt.append(" ")
+            elif tag == "br" and etree.QName(node).namespace == W:
+                # yumshoq qator uzilishi (Shift+Enter): keyingi qator «1.» / «2)» kabi raqam bilan boshlansa — alohida qator (Word ro'yxati: Reja, savollar);
+                # sahifa uzilishi va oddiy holatlarda — bo'sh joy
+                txt.append(" " if node.get(f"{{{W}}}type") == "page" else " \x00 ")
+            elif tag == "tab" and etree.QName(node).namespace == W: txt.append(" ")
             elif tag == "blip":
                 fn = image(node.get(f"{{{R}}}embed"))
                 if fn: imgs.append(fn)
@@ -1383,6 +1637,8 @@ def docx_lecture(raw: bytes) -> dict:
                 fn = image(node.get(f"{{{R}}}id"))
                 if fn: imgs.append(fn)
         text = re.sub(r"\s+", " ", "".join(txt)).strip()
+        if "\x00" in text: text = re.sub(r"\s*\x00\s*(?=\d{1,2}[.)]\s)", "\n", text).replace("\x00", " "); text = re.sub(r"[ \t]+", " ", text).strip()
+        if has_math: text = re.sub(r"⟧ ([.,;:!?)»])", r"⟧\1", text)        # «… formula .» → «… formula.»
         ppr = pel.find(f"{{{W}}}pPr")
         style, lvl, is_list = "", None, False
         if ppr is not None:
@@ -1396,7 +1652,7 @@ def docx_lecture(raw: bytes) -> dict:
         mh = re.search(r"(heading|заголовок|sarlavha)\s*(\d)", style)
         if mh: lvl = int(mh.group(2))
         elif style in ("title", "название"): lvl = 1
-        if lvl is None and text and any_run and bold_all and len(text) <= 120 and not text.endswith((".", ",", ";")) and not CAPTION_RX.match(text): lvl = 2
+        if lvl is None and text and any_run and bold_all and not has_math and len(text) <= 120 and not text.endswith((".", ",", ";")) and not CAPTION_RX.match(text): lvl = 2
         return text, lvl, is_list or "list" in style, imgs
     blocks, tables = [], {}
     body = doc.find(f"{{{W}}}body")
@@ -1418,7 +1674,7 @@ def docx_lecture(raw: bytes) -> dict:
                 for tr in el.iter(f"{{{W}}}tr"):
                     cells = []
                     for tc in tr.findall(f"{{{W}}}tc"):
-                        cells.append(" ".join(x for x in (para(pp)[0] for pp in tc.iter(f"{{{W}}}p")) if x))   # jadval ichidagi rasm — olinmaydi
+                        cells.append(" ".join(x for x in (para(pp, True)[0] for pp in tc.iter(f"{{{W}}}p")) if x))   # jadval ichidagi rasm — olinmaydi
                     if any(cells): rows.append(cells)
                 if not rows: continue
                 if len(rows) == 1 and len(rows[0]) == 1: blocks.append(["p", rows[0][0]]); continue   # bitta katak — oddiy matn
@@ -1445,8 +1701,8 @@ def docx_lecture(raw: bytes) -> dict:
     return {"text": "\n".join(lines), "images": {k: v for k, v in images.items() if k in used}, "tables": tables}
 
 def _plain(text: str) -> str:
-    """Belgilarsiz matn (AI va iqtibos tekshiruvi uchun): «[RASM:…]» / «[JADVAL:N]» qatorlari olib tashlanadi."""
-    return "\n".join(l for l in str(text or "").split("\n") if not (_FIG_RX.match(l.strip()) or _TBL_RX.match(l.strip()) or _IMG_RX.match(l.strip())))
+    """Belgilarsiz matn (AI va iqtibos tekshiruvi uchun): «[RASM:…]» / «[JADVAL:N]» qatorlari olib tashlanadi, formula belgilari — chiziqli matn."""
+    return OM.linearize("\n".join(l for l in str(text or "").split("\n") if not (_FIG_RX.match(l.strip()) or _TBL_RX.match(l.strip()) or _IMG_RX.match(l.strip()))))
 
 def _save_image_asset(c: Ctx | None, cid: int, no: int, fn: str, data: bytes, meta: dict, src="") -> int:
     ex = db.one(_con, "SELECT id FROM pk_assets WHERE course_id=? AND topic_no=? AND purpose='rasm' AND name=? AND deleted=0", (cid, no, fn))
@@ -1460,8 +1716,13 @@ def upload_text(c: Ctx, cid: int, no: int, raw: bytes | None, text: str | None, 
     co = _course(c, cid, write=True); l = _check_topic(co, no)
     media = {"images": {}, "tables": {}}
     imgs = {}
+    ocr_pages: list = []
     if raw is not None:
         _read_upload_guard(raw)
+        if raw[:8] == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1":        # eski .doc (OLE) → .docx (LibreOffice bo'lsa)
+            from . import office_tools as OT
+            if not OT.soffice(): raise HTTPException(415, "Eski .doc formati: serverda LibreOffice o'rnatilmagan — Word'da «.docx» qilib saqlang")
+            raw = _office_convert(raw, "doc", "docx"); name = re.sub(r"\.[A-Za-z0-9]{1,5}$", "", name or "matn") + ".docx"
         if raw[:4] == b"PK\x03\x04":
             _zip_guard(raw); _ooxml_image_guard(raw, "word/media/")   # .docx: zip/rasm bombasi — tahlildan oldin
         try:
@@ -1470,23 +1731,29 @@ def upload_text(c: Ctx, cid: int, no: int, raw: bytes | None, text: str | None, 
                 try: dx = docx_lecture(raw)
                 except HTTPException: raise
                 except Exception: raise EX.BadFile("Word faylni o'qib bo'lmadi (fayl buzilgan yoki .docx emas)")
-                txt = dx["text"]; trunc = len(txt) > MAX_TEXT_CHARS; txt = txt[:MAX_TEXT_CHARS]
+                txt = dx["text"]; trunc = len(txt) > MAX_TEXT_CHARS; txt = _cut_text(txt)
                 imgs = {fn: v for fn, v in dx["images"].items() if f"[RASM:{fn}]" in txt}
                 media = {"images": {fn: {"caption": v["caption"]} for fn, v in imgs.items()}, "tables": dx["tables"]}
             else:
                 ex = EX.extract(raw, kind, None)
                 txt, trunc = EX.as_text([b for b in ex["blocks"] if b.get("k") != "img"], MAX_TEXT_CHARS)
+                if kind == "pdf" and len(_plain(txt)) < 100:
+                    ocr_pages, txt = _ocr_pdf(raw); trunc = len(txt) > MAX_TEXT_CHARS; txt = _cut_text(txt)
         except EX.BadFile as e:
             rbac.audit(_con, c, "paket: matn rad etildi", RES, False, f"{name[:60]} · {e}")
             raise HTTPException(415, str(e))
     else:
         txt = (text or "").strip(); kind = "txt"; name = name or "matn.txt"
-        trunc = len(txt) > MAX_TEXT_CHARS; txt = txt[:MAX_TEXT_CHARS]
+        trunc = len(txt) > MAX_TEXT_CHARS; txt = _cut_text(txt)
         raw = txt.encode("utf-8")
     if len(_plain(txt)) < 100: raise HTTPException(400, f"Ma'ruza matni juda qisqa ({len(_plain(txt))} belgi)")
     st = structure_text(txt, l["title"], media)
     aid = _save_asset(c, cid, no, "matn", kind, name, raw, {"text": txt, "chars": len(txt), "truncated": bool(trunc), "plan": st["plan"],
-                                                           "images": media["images"], "tables": media["tables"], "refs": len(st["refs"])})
+                                                           "images": media["images"], "tables": media["tables"], "refs": len(st["refs"]),
+                                                           **({"ocr": True, "pages": [{"img": f"p{i}.jpg", "text": t} for i, (_, t) in enumerate(ocr_pages, 1)]} if ocr_pages else {})})
+    if ocr_pages:      # skaner ma'ruza: sahifa rasmlari paketda galereya bo'lib chiqadi (NEXTID kabi), OCR matni — qidiruv / ekran o'quvchi uchun
+        a = db.one(_con, "SELECT * FROM pk_assets WHERE id=?", (aid,)); d = _img_dir(a); d.mkdir(parents=True, exist_ok=True)
+        for i, (img, _) in enumerate(ocr_pages, 1): (d / f"p{i}.jpg").write_bytes(img)
     for fn, v in imgs.items():
         _save_image_asset(c, cid, no, fn, v["data"], {"caption": v["caption"], "src": "docx", "text_asset": aid})
     found = doc_title(txt)                    # «3-MAVZU: …» — darsning nomi (o'qituvchi qo'lda kiritmagan bo'lsa shu ishlatiladi)
@@ -1495,9 +1762,21 @@ def upload_text(c: Ctx, cid: int, no: int, raw: bytes | None, text: str | None, 
         _log(c, cid, no, "matn yuklandi", f"{name[:80]} · {len(txt)} belgi · {len(imgs)} rasm · {len(media['tables'])} jadval"); _con.commit()
     rbac.audit(_con, c, "paket: ma'ruza matni yuklandi", RES, True, f"kurs #{cid} · {l['code']} · {name[:60]} · {len(txt)} belgi")
     l2 = lesson_info(co, no)
-    return {"ok": True, "id": aid, "chars": len(txt), "truncated": bool(trunc), "plan": st["plan"], "images": len(imgs),
+    return {"ok": True, "id": aid, "kind": kind, "chars": len(txt), "truncated": bool(trunc), "plan": st["plan"], "images": len(imgs), "ocr": len(ocr_pages),
             "tables": len(media["tables"]), "refs": len(st["refs"]), "title": l2["title"],
             "title_set": bool(found and l2["title_src"] == "word" and l2["title"] != l["title"])}
+
+def _ocr_pdf(raw: bytes) -> tuple[list, str]:
+    """Matn qatlami yo'q (skaner) PDF ma'ruza → [(sahifa JPEG, OCR matni)], umumiy matn. OCR yo'q bo'lsa — tushunarli 415."""
+    from . import office_tools as OT
+    if not (OT.tesseract() and OT.ocr_lang()):
+        raise HTTPException(415, "PDF'da matn qatlami yo'q (skaner qilingan) — serverda OCR o'rnatilmagan. Word (.docx) faylini yuklang")
+    pdf = render_pdf(raw)
+    pages = []
+    for img in pdf["images"]:
+        try: pages.append((img, OT.ocr_image(img)))
+        except OT.ToolError as e: raise HTTPException(415, f"OCR: {e}")
+    return pages, "\n\n".join(t for _, t in pages if t)
 
 def upload_image(c: Ctx, cid: int, no: int, raw: bytes, name: str, caption: str = "") -> dict:
     """Darsning «rasmlar»iga qo'lda rasm (.png/.jpg): matnda «[RASM:fayl]» qatori bilan joylanadi; havola qilinmaganlari matn oxirida."""
@@ -1527,18 +1806,20 @@ _PDFIUM_LOCK = threading.Lock()     # PDFium thread-safe emas: pypdfium2 bilan h
 def render_pdf(raw: bytes) -> dict:
     """PDF → {"pages": n, "images": [jpeg baytlari], "truncated": bool}. Har sahifa ~1600 px kenglikda; ko'pi bilan PDF_MAX_PAGES sahifa,
     sahifa ≤ IMG_MAX_PIXELS, umumiy ≤ PDF_MAX_TOTAL_PX (oshsa — qolgan sahifalar chizilmaydi, truncated).
-    Butun ish _PDFIUM_LOCK ostida (PDFium bir vaqtda faqat bitta oqimda). Sahifani o'lchash/chizishdagi har qanday xato → 415."""
+    Har bir pdfium chaqiruvi _PDFIUM_LOCK ostida (PDFium bir vaqtda faqat bitta oqimda); qulf sahifa bo'yicha olinadi, JPEG — qulfsiz. Sahifani o'lchash/chizishdagi har qanday xato → 415."""
     import pypdfium2 as pdfium
     with _PDFIUM_LOCK:
         try:
             doc = pdfium.PdfDocument(raw)
         except Exception:
             raise HTTPException(415, "PDF faylni o'qib bo'lmadi (buzilgan yoki parol bilan himoyalangan)")
-        out, total, trunc = [], 0, False
-        try:
-            n = len(doc)
-            if not n: raise HTTPException(415, "PDF faylda sahifa yo'q")
-            for i in range(min(n, PDF_MAX_PAGES)):
+    out, texts, total, trunc, n = [], [], 0, False, 0
+    try:
+        with _PDFIUM_LOCK: n = len(doc)
+        if not n: raise HTTPException(415, "PDF faylda sahifa yo'q")
+        for i in range(min(n, PDF_MAX_PAGES)):
+            im = None
+            with _PDFIUM_LOCK:                  # qulf har sahifada qayta olinadi — boshqa yuklashlar navbat kutib qolmaydi
                 page = doc[i]
                 try:
                     w, h = page.get_width(), page.get_height()
@@ -1548,36 +1829,73 @@ def render_pdf(raw: bytes) -> dict:
                     if px > IMG_MAX_PIXELS: continue
                     if total + px > PDF_MAX_TOTAL_PX: trunc = True; break
                     total += px
-                    im = page.render(scale=scale).to_pil().convert("RGB")
-                    bio = io.BytesIO(); im.save(bio, "JPEG", quality=84, optimize=True); out.append(bio.getvalue())
+                    tp = page.get_textpage()
+                    try: texts.append(re.sub(r"\s+", " ", tp.get_text_range() or "").strip()[:2000])
+                    finally: tp.close()
+                    bm = page.render(scale=scale)
+                    try: im = bm.to_pil().convert("RGB")      # convert — nusxa: bitmap yopilgandan keyin ham yashaydi
+                    finally: bm.close()
                 finally:
                     page.close()
-            trunc = trunc or n > PDF_MAX_PAGES
-        except HTTPException:
-            raise
-        except Exception as e:      # pdfium.PdfiumError, MemoryError, PIL xatolari …
-            raise HTTPException(415, f"PDF sahifalarini rasmga aylantirib bo'lmadi (fayl buzilgan yoki qo'llab-quvvatlanmaydi: {type(e).__name__})")
-        finally:
-            doc.close()
+            bio = io.BytesIO(); im.save(bio, "JPEG", quality=84, optimize=True); out.append(bio.getvalue())   # JPEG — qulfdan tashqarida
+        trunc = trunc or n > PDF_MAX_PAGES
+    except HTTPException:
+        raise
+    except Exception as e:      # pdfium.PdfiumError, MemoryError, PIL xatolari …
+        raise HTTPException(415, f"PDF sahifalarini rasmga aylantirib bo'lmadi (fayl buzilgan yoki qo'llab-quvvatlanmaydi: {type(e).__name__})")
+    finally:
+        with _PDFIUM_LOCK: doc.close()
     if not out: raise HTTPException(415, "PDF sahifalarini rasmga aylantirib bo'lmadi")
-    return {"pages": n, "images": out, "truncated": trunc}
+    return {"pages": n, "images": out, "texts": texts, "truncated": trunc}
+
+def _pdf_norm(t: str) -> str:
+    return re.sub(r"[^\w]+", " ", str(t or "").casefold()).strip()
+
+def _pdf_matches_pptx(pdf: dict, pptx: dict) -> bool:
+    """PDF (keyin yuklangan) shu .pptx dan eksport qilinganmi: PDF sahifalari matnida .pptx slayd sarlavhalarining kamida yarmi bor.
+    PDF'da matn bo'lmasa (skaner/rasm) yoki eski yuklash (matn saqlanmagan) — tekshirib bo'lmaydi, juftlik saqlanadi."""
+    texts = json.loads(pdf["meta"] or "{}").get("texts") or []
+    hay = " ".join(_pdf_norm(t) for t in texts)
+    if len(hay) < 20: return True
+    titles = [_pdf_norm(sl.get("title")) for sl in json.loads(pptx["meta"] or "{}").get("slides") or []]
+    titles = [t for t in titles if len(t) >= 3]
+    if not titles: return True
+    hit = sum(1 for t in titles if t in hay)
+    if hit * 2 >= len(titles): return True
+    if len(pdf_pages := texts) and abs(len(pdf_pages) - len(titles)) <= max(1, len(titles) // 4) and hit * 4 >= len(titles): return True   # sahifa soni mos + sarlavhalarning choragi topilsa
+    return False
 
 def _retire_taqdimot(c: Ctx | None, cid: int, no: int, kind: str, keep: int) -> int:
     """Yangi taqdimot (.pdf yoki .pptx) yuklanganda shu darsning o'sha turdagi eski taqdimotlari «almashtirildi» (deleted=2) — paketga
     kirmaydi va ro'yxatda ko'rinmaydi; fayllari diskda qoladi (eski paket versiyalari o'z zipida to'liq, fayl kerak bo'lsa tiklash mumkin)."""
     with _lock:
+        top = (_con.execute("SELECT MAX(id) FROM pk_assets WHERE course_id=? AND topic_no=? AND purpose='taqdimot' AND kind=? AND deleted=0", (cid, no, kind)).fetchone() or [None])[0]
+        keep = max(int(keep), int(top or 0))        # parallel yuklashda ham eng YANGI fayl qoladi (ikkalasi ham o'zini qoldirib, o'zgasini o'chirmasin)
         n = _con.execute("UPDATE pk_assets SET deleted=2 WHERE course_id=? AND topic_no=? AND purpose='taqdimot' AND kind=? AND deleted=0 AND id<>?",
                          (cid, no, kind, keep)).rowcount
         if n: _log(c, cid, no, "taqdimot almashtirildi", f"{n} ta eski .{kind}")
         _con.commit()
     return n
 
-def upload_slides(c: Ctx, cid: int, no: int, raw: bytes, name: str) -> dict:
-    """Taqdimot: .pptx (tahlil + rasmlar) / .pdf (har sahifa → slayd rasmi, pypdfium2) / .png / .jpg (slayd rasmlari to'plami)."""
+def _office_convert(raw: bytes, src_ext: str, to: str) -> bytes:
+    from . import office_tools as OT
+    try: return OT.convert(raw, src_ext, to)
+    except OT.ToolError as e: raise HTTPException(415, str(e))
+
+def upload_slides(c: Ctx, cid: int, no: int, raw: bytes, name: str, _derived: bool = False) -> dict:
+    """Taqdimot: .pptx (tahlil + rasmlar) / .pdf (har sahifa → slayd rasmi, pypdfium2) / .png / .jpg (slayd rasmlari to'plami).
+    Serverda LibreOffice bo'lsa (app/office_tools.py): eski .ppt → .pptx ga o'giriladi; .pptx dan PDF ham chiziladi (keyingi asset) —
+    paketda slaydlar asl ko'rinishida (rasm), sarlavha/izohlar esa .pptx dan."""
+    from . import office_tools as OT
     co = _course(c, cid, write=True); l = _check_topic(co, no)
     _read_upload_guard(raw)
     kind = _sniff_asset(raw)
-    if kind == "ole": raise HTTPException(415, "Eski .ppt formati qabul qilinmaydi — PowerPoint'da «.pptx» qilib saqlang")
+    converted = False
+    if kind == "ole":
+        if not OT.soffice(): raise HTTPException(415, "Eski .ppt formati: serverda LibreOffice o'rnatilmagan — PowerPoint'da «.pptx» qilib saqlang")
+        raw = _office_convert(raw, "ppt", "pptx"); kind = _sniff_asset(raw); converted = True
+        name = re.sub(r"\.[A-Za-z0-9]{1,5}$", "", name or "taqdimot") + ".pptx"
+        if kind != "pptx": raise HTTPException(415, "Eski .ppt faylni o'girib bo'lmadi — PowerPoint'da «.pptx» qilib saqlang")
     if kind not in ("pptx", "pdf", "png", "jpg"):
         raise HTTPException(415, "Taqdimot uchun .pptx, .pdf yoki slayd rasmlari (.png, .jpg) qabul qilinadi")
     meta, imgs, parsed, pdf = {}, {}, None, None
@@ -1591,7 +1909,7 @@ def upload_slides(c: Ctx, cid: int, no: int, raw: bytes, name: str) -> dict:
             rbac.audit(_con, c, "paket: PDF taqdimot rad etildi", RES, False, f"kurs #{cid} · {l['code']} · {name[:60]} · {e.detail}"[:300])
             raise
         for i, b in enumerate(pdf["images"], 1): imgs[f"p{i}.jpg"] = b
-        meta = {"pages": pdf["pages"], "rendered": len(pdf["images"]), "truncated": pdf["truncated"], "images": list(imgs)}
+        meta = {"pages": pdf["pages"], "rendered": len(pdf["images"]), "truncated": pdf["truncated"], "images": list(imgs), "texts": pdf["texts"]}
     else:
         r = _norm_image(raw, strict=True)
         if not r: raise HTTPException(415, "Rasmni o'qib bo'lmadi yoki juda kichik")
@@ -1612,9 +1930,18 @@ def upload_slides(c: Ctx, cid: int, no: int, raw: bytes, name: str) -> dict:
             meta = {"count": parsed["count"], "images": sum(1 for s in parsed["slides"] if s["image"])}
         else:
             meta = {"pages": pdf["pages"], "count": len(pdf["images"]), "images": len(pdf["images"]), "truncated": pdf["truncated"]}
-    with _lock: _log(c, cid, no, "taqdimot yuklandi", f"{name[:80]} · {kind}"); _con.commit()
+    with _lock: _log(c, cid, no, "taqdimot yuklandi", f"{name[:80]} · {kind}" + (" · .ppt dan o'girildi" if converted else "") + (" · .pptx dan chizildi" if _derived else "")); _con.commit()
     rbac.audit(_con, c, "paket: taqdimot yuklandi", RES, True, f"kurs #{cid} · {l['code']} · {name[:60]} · {kind}")
-    return {"ok": True, "id": aid, "kind": kind, **meta}
+    out = {"ok": True, "id": aid, "kind": kind, "converted": converted, **meta}
+    if kind == "pptx" and not _derived and OT.soffice():
+        # aniq ko'rinish: .pptx → PDF → slayd rasmlari (python-pptx faqat matn va eng katta rasmni oladi); xato bo'lsa — .pptx o'zi qoladi
+        try:
+            pdf_raw = OT.convert(raw, "pptx", "pdf")
+            r = upload_slides(c, cid, no, pdf_raw, re.sub(r"\.[A-Za-z0-9]{1,5}$", "", name) + ".pdf", _derived=True)
+            out.update(rendered=True, pdf_id=r["id"], pages=r.get("pages"), images=r.get("images", out.get("images")))
+        except (OT.ToolError, HTTPException) as e:
+            out["rendered"] = False; out["render_error"] = str(getattr(e, "detail", e))[:200]
+    return out
 
 FILE_KINDS = ("pdf", "docx", "pptx", "xlsx", "png", "jpg")
 
@@ -1712,6 +2039,10 @@ def _replace_assets(cid: int, no: int, purpose: str, keep: int, match=None) -> i
     _unlink_all(gone)
     return len(gone)
 
+def _cap_job(cid: int, no: int):
+    from . import paket_captions as PC
+    return PC.job_status(cid, no)
+
 def upload_video(c: Ctx, cid: int, no: int, up: dict, name: str) -> dict:
     """Video fayl (.mp4 / .webm) — _stream_upload natijasi (diskda). Darsda bitta video fayl: yangisi eskisini almashtiradi."""
     try:
@@ -1722,7 +2053,8 @@ def upload_video(c: Ctx, cid: int, no: int, up: dict, name: str) -> dict:
     _replace_assets(cid, no, "video", aid)
     with _lock: _log(c, cid, no, "video fayl yuklandi", f"{name[:80]} · {up['kind']} · {up['size'] // (1024 * 1024)} MB"); _con.commit()
     rbac.audit(_con, c, "paket: video fayl yuklandi", RES, True, f"kurs #{cid} · {l['code']} · {name[:60]} · {up['size']} bayt")
-    return {"ok": True, "id": aid, "kind": up["kind"], "size": up["size"]}
+    from . import paket_captions as PC; ac = PC.on_video_uploaded(c, cid, no)      # auto_captions yoqilgan bo'lsa — avtomatik subtitr navbatga
+    return {"ok": True, "id": aid, "kind": up["kind"], "size": up["size"], **({"auto_captions": ac} if ac else {})}
 
 # --- subtitrlar: .vtt / .srt → me'yorlangan WebVTT -------------------------------------------------------------------
 _TS_RX = re.compile(r"^\s*(?:(\d{1,3}):)?(\d{1,2}):(\d{2})[.,](\d{1,3})\s*-->\s*(?:(\d{1,3}):)?(\d{1,2}):(\d{2})[.,](\d{1,3})(?:\s.*)?$")
@@ -1924,11 +2256,14 @@ def _slide_audio(cid: int, no: int) -> dict:
         if n and _apath(a).is_file(): out[int(n)] = a
     return out
 
+BUILTIN_COVER = Path(__file__).parent / "paket_assets" / "default_cover.jpg"   # bo'lim standart muqova yuklamagan bo'lsa — ISFT fon rasmi
+
 def _cover_source(cid: int, no: int) -> tuple[dict, str] | None:
     """Muqova rasmi: darsniki > kursniki > bo'lim standarti (Sozlamalar)."""
     for c_, n_, src in ((cid, no, "dars"), (cid, 0, "kurs"), (0, 0, "standart")):
         a = _latest_asset(c_, n_, "muqova")
         if a: return a, src
+    if BUILTIN_COVER.is_file(): return {"id": None, "path": str(BUILTIN_COVER)}, "ichki"   # kodga kiritilgan ISFT standart fon rasmi (absolyut yo'l: store()/yo'l = o'sha yo'l)
     return None
 
 
@@ -2218,7 +2553,7 @@ def _pdf_slides(pdf: dict) -> list[str]:
 def gather(cid: int, no: int, co: dict | None = None, settings: dict | None = None, les: dict | None = None) -> dict:
     """Dars manbalari → {"content" (built/id/v dan tashqari), "files": {zip yo'li: Path|bytes|BigFile}, "ready": {...}, "settings", "lesson"}.
     Bloklar tartibi (kafedra shabloni, kontrakt v3): [muqova — content.cover] → bo'lim «VIDEODARS» → video (fayl yoki YouTube) → bo'lim «MA'RUZA MATNI»
-    → reja (sarlavha bilan) → matn → asosiy xulosalar → adabiyotlar → bo'lim «DARS TAQDIMOTI» → taqdimot (slayd izohi/audiosi) → qo'shimcha fayllar →
+    → reja (sarlavha bilan) → matn → asosiy xulosalar → adabiyotlar → bo'lim «TAQDIMOT» → taqdimot (slayd izohi/audiosi) → qo'shimcha fayllar →
     bo'lim «MASHQ VA TOPSHIRIQLAR» → kartochkalar → test (Test bank + moslashtirish/saralash) → topshiriq → o'z-o'zini baholash.
     Manbasi yo'q blok (va bo'sh guruhning bo'limi) tushadi."""
     co = co or db.one(_con, "SELECT c.*, d.name dept, t.full_name teacher FROM dl_courses c LEFT JOIN departments d ON d.id=c.department_id "
@@ -2249,7 +2584,8 @@ def gather(cid: int, no: int, co: dict | None = None, settings: dict | None = No
     if extra_figs and (html_text or not ts):
         html_text += sanitize("".join(_fig_html(fn, media) for fn in extra_figs)); used += extra_figs
     # matn manbasi faqat topshiriqlar ro'yxatidan iborat bo'lsa (amaliy mashg'ulot) — ro'yxat topshiriq blokiga o'tadi, matn bloki chiqmaydi: «matn bor»
-    ready["text"] = {"ok": bool(ts and (stx["html"] or stx["questions"])), "only_assignment": bool(ts and not stx["html"] and stx["questions"]), "src": ts["src"] if ts else None, "name": ts["name"] if ts else None,
+    ready["text"] = {"ocr": bool(ts and ts.get("asset") and json.loads(ts["asset"]["meta"] or "{}").get("ocr")),
+                     "ok": bool(ts and (stx["html"] or stx["questions"])), "only_assignment": bool(ts and not stx["html"] and stx["questions"]), "src": ts["src"] if ts else None, "name": ts["name"] if ts else None,
                      "chars": ts["chars"] if ts else 0, "ts": ts["ts"] if ts else None, "by": ts["by"] if ts else None, "demo": bool(ts and ts["demo"])}
     ready["plan"] = {"ok": bool(stx["plan"]), "n": len(stx["plan"]), "explicit": stx["explicit_plan"], "items": stx["plan"], "heading": _lesson_heading(les)}
     ready["images"] = {"ok": bool(used), "n": len(used), "uploaded": len(limgs), "manual": sum(1 for v in limgs.values() if v["src"] == "manual"),
@@ -2263,6 +2599,8 @@ def gather(cid: int, no: int, co: dict | None = None, settings: dict | None = No
     pptx = _latest_asset(cid, no, "taqdimot", ("pptx",))
     pdf = _latest_asset(cid, no, "taqdimot", ("pdf",))
     if pptx and pdf and pptx["id"] > pdf["id"]: pdf = None
+    if pptx and pdf and not _pdf_matches_pptx(pdf, pptx):
+        pptx = None                                   # PDF keyin yuklangan va matni .pptx sarlavhalariga mos emas — eski .pptx boshqa taqdimot
     tr = _topic_row(cid, no)
     slides, ssrc, file_path = [], None, None
     pslides = []
@@ -2279,10 +2617,13 @@ def gather(cid: int, no: int, co: dict | None = None, settings: dict | None = No
     pdf_imgs = _pdf_slides(pdf) if pdf else []
     if pdf_imgs:
         same = len(pslides) == len(pdf_imgs)          # .pptx va PDF — bitta taqdimot: sarlavha/izohlar .pptx dan
+        ptexts = json.loads(pdf["meta"] or "{}").get("texts") or []
         for i, fn in enumerate(pdf_imgs, 1):
             pth = f"assets/slides/p{i}.jpg"; files[pth] = _img_dir(pdf) / fn
             src_s = pslides[i - 1] if same else {}
-            slides.append({"title": src_s.get("title") or "", "bullets": list(src_s.get("bullets") or []), "notes": src_s.get("notes") or "", "image": pth})
+            sl_ = {"title": src_s.get("title") or "", "bullets": list(src_s.get("bullets") or []), "notes": src_s.get("notes") or "", "image": pth}
+            if i <= len(ptexts) and str(ptexts[i - 1] or "").strip(): sl_["text"] = str(ptexts[i - 1])[:2000]   # slayd matni — ekran o'quvchi / qidiruv
+            slides.append(sl_)
         ssrc = "pdf"
     elif pslides:
         for sl in pslides:
@@ -2311,6 +2652,13 @@ def gather(cid: int, no: int, co: dict | None = None, settings: dict | None = No
     sb = {"type": "slides", "title": "Taqdimot", "display": display, "slides": slides, "file": None, "pdf": None}
     if file_path: sb["file"] = "assets/taqdimot.pptx"; files["assets/taqdimot.pptx"] = file_path
     if pdf: sb["pdf"] = "assets/taqdimot.pdf"; files["assets/taqdimot.pdf"] = _apath(pdf)
+    # yuklab olish kartochkasida asl nom («1-MA'RUZA.pptx») — paket ichidagi yo'l ASCII qoladi
+    if file_path and pptx: sb["file_name"] = re.sub(r"[\x00-\x1f]", "", str(pptx["name"] or ""))[:120]
+    if pdf: sb["pdf_name"] = re.sub(r"[\x00-\x1f]", "", str(pdf["name"] or ""))[:120]
+    for k_, pth_ in (("file_size", file_path if sb["file"] else None), ("pdf_size", _apath(pdf) if pdf else None)):
+        try:
+            if pth_ is not None: sb[k_] = Path(pth_).stat().st_size
+        except OSError: pass
     has_slides = bool(slides or sb["file"] or sb["pdf"])
     ready["slides"] = {"ok": has_slides, "src": ssrc, "n": len(slides), "file": bool(sb["file"]), "pdf": bool(sb["pdf"]), "display": display,
                        "images": sum(1 for x in slides if x["image"]), "deck_id": tr.get("deck_id"), "deck_title": deck["title"] if deck else None,
@@ -2332,7 +2680,8 @@ def gather(cid: int, no: int, co: dict | None = None, settings: dict | None = No
                       "provider": "file" if use_file else v.get("provider") if v else None, "video_id": v.get("video_id") if v else None,
                       "error": v.get("error") if v and not v["ok"] else None, "demo": bool(v and v.get("demo")), "link_src": v["src"] if v else None,
                       "file": {"id": vf["id"], "name": vf["name"], "kind": vf["kind"], "size": vf["size"], "studio": vf.get("src") == "studio"} if vf else None,
-                      "captions": [{"id": a["id"], "lang": m_.get("lang"), "label": m_.get("label"), "cues": m_.get("cues")} for a, m_ in subs],
+                      "captions": [{"id": a["id"], "lang": m_.get("lang"), "label": m_.get("label"), "cues": m_.get("cues"), "auto": m_.get("auto") or ""} for a, m_ in subs],
+                      "captions_job": _cap_job(cid, no) if vf else None,
                       "poster": poster["id"] if poster else None, "both": bool(vf and v and v["ok"])}
     # qo'shimcha fayllar (+ asl ma'ruza fayli)
     extra = db.rows(_con, "SELECT * FROM pk_assets WHERE course_id=? AND topic_no=? AND purpose='fayl' AND deleted=0 ORDER BY id", (cid, no))
@@ -2354,7 +2703,9 @@ def gather(cid: int, no: int, co: dict | None = None, settings: dict | None = No
     act = [r for r in exs if r["status"] == "faol"]
     fl, ms = [r for r in act if r["kind"] == "flashcards"], [r for r in act if r["kind"] in ("match", "sort")]
     ready["exercises"] = {"ok": bool(act), "n": len(act), "draft": len(exs) - len(act), **{k: sum(1 for r in act if r["kind"] == k) for k in EX_KINDS}}
-    ready["quiz"] = {"ok": bool(rows or ms), "approved": len(rows), "used": len(picked), "exercises": len(ms)}
+    from . import test_import as TI
+    ready["quiz"] = {"ok": bool(rows or ms), "approved": len(rows), "used": len(picked), "exercises": len(ms),
+                     "pending": TI.pending_count(cid, (source_topic(les) if les else no) or 0)}      # javobi belgilanmagan (import) savollar — «To'g'ri javobni tanlang» kutmoqda
     # topshiriq: savollar — qo'lda kiritilgan (extra.questions) yoki ma'ruza matnidagi «Savollar» bo'limidan; shablon matni — sozlamadan
     asg = st["assignment"]
     aq = [str(x) for x in ex["questions"]] if q_manual else list(stx["questions"])
@@ -2369,7 +2720,7 @@ def gather(cid: int, no: int, co: dict | None = None, settings: dict | None = No
     # muqova: rasm (dars > kurs > bo'lim standarti) + muallif (standart — kurs o'qituvchisi; dars bo'yicha tahrirlanadi)
     cov = _cover_source(cid, no)
     author = str(ex["author"]) if "author" in ex else _short(co.get("teacher") or "")
-    ready["cover"] = {"ok": bool(on.get("cover")), "image": cov[0]["id"] if cov else None, "src": cov[1] if cov else None, "author": author, "custom": "author" in ex}
+    ready["cover"] = {"ok": bool(on.get("cover")), "image": (cov[0]["id"] or "ichki") if cov else None, "src": cov[1] if cov else None, "author": author, "custom": "author" in ex}
     rf = st["reflect"]
     ready["reflect"] = {"ok": bool(on.get("reflect")), "question": rf["question"]}
     # bloklar — shablon tartibida
@@ -2396,17 +2747,32 @@ def gather(cid: int, no: int, co: dict | None = None, settings: dict | None = No
                 f'<p>Videodars tashqi saytda joylashgan:</p><p><a href="{html.escape(v["url"], quote=True)}">{html.escape(v["url"])}</a></p>')})
     section("video", vg)
     tg = []
-    if on["plan"] and stx["plan"]: tg.append({"type": "plan", "title": "Reja", "heading": _lesson_heading(les), "items": stx["plan"]})
+    # skaner (OCR) ma'ruza — sahifa rasmlari galereyasi; OCR matni har sahifada (ekran o'quvchi / qidiruv), ko'rinadigan matn bloki va reja chiqmaydi
+    ocr_m = json.loads(ts["asset"]["meta"] or "{}") if ts and ts.get("asset") else {}
+    ocr_pages = []
+    if ocr_m.get("ocr") and on["text"]:
+        d_ = _img_dir(ts["asset"])
+        for i, pg in enumerate(ocr_m.get("pages") or [], 1):
+            if not (d_ / str(pg.get("img"))).is_file(): continue
+            pth = f"assets/maruza/p{i}.jpg"; files[pth] = d_ / pg["img"]
+            ocr_pages.append({"title": f"Ma'ruza matni, {i}-sahifa", "bullets": [], "notes": "", "image": pth, "text": str(pg.get("text") or "")[:4000]})
+    if ocr_pages:
+        tg.append({"type": "slides", "title": "Ma'ruza matni", "display": "images", "slides": ocr_pages, "file": None, "pdf": None})
+        html_text = ""
+    if on["plan"] and stx["plan"] and not ocr_pages: tg.append({"type": "plan", "title": "Reja", "heading": _lesson_heading(les), "items": stx["plan"]})
     if on["text"] and html_text: tg.append({"type": "text", "title": "Ma'ruza matni", "html": html_text})
     if on.get("keypoints") and kp_items: tg.append({"type": "keypoints", "title": "Asosiy xulosalar", "items": kp_items})
     if on.get("refs") and stx["refs"]: tg.append({"type": "refs", "title": "Foydalanilgan adabiyotlar", "items": stx["refs"]})
+    lec_files = [x for x in fblocks if x[0]["title"].startswith("Ma'ruza matni (asl fayl)")] if on["files"] else []   # asl ma'ruza fayli — MA'RUZA MATNI bo'limida (taqdimot bo'limida emas)
+    for b_, nm, pth in lec_files: tg.append(b_); files[nm] = pth
     section("text", tg)
     if on["text"] and html_text:
         for fn in used:
             if fn in limgs: files[f"assets/img/{fn}"] = limgs[fn]["path"]
     section("slides", [sb] if on["slides"] and has_slides else [])
     if on["files"]:
-        for b_, nm, pth in fblocks: blocks.append(b_); files[nm] = pth
+        for b_, nm, pth in fblocks:
+            if not any(b_ is x[0] for x in lec_files): blocks.append(b_); files[nm] = pth
     pg = []                                                   # «MASHQ VA TOPSHIRIQLAR»: kartochkalar → test → topshiriq
     if on.get("flashcards"):
         for r in fl: pg.append({"type": "flashcards", "title": r["title"] or EX_STEMS["flashcards"], "cards": json.loads(r["data"] or "{}").get("cards") or []})
@@ -2416,7 +2782,7 @@ def gather(cid: int, no: int, co: dict | None = None, settings: dict | None = No
             opts = json.loads(r["options"] or "[]"); corr = json.loads(r["correct"] or "[]"); ans = json.loads(r["answers"] or "[]")
             if r["qtype"] == "tf":     # kontrakt: har doim ["To'g'ri", "Noto'g'ri"], [0] — to'g'ri, [1] — noto'g'ri (bazada qanday saqlangan bo'lmasin)
                 opts, corr = list(TF_OPTIONS), [_tf_correct(opts, corr)]
-            qs.append({"id": f"q{r['id']}", "type": r["qtype"] if r["qtype"] in ("mcq", "tf", "fill") else "mcq", "stem": r["stem"] or "",
+            qs.append({"id": f"q{r['id']}", "type": r["qtype"] if r["qtype"] in ("mcq", "multi", "tf", "fill") else "mcq", "stem": r["stem"] or "",
                        "options": opts if r["qtype"] != "fill" else [], "correct": [int(x) for x in corr] if r["qtype"] != "fill" else [],
                        "answers": ans if r["qtype"] == "fill" else [], "explanation": r["explanation"] or ""})
         for r in ms:                                          # mashqlar — Test bank savollaridan keyin; baholanadi (hammasi to'g'ri = 1, aks holda 0)
@@ -2445,7 +2811,8 @@ def gather(cid: int, no: int, co: dict | None = None, settings: dict | None = No
                **({"cover": {"image": "assets/cover.jpg" if cov else None, "author": author}} if on.get("cover") else {}),
                "brand": {"name": "ISFT", "full": _brand_full(), "color": BRAND_COLOR, "logo": "assets/logo.png"},
                "blocks": blocks,
-               "tracking": {"mode": st["mode"], "completion": completion, "mastery": st["mastery"], "activity_id": activity}}
+               "tracking": {"mode": st["mode"], "completion": completion, "mastery": st["mastery"], "activity_id": activity,
+                            **({"video_min": round(st["video_min"] / 100, 2)} if st.get("video_min") else {})}}
     if on.get("cover") and cov: files["assets/cover.jpg"] = _apath(cov[0])
     logo = _logo_path()
     if logo: files["assets/logo.png"] = logo
@@ -2560,6 +2927,21 @@ def manifest_scorm2004(ident: str, title: str, scos: list[dict], files: list[str
   </resources>
 </manifest>
 """
+
+# NEXTID.LMS xAPI paketni Articulate Rise yo'li bilan ochadi: «<paket>/scormdriver/indexAPI.html?endpoint=…&auth=Bearer …&actor={"name":…}»
+# (Rise tincan.xml: <launch>scormdriver/indexAPI.html</launch>). Shu yo'lda kichik yo'naltiruvchi sahifa — so'rov qatorini saqlab haqiqiy
+# pleyerga (../index.html) o'tkazadi; ildizdagi index.html (bizning LRS: /xapi/pkg/<kod>/index.html, boshqa LMS'lar) o'zgarmaydi.
+# Articulate/Rustici kodi YO'Q. Skript — alohida fayl (bizning LRS launch CSP'si «script-src 'self'» — ichki skript bloklanadi).
+SCORMDRIVER = "scormdriver/indexAPI.html"
+_INDEXAPI_HTML = ("<!DOCTYPE html>\n<html lang=\"uz\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+                  "<title>Dars ochilmoqda…</title>\n<script src=\"indexAPI.js\"></script></head>\n"
+                  "<body><noscript><p><a href=\"../index.html\">Darsni ochish</a></p></noscript></body></html>\n").encode("utf-8")
+_INDEXAPI_JS = ("/* ISFT Core: NEXTID (Rise yo'li) → pleyer; so'rov qatori (endpoint, auth, actor) saqlanadi */\n"
+                "location.replace('../index.html' + location.search + location.hash);\n").encode("utf-8")
+
+def scormdriver_files(prefix: str = "") -> dict[str, bytes]:
+    """xAPI paket uchun «<prefix>scormdriver/indexAPI.html» (+ indexAPI.js) — <prefix>index.html ga yo'naltiradi."""
+    return {prefix + SCORMDRIVER: _INDEXAPI_HTML, prefix + "scormdriver/indexAPI.js": _INDEXAPI_JS}
 
 def manifest_tincan(acts: list[dict]) -> str:
     """acts: [{"id", "name", "description", "launch"}]"""
@@ -2684,9 +3066,10 @@ def build_zip(content: dict, files: dict, mode: str, player_dir: Path | None = N
     elif mode == "scorm2004": entries["imsmanifest.xml"] = manifest_scorm2004(ident, content.get("title") or "", sco, names).encode("utf-8")
     elif mode == "xapi":
         c = content.get("course") or {}
+        entries.update(scormdriver_files())                        # NEXTID launch yo'li (Rise kabi); ildizdagi index.html ham ishlaydi
         entries["tincan.xml"] = manifest_tincan([{"id": content["tracking"]["activity_id"], "name": content.get("title") or "",
                                                  "description": f"{c.get('subject', '')} · {(content.get('lesson') or {}).get('code') or str((content.get('topic') or {}).get('no', '')) + '-mavzu'}",
-                                                 "launch": "index.html"}]).encode("utf-8")
+                                                 "launch": SCORMDRIVER}]).encode("utf-8")
     elif mode != "none": raise HTTPException(400, "Paket turi noma'lum")
     return _emit(entries, out_dir) if out_dir is not None else zip_bytes(entries)
 
@@ -2720,7 +3103,7 @@ def _check_content(raw: bytes, base: str, names: set, errors: list, where: str) 
     except ValueError as e:
         errors.append(f"{where}: JSON xato ({e})"); return None
     if c.get("v") != 1: errors.append(f"{where}: v != 1")
-    if c.get("layout") not in (None, "steps", "scroll"): errors.append(f"{where}: layout noto'g'ri")
+    if c.get("layout") not in (None, *LAYOUTS): errors.append(f"{where}: layout noto'g'ri")
     for k in ("id", "title", "blocks", "tracking", "course", "topic", "brand"):
         if k not in c: errors.append(f"{where}: «{k}» yo'q")
     refs = []
@@ -2858,8 +3241,15 @@ def validate_zip(data) -> dict:
                     la = a.find(f"{{{_TC}}}launch")
                     if la is None or not (la.text or "").strip(): errors.append("tincan.xml: launch yo'q")
                     else:
-                        launches.append(la.text.strip())
-                        if la.text.strip() not in names: errors.append(f"tincan.xml: launch {la.text.strip()} zip ichida yo'q")
+                        lt = la.text.strip()
+                        if lt not in names: errors.append(f"tincan.xml: launch {lt} zip ichida yo'q")
+                        # NEXTID (Rise yo'li): launch — «<papka>/scormdriver/indexAPI.html», u «<papka>/index.html» (pleyer) ga yo'naltiradi
+                        if lt == SCORMDRIVER or lt.endswith("/" + SCORMDRIVER):
+                            lt = lt[:-len(SCORMDRIVER)] + "index.html"
+                            if lt not in names: errors.append(f"tincan.xml: {lt} (scormdriver yo'naltiradigan pleyer) zip ichida yo'q")
+                            if lt[:-len("index.html")] + "scormdriver/indexAPI.js" not in names: errors.append(f"tincan.xml: {lt[:-len('index.html')]}scormdriver/indexAPI.js yo'q")
+                        else: errors.append(f"tincan.xml: launch {lt!r} — NEXTID uchun «{SCORMDRIVER}» bo'lishi kerak")
+                        launches.append(lt)
                 out["scos"] = len(top)
                 out["activities"] = [a.get("id") for a in top]
         else:
@@ -3044,7 +3434,7 @@ def build_course(c: Ctx, cid: int, mode: str = "scorm12", only_approved: bool = 
         with zipfile.ZipFile(store() / pick["file"]) as z:
             for zi in z.infolist():
                 nm = zi.filename
-                if nm.endswith("/") or nm in ("imsmanifest.xml", "tincan.xml"): continue
+                if nm.endswith("/") or nm in ("imsmanifest.xml", "tincan.xml") or nm.startswith("scormdriver/"): continue   # scormdriver — faqat xAPI (pastda)
                 big = zi.compress_type == zipfile.ZIP_STORED and zi.file_size > STREAM_FROM      # video — xotiraga o'qilmaydi
                 entries[pre + nm] = ZipMember(store() / pick["file"], nm, zi.file_size) if big else z.read(nm)
         t = entries[pre + "content.js"].decode("utf-8")
@@ -3053,8 +3443,9 @@ def build_course(c: Ctx, cid: int, mode: str = "scorm12", only_approved: bool = 
         entries[pre + "content.js"] = content_js(cj)
         entries[pre + "content.json"] = json.dumps(cj, ensure_ascii=False, indent=1).encode("utf-8")
         title = f"{les['code']}. {cj.get('title') or ''}"
-        scos.append({"ident": f"SCO-{les['code']}", "title": title, "href": pre + "index.html", "prefix": pre, "mastery": _sco_mastery(cj)})
-        acts.append({"id": cj["tracking"]["activity_id"], "name": title, "description": co["subject"] or "", "launch": pre + "index.html"})
+        scos.append({"ident": f"SCO-{les['code']}",  "title": title, "href": pre + "index.html", "prefix": pre, "mastery": _sco_mastery(cj)})
+        acts.append({"id": cj["tracking"]["activity_id"], "name": title, "description": co["subject"] or "", "launch": pre + SCORMDRIVER})
+        if mode == "xapi": entries.update(scormdriver_files(pre))
         used.append({"no": no, "code": les["code"], "version": pick["version"], "status": pick["status"]})
     if not scos: raise HTTPException(400, "Kursda yig'ilgan mavzu paketi yo'q" + (" (tasdiqlangan)" if only_approved else ""))
     title = f"{co['subject']} ({co['direction']}, {co['course']}-kurs)"
@@ -3379,15 +3770,32 @@ def _is_stale(p_: dict | None, cid: int, no: int, les: dict | None = None, sig: 
     if not a or a["id"] != p_["last"]["id"] or not a.get("src_sig"): return False
     return a["src_sig"] != (sig or source_sig(cid, no, les))
 
+def _chain_counts() -> dict:
+    """Taqdimot → Studiya → Masofaviy bo'lim zanjiri bo'yicha fan ichidagi darslar soni: pres — taqdimot yuborilgan, dept — video bo'limga yuborilgan,
+    wait — tasdiqlangan montaj bor, bo'limga yuborilmagan. {pres|dept|wait: {kurs id: son}} (bir martalik guruhlangan so'rovlar)."""
+    out = {"pres": {}, "dept": {}, "wait": {}}
+    try:
+        if _has_table("pres_sends"):
+            for r in db.rows(_con, "SELECT course_id, COUNT(DISTINCT lkey) n FROM pres_sends WHERE course_id>0 GROUP BY course_id"): out["pres"][r["course_id"]] = r["n"]
+        if _has_table("st_jobs") and _has_table("st_dept"):
+            from . import studio as STU
+            for (cid, _lk), f in STU.dept_flags().items():
+                if f["dept_sent"]: out["dept"][cid] = out["dept"].get(cid, 0) + 1
+                if f["video_wait"]: out["wait"][cid] = out["wait"].get(cid, 0) + 1
+    except Exception as e: print("paket._chain_counts:", repr(e))
+    return out
+
 def course_rows(c: Ctx) -> list[dict]:
     sw, sa = scope(c)
     courses = db.rows(_con, f"""SELECT c.id, c.subject, c.direction, c.course, c.department_id, c.teacher_id, c.topics, d.name dept, t.full_name teacher
                                 FROM dl_courses c LEFT JOIN departments d ON d.id=c.department_id LEFT JOIN teachers t ON t.id=c.teacher_id WHERE {sw}""", sa)
-    rd, pk, lk = readiness_map(), _pkg_map(), lesson_keys_all()
+    rd, pk, lk, codes = readiness_map(), _pkg_map(), lesson_keys_all(), course_codes()
+    chain = _chain_counts()
     out = []
     for co in courses:
         keys = lk.get(co["id"]) or list(range(1, int(co["topics"] or 15) + 1))
-        row = {**co, "teacher": _short(co["teacher"]), "built": 0, "approved": 0, "waiting": 0, "text": 0, "slides": 0, "video": 0, "quiz": 0, "exercises": 0, "full": 0,
+        row = {**co, "teacher": _short(co["teacher"]), "code": codes.get(co["id"]), "dir_code": dir_abbr(co["direction"]),
+               "pres_sent": chain["pres"].get(co["id"], 0), "dept_sent": chain["dept"].get(co["id"], 0), "video_wait": chain["wait"].get(co["id"], 0), "built": 0, "approved": 0, "waiting": 0, "text": 0, "slides": 0, "video": 0, "quiz": 0, "exercises": 0, "full": 0,
                "lessons": len(keys), "by_kind": {}, "waiting_no": 0}
         for no in keys:
             kind = split_key(no)[0]
@@ -3535,11 +3943,13 @@ def review_queue(c: Ctx, limit: int = 200) -> dict:
 
 # --- bitta yuklash nuqtasi: fayl turi tarkibidan aniqlanib, o'z joyiga yo'naltiriladi ---------------------------------------------------
 UPLOAD_AS = {"matn": "Ma'ruza matni", "taqdimot": "Taqdimot", "slayd": "Slayd rasmi", "video": "Video", "muqova": "Dars muqovasi",
-             "rasm": "Matn ichidagi rasm", "poster": "Video muqovasi", "subs": "Subtitr", "fayl": "Qo'shimcha fayl"}
+             "rasm": "Matn ichidagi rasm", "poster": "Video muqovasi", "subs": "Subtitr", "fayl": "Qo'shimcha fayl",
+             "test": "Test (Word, ✅ belgili)"}       # tayyor test → Test bank + glossariy mashqi + topshiriq (app/test_import.py)
 _UPLOAD_OK = {"matn": ("docx", "pdf", "txt"), "taqdimot": ("pptx", "pdf", "png", "jpg"), "slayd": ("png", "jpg"), "video": ("mp4", "webm"),
-              "muqova": ("png", "jpg"), "rasm": ("png", "jpg"), "poster": ("png", "jpg"), "subs": ("subs",), "fayl": FILE_KINDS}
+              "muqova": ("png", "jpg"), "rasm": ("png", "jpg"), "poster": ("png", "jpg"), "subs": ("subs",), "fayl": FILE_KINDS,
+              "test": ("docx", "pdf", "txt")}
 _UPLOAD_AUTO = {"docx": "matn", "txt": "matn", "pdf": "taqdimot", "pptx": "taqdimot", "mp4": "video", "webm": "video", "subs": "subs", "xlsx": "fayl"}
-UPLOAD_HELP = "Qabul qilinadi: Word (.docx), PDF, PowerPoint (.pptx), video (.mp4, .webm), rasm (.png, .jpg), subtitr (.srt, .vtt)"
+UPLOAD_HELP = "Qabul qilinadi: Word (.docx; .doc — LibreOffice bo'lsa), PDF, PowerPoint (.pptx; .ppt — LibreOffice bo'lsa), video (.mp4, .webm), rasm (.png, .jpg), subtitr (.srt, .vtt)"
 
 async def _stream_any(request) -> dict:
     """Istalgan fayl — diskka oqim bilan (xotiraga yig'ilmaydi). Chegara turga qarab (o'zgarmagan): video (.mp4/.webm, birinchi 64 baytdan) —
@@ -3586,6 +3996,13 @@ def _looks_text(raw: bytes) -> bool:
         if e.start < len(raw[:65536]) - 4: return False
     return True
 
+def _ole_kind(raw: bytes) -> str | None:
+    """OLE (eski Office) fayl ichidagi oqim nomi bo'yicha: «PowerPoint Document» → ppt, «WordDocument» → doc."""
+    head = raw
+    if "PowerPoint Document".encode("utf-16-le") in head or b"P\x00o\x00w\x00e\x00r\x00P\x00o\x00i\x00n\x00t" in head: return "ppt"
+    if "WordDocument".encode("utf-16-le") in head: return "doc"
+    return None
+
 def route_upload(c: Ctx, cid: int, no: int, up: dict, name: str, want: str = "", lang: str = "uz", caption: str = "") -> dict:
     """Yuklangan faylni turiga qarab o'z joyiga: Word → ma'ruza matni; PDF / PPTX → taqdimot; MP4 / WebM → video; .srt / .vtt → subtitr;
     .txt → matn; .xlsx → qo'shimcha fayl; rasm — noaniq (muqova / matn rasmi / slayd): `want` berilmasa 409 + tanlovlar.
@@ -3607,10 +4024,28 @@ def route_upload(c: Ctx, cid: int, no: int, up: dict, name: str, want: str = "",
     finally:
         path.unlink(missing_ok=True)
     kind = _sniff_asset(raw)
-    if kind == "ole": deny(f"«{name[:60]}» — eski Word/PowerPoint formati (.doc / .ppt). Faylni «.docx» yoki «.pptx» qilib saqlab, qayta yuklang")
+    if kind == "ole":           # eski .ppt / .doc — serverda LibreOffice bo'lsa o'giriladi (upload_slides / upload_text)
+        from . import office_tools as OT
+        sub = _ole_kind(raw)
+        if not sub: deny(f"«{name[:60]}» — eski Office formati (Excel yoki noma'lum). {UPLOAD_HELP}")
+        if not OT.soffice(): deny(f"«{name[:60]}» — eski {'PowerPoint (.ppt)' if sub == 'ppt' else 'Word (.doc)'} formati: serverda LibreOffice o'rnatilmagan. "
+                                  f"Faylni «.{sub}x» qilib saqlab, qayta yuklang")
+        target = want or ("taqdimot" if sub == "ppt" else "matn")
+        if (sub == "ppt") != (target in ("taqdimot", "slayd")) or target not in ("taqdimot", "slayd", "matn"):
+            deny(f"«{name[:60]}» (.{sub}) — «{UPLOAD_AS.get(target, target)}» uchun mos emas. {UPLOAD_HELP}")
+        r = upload_slides(c, cid, no, raw, name) if sub == "ppt" else upload_text(c, cid, no, raw, None, name)
+        return {**r, "as": target, "label": UPLOAD_AS[target], "kind": r.get("kind") or sub}
     if kind == "other":
-        kind = "subs" if _looks_subs(raw, name) else "txt" if _looks_text(raw) and (want == "matn" or name.lower().endswith(".txt")) else "other"
+        kind = "subs" if _looks_subs(raw, name) else "txt" if _looks_text(raw) and (want in ("matn", "test") or name.lower().endswith(".txt")) else "other"
     if kind in ("other", "zip"): deny(f"«{name[:60]}» — bu turdagi fayl qabul qilinmaydi. {UPLOAD_HELP}")
+    # tayyor test (app/test_import.py): as=test yoki Word/.txt tarkibi testga o'xshasa (≥ 2 ta ✅ belgili savol va fayl asosan test) —
+    # ma'ruza matni o'rniga savollar Test bankka, glossariy — moslashtirish mashqiga, «Savollar» — topshiriqqa
+    if want == "test" or (not want and kind in ("docx", "txt")):
+        from . import test_import as TI
+        _zip_guard(raw)                          # zip bombasi — tahlildan oldin
+        if want == "test" or TI.looks_like_test(raw, kind):
+            if kind not in _UPLOAD_OK["test"]: deny(f"«{name[:60]}» ({kind}) — «{UPLOAD_AS['test']}» uchun mos emas. {UPLOAD_HELP}")
+            return {**TI.import_upload(c, cid, no, raw, kind, name), "as": "test", "label": UPLOAD_AS["test"], "kind": kind}
     target = want or _UPLOAD_AUTO.get(kind)
     if not target:                               # rasm: muqova, matn ichidagi rasm yoki slayd — foydalanuvchi tanlaydi
         raise HTTPException(409, {"message": f"«{name[:60]}» — rasm. Nima uchun ekanini tanlang: dars muqovasi, matn ichidagi rasm yoki slayd",
@@ -3706,6 +4141,10 @@ def pk_daily() -> int:
     try: return max(1, int(os.getenv("ISFT_CORE_PK_DAILY", "30")))
     except ValueError: return 30
 
+def _stale_cut() -> str:
+    """10 daqiqadan oshgan «jarayonda» band qilishlar (jarayon yiqilgan) kunlik cheklovga sanalmaydi."""
+    return (clock.now().replace(microsecond=0) - dt.timedelta(minutes=10)).isoformat(timespec="seconds")
+
 KP_MAX_CHARS = 60_000
 KP_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["points"],
              "properties": {"points": {"type": "array", "items": {"type": "object", "additionalProperties": False, "required": ["text", "quote"],
@@ -3726,14 +4165,18 @@ def ai_keypoints(c: Ctx, cid: int, no: int) -> dict:
                                  "Xulosalarni hozircha qo'lda yozishingiz mumkin.")
     ts = _text_source(cid, no, les)
     if not ts or len(_plain(ts["text"]).strip()) < 200: raise HTTPException(400, "Avval ma'ruza matnini yuklang (kamida 200 belgi)")
-    day = clock.today().isoformat()
-    if db.one(_con, "SELECT COUNT(*) n FROM pk_ai WHERE user_id=? AND day=?", (c.user["id"], day))["n"] >= pk_daily():
-        raise HTTPException(429, f"Kunlik cheklov: bir foydalanuvchi uchun kuniga {pk_daily()} ta AI so'rovi. Ertaga davom ettiring.")
     text = _plain(ts["text"])
     src_text = text[:KP_MAX_CHARS]
     prompt = (f"Dars: {les['code']} — {les['title']}\nFan: {co['subject']}\n"
               f"{'(Matn uzun — faqat boshlang`ich qismi berildi.)' if len(text) > KP_MAX_CHARS else ''}\n\nMA'RUZA MATNI:\n<<<\n{src_text}\n>>>\n\n"
               "Shu matn bo'yicha 4–7 ta asosiy xulosa va har biri uchun matndan aynan iqtibos qaytaring.")
+    day = clock.today().isoformat()
+    with _lock:                 # tekshiruv + joy band qilish bitta qulf ostida: parallel so'rovlar cheklovdan oshib keta olmaydi
+        if db.one(_con, "SELECT COUNT(*) n FROM pk_ai WHERE user_id=? AND day=? AND NOT (ok=0 AND err='jarayonda' AND ts < ?)", (c.user["id"], day, _stale_cut()))["n"] >= pk_daily():
+            raise HTTPException(429, f"Kunlik cheklov: bir foydalanuvchi uchun kuniga {pk_daily()} ta AI so'rovi. Ertaga davom ettiring.")
+        ai_id = _con.execute("INSERT INTO pk_ai(course_id,topic_no,user_id,day,ts,kind,model,ok,err) VALUES(?,?,?,?,?,?,?,0,?)",
+                             (cid, no, c.user["id"], day, _now(), "keypoints", pk_model(), "jarayonda")).lastrowid
+        _con.commit()
     t0 = time.time(); err = None; info = {"in": 0, "out": 0, "model": pk_model()}; items, dropped = [], 0
     try:
         data, info = CC.call_json(model=pk_model(), system=KP_SYSTEM, content=[{"type": "text", "text": prompt}], schema=KP_SCHEMA,
@@ -3750,9 +4193,9 @@ def ai_keypoints(c: Ctx, cid: int, no: int) -> dict:
     except Exception as e:
         err = f"AI javobini qayta ishlab bo'lmadi: {type(e).__name__}"
     with _lock:
-        _con.execute("INSERT INTO pk_ai(course_id,topic_no,user_id,day,ts,kind,model,ok,ms,err,in_tok,out_tok,n_got,n_dropped) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                     (cid, no, c.user["id"], day, _now(), "keypoints", info.get("model"), 0 if err else 1, int((time.time() - t0) * 1000), err,
-                      info.get("in", 0), info.get("out", 0), len(items), dropped))
+        _con.execute("UPDATE pk_ai SET ts=?, model=?, ok=?, ms=?, err=?, in_tok=?, out_tok=?, n_got=?, n_dropped=? WHERE id=?",
+                     (_now(), info.get("model"), 0 if err else 1, int((time.time() - t0) * 1000), err,
+                      info.get("in", 0), info.get("out", 0), len(items), dropped, ai_id))
         if not err:
             kp = keypoints_state(cid, no)
             kp["draft"] = {"items": items, "ts": _now(), "by": c.user["full_name"], "model": info.get("model"), "dropped": dropped, "src": "ai"}
@@ -3770,7 +4213,7 @@ def save_keypoints(c: Ctx, cid: int, no: int, items: list, approve: bool, clear:
     co = _course(c, cid, write=True); les = _check_topic(co, no)
     clean = []
     for x in items or []:
-        t_ = re.sub(r"\s+", " ", str(x.get("text") if isinstance(x, dict) else x or "")).strip()[:300]
+        t_ = re.sub(r"\s+", " ", str((x.get("text") if isinstance(x, dict) else x) or "")).strip()[:300]
         if t_ and t_ not in clean: clean.append(t_)
     if len(clean) > 12: raise HTTPException(400, "Ko'pi bilan 12 ta xulosa")
     kp = {} if clear else keypoints_state(cid, no)
@@ -3821,7 +4264,7 @@ def ai_exercises(c: Ctx, cid: int, no: int, sort: bool = False) -> dict:
     ts = _text_source(cid, no, les)
     if not ts or len(_plain(ts["text"]).strip()) < 200: raise HTTPException(400, "Avval ma'ruza matnini yuklang (kamida 200 belgi)")
     day = clock.today().isoformat()
-    if db.one(_con, "SELECT COUNT(*) n FROM pk_ai WHERE user_id=? AND day=?", (c.user["id"], day))["n"] >= pk_daily():
+    if db.one(_con, "SELECT COUNT(*) n FROM pk_ai WHERE user_id=? AND day=? AND NOT (ok=0 AND err='jarayonda' AND ts < ?)", (c.user["id"], day, _stale_cut()))["n"] >= pk_daily():
         raise HTTPException(429, f"Kunlik cheklov: bir foydalanuvchi uchun kuniga {pk_daily()} ta AI so'rovi. Ertaga davom ettiring.")
     # save_exercise bilan bir xil chegara. Oldingi AI qoralamalari almashtiriladi — ular hisobga kirmaydi. To'lgan bo'lsa AI chaqirilmaydi
     ex_count = lambda: db.one(_con, "SELECT COUNT(*) n FROM pk_exercises WHERE course_id=? AND topic_no=? AND deleted=0 AND NOT (status='qoralama' AND src='ai')", (cid, no))["n"]
@@ -4146,7 +4589,7 @@ def api_meta(request: Request):
             "today": clock.today().isoformat(), "demo": demo, "player": player_ok(),
             "modes": MODES, "completion": COMPLETION, "status": STATUS, "blocks": BLOCKS, "required": list(REQUIRED), "defaults": defaults(),
             "layouts": LAYOUTS, "sections": SECTIONS, "reflect_default": REFLECT, "assignment_default": ASSIGNMENT, "video_sources": VIDEO_SOURCES,
-            "ex_kinds": EX_KINDS, "sub_langs": SUB_LANGS, "default_cover": (a_["id"] if k in WORK and (a_ := _latest_asset(0, 0, "muqova")) else None),
+            "ex_kinds": EX_KINDS, "sub_langs": SUB_LANGS, "tools": _OFFICE.available(), "default_cover": (a_["id"] if k in WORK and (a_ := _latest_asset(0, 0, "muqova")) else None),
             "kinds": {k: {"prefix": v[0], "label": v[2], "plural": v[3]} for k, v in KINDS.items()}, "ai": CC_has_key() and k in AUTHORS,
             "limits": {"asset_mb": MAX_ASSET // (1024 * 1024), "package_mb": MAX_PACKAGE // (1024 * 1024), "keep": KEEP_VERSIONS,
                        "video_mb": video_max() // (1024 * 1024), "package_video_mb": package_max(True) // (1024 * 1024), "audio_mb": MAX_AUDIO // (1024 * 1024), "audio_total_mb": MAX_AUDIO_TOTAL // (1024 * 1024),
@@ -4160,6 +4603,17 @@ def api_coverage(request: Request):
     c = C(request); guard(c, "qamrov")
     return coverage(c)
 
+_LCODE_RX = re.compile(r"^(.+?)_(lab|mt|l|a|s)(\d{1,3})$", re.I)
+
+def _parse_lesson_code(q: str) -> tuple[str, int] | None:
+    """To'liq dars kodi («2_ATT_dasturiyinjiniring_L8», «..._A3») → (fan kodi, dars kaliti); boshqa matn — None."""
+    m = _LCODE_RX.match((q or "").strip())
+    if not m: return None
+    pref = {v[0].lower(): k for k, v in KINDS.items()}.get(m.group(2).lower())
+    no = int(m.group(3))
+    if not pref or not 1 <= no <= MAX_LESSON_NO: return None
+    return m.group(1), lesson_key(pref, no)
+
 @router.get(P + "/courses")
 def api_courses(request: Request, q: str = "", department_id: int = 0, teacher_id: int = 0, only: str = "", offset: int = 0, limit: int = 50):
     c = C(request); guard(c, "kurslar ro'yxati", WORK, f"{q[:30]}/{department_id}/{only}")
@@ -4169,12 +4623,16 @@ def api_courses(request: Request, q: str = "", department_id: int = 0, teacher_i
     if only == "started": rows = [r for r in rows if r["started"]]
     elif only == "waiting": rows = [r for r in rows if r["waiting"]]
     elif only == "empty": rows = [r for r in rows if not r["started"]]
+    hint = None
     if q:
         ql = q.lower().strip()
-        rows = [r for r in rows if ql in f"{r['subject']} {r['direction']} {r['teacher']} {r['dept']}".lower()]
+        pc = _parse_lesson_code(ql)                          # to'liq dars kodi (kartochkadan nusxalangan) — fanni topadi va darsni ko'rsatadi
+        by_code = [r for r in rows if pc and (r.get("code") or "").lower() == pc[0].lower()] if pc else []
+        if by_code: rows, hint = by_code, pc[1]
+        else: rows = [r for r in rows if ql in f"{r['subject']} {r['direction']} {r['teacher']} {r['dept']} {r.get('code')}".lower()]
     rows.sort(key=lambda r: (not r["started"], -r["waiting"], r["subject"] or "", r["direction"] or "", r["course"] or 0))
-    limit = max(1, min(400, limit))
-    return {"total": len(rows), "items": rows[max(0, offset):max(0, offset) + limit]}
+    limit = max(1, min(1000, limit))
+    return {"total": len(rows), "items": rows[max(0, offset):max(0, offset) + limit], "lesson_hint": hint}
 
 @router.get(P + "/courses/{cid}")
 def api_course(cid: int, request: Request):
@@ -4221,6 +4679,24 @@ async def api_upload_any(cid: int, no: int, request: Request, name: str = "fayl"
     co = _course(c, cid, write=True); _check_topic(co, no)
     up = await _stream_any(request)
     return await run_in_threadpool(route_upload, c, cid, no, up, name[:160], request.query_params.get("as") or "", lang, caption)
+
+class TestAnswersIn(BaseModel):
+    upload_id: str = Field(..., min_length=1, max_length=64)
+    answers: list[dict] = Field(..., max_length=400)
+
+@router.get(P + "/courses/{cid}/topics/{no}/test/pending")
+def api_test_pending(cid: int, no: int, request: Request):
+    """Word testidan import: javobi belgilanmagan, «To'g'ri javobni tanlang» kutayotgan savollar (yuklash javobidagi `needs_answer` bilan bir xil)."""
+    c = C(request); guard(c, "test: javobsiz savollar", AUTHORS, f"kurs #{cid} · {lesson_code(no)}")
+    from . import test_import as TI
+    return TI.pending_state(c, cid, no)
+
+@router.post(P + "/courses/{cid}/topics/{no}/test/answers")
+def api_test_answers(cid: int, no: int, body: TestAnswersIn, request: Request):
+    """«To'g'ri javobni tanlang»: [{i, correct:[…]} | {i, skip:true}] → Test bankka (yuklashdagidek). Ruxsat — yuklash bilan bir xil (AUTHORS + kurs ko'lami)."""
+    c = C(request); guard(c, "test javoblarini belgilash", AUTHORS, f"kurs #{cid} · {lesson_code(no)}")
+    from . import test_import as TI
+    return TI.apply_answers(c, cid, no, body.upload_id, body.answers)
 
 @router.post(P + "/courses/{cid}/topics/{no}/deck/create")
 async def api_deck_create(cid: int, no: int, request: Request):
@@ -4415,6 +4891,12 @@ def api_exercise_delete(eid: int, request: Request):
     return delete_exercise(c, eid)
 
 
+@router.get(P + "/assets/builtin-cover")
+def api_builtin_cover(request: Request):
+    c = C(request); guard(c, "standart muqovani ko'rish", WORK, "ichki")
+    if not BUILTIN_COVER.is_file(): raise HTTPException(404, "Ichki muqova yo'q")
+    return FileResponse(BUILTIN_COVER, media_type="image/jpeg")
+
 @router.get(P + "/assets/{aid}")
 def api_asset(aid: int, request: Request):
     c = C(request); guard(c, "manba faylini yuklab olish", WORK, f"#{aid}")
@@ -4454,10 +4936,12 @@ class SettingsIn(BaseModel):
     mode: str | None = None
     completion: str | None = None
     mastery: int | None = Field(None, ge=0, le=100)
+    video_min: int | None = Field(None, ge=0, le=100)
     quiz_n: int | None = Field(None, ge=0, le=200)
     shuffle: bool | None = None
     attempts: int | None = Field(None, ge=0, le=20)
     show_feedback: bool | None = None
+    auto_captions: bool | None = None
     blocks: dict | None = None
     reset: bool = False
 
@@ -4546,7 +5030,7 @@ def api_package_action(pid: int, body: ActIn, request: Request):
     return package_action(c, pid, body.action, body.note, body.override)
 
 class DefaultsIn(BaseModel):
-    layout: str = "steps"
+    layout: str = "rise"
     sections: dict = {}
     reflect: dict = {}
     assignment: dict = {}
@@ -4554,6 +5038,7 @@ class DefaultsIn(BaseModel):
     mode: str
     completion: str
     mastery: int = Field(60, ge=0, le=100)
+    video_min: int = Field(0, ge=0, le=100)
     quiz_n: int = Field(0, ge=0, le=200)
     shuffle: bool = True
     attempts: int = Field(0, ge=0, le=20)
@@ -4565,7 +5050,10 @@ def api_settings(body: DefaultsIn, request: Request):
     c = C(request); guard(c, "umumiy sozlamalar", DEPT)
     if body.mode not in MODES or body.completion not in COMPLETION or body.layout not in LAYOUTS or body.video_source not in VIDEO_SOURCES:
         raise HTTPException(400, "Sozlama qiymati noto'g'ri")
-    s = _clean_settings(body.model_dump(), DEFAULTS)
+    d, cur = body.model_dump(), defaults()
+    rf = d.get("reflect") if isinstance(d.get("reflect"), dict) else {}
+    d["reflect"] = {**cur["reflect"], **{k: v for k, v in rf.items() if k in ("title", "question", "options")}}   # yuborilmagan maydon — saqlangani qoladi
+    s = _clean_settings(d, DEFAULTS)
     with _lock:
         _con.execute("INSERT OR REPLACE INTO pk_meta(k,v) VALUES('defaults', ?)", (json.dumps(s),)); _con.commit()
     return {"ok": True, "defaults": defaults()}
@@ -4687,3 +5175,5 @@ def seed(con, force=False):
                 print("paket demo build:", e.detail)
     finally:
         _con = saved
+
+from . import paket_captions as _paket_captions   # noqa: E402 — avtomatik subtitr yo'llari (POST/GET .../captions/auto) shu router'ga qo'shiladi

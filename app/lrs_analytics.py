@@ -33,12 +33,15 @@ def lesson_summary(events: list[dict]) -> dict:
     Urinish = test natijasi (passed/failed). Paket pleyeri natijani ham test bloki (sub), ham dars (paket) darajasida yuboradi —
     ikki marta sanalmasligi uchun: blok darajasidagi natija bo'lsa faqat o'shalar, aks holda dars darajasidagilar sanaladi.
     Holat: o'tdi (passed) > testdan o'tmadi (failed, passed yo'q — dars «completed» bo'lsa ham) > yakunlandi (completed) > jarayonda > boshlanmagan.
-    Foiz: yakunlangan/o'tgan — 100; aks holda «progressed» kengaytmasidagi eng katta qiymat (yo'q bo'lsa 0)."""
+    Ballsiz dars darajasidagi «passed» (Rise «passed/incomplete» va bizning pleyer — testsiz dars ko'rib chiqildi) — test natijasi emas,
+    yakunlanish belgisi: urinish sanalmaydi, holat «yakunlandi».
+    Foiz: yakunlangan/o'tgan — 100; aks holda «progressed» kengaytmasidagi eng katta qiymat (yo'q bo'lsa 0).
+    Vaqt: dars darajasidagi terminated / suspended (eski pleyer) va «attempted» (Rise / yangi pleyer — yopilishda result.duration) yig'indisi."""
     ev = [e for e in events if e]
     if not ev:
         return {"status": "boshlanmagan", "pct": 0.0, "score": None, "best": None, "attempts": 0, "fails": 0, "time_s": 0.0, "first": None, "last": None}
     res_sub = [e for e in ev if e["verb"] in RESULT_VERBS and e.get("sub")]
-    res = res_sub or [e for e in ev if e["verb"] in RESULT_VERBS and not e.get("sub")]
+    res = res_sub or [e for e in ev if e["verb"] in RESULT_VERBS and not e.get("sub") and not (e["verb"] == "passed" and e.get("score") is None)]
     res = sorted(res, key=lambda e: e["ts"] or "")
     passed = any(e["verb"] == "passed" or e.get("success") == 1 and e["verb"] in RESULT_VERBS for e in res)
     fails = sum(1 for e in res if e["verb"] == "failed")
@@ -48,7 +51,7 @@ def lesson_summary(events: list[dict]) -> dict:
     status = "otdi" if passed else "otmadi" if fails else "yakunlandi" if completed else "jarayonda"   # yiqilgan test «yakunlandi» hisoblanmaydi
     prog = [e["progress"] for e in ev if e.get("progress") is not None]
     pct = 100.0 if status in DONE_ST else round(min(99.0, max(prog)), 1) if prog else 0.0
-    time_s = sum(float(e.get("duration") or 0) for e in ev if e["verb"] in ("terminated", "suspended") and not e.get("sub"))
+    time_s = sum(float(e.get("duration") or 0) for e in ev if e["verb"] in ("terminated", "suspended", "attempted") and not e.get("sub"))
     first = last = None
     for e in ev:
         t = e.get("ts")

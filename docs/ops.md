@@ -202,3 +202,12 @@ export ISFT_TEST_URL=http://127.0.0.1:8103 ISFT_CORE_DB=$SB/jarvis.db ISFT_CORE_
 | Brifing / eslatma kelmayapti | `/api/status` → `bot.running`, `bot.last_error`, `bot.next_brief`. Foydalanuvchi botga ulanganmi (`users.telegram_id`) |
 | Vaqtlar 5 soat siljigan | `TZ` va `ISFT_CORE_TZ`. Deploy logida `start.sh` qaysi TZ qo'yganini ko'ring |
 | Deploy'dan keyin ma'lumotlar yo'qoldi | Volume `/app/data` ga ulanganmi; `SEED_VERSION` o'zgarganmi (4-bo'lim) |
+
+
+## Bitta worker (muhim)
+
+Ilova **bitta uvicorn jarayoni** sifatida ishlaydi (`start.sh`: `--workers 1`, `WEB_CONCURRENCY=1`). Sabablari:
+- Taqdimot yuborish (dars bo'yicha), «Dars yaratish» (`dars.link_lock`), studiya yuborish va paket yig'ish qulflari **jarayon ichida** (`threading.Lock` / `db.TxLock`).
+- Bir nechta worker bo'lsa qulflar o'zaro ko'rinmaydi. Bazaning o'zi baribir himoya qiladi (UNIQUE: `pres_sends(course_id, lkey, version)`, `st_dept(job_id)`, `ds_links(dl_course_id, lkey)`; SQLite yozuv qulfi), shuning uchun ma'lumot buzilmaydi, lekin parallel so'rovlarda ba'zida 409/500 yoki bir xil narsaning ikki marta bajarilishi (masalan paketga taqdimotning ikki marta qo'yilishi) mumkin.
+- Ko'p worker rejimi sinalmagan. Kerak bo'lsa avval qulflar bazaga ko'chirilishi kerak (`BEGIN IMMEDIATE` + qator qulfi / maxsus `locks` jadvali) va parallel testlar qayta yuritilishi kerak.
+- Ko'p instansiya (bir nechta Railway nusxasi) ham qo'llab-quvvatlanmaydi: SQLite fayli bitta joyda.

@@ -24,8 +24,8 @@ files = [p for p in PL.rglob("*") if p.is_file() and p.name != ".DS_Store"]
 names = {str(p.relative_to(PL)) for p in files}
 ok({"index.html", "player.js", "player.css", "lms.js"} <= names, "index.html, player.js, player.css, lms.js (LMS adapterlari — kurs pleyeri bilan umumiy) mavjud")
 size = sum(p.stat().st_size for p in files)
-ok(size <= 260 * 1024, f"Pleyer hajmi {size / 1024:.1f} KB ≤ 260 KB (shriftlar bilan)")
-ok(all(p.suffix in {".html", ".js", ".css", ".woff2"} for p in files), "Faqat html/js/css/woff2 fayllar: " + ", ".join(sorted(names)))
+ok(size <= 560 * 1024, f"Pleyer hajmi {size / 1024:.1f} KB ≤ 560 KB (Manrope + Lato + Merriweather shriftlari bilan)")
+ok(all(p.suffix in {".html", ".js", ".css", ".woff2"} or p.name == "OFL.txt" for p in files), "Faqat html/js/css/woff2 fayllar (+ shrift litsenziyasi OFL.txt): " + ", ".join(sorted(names)))
 
 html = (PL / "index.html").read_text(encoding="utf-8")
 pjs = (PL / "player.js").read_text(encoding="utf-8")
@@ -33,17 +33,30 @@ ljs = (PL / "lms.js").read_text(encoding="utf-8")
 js = pjs + "\n" + ljs          # standartlar kalit so'zlari — ikkala faylda (adapterlar lms.js da)
 css = (PL / "player.css").read_text(encoding="utf-8") + "".join(p.read_text(encoding="utf-8") for p in PL.rglob("*.css") if p.name != "player.css")
 srcs = re.findall(r'<script[^>]*\bsrc="([^"]+)"', html)
-ok(srcs == ["content.js", "lms.js", "a11y.js", "player.js"], f"index.html: content.js, lms.js (LMS adapterlari), a11y.js (qulaylik paneli, ovozli o'qish), keyin player.js ({srcs})")
+ok(srcs == ["content.js", "lms.js", "a11y.js", "player.js"], f"index.html: content.js, lms.js (LMS adapterlari), a11y.js (imlo normallashtiruvchisi), keyin player.js ({srcs})")
 ajs = (PL / "a11y.js").read_text(encoding="utf-8")
-ok("speechSynthesis" in ajs and "localStorage" in ajs and not re.search(r"https?://", ajs.split("*/", 1)[1]), "a11y.js: Web Speech API, localStorage (try/catch), tashqi manzilsiz")
+ok("speechSynthesis" not in ajs and "localStorage" not in ajs and "a11y-b" not in ajs and "panel" not in ajs.split("*/", 1)[1] and not re.search(r"https?://", ajs.split("*/", 1)[1]), "a11y.js: ovozli o'qish (Tinglash) va «Aa» qulaylik paneli olib tashlangan; localStorage yo'q, tashqi manzilsiz")
+ok("\\u02bb" in ajs and "MutationObserver" in ajs and all(t in ajs for t in ("SCRIPT", "TEXTAREA", "CODE", "PRE", "MATH")) and "uz: uz" in ajs,
+   "a11y.js: oʻ/gʻ (U+02BB) ko'rinish normallashtiruvchisi — MutationObserver, script/style/textarea/code/pre/MathML chiqarib tashlangan")
+ok("Nimalar qoldi?" in pjs and "'aria-controls': 'r-left'" in pjs and "'aria-expanded': 'false'" in pjs and "e.key === 'Escape' && !R.left.hidden" in pjs and "ta qadam qoldi" in pjs,
+   "player.js: pastki tasma — qisqa holat («N ta qadam qoldi»), «Nimalar qoldi?» (aria-expanded, Esc)")
+_fcss = (PL / "fonts" / "fonts.css").read_text(encoding="utf-8")
+ok(re.search(r'font-family:"ISFT Uz"[^}]*merriweather-latin\.woff2[^}]*unicode-range:U\+02BB-02BC', _fcss) and '"ISFT Uz"' in css and (PL / "fonts" / "merriweather-latin.woff2").is_file(),
+   "fonts.css: ʻ (U+02BB) uchun «ISFT Uz» shrifti (Merriweather glifi), shrift ro'yxatida Lato / Manrope'dan keyin")
+try:
+    from fontTools.ttLib import TTFont
+    ok(0x2BB in TTFont(str(PL / "fonts" / "merriweather-latin.woff2")).getBestCmap(), "merriweather-latin.woff2 da U+02BB glifi bor")
+except ImportError:
+    pass
+ok(".r-left" in css and ".r-what" in css and ".a11y-b" not in css and ".r-a11y" not in css and "R.a11y" not in pjs, "player.css: «Nimalar qoldi?» oynasi; «Aa» tugmasi (CSS va kod) olib tashlangan")
 ok('href="player.css"' in html and '<meta name="viewport"' in html and 'lang="uz"' in html, "index.html: player.css, viewport, lang=uz")
 ok(not re.search(r'(src|href)="(/|[a-z]+:)', html), "index.html: faqat nisbiy manzillar")
 
 print("== 2. Xavfsizlik va tashqi resurslar")
-ALLOWED = re.compile(r"^https?://(www\.)?(youtube-nocookie\.com|youtube\.com|youtu\.be)(/|$)|^http://adlnet\.gov/expapi/|^https://w3id\.org/xapi/")   # w3id — cmi5 kengaytma IRI (identifikator, so'rov emas)
+ALLOWED = re.compile(r"^https?://(www\.)?(youtube-nocookie\.com|youtube\.com|youtu\.be)(/|$)|^http://adlnet\.gov/expapi/|^https://w3id\.org/xapi/|^http://id\.tincanapi\.com/extension/|^http://www\.w3\.org/1998/Math/MathML$")   # w3id / tincanapi — kengaytma IRI, MathML — nomlar fazosi (identifikator, so'rov emas)
 urls = re.findall(r"https?://[^\s'\"()<>]+", js + css + html)
 bad = [u for u in urls if not ALLOWED.match(u)]
-ok(not bad, f"Tashqi URL lar faqat YouTube va ADL / cmi5 xAPI IRI ({len(urls)} ta topildi){': ' + ', '.join(bad[:5]) if bad else ''}")
+ok(not bad, f"Tashqi URL lar faqat YouTube, ADL / cmi5 / TinCan xAPI IRI va MathML nomlar fazosi ({len(urls)} ta topildi){': ' + ', '.join(bad[:5]) if bad else ''}")
 ok(not re.search(r"\beval\s*\(|new\s+Function\s*\(|setTimeout\s*\(\s*['\"]|document\.write", js), "eval / new Function / satrli setTimeout / document.write yo'q")
 ok(not re.search(r"@import|url\((['\"]?)(https?:|//)", css), "CSS da tashqi @import/url yo'q")
 inner = re.findall(r"\.innerHTML\s*=\s*([^;]+)", js)
@@ -68,8 +81,10 @@ for k in ["cmi.core.lesson_status", "cmi.core.score.raw", "cmi.core.session_time
 for k in ["API_1484_11", "cmi.completion_status", "cmi.success_status", "cmi.score.scaled", "cmi.progress_measure", "cmi.location", "cmi.session_time",
           "Terminate", "learner_response", "timestamp"]:
     ok(k in js, f"SCORM 2004: {k}")
-for k in ["X-Experience-API-Version", "1.0.3", "activities/state", "isft-state", "keepalive", "initialized", "experienced", "answered", "passed", "failed", "completed", "terminated", "registration"]:
-    ok(k in js, f"xAPI: {k}")
+for k in ["X-Experience-API-Version", "'1.0.2'", "activities/state", "suspend_data", "bookmark", "cumulative_time", "language_preference", "isft-state", "keepalive",
+          "?method=", "application/x-www-form-urlencoded", "statementId", "attempted", "progressed", "experienced", "answered", "passed", "failed", "registration"]:
+    ok(k in js, f"xAPI (Rise / NEXTID moslik): {k}")
+ok("initialized" not in ljs and "terminated" not in ljs and "'resumed'" not in ljs, "xAPI: Rise'da yo'q fe'llar (initialized / resumed / suspended / terminated) yuborilmaydi")
 ok("Ko'rish rejimi" in js and "natija LMS'ga yuborilmaydi" in js and "localStorage" in js and "get('preview') === '1'" in js, "Ko'rish rejimi banneri faqat ?preview=1 da, localStorage")
 ok("LMS bilan aloqa topilmadi" in js and "O'qituvchiga xabar bering." in js and "m === 'scorm12' || m === 'scorm2004'" in js,
    "SCORM paketi API'siz — «LMS bilan aloqa topilmadi» ogohlantirishi (xAPI/none — jim)")
@@ -86,6 +101,9 @@ ok("c.cover.author == null ? null" in js and "a != null ? a : str(C.course.teach
    "Muqova: author === '' — muallifsiz; course.teacher'ga faqat null/undefined bo'lsa qaytadi (muqova va chop etish)")
 ok(re.search(r"function typing\(t\) \{[^}]*form\.qform,fieldset\.q,\.m-slot,\.m-tile,\.m-bank,\.s-card,\.s-drop,\.fc-grid,\.fc'", js) is not None,
    "Global ← → / PageUp / PageDown: test formasi, match/sort vidjetlari va kartochkalar ichida ishlamaydi")
+ok(js.count("/^(tf|fill|match|sort|multi)$/.test(q.type)") == 2 and "q.type === 'multi' || (q.type === 'mcq' && q.correct.length > 1)" in js
+   and "(q.type === 'mcq' || q.type === 'multi') ? shuffled" in js,
+   "Test: «multi» savol turi (belgilash katakchalari, variantlar aralashadi) + eski mcq (correct ≥ 2) orqaga mos; baholash — «hammasi va faqat shular» (brauzer: tools/paket_player_check.js «multi»)")
 ok("e.pointerType === 'touch'" in js and "ondragstart" not in js, "Sudrash — faqat sichqoncha/pero uchun qo'shimcha (sensor va klaviaturada bosib tanlash)")
 ok("prefers-color-scheme:dark" in css.replace(" ", "") and "@media print" in css and "prefers-reduced-motion" in css and ":focus-visible" in css,
    "CSS: qorong'i rejim, chop etish, reduced-motion, focus-visible")
@@ -124,7 +142,7 @@ ok(all((FX / r).is_file() for r in refs), f"Paketdagi barcha asset havolalari ma
 print("== 5. JS sintaksisi")
 node = shutil.which("node")
 if node:
-    for f in [PL / "player.js", PL / "lms.js", ROOT / "tools" / "paket_player_check.js", FX / "content.js"]:
+    for f in [PL / "player.js", PL / "lms.js", ROOT / "tools" / "paket_player_check.js", ROOT / "tools" / "nextid_parity_check.js", FX / "content.js"]:
         r = subprocess.run([node, "--check", str(f)], capture_output=True, text=True)
         ok(r.returncode == 0, f"node --check {f.relative_to(ROOT)}" + ("" if r.returncode == 0 else ": " + r.stderr.strip()[:200]))
 else:
@@ -144,6 +162,44 @@ else:
         elif s.startswith("✓"): ok(True, "[brauzer] " + s[1:].strip())
         elif s.startswith("✗"): ok(False, "[brauzer] " + s[1:].strip())
     ok(r.returncode == 0, f"Muvofiqlik sinovi chiqish kodi 0 ({r.returncode})" + ("" if r.returncode == 0 else ":\n" + "\n".join(out.splitlines()[-15:])))
+
+print("== 7. NEXTID (Articulate Rise) bilan simdagi moslik — app.paket.build_zip paketi, NEXTID launch'i, boshqa domendagi soxta LRS")
+# Namuna paketdan haqiqiy yig'uvchi (build_zip, xAPI) bilan paket: scormdriver/indexAPI.html orqali «endpoint=…&auth=Bearer …&actor={"name":9424693}»
+# bilan ochiladi; so'rovlar ketma-ketligi Rise yozuvi bilan solishtiriladi (tools/nextid_parity_check.js; docs/paket.md «Kuzatuv»).
+import tempfile, zipfile, io
+sys.path.insert(0, str(ROOT))
+from app import paket as PK
+pc = json.loads(json.dumps(cj))
+pc["blocks"] = [b for b in pc["blocks"] if b["type"] in PK.BLOCK_TYPES]
+for b in pc["blocks"]:
+    if b["type"] == "text": b["html"] = "<h2>Kirish</h2><p>Matritsa — sonlar jadvali.</p><h2>Amallar</h2><p>Qo'shish va ko'paytirish.</p>"
+    if b["type"] == "quiz": b["questions"] = [x for x in b["questions"] if x["type"] in ("mcq", "tf", "fill")]
+    if b["type"] == "refs": b["items"] = [x for x in b["items"] if isinstance(x, str)]            # hujum satrlari / obyekt bandlar — pleyer sinoviniki
+    if b["type"] == "flashcards": b["cards"] = [x for x in b["cards"] if str(x.get("front") or "").strip() and str(x.get("back") or "").strip()]
+    if b["type"] == "video" and b.get("captions"): b["captions"] = [x for x in b["captions"] if str(x["src"]).startswith("assets/")]
+pc.update(layout="rise")    # standart NEXTID ko'rinishi: ↓, «davom etish» tugmalari, bloklar oxirigacha aylantiriladi (tools/nextid_parity_check.js)
+pc["tracking"].update(completion="view_all", activity_id="https://isft.uz/xapi/paket/12/5")
+pfiles = {str(p_.relative_to(FX)): p_.read_bytes() for p_ in (FX / "assets").rglob("*") if p_.is_file()}
+pzip = PK.build_zip(pc, pfiles, "xapi", player_dir=PL)
+pv = PK.validate_zip(pzip)
+pz = zipfile.ZipFile(io.BytesIO(pzip))
+ok(pv["ok"] and "scormdriver/indexAPI.html" in pz.namelist() and b"<launch lang=\"uz\">scormdriver/indexAPI.html</launch>" in pz.read("tincan.xml"),
+   f"build_zip (xAPI): tekshiruvdan o'tdi, tincan.xml launch — scormdriver/indexAPI.html ({pv['errors'][:2]})")
+if not (pw and chrome and node):
+    print("  – PW/CHROME berilmagan — brauzer qismi o'tkazib yuborildi")
+else:
+    pdir = Path(tempfile.mkdtemp(prefix="nextid-parity-")); pz.extractall(pdir)
+    env = dict(os.environ, PKG_DIR=str(pdir), QUIZ=json.dumps(next(b for b in pc["blocks"] if b["type"] == "quiz")))
+    r = subprocess.run([node, str(ROOT / "tools" / "nextid_parity_check.js")], cwd=ROOT, env=env, capture_output=True, text=True, timeout=300)
+    out = r.stdout + r.stderr
+    for ln in out.splitlines():
+        s_ = ln.strip()
+        if ln.startswith("=="): print("  " + ln)
+        elif s_.startswith("✓"): ok(True, "[NEXTID] " + s_[1:].strip())
+        elif s_.startswith("✗"): ok(False, "[NEXTID] " + s_[1:].strip())
+        elif s_.startswith("»"): print("    " + s_)
+    ok(r.returncode == 0, f"tools/nextid_parity_check.js chiqish kodi 0 ({r.returncode})" + ("" if r.returncode == 0 else ":\n" + "\n".join(out.splitlines()[-15:])))
+    shutil.rmtree(pdir, ignore_errors=True)
 
 print()
 if fails:

@@ -54,7 +54,7 @@ kalit bilan qayta yoqiladi). Yagona manba — `app/modules.py`; to'liq ro'yxat, 
 
 - Yoqish/o'chirish: menyu → **Bo'limlar** (AT bo'limi boshlig'i, rektor) yoki `ISFT_CORE_MODULES="+moliya,-testbank"`. Bu mahsulot kaliti, xavfsizlik chegarasi emas — ruxsatni `app/rbac.py` tekshiradi.
 - Standart holatda rektor menyusida 10 ta, o'qituvchida 6 ta band; guruhlangan (yig'iladigan) menyu faqat 12 tadan ko'p band bo'lganda yoqiladi (`static/nav.js`).
-- Ilova tepasida «Namuna ma'lumot — haqiqiy tizimlar (HEMIS, NEXTID) hali ulanmagan» tasmasi; `ISFT_CORE_REAL_DATA=1` bilan o'chadi.
+- «Namuna ma'lumot» tasmasi va belgilari interfeysdan olib tashlangan (login sahifasi ham). `ISFT_CORE_REAL_DATA=1` endi faqat «Manba: HEMIS …» matnlarini yoqadi.
 - Kamera simulyatori standart holda o'chiq (`ISFT_CORE_CAM_SIM=1` va «Kameralar» bo'limi yoqilgandagina ishlaydi).
 - Ixcham rejim (faqat ikonkalar): tepadagi ☰ tugma yoki klaviaturada `[`. 980px dan tor ekranda — chiquvchi mobil menyu.
 - Nomlar: bo'limlararo xatlar — **Yozishmalar**, rasmiy hujjatlar — **Hujjat chiqarish**, QR nosozliklar va xarid — **Nosozliklar va murojaatlar** (nom lavozimga qarab o'zgarmaydi).

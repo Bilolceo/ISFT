@@ -8,7 +8,7 @@
    to'sig'i — sabab bilan aylanib o'tish), dsOpenSubject (muharrirdan fanga qaytish).
    Ruxsat va ko'lam — serverda. app.js yordamchilari: $, esc, fmt, toast, ico, ME, go; paket.js: PK, pkApi, pkModal, pkChip, pkTable, pkPreview, pkD.
    ===================================================================== */
-const DS = {cid: 0, q: "", offset: 0, data: null, meta: null, kind: ""};
+const DS = {cid: 0, q: "", offset: 0, data: null, meta: null, kind: "", kurs: 0, dir: ""};
 if (!document.querySelector('link[href="dars.css"]')) document.head.insertAdjacentHTML("beforeend", '<link rel="stylesheet" href="dars.css">');
 const DS_KIND = {maruza: "Ma'ruzalar (L)", amaliy: "Amaliy mashg'ulotlar (A)", seminar: "Seminarlar (S)", laboratoriya: "Laboratoriya ishlari (Lab)", mustaqil: "Mustaqil ta'lim (MT)"};
 const dsYes = (on, label, cls = "ok") => `<span class="ds-st ${on ? cls : "off"}" title="${esc(label)}: ${on ? "bor" : "yo'q"}">${on ? "✓" : "–"} ${esc(label)}</span>`;
@@ -33,63 +33,213 @@ async function dsGateFetch(url, body) {
   toast(pkErrMsg(d)); return null;
 }
 
-/* ---------- Fanlar ro'yxati ---------- */
-async function dsSubjects(box) {
-  if (DS.cid) return dsSubject(box);
-  const lim = 30;
-  const d = await pkApi(`/api/paket/courses?limit=${lim}&offset=${DS.offset}&q=${encodeURIComponent(DS.q)}`);
-  if (d.total === 1 && !DS.q && d.items[0]) { DS.cid = d.items[0].id; return dsSubject(box); }
-  box.innerHTML = `<div class="card pk-card"><div class="ds-h"><div><h3>Fanlar</h3><p class="muted">Fanni tanlang — NEXTID darslari (ma'ruza L, amaliy A) to'ri ochiladi: har dars shablon bo'yicha avtomatik yig'iladi yoki muharrirda bloklardan tahrirlanadi.</p></div>
-      <input type="search" id="dsQ" placeholder="Fan, yo'nalish, o'qituvchi…" value="${esc(DS.q)}" aria-label="Fanni qidirish"></div>
-    <div class="ds-subj">${d.items.map(r => `<button type="button" class="ds-sc" data-cid="${r.id}">
-        <b>${esc(r.subject)}</b><small>${esc(r.direction)} · ${r.course}-kurs${r.teacher ? " · " + esc(r.teacher) : ""}</small>
-        <span class="ds-sc-f">${pkBar(r.built_pct, pkTone(r.built_pct))}<small>${r.lessons} dars · tayyorlangan ${r.built} · tasdiqlangan ${r.approved}${r.waiting ? ` · <b>kutmoqda ${r.waiting}</b>` : ""}</small></span></button>`).join("")
-      || `<div class="pk-empty">Fan topilmadi</div>`}</div>
+/* ---------- Fanlar: kurs → ta'lim yo'nalishi → fan (ichma-ich); qidiruv — tekis ro'yxat ---------- */
+/* Fan kodi (serverdan): «<kurs>_<YO'NALISH>_<fan>» — masalan 2_ATT_dasturiyinjiniring (unikal; dars kodi oxiriga _L2 qo'shiladi) */
+const dsAgg = rows => { const n = rows.reduce((a, r) => ({lessons: a.lessons + r.lessons, built: a.built + r.built, approved: a.approved + r.approved, waiting: a.waiting + r.waiting,
+    pres: a.pres + (r.pres_sent || 0), dept: a.dept + (r.dept_sent || 0), vwait: a.vwait + (r.video_wait || 0)}), {lessons: 0, built: 0, approved: 0, waiting: 0, pres: 0, dept: 0, vwait: 0});
+  n.pct = n.lessons ? Math.round(100 * n.built / n.lessons) : 0; return n; };
+/* taqdimot / video holati: «yangi: 1 taqdimot · 3 video» (backend: pres_sent, dept_sent, video_wait — yo'q bo'lsa ko'rinmaydi) */
+const dsNewLine = (pres, dept, vwait) => {
+  const parts = [pres ? `${pres} taqdimot` : "", dept ? `${dept} video` : ""].filter(Boolean);
+  return parts.length || vwait ? `<span class="ds-new">${parts.length ? `<span class="ds-nw" title="Taqdimot yuborilgan darslar; video bo'limga yuborilgan darslar">yangi: ${parts.join(" · ")}</span>` : ""}${vwait ? `<span class="ds-nw wait" title="Montaj tasdiqlangan, lekin masofaviy bo'limga hali yuborilmagan">${vwait} video yuborilmagan</span>` : ""}</span>` : "";
+};
+const dsGroupStat = (n, unit) => `<span class="ds-sc-f">${pkBar(n.pct, pkTone(n.pct))}<small>${[unit, `${n.lessons} dars`, `tayyorlangan ${n.built}`, `tasdiqlangan ${n.approved}`, n.waiting ? `<b>kutmoqda ${n.waiting}</b>` : ""].filter(Boolean).join(" · ")}</small>${dsNewLine(n.pres, n.dept, n.vwait)}</span>`;
+const dsSubjCard = r => `<button type="button" class="ds-sc" data-cid="${r.id}">
+        <span class="ds-code-s">${esc(r.code || "")}</span><b>${esc(r.subject)}</b><small>${esc(r.direction)} · ${r.course}-kurs${r.teacher ? " · " + esc(r.teacher) : ""}</small>
+        <span class="ds-sc-f">${pkBar(r.built_pct, pkTone(r.built_pct))}<small>${r.lessons} dars · tayyorlangan ${r.built} · tasdiqlangan ${r.approved}${r.waiting ? ` · <b>kutmoqda ${r.waiting}</b>` : ""}</small>${dsNewLine(r.pres_sent, r.dept_sent, r.video_wait)}</span></button>`;
+
+/* Holatni tiklash: sahifa yangilanganda kurs/yo'nalish/fan — URL hash'da (#fanlar=kurs/yo'nalish/fan_id), history.pushState bilan (har daraja tarixga yoziladi — brauzer «Orqaga» tugmasi) */
+function dsWho() {
+  const w = typeof ME !== "undefined" ? ME : null;
+  if (DS.who !== undefined && DS.who !== w) Object.assign(DS, {cid: 0, q: "", offset: 0, data: null, kind: "", kurs: 0, dir: "", single: null, restored: false, pendingCard: 0, pendingCode: ""});
+  DS.who = w;
+}
+const dsHashStr = () => DS.cid ? `#fanlar=${DS.kurs || 0}/${encodeURIComponent(DS.dir || "")}/${DS.cid}` : DS.kurs ? `#fanlar=${DS.kurs}/${encodeURIComponent(DS.dir || "")}` : "";
+function dsHashSave(replace) {
+  try {
+    const h = dsHashStr();
+    if (location.hash === h || !(h || location.hash.startsWith("#fanlar="))) return;
+    const u = location.pathname + location.search + h;
+    if (replace) history.replaceState(history.state, "", u);
+    else history.pushState({isftView: (history.state && history.state.isftView) || "paket"}, "", u);   /* «Orqaga» (brauzer) bir daraja qaytaradi — nav_history.js */
+  } catch (e) {}
+}
+function dsHashLoad() {
+  const m = /^#fanlar=(\d+)(?:\/([^/]*))?(?:\/(\d+))?$/.exec(location.hash || ""); if (!m) return;
+  try { DS.kurs = +m[1] || 0; DS.dir = DS.kurs ? decodeURIComponent(m[2] || "") : ""; DS.cid = +m[3] || 0; DS.fromHash = !!DS.cid; } catch (e) { DS.kurs = 0; DS.dir = ""; DS.cid = 0; }
+}
+/* ekran o'qigichlar uchun: doimiy aria-live bloki (daraxt qayta chizilganda ham e'lon qilinadi) */
+function dsAnnounce(t) {
+  let el = document.getElementById("dsLive");
+  if (!el) { el = document.createElement("div"); el.id = "dsLive"; el.className = "pk-sr"; el.setAttribute("role", "status"); el.setAttribute("aria-live", "polite"); document.body.appendChild(el); }
+  el.textContent = ""; setTimeout(() => { el.textContent = t; }, 60);
+}
+/* qayta chizishdan keyin: yangi bosqich sarlavhasiga fokus (faqat foydalanuvchi harakatidan keyin) + e'lon */
+function dsStage(box, o, status, always) {
+  const h = box.querySelector("[data-stage]");
+  if (o && o.focus && h) h.focus({preventScroll: true});
+  if ((o && o.focus) || always) dsAnnounce(status);
+}
+const DS_SFX = /^(.+?)_((?:L|A|S|MT|LAB)\d+)$/i;      /* to'liq dars kodi: ..._L8 */
+async function dsSubjects(box, o = {}) {
+  dsWho();
+  if (!DS.restored) { DS.restored = true; if (!DS.cid && !DS.kurs && !DS.q) dsHashLoad(); }
+  try { return await dsSubjectsIn(box, o); }
+  catch (e) {
+    if (e?.message === "auth") return;
+    if (e?.message === "denied") { box.innerHTML = locked("Bu bo'lim"); return; }
+    pkFail(box, e, () => dsSubjects(box, o));
+  }
+}
+async function dsSubjectsIn(box, o) {
+  if (DS.cid) return dsSubject(box, o);
+  dsHashSave();
+  const head = (title, sub) => `<div class="ds-h"><div><h3 tabindex="-1" data-stage>${esc(title)}</h3><p class="muted" aria-live="polite">${sub}</p></div>
+      <input type="search" id="dsQ" class="ds-q" placeholder="Fan nomi yoki kod (masalan 4_BHM_… yoki …_L8)" value="${esc(DS.q)}" aria-label="Fanni qidirish: fan nomi yoki kod" autocomplete="off"></div>`;
+  const bindQ = () => { let t = 0;
+    box.querySelector("#dsQ").oninput = e => { clearTimeout(t); t = setTimeout(() => { DS.q = e.target.value.trim(); DS.offset = 0; dsSubjects(box).then(() => { const q = box.querySelector("#dsQ"); q?.focus(); q?.setSelectionRange(q.value.length, q.value.length); }); }, 300); }; };
+  const openSubj = () => box.querySelectorAll("[data-cid]").forEach(b => b.onclick = () => { DS.cid = +b.dataset.cid; dsSubject(box, {focus: true}); });
+  if (DS.q) {   /* qidiruv — barcha fanlar bo'yicha tekis ro'yxat */
+    const lim = 30, find = q => pkApi(`/api/paket/courses?limit=${lim}&offset=${DS.offset}&q=${encodeURIComponent(q)}`);
+    let d = await find(DS.q), hint = d.lesson_hint ? +d.lesson_hint : 0, code = "";
+    const sfx = DS_SFX.exec(DS.q);
+    if (!d.items.length && sfx && !DS.offset) { const d2 = await find(sfx[1]); if (d2.items.length === 1) { d = d2; code = sfx[2].toUpperCase(); } }   /* server lesson_hint bermasa — kod oxiridagi _L8 ni o'zimiz ajratamiz */
+    if (!DS.offset && d.items.length === 1 && (hint || code)) {      /* to'liq dars kodi — fan darhol ochiladi va shu dars kartochkasiga o'tadi */
+      const r = d.items[0]; DS.q = ""; DS.cid = r.id; DS.kurs = r.course; DS.dir = r.direction; DS.pendingCard = hint; DS.pendingCode = code;
+      return dsSubject(box, {focus: true});
+    }
+    const miss = `«${esc(DS.q)}» bo'yicha fan topilmadi. ${sfx ? `Kodning oxiridagi <b>_${esc(sfx[2])}</b> ni olib tashlab ko'ring.` : "Fan nomi yoki kodining bir qismini yozib ko'ring."}`;
+    box.innerHTML = `<div class="card pk-card">${head("Fanlar", `«${esc(DS.q)}» bo'yicha natijalar. Qidiruvni tozalasangiz — kurs → yo'nalish → fan bo'yicha ko'rinishga qaytasiz.`)}
+    <div class="ds-subj">${d.items.map(dsSubjCard).join("") || `<div class="pk-empty" role="status">${miss}</div>`}</div>
     ${d.total > lim ? `<div class="pk-pager"><button type="button" class="btn sm ghost" data-p="${Math.max(0, DS.offset - lim)}" ${DS.offset ? "" : "disabled"}>← Oldingi</button>
       <span>${fmt(DS.offset + 1)}–${fmt(Math.min(d.total, DS.offset + lim))} / ${fmt(d.total)}</span>
       <button type="button" class="btn sm ghost" data-p="${DS.offset + lim}" ${DS.offset + lim < d.total ? "" : "disabled"}>Keyingi →</button></div>` : ""}</div>`;
-  let t = 0;
-  box.querySelector("#dsQ").oninput = e => { clearTimeout(t); t = setTimeout(() => { DS.q = e.target.value.trim(); DS.offset = 0; dsSubjects(box).then(() => { const q = box.querySelector("#dsQ"); q?.focus(); q?.setSelectionRange(q.value.length, q.value.length); }); }, 300); };
-  box.querySelectorAll("[data-p]").forEach(b => b.onclick = () => { DS.offset = +b.dataset.p; dsSubjects(box); });
-  box.querySelectorAll("[data-cid]").forEach(b => b.onclick = () => { DS.cid = +b.dataset.cid; dsSubject(box); });
+    bindQ(); openSubj();
+    box.querySelectorAll("[data-p]").forEach(b => b.onclick = () => { DS.offset = +b.dataset.p; dsSubjects(box, {focus: true}); });
+    dsStage(box, {}, d.items.length ? `${fmt(d.total)} ta natija` : `«${DS.q}» bo'yicha fan topilmadi`, true);
+    return;
+  }
+  const dd = await pkApi(`/api/paket/courses?limit=1000`), all = dd.items;
+  DS.single = all.length === 1;
+  if (all.length === 1) { DS.cid = all[0].id; DS.kurs = all[0].course; DS.dir = all[0].direction; return dsSubject(box, o); }
+  if (!all.length) {
+    const teacher = PK.meta?.role === "oqituvchi";
+    box.innerHTML = `<div class="card pk-card"><div class="ds-h"><div><h3 tabindex="-1" data-stage>Fanlar</h3></div></div>
+      <div class="pk-empty" role="status">${teacher ? "Sizga fan biriktirilmagan. Kafedra mudiriga murojaat qiling." : "Fan topilmadi."}</div></div>`;
+    dsStage(box, o, teacher ? "Sizga fan biriktirilmagan" : "Fan topilmadi"); return;
+  }
+  const {kurslar, inK, dirs} = lpLevels(all, DS);                            /* umumiy mantiq (lesson_picker.js): bitta kurs / yo'nalish — bosqich o'tkaziladi */
+  dsHashSave();
+  const crumbs = [`<button type="button" class="ds-cr" data-lv="0" ${DS.kurs ? "" : 'aria-current="page"'}>Barcha kurslar</button>`];
+  if (DS.kurs) crumbs.push(`<button type="button" class="ds-cr" data-lv="1" ${DS.dir ? "" : 'aria-current="page"'}>${DS.kurs}-kurs</button>`);
+  if (DS.dir) crumbs.push(`<span class="ds-cr" aria-current="page">${esc(DS.dir)} <small>${esc(inK.find(r => r.direction === DS.dir)?.dir_code || "")}</small></span>`);
+  let body, sub, title, live;
+  if (!DS.kurs) {
+    title = "Fanlar"; sub = "1-qadam: kursni tanlang."; live = `Fanlar: ${kurslar.length} ta kurs. ${sub}`;
+    body = `<div class="ds-subj ds-lv">${kurslar.map(k => { const rs = all.filter(r => r.course === k);
+      return `<button type="button" class="ds-sc ds-big" data-kurs="${k}"><span class="ds-code-s">${k}</span><b>${k}-kurs</b>
+        <small>${new Set(rs.map(r => r.direction)).size} ta yo'nalish · ${rs.length} ta fan</small>${dsGroupStat(dsAgg(rs), "")}</button>`; }).join("")}</div>`;
+  } else if (!DS.dir) {
+    title = `${DS.kurs}-kurs`; sub = `2-qadam: ${DS.kurs}-kurs — ta'lim yo'nalishini tanlang.`; live = `${DS.kurs}-kurs: ${dirs.length} ta ta'lim yo'nalishi. 2-qadam: yo'nalishni tanlang.`;
+    body = `<div class="ds-subj ds-lv">${dirs.map(d => { const rs = inK.filter(r => r.direction === d);
+      return `<button type="button" class="ds-sc ds-big" data-dir="${esc(d)}"><span class="ds-code-s">${DS.kurs}_${esc(rs[0].dir_code)}</span><b>${esc(d)}</b>
+        <small>${rs.length} ta fan</small>${dsGroupStat(dsAgg(rs), "")}</button>`; }).join("")}</div>`;
+  } else {
+    const rs = inK.filter(r => r.direction === DS.dir).sort((a, b) => (a.subject || "").localeCompare(b.subject || "", "uz"));
+    title = DS.dir; sub = `3-qadam: fanni tanlang — kod ko'rinishi: <b>kurs_YO'NALISH_fan</b>.`; live = `${DS.dir}: ${rs.length} ta fan. 3-qadam: fanni tanlang.`;
+    body = `<div class="ds-subj">${rs.map(dsSubjCard).join("")}</div>`;
+  }
+  const warn = dd.total > all.length ? `<div class="pk-warnbox" role="status">${ico("alert", 15)}<span>Faqat birinchi ${fmt(all.length)} ta fan ko'rsatildi (jami ${fmt(dd.total)}). Qolganlarini yuqoridagi qidiruv orqali toping.</span></div>` : "";
+  box.innerHTML = `<div class="card pk-card">${head(title, sub)}${warn}<nav class="ds-crumbs" aria-label="Fanlar bo'yicha yo'l">${crumbs.join('<span aria-hidden="true">›</span>')}</nav>${body}</div>`;
+  bindQ(); openSubj();
+  box.querySelectorAll("[data-lv]").forEach(b => b.onclick = () => { if (+b.dataset.lv === 0) { DS.kurs = 0; DS.dir = ""; } else DS.dir = ""; dsSubjects(box, {focus: true}); });
+  box.querySelectorAll("[data-kurs]").forEach(b => b.onclick = () => { DS.kurs = +b.dataset.kurs; DS.dir = ""; dsSubjects(box, {focus: true}); });
+  box.querySelectorAll("[data-dir]").forEach(b => b.onclick = () => { DS.dir = b.dataset.dir; dsSubjects(box, {focus: true}); });
+  dsStage(box, o, live);
 }
 
 /* ---------- Fan: NEXTID darslar to'ri ---------- */
-async function dsSubject(box) {
-  const d = await pkApi(`/api/dars/subjects/${DS.cid}`), c = d.course, can = d.can;
-  DS.data = d;
-  const groups = Object.keys(DS_KIND).map(k => [k, d.lessons.filter(l => l.kind === k)]).filter(g => g[1].length);
-  const st = l => `${dsYes(l.material, "Material")}${dsYes(l.video, "Video")}${dsYes(l.package || l.export, l.authority === "kurs" ? "Eksport" : "Paket")}
-      ${l.review ? pkChip("Ko'rib chiqishda", "info") : ""}${l.approved ? pkChip("Tasdiqlangan", "ok") : ""}
+/* dars qatori: Material · Video · Paket — 3 ta kichik qadam (✓ — bor); nomi kiritilmagan dars — «Mavzu nomi kiritilmagan» (xira, qiya) */
+const dsTitle = l => l.untitled ? `<b class="ds-un">Mavzu nomi kiritilmagan</b>` : `<b>${esc(l.title)}</b>`;
+const dsFlags = l => `${l.pres_version ? pkChip(`Taqdimot v${l.pres_version}`, "info") : ""}${l.dept_sent ? pkChip("Video keldi", "ok") : l.video_wait ? pkChip("Video: bo'limga yuborilmagan", "warn") : ""}${l.review ? pkChip("Ko'rib chiqishda", "info") : ""}${l.approved ? pkChip("Tasdiqlangan", "ok") : ""}
       ${l.comments.open ? pkChip(`${l.comments.open} izoh${l.comments.blocking ? ` · ${l.comments.blocking} to'xtatuvchi` : ""}`, l.comments.blocking ? "bad" : "warn") : ""}`;
+function dsProgress(l) {
+  const pk = !!(l.package || l.export);
+  const S = [["Material", "file", !!l.material, l.material ? "Material: yuklangan (Word yoki taqdimot)" : "Material: hali yuklanmagan"],
+             ["Video", "video", !!l.video, l.video ? "Video: bor" : "Video: hali yo'q"],
+             ["Paket", "package", pk, pk ? (l.authority === "kurs" && l.export ? "Paket: muharrirdan eksport qilingan" : "Paket: tayyor") : "Paket: hali yig'ilmagan"]];
+  return `<span class="ds-prg" role="list" aria-label="Tayyorlik: ${S.map(x => x[3]).join("; ")}">${S.map(([t, ic, on, tip]) =>
+    `<span class="ds-step ${on ? "on" : ""}" role="listitem" title="${esc(tip)}" aria-label="${esc(tip)}"><i>${ico(on ? "check" : ic, 12)}</i><span>${t}</span></span>`).join("")}</span>`;
+}
+
+async function dsSubject(box, o = {}) {
+  dsWho();
+  let d;
+  try { d = await pkApi(`/api/dars/subjects/${DS.cid}`); }
+  catch (e) {          /* tiklangan (hash) fan endi mavjud emas / ruxsat yo'q — ro'yxatga qaytamiz */
+    if (DS.fromHash && (e?.message === "denied" || e?.status === 404 || e?.status === 403)) { DS.fromHash = false; DS.cid = 0; DS.kurs = 0; DS.dir = ""; dsHashSave(true); return dsSubjectsIn(box, o); }
+    throw e;
+  }
+  DS.fromHash = false;
+  const c = d.course, can = d.can;
+  DS.data = d;
+  if (DS.single == null) { try { DS.single = (await pkApi("/api/paket/courses?limit=1")).total === 1; } catch (e) { DS.single = false; } }   /* bitta fani bor o'qituvchi: «← Fanlar» yo'q */
+  DS.kurs = c.course; DS.dir = c.direction; dsHashSave();
+  const groups = Object.keys(DS_KIND).map(k => [k, d.lessons.filter(l => l.kind === k)]).filter(g => g[1].length);
+  const st = l => `${dsYes(l.material, "Material")}${dsYes(l.video, "Video")}${dsYes(l.package || l.export, "Paket")}
+      ${dsFlags(l)}`;
   const src = l => l.kurs ? `<label class="ds-src" title="Eksport (NEXTID uchun zip) qaysi manbadan olinadi">Eksport:
       <select data-auth="${l.key}" ${can.write ? "" : "disabled"} aria-label="${esc(l.code)} — eksport manbai"><option value="kurs" ${l.authority === "kurs" ? "selected" : ""}>Muharrir</option>
       <option value="paket" ${l.authority === "paket" ? "selected" : ""}>Shablon (paket)</option></select></label>` : `<span class="ds-src muted">Eksport: shablon (paket)</span>`;
-  const row = l => `<li class="ds-l ${l.approved ? "ok" : l.review ? "rv" : ""}" data-key="${l.key}">
+  const A = typeof kxOpen === "function" && dsVer() === "a";   /* A — Konstruktor (bitta oqim), B — avtomatik yig'ish + muharrir */
+  const cardBtn = l => typeof lcOpen === "function" && ["maruza", "amaliy"].includes(l.kind) ? `<button type="button" class="btn sm ghost" data-card="${l.key}" aria-label="${esc(l.code)} — kartochka" title="Dars kartochkasi: unikal kod, taqdimot versiyalari, video holati, matn, jurnal, ZIP">${ico("file", 15)} Kartochka</button>` : "";
+  const rowA = l => `<li class="ds-l ${l.approved ? "ok" : l.review ? "rv" : ""}" data-key="${l.key}">
       <span class="ds-code">${esc(l.code)}</span>
-      <span class="ds-t"><b class="${l.untitled ? "muted" : ""}">${esc(l.title)}</b><span class="ds-sts">${st(l)}</span></span>
+      <span class="ds-t">${dsTitle(l)}<span class="ds-sts">${dsProgress(l)}${dsFlags(l)}</span></span>
+      <span class="ds-a">${cardBtn(l)}${can.write ? `<button type="button" class="btn sm primary" data-kx="${l.key}" aria-label="${esc(l.code)} — Konstruktorda ochish" title="${l.kurs ? "Dars Konstruktorda yaratilgan — davom ettirish" : l.material || l.video ? "Yuklangan fayllar bilan Konstruktorda ochiladi (dars shu yerda yaratiladi)" : "Dars hali yaratilmagan — Konstruktorda ochilganda yaratiladi"}">${ico("layers", 15)} Konstruktorda ochish</button>`
+        : l.kurs ? `<button type="button" class="btn sm" data-ku="${l.kurs.id}" aria-label="${esc(l.code)} — Konstruktorda ko'rish">${ico("layers", 15)} Ko'rish</button>` : ""}</span></li>`;
+  const row = l => A ? rowA(l) : `<li class="ds-l ${l.approved ? "ok" : l.review ? "rv" : ""}" data-key="${l.key}">
+      <span class="ds-code">${esc(l.code)}</span>
+      <span class="ds-t">${dsTitle(l)}<span class="ds-sts">${st(l)}</span></span>
       <span class="ds-a">${src(l)}
-        ${can.write ? `<button type="button" class="btn sm" data-build="${l.key}" ${PK.meta?.player === false ? "disabled" : ""} title="Yuklangan fayllardan kafedra shabloni bo'yicha paket">${ico("package", 15)} Avtomatik yig'ish (shablon)</button>` : ""}
-        ${l.kurs ? `<button type="button" class="btn sm ${can.write ? "primary" : ""}" data-ku="${l.kurs.id}">${ico("layers", 15)} ${can.write ? "Muharrirda tahrirlash" : "Muharrirda ko'rish"}</button>`
-          : can.write ? `<button type="button" class="btn sm primary" data-conv="${l.key}" title="Avtomatik yig'ilgan dars bloklarga o'tkaziladi — keyin erkin tahrirlanadi">${ico("layers", 15)} Muharrirda tahrirlash</button>` : ""}
-        <button type="button" class="btn sm ghost" data-open="${l.key}" title="Fayllarni yuklash, ko'rish, tasdiqlash">Fayllar</button></span></li>`;
+        ${can.write ? `<button type="button" class="btn sm" data-build="${l.key}" aria-label="${esc(l.code)} — avtomatik yig'ish" ${PK.meta?.player === false ? "disabled" : ""} title="Yuklangan fayllardan kafedra shabloni bo'yicha paket">${ico("package", 15)} Avtomatik yig'ish (shablon)</button>` : ""}
+        ${l.kurs ? `<button type="button" class="btn sm ${can.write ? "primary" : ""}" data-ku="${l.kurs.id}" aria-label="${esc(l.code)} — ${can.write ? "muharrirda tahrirlash" : "muharrirda ko'rish"}">${ico("layers", 15)} ${can.write ? "Muharrirda tahrirlash" : "Muharrirda ko'rish"}</button>`
+          : can.write ? `<button type="button" class="btn sm primary" data-conv="${l.key}" aria-label="${esc(l.code)} — muharrirda tahrirlash" title="Avtomatik yig'ilgan dars bloklarga o'tkaziladi — keyin erkin tahrirlanadi">${ico("layers", 15)} Muharrirda tahrirlash</button>` : ""}
+        ${cardBtn(l)}<button type="button" class="btn sm ghost" data-open="${l.key}" aria-label="${esc(l.code)} — fayllar" title="Fayllarni yuklash, ko'rish, tasdiqlash">Fayllar</button></span></li>`;
   box.innerHTML = `<div class="card pk-card ds-head"><div class="ds-h">
-      <div><button type="button" class="btn sm ghost" id="dsBack">← Fanlar</button>
-        <h3>${esc(c.subject)}</h3><p class="muted">${esc(c.direction)} · ${c.course}-kurs · ${esc(c.dept || "—")} · mas'ul: ${esc(c.teacher || "—")} ·
+      <div>${DS.single ? "" : `<button type="button" class="btn sm ghost" id="dsBack">← Fanlar</button>`}
+        <h3 tabindex="-1" data-stage>${esc(c.subject)}</h3>${DS.single ? `<p class="ds-path" aria-label="Fan yo'li">${esc(c.subject)} · ${c.course}-kurs · ${esc(c.direction)} (${esc(c.dir_code || "")})</p>` : ""}<p class="muted"><span class="ds-code-s" title="Fanning unikal kodi — dars kodi oxiriga _L2 kabi qo'shiladi">${esc(c.code || "")}</span> ${esc(c.direction)} · ${c.course}-kurs · ${esc(c.dept || "—")} · mas'ul: ${esc(c.teacher || "—")} ·
           shablon: <b>${esc(d.template.name)}</b> v${d.template.version}</p></div>
       <div class="ds-kpis">${[["Ma'ruza", d.counts.L], ["Amaliy", d.counts.A], ["Muharrirda", d.counts.linked], ["Ko'rib chiqishda", d.counts.review], ["Tasdiqlangan", d.counts.approved]]
         .map(([k, v]) => `<span><b>${v}</b>${esc(k)}</span>`).join("")}${d.counts.blocking ? `<span class="bad"><b>${d.counts.blocking}</b>to'xtatuvchi izoh</span>` : ""}</div></div>
+    ${typeof kxOpen === "function" ? `<div class="ds-ver" role="group" aria-label="Ko'rinish versiyasi"><span>Ko'rinish:</span>
+      <button type="button" class="${A ? "on" : ""}" data-ver="a" title="Bitta oqim: fayllar → Rise kabi muharrir → nashr">A — Konstruktor</button>
+      <button type="button" class="${A ? "" : "on"}" data-ver="b" title="Avvalgidek: avtomatik yig'ish (shablon) va alohida muharrir">B — Yig'ish + muharrir</button></div>` : ""}
     ${can.write ? `<div class="pk-acts ds-tools"><button type="button" class="btn sm" id="dsSkel">${ico("plus", 15)} Fan skeleti (L + A)</button>
+      ${typeof kxbOpen === "function" ? `<button type="button" class="btn sm" id="dsBulkUp" title="Ko'p faylni birdaniga yuklash: fayl nomidagi raqam bo'yicha darsga moslanadi">${ico("upload", 15)} Ko'p faylni yuklash</button>` : ""}
       <button type="button" class="btn sm" id="dsApply">Shablonni qo'llash</button>
       <button type="button" class="btn sm" id="dsBulk">${ico("download", 15)} Hammasini yig'ish va eksport</button>
       <button type="button" class="btn sm" id="dsAq" title="Muharrirdagi har dars oxiriga 3–5 savollik past xavfli test — Test bankdagi tasdiqlangan savollardan, fan bo'yicha takrorsiz">${ico("checkc", 15)} Har dars oxiriga test</button>
       ${can.template ? `<button type="button" class="btn sm ghost" id="dsTpl">Kafedra shablonini tahrirlash</button>` : ""}</div>` : ""}</div>
-    ${groups.length ? groups.map(([k, ls]) => `<div class="card pk-card"><h3>${esc(DS_KIND[k])} <span class="muted">· ${ls.length} ta</span></h3><ol class="ds-grid">${ls.map(row).join("")}</ol></div>`).join("")
+    ${groups.length ? groups.map(([k, ls]) => `<div class="card pk-card"><h3>${esc(DS_KIND[k])} <span class="muted">· ${ls.length} ta</span></h3><ol class="ds-grid ${A ? "a" : ""}">${ls.map(row).join("")}</ol></div>`).join("")
       : `<div class="card pk-card pk-empty">Darslar yo'q — «Fan skeleti» bilan yarating.</div>`}`;
-  box.querySelector("#dsBack").onclick = () => { DS.cid = 0; dsSubjects(box); };
+  const back = box.querySelector("#dsBack"); if (back) back.onclick = () => { DS.cid = 0; DS.kurs = c.course; DS.dir = c.direction; DS.q = ""; dsSubjects(box, {focus: true}); };
+  dsStage(box, o, `${c.subject}: ${d.lessons.length} ta dars`);
+  box.querySelectorAll("[data-ver]").forEach(b => b.onclick = () => { dsVerSet(b.dataset.ver); dsSubject(box); });
+  box.querySelectorAll("[data-kx]").forEach(b => b.onclick = () => kxOpen(box, DS.cid, +b.dataset.kx));
+  box.querySelectorAll("[data-card]").forEach(b => b.onclick = () => lcOpen(DS.cid, +b.dataset.card));
+  if (typeof KX === "object" && KX.pending && KX.pending.cid === DS.cid) { const k = KX.pending.key; KX.pending = null; return kxOpen(box, DS.cid, k); }
+  if (DS.pendingCard || DS.pendingCode) {      /* to'liq dars kodi bilan qidirildi — shu dars kartochkasi ochiladi */
+    const l = d.lessons.find(x => (DS.pendingCard && x.key === DS.pendingCard) || (DS.pendingCode && String(x.code).toUpperCase() === DS.pendingCode));
+    DS.pendingCard = 0; DS.pendingCode = "";
+    if (l && typeof lcOpen === "function" && ["maruza", "amaliy"].includes(l.kind)) lcOpen(DS.cid, l.key);
+    else if (l) toast(`${l.code} — kartochka bu dars turi uchun yo'q`);
+    else toast("Bu fanda bunday dars topilmadi");
+  }
   box.querySelector("#dsSkel")?.addEventListener("click", () => dsSkeleton(box));
   box.querySelector("#dsApply")?.addEventListener("click", () => dsApply(box));
   box.querySelector("#dsBulk")?.addEventListener("click", () => dsBulk(box));
+  box.querySelector("#dsBulkUp")?.addEventListener("click", () => kxbOpen(box));
   box.querySelector("#dsAq")?.addEventListener("click", e => { if (!arm(e.currentTarget, "Qo'shilsinmi?")) return; (async () => {
     const r = await pkApi(`/api/dars/subjects/${DS.cid}/dars-testlari`, {});
     if (!r) return;

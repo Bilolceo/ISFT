@@ -55,6 +55,9 @@ darsda, darslar ro'yxatida va navbatda «Tasdiqlangan versiya eskirgan — qayta
 **Navbat** — `GET /queue` (ko'lam bo'yicha): `kutilmoqda` (oxirgi versiyasi tasdiq kutayotgan darslar) va `eskirgan`. Holat → «Tasdiq kutayotganlar» →
 «Ko'rib chiqish» kutayotgan darsning o'zini ochadi (`courses[].waiting_no`), L1 ni emas.
 
+**Unikal dars kodi:** `lesson_unique_code(cid, key)` → `2_ATT_dasturiyinjiniring_L2` — Taqdimot → Studiya → Masofaviy bo'lim zanjirining kaliti (`docs/studio.md`). O'qituvchi «Taqdimot»dan yuborgan taqdimot
+(`pres_sends`, versiyalar) darsning paketiga `upload_slides` bilan qo'yiladi (oxirgi versiya `taqdimot` aktivi; PDF — montaj uchun).
+
 **«ISFT shablonida taqdimot yaratish»** (Taqdimot kartasi, o'qituvchi) — `POST …/deck/create`: yuklangan ma'ruza matni «Taqdimot» moduliga beriladi
 (`taqdimot.create`, qayta yuklash shart emas), tuzilgan deck darsga biriktiriladi.
 
@@ -74,10 +77,11 @@ Bo'lim talabi: «video havolasini bersak — har mavzuga o'zi joylasin; ma'ruza 
 iloji bo'lsa PPT kabi ochilsin, bo'lmasa yuklab olinadigan fayl». Bu modul (3-bosqich) o'sha ishni o'zimizda bajaradi.
 
 Institut LMS'i — **NEXTID.LMS** (my.isft.uz, NextBrain; Moodle emas). Har fanda «Articulate» yorlig'i: darslar «L1-1-dars: …» (ma'ruza) va
-«A1- AMALIY MASHG'ULOT: …» (amaliy) nomi bilan, har biri Articulate Rise 360 xAPI eksporti (zip ildizi: `index.html`, `tincan.xml`, …), iframe'da
-**launch parametrlarisiz** ochiladi. Shuning uchun standart tur — **xAPI** (NEXTID); boshqa LMS uchun **SCORM 1.2**, **SCORM 2004 4-nashr** va
+«A1- AMALIY MASHG'ULOT: …» (amaliy) nomi bilan, har biri Articulate Rise 360 xAPI eksporti (zip ildizi: `index.html`, `tincan.xml`, `scormdriver/`, …),
+iframe'da `scormdriver/indexAPI.html?endpoint=…&auth=Bearer …&actor={"name":<id>}` bilan ochiladi (NEXTID'ning o'z LRS'i; «Kuzatuv (xAPI) —
+NEXTID / Rise moslik» bo'limiga qarang). Shuning uchun standart tur — **xAPI** (NEXTID); boshqa LMS uchun **SCORM 1.2**, **SCORM 2004 4-nashr** va
 oddiy HTML (LMS'siz) ham qoladi. Kafedra shabloni (Rise «qadamlar» rejimi): VIDEODARS → MA'RUZA MATNI («1-MAVZU: …» + Reja, matn, rasmlar
-«1.1-rasm. …», jadvallar, adabiyotlar) → DARS TAQDIMOTI (slayd rasmlari galereyasi) → «Darsni to'liq o'zlashtirdingizmi?».
+«1.1-rasm. …», jadvallar, adabiyotlar) → TAQDIMOT (slayd rasmlari galereyasi) → «Darsni to'liq o'zlashtirdingizmi?».
 
 **Rise 360 (kontrakt v3).** Bo'lim darsni Rise 360'da qo'lda qanday yig'ishini (video yozuvi) ko'rib, quyidagilar qo'shildi: **muqova** (fon rasmi +
 ISFT logotipi + «L1-1-dars: …» + muallif), **video fayl** (.mp4 / .webm) subtitr va poster bilan, slayd **izohi va audiosi**, bo'lim
@@ -144,13 +148,31 @@ video, matn, reja («1-MAVZU: …» sarlavhasi bilan), rasmlar va jadvallar soni
 
 ### Word (.docx) → matn, rasmlar, jadvallar
 
-`docx_lecture()` (lxml, `word/document.xml`): paragraflar (sarlavha uslubi / qalin qisqa qator → sarlavha — `<w:b w:val="0|false|off"/>` qalin emas, belgi uslubi (`rStyle`, `basedOn` zanjiri) qalinligi hisobga olinadi; ro'yxat), formulalar (OMML → matn),
+`docx_lecture()` (lxml, `word/document.xml`): paragraflar (sarlavha uslubi / qalin qisqa qator → sarlavha — `<w:b w:val="0|false|off"/>` qalin emas, belgi uslubi (`rStyle`, `basedOn` zanjiri) qalinligi hisobga olinadi; ro'yxat), **formulalar** (OMML → MathML, quyida),
 **jadvallar** (`<table>`, birinchi qator — `thead`; bitta katakli jadval — oddiy paragraf), **rasmlar** hujjat tartibida (≤ 80 ta; < 48 px ikonkalar
 tashlanadi; `_norm_image` — dekodlashdan oldin o'lcham tekshiruvi, ≤ 1600 px, metama'lumotsiz). Rasm izohi — rasmdan keyingi, bo'lmasa oldingi
 paragraf, agar u `^\d+(\.\d+)*\s*-?\s*rasm` / «Rasm 2.» / «Рисунок 2.» ga mos kelsa (izoh paragrafi matndan olinadi). Saqlangan matnda belgilar:
 `[RASM:<fayl>]`, `[JADVAL:N]` (meta: `images`, `tables`) — joylashtirilgan matnda ham ishlatish mumkin (qo'lda yuklangan rasm uchun UI
 belgini ko'rsatadi; belgisiz qo'lda yuklangan rasm matn oxirida chiqadi). Zip/rasm bombasi tekshiruvlari (`_zip_guard`, `_ooxml_image_guard`) — tahlildan oldin.
 Sarlavha darajalari: mavzu nomi olib tashlangach eng yuqori daraja `h2` bo'ladi (pleyer «qadamlar»ni `h2` bo'yicha bo'ladi). PDF ma'ruza matni — faqat matn.
+
+### Formulalar (Word OMML → MathML Core)
+
+Rise formulani ko'rsata olmaydi; bizda Word tenglamalari (`m:oMath` — qator ichida, `m:oMathPara` — alohida) **MathML Core**'ga o'giriladi va
+brauzerning o'zi chizadi (Chrome 109+, Firefox, Safari; JS kutubxonasi yo'q, pleyer hajmi o'zgarmaydi). Konvertor — `app/omml.py`
+(`omml_to_mathml`, `omml_to_text`, `convert`): `m:r/m:t` (harf → `mi` (har harf alohida; `sin`, `log`, `lim` … — bitta tik `mi`), son → `mn`,
+qolgani → `mo`; `m:sty`, `m:scr`, `m:nor`), `m:f` (kasr; `lin`/`skw` — «a/b», `noBar`), `m:sSub`/`m:sSup`/`m:sSubSup`, `m:sPre` (`mmultiscripts`),
+`m:rad` (daraja bilan — `mroot`), `m:nary` (∑ ∫ ∏ …, `limLoc`, `subHide`/`supHide`), `m:d` (`begChr`/`endChr`/`sepChr`), `m:m` (matritsa → `mtable`),
+`m:eqArr`, `m:func`, `m:limLow`/`m:limUpp`, `m:acc`, `m:bar`, `m:groupChr`, `m:box`/`m:borderBox`, `m:phant`; noma'lum element — matni `<mtext>` ichida.
+Paragrafdagi yagona formula — blok (Word ham shunday ko'rsatadi), jadval katagida — qator ichida. Har `<math>`da `alttext` — chiziqli matn (ekran o'quvchi).
+
+Saqlangan matnda formula **belgi** bo'lib turadi: `⟦m:<base64url(zlib(MathML))>|<chiziqli matn>⟧` (alohida jadvalsiz — matn bilan birga
+saqlanadi, chaqiruvchilar o'zgarmaydi). `structure_text` belgini `<math>`ga aylantiradi (faqat formuladan iborat qator — `<math display="block">`),
+natija `sanitize`'dan o'tadi (soxta belgi ham faqat oq ro'yxatdagi MathML beradi; siqilgan ma'lumot ≤ 200 KB). Oddiy matn iste'molchilari
+(`_plain` — AI so'rovlari, iqtibos tekshiruvi, Test bank; reja, adabiyotlar, savollar, `doc_title`) **chiziqli** shaklni oladi:
+`x=(−b±√(b^2−4ac))/(2a)`, `∑_{i=1}^n x_i`, `A=([a_{11}, a_{12}]; [a_{21}, a_{22}])`. Pleyerlarda: matematik shrift (`Latin Modern Math`,
+`STIX Two Math`, `Cambria Math`, `math`), blok formula markazda, tor ekranda o'z qutisida (`.mth`) gorizontal aylanadi.
+Namuna: `tests/fixtures/omml/make_fixture.py` → `formulalar.docx`; test — `tests/test_omml.py` (+ `tools/omml_player_check.js`, brauzerda).
 
 ### Matn → HTML
 
@@ -159,7 +181,15 @@ ketma-ket «1. 2.»), « | » bilan ajratilgan qatorlar → jadval, uzilgan qato
 Mavzu nomi qatori («5-MAVZU: …») olib tashlanadi. Natija oq ro'yxat bo'yicha **tozalanadi** (`sanitize`): `h2 h3 h4 p ul ol li strong em b i u
 blockquote table thead tbody tr th td br sup sub code pre a` (`a` — faqat http(s) `href`, `rel="noopener noreferrer"`); script, style, iframe, svg,
 `on*` atributlari, `javascript:` / `data:` havolalar olib tashlanadi. Rasmlar: `figure`, `figcaption`, `img` — faqat `src` (nisbiy `assets/…`,
-`[A-Za-z0-9_\-./]`, `..`/`//`/`/` bilan boshlanish yo'q; http(s), `data:`, `javascript:` — rad) va `alt`; `html_unsafe()` aynan shuni qabul qiladi. script/style/iframe/object/svg/math/textarea/title kabi teglar
+`[A-Za-z0-9_\-./]`, `..`/`//`/`/` bilan boshlanish yo'q; http(s), `data:`, `javascript:` — rad) va `alt`; `html_unsafe()` aynan shuni qabul qiladi.
+**MathML** (`MATH_TAGS`): `math semantics mrow mi mn mo ms mtext mspace mfrac msqrt mroot msub msup msubsup munder mover munderover mmultiscripts
+mprescripts none mtable mtr mtd mstyle mpadded mphantom` — faqat `<math>` ichida (tashqarida yoki ichma-ich `<math>` — teg tashlanadi, matni qoladi);
+`<math>` ichida HTML teglari (rasm, havola, `p` …) — tashlanadi. Atributlar (`_MATH_ATTRS`): `display` (faqat block/inline), `alttext` (matn),
+`mathvariant displaystyle scriptlevel linethickness stretchy fence separator form lspace rspace accent accentunder columnalign rowalign columnspacing
+rowspacing columnlines rowlines frame largeop movablelimits symmetric minsize maxsize width height depth voffset columnspan rowspan` — qiymati
+`[A-Za-z0-9 .,%#+-]` (url(), «:», «;» yo'q); `href`, `style`, `class`, `id`, `on*`, `xlink:*` — tashlanadi. `maction`, `mglyph`, `malignmark`,
+`menclose` — teg tashlanadi (mazmuni qoladi); `annotation`, `annotation-xml` — mazmuni bilan. Pleyerlar sanitizeri (paket va kurs) xuddi shu
+ro'yxatni MathML nomlar fazosida tekshiradi (`createElementNS`). script/style/iframe/object/svg/textarea/title kabi teglar
 mazmuni bilan tashlanadi; bo'sh teglar (embed, frame, param …) — «tashlash» rejimiga kirmasdan; button/form/select — faqat teg (matni qoladi);
 yopilmagan textarea/title — hujjat oxirida matni (escape qilingan) qaytariladi.
 
@@ -187,6 +217,27 @@ yopilmagan textarea/title — hujjat oxirida matni (escape qilingan) qaytariladi
   matndagi yolg'iz «<» / «>» («a < b va c > d») saqlanadi va WebVTT qoidasi bo'yicha `&lt;` / `&gt;` qilib yoziladi.
   Har til uchun bitta fayl (`uz`, `ru`, `en` …); paketda `assets/video/video.<til>.vtt`. Subtitr faqat video **fayl** bilan ishlatiladi.
 - **Poster** — `POST …/video/poster` (.png/.jpg → JPEG ≤ 1920 px) → `assets/video/video.jpg`.
+- **Avtomatik subtitr (AI, Whisper)** — quyida.
+
+### Avtomatik subtitr (Whisper) — `app/paket_captions.py`
+Yangi texnologiya yo'q: **kurs muharriridagi subtitr navbati va studiya montaj ishchisi qayta ishlatiladi** (`tools/montaj`, faster-whisper, `ISFT_CORE_WORKER_TOKEN`;
+docs/kurs.md «Subtitrlar»). Ishchi navbat bo'sh bo'lganda `/api/montaj/kurs-captions/claim` ni so'raydi — bu yo'llar `paket_captions.install()` orqali o'raladi:
+avval kurs vazifalari, keyin paket vazifalari (`pk_caption_jobs`, ishchiga raqam `10^9 + id` bilan beriladi — kurs raqamlari bilan to'qnashmaydi);
+`media` / `progress` / `fail` / `result` ham o'sha yo'llarda (ishchi kodi va `kurs.py` o'zgarmagan).
+
+- `POST /api/paket/courses/{cid}/topics/{key}/captions/auto` `{"lang": "uz"}` — ruxsat boshqa yuklash yo'llari bilan bir xil (bo'lim, o'z kursining o'qituvchisi; kafedra / rahbariyat — 403).
+  Javob doim `{ok, state, message, …}`: `queued` (+ `job_id`, `existing` — shu video + til uchun faol vazifa bo'lsa o'sha qaytadi), `exists` (bu tilda subtitr bor),
+  `unavailable` (`ok:false`, `reason`: `youtube` — «YouTube videosiga avtomatik subtitr qo'yib bo'lmaydi — .srt/.vtt yuklang»; `no_video`; `no_worker` — «ishchi sozlanmagan»).
+- `GET …/captions/auto?lang=uz` — joriy holat (`none | queued | running | done | failed | exists | unavailable`, `pct`, `stage`, `worker`, `can_request`); hech narsa yaratmaydi.
+- `POST …/captions/auto/cancel` `{lang}` — navbatdagi / bajarilayotgan / xatoli vazifani bekor qiladi.
+- `GET …/topics/{key}` → `ready.video.captions_job` = `{state, message, job_id, lang, pct, stage, cues, error, auto}` yoki `null`; `ready.video.captions[].auto = "whisper"`.
+- Natija (WebVTT) `paket.to_vtt` bilan tekshiriladi va darsning `subs` fayli sifatida saqlanadi (`meta.from/auto = whisper`, yorliq «O'zbekcha (avto)») → keyingi yig'ishda
+  `assets/video/video.<til>.vtt` va `video.captions[]`, pleyer `<track>` chizadi. **Qo'lda yuklangan subtitr hech qachon avtomatik bilan almashtirilmaydi**; video almashtirilgan bo'lsa
+  eski videoning natijasi qabul qilinmaydi (410). Natija bir marta qabul qilinadi (qayta yuborish — 410).
+- Mavzu sozlamasi **`auto_captions`** (bool, standart `false`; «Sozlamalar» formasida): video fayl yuklangach (`upload_video`) uzbekcha subtitr o'zi navbatga qo'yiladi
+  (yuklash javobida `auto_captions: {state, job_id…}`); avvalgi videoning Whisper subtitri olib tashlanadi.
+- **Ishchi sozlanmagan bo'lsa** (`ISFT_CORE_WORKER_TOKEN` yo'q) — hech narsa soxtalashtirilmaydi: `unavailable` + aniq xabar, vazifa yaratilmaydi; qo'lda yo'l — `.srt/.vtt` yuklash.
+- UI: «Materiallar» (`static/paket.js`) video kartasida «Avtomatik subtitr (AI)» tugmasi va holat satri (5 s da yangilanadi, tayyor bo'lsa dars qayta yuklanadi); faqat video FAYL uchun.
 
 ### Muqova
 
@@ -233,6 +284,72 @@ professor-o'qituvchingiz»), `avatar` — kurs bo'yicha yuklangan o'qituvchi ras
 Ro'yxat matndan **faqat topshiriq blokida aynan shu (matndan olingan) ro'yxat ko'rsatilganda** olinadi. Qo'lda ro'yxat saqlangan (bo'sh ham), topshiriq bloki
 o'chirilgan yoki savol topilmagan bo'lsa — «Savollar» bo'limi ma'ruza matnida qoladi. Javobni talaba LMS'ning o'ziga yuklaydi — paket fayl qabul qilmaydi.
 
+### Tayyor testni Word'dan import
+
+O'qituvchilarning testlari ko'pincha Word'da tayyor (Rise'ga qo'lda ko'chiriladi). Endi o'sha fayl darsga **yuklanadi** — «Fayl tanlash»
+(`POST …/topics/{no}/upload`) uni o'zi taniydi yoki `?as=test` («Test (Word, ✅ belgili)») bilan majburan import qilinadi. Modul — `app/test_import.py`.
+
+```
+1. “O‘zbek tilining sohada qo‘llanilishi” fanining maqsadi nima?
+A) Tilning faqat shevalarini o‘rganish
+B) O‘zbek tilining turli sohalarda qo‘llanilishini o‘rgatish ✅
+C) Faqat badiiy matnlarni yozishni o‘rgatish
+
+Glossariy
+Uslub - tilning ifoda vositalari tizimi
+Termin — tushunchaning aniq nomi
+
+Savollar
+1. Rasmiy uslubning xususiyatlari nimalardan iborat?
+```
+
+- **Savol**: «1.», «1)», «1-savol.», «Savol 1.», Word avtomatik raqami (List Number / numbering.xml) yoki raqamsiz («?» bilan tugaydi yoki keyingi qatori —
+  A varianti). Ko'p qatorli savol matni birlashtiriladi. **Variant**: «A)», «A.», «a)», «(A)», kirillcha «А) Б) В)», Word avtomatik harfi, bir qatorda bir nechta
+  («A) 3  B) 4 ✅  C) 5»).
+- **To'g'ri javob**: ✅ ✔ ✓ ☑ ✔️ (oxirida yoki boshida), «(to'g'ri)» / «(to‘g‘ri javob)» / «(правильно)» / «(+)», oxiridagi « *» / « +» (bo'shliq bilan —
+  «C++» belgi emas), boshidagi «*B)», «Javob: B» qatori; belgi bo'lmasa — Word'da **qalin yoki rangli fon (highlight)** bilan ajratilgan variant (hamma
+  variant qalin bo'lsa — belgi emas). Ikki va undan ko'p to'g'ri javob — ko'p javobli: Test bankda `qtype='multi'`, pleyerda belgilash katakchalari va «hammasi va faqat shular» baholash, Kurs muharririga o'tkazilganda «Bir nechta javob». «Izoh: …» qatori — savol izohi.
+  Belgisiz savol tashlanmaydi, lekin Test bankka ham darhol tushmaydi — «To'g'ri javobni tanlang» qadami (pastda).
+- **Glossariy** («Glossariy», «Atamalar (lug‘ati)», «Tayanch so'zlar/tushunchalar», «Asosiy tushunchalar», kirill/rus): «atama - ta'rif», «atama — …»,
+  «atama: …» yoki 2 ustunli jadval → **moslashtirish mashqi** (8 juftdan, `pk_exercises.src='import'`, faol — testga qo'shiladi).
+- **«Savollar» / «Nazorat savollari» / «Topshiriqlar»** bo'limi (va test ichidagi variantsiz «…?» savol) → darsning **topshiriq savollari**
+  (`extra.questions`, qo'lda kiritilgan kabi).
+
+**Aniqlash** (`looks_like_test`): ≥ 2 ta to'g'ri javobi belgilangan savol **va** faylning ≥ 50% qatorlari test/glossariy/savollar bo'lsa — test; aks holda
+Word avvalgidek **ma'ruza matni** (oxirida kichik test bo'limi bo'lgan ma'ruza testga aylanmaydi). `.txt` ham shunday; PDF — faqat `?as=test` bilan.
+
+**Saqlash.** Savollar Test bankka — darsning manba mavzusi (`source_topic`: L dars — o'z raqami, A/S/Lab — bog'langan mavzu; bog'lanmagan bo'lsa savollar
+saqlanmaydi, ogohlantirish), `src='import'`, `engine='import'`, QC belgilari bilan. **Bo'lim (masofaviy, masofaviy_xodim) yuklasa — tasdiqlangan** (darhol dars
+testiga kiradi; bloklovchi xatosi yoki javobi yo'q savol — qoralama), **o'qituvchi yuklasa — qoralama** (Test bankda tekshiruvga yuboradi, bo'lim tasdiqlaydi).
+Qayta yuklash — o'sha mavzuning oldingi importi (savollar) va darsning import mashqlari almashtiriladi (dublikat yo'q); topshiriq savollari yangilanadi.
+
+**AI izoh (ixtiyoriy, Rise'dagi «Edit with AI» kabi).** Claude ulangan bo'lsa (`ANTHROPIC_API_KEY`) — faylga **bitta** so'rov: javobi belgilangan va izohi
+yo'q savollar uchun umumiy izoh va har variant bo'yicha qisqa izoh (`explanation` ga: «… B: …; C: …»). Faqat fan/mavzu nomi, savol va variantlar
+yuboriladi — talabalar ma'lumoti yo'q; `tb_gen` da `engine='claude-izoh'`. Ulanmagan yoki xato — jim o'tkaziladi (ogohlantirish), soxta matn yo'q.
+
+Javob (`as: "test"`): `{questions, without_answer, multi, approved, draft, replaced, saved, no_answer_ids, upload_id, needs_answer[{i, n, stem, options}], glossary, exercises, open_questions,
+explanations, ai, topic_no, warnings[], items[{stem, n_options, correct, qtype: mcq|multi, marked_by: belgi|kalit|format|""}]}`. `saved` — Test bankka yozilgan (javobi bor) savollar.
+
+**«To'g'ri javobni tanlang» (javobi ✅ topilmagan savollar).** Dizayn: javobsiz savol yuklash paytida **Test bankka yozilmaydi** — serverda `pk_import_pending`
+jadvalida (`upload_id` — 16 hex, kurs + mavzu, savollar JSON: `i` (fayldagi 0-boshlanuvchi indeks), matn, variantlar, holat `kutilmoqda | saqlanmoqda | saqlandi | otkazildi`)
+ushlab turiladi; yuklash javobi `needs_answer` + `upload_id` qaytaradi. Shu mavzuga yangi test fayli yuklansa — oldingi kutayotgan yuklash `almashtirildi` bo'ladi (409).
+Sahifa yopilsa ham savollar kutadi: `GET …/test/pending` va dars holatida `ready.quiz.pending`.
+- `GET /api/paket/courses/{cid}/topics/{key}/test/pending` → `{upload_id, file, needs_answer[]}` (kutayotgani yo'q bo'lsa — bo'sh ro'yxat).
+- `POST /api/paket/courses/{cid}/topics/{key}/test/answers` `{upload_id, answers: [{i, correct: [variant indekslari]} | {i, skip: true}]}`. Ruxsat — yuklash bilan bir xil
+  (`AUTHORS` + kurs ko'lami; kafedra va begona kurs o'qituvchisi — 403). Butun so'rov avval tekshiriladi (hammasi yoki hech narsa, 400): `i` kutayotgan savollardan,
+  takrorlanmagan; `correct` — bo'sh emas, butun sonlar, variantlar oralig'ida, hamma variant emas; 404 — noma'lum `upload_id`; 409 — eskirgan. Belgilangan savol Test bankka
+  yuklashdagidek yoziladi (1 ta to'g'ri — `mcq`, 2+ — `multi`; bo'lim — tasdiqlangan, o'qituvchi — qoralama; Claude ulangan bo'lsa — izoh ham), `o'tkazib yuborish` — javobsiz
+  qoralama (Test bankda keyin tanlanadi). **Idempotent**: allaqachon qayta ishlangan `i` qayta yozilmaydi (`already` ga sanaladi; birinchi javob qoladi), parallel
+  takroriy so'rov ham dublikat yaratmaydi (band qilish). Javob: `{saved, answered, skipped, already, approved, draft, multi, no_answer_ids, remaining, needs_answer[]}`; audit —
+  «paket: test javoblari belgilandi».
+- UI (`pkAnswerModal`, static/paket.js; Konstruktor test kartochkasi va eski «Dars tayyorlash» ekrani): yuklashdan keyin «Javobi belgilanmagan savollar (N ta)» oynasi —
+  «4 ta savol qo'shildi, 1 tasi javobsiz — hozir tanlang», har savol radio yoki («Bir nechta javob») belgilash katakchalari bilan, «O'tkazib yuborish», «Hammasini saqlash»
+  (javobsiz va o'tkazilmagan savol bo'lsa — savol ostida xato, oyna ochiq qoladi). Esc, Tab tuzog'i, `role=dialog aria-modal`, `aria-live` holat qatori, 390 px da
+  44 px tegish maydonlari va yopishqoq tugmalar paneli. Oyna yopilsa — kartochkada «N ta savol javobsiz» va «To'g'ri javobni tanlang (N)» tugmasi. «Ko'p faylni yuklash» da
+  — qatorda «N ta savol javobsiz» eslatmasi; oyna darsni ochgach.
+Cheklov: javobsiz savolga AI izohi faqat belgilangach (javob bilan birga) yoziladi; belgilanmagan savollar `pk_import_pending`da cheksiz saqlanadi (tozalash — qayta yuklash). Namuna fayl —
+`tests/fixtures/test_import/make_fixtures.py` (test.docx, test.txt, test_javobsiz.docx); testlar — `tests/test_import.py` (`run_all.py --only test_import`).
+
 ### Slayd izohi va audiosi
 
 «Taqdimot → Slayd izohlari va audio»: har slaydga izoh (≤ 300 belgi, `pk_topics.extra.slides`) va audio (`.mp3 / .m4a / .ogg / .wav` — tur baytlardan,
@@ -245,7 +362,7 @@ slayd **tartib raqami** bo'yicha: taqdimot almashtirilsa izoh/audio o'sha raqamd
 |---|---|---|
 | Dars muqovasi: rasm, logotip, «L1-1-dars: …», muallif | `cover` — rasm (dars/kurs/bo'lim standarti), logotip, dars kodi va nomi, muallif avtomatik | bor, avtomatik |
 | Video blok: mp4 yuklash | video fayl (.mp4 / .webm ≤ 200 MB) yoki YouTube havola | bor |
-| Video subtitrlari (Rise'da qo'lda yoki AI) | tayyor `.vtt` / `.srt` fayl yuklanadi (SRT → WebVTT) | bor — **AI subtitr yo'q** |
+| Video subtitrlari (Rise'da qo'lda yoki AI) | tayyor `.vtt` / `.srt` fayl yuklanadi (SRT → WebVTT) | bor — tayyor fayl yoki **avtomatik subtitr (Whisper ishchisi bo'lsa)** |
 | Matn bloklari (Word'dan nusxalab) | Word (.docx) bir marta yuklanadi → reja, sarlavhalar, rasmlar izohi bilan, jadvallar, adabiyotlar avtomatik | bor, avtomatik |
 | Rasm karuseli: izoh va audio | taqdimot galereyasi (PDF/PPTX/rasmlar) + slayd izohi + slayd audiosi | bor — audio tayyor fayl; **AI ovoz yo'q** |
 | Knowledge check: bitta/bir nechta tanlov, to'g'ri/noto'g'ri, bo'sh joy | Test bankdagi tasdiqlangan savollar | bor, avtomatik |
@@ -253,13 +370,13 @@ slayd **tartib raqami** bo'yicha: taqdimot almashtirilsa izoh/audio o'sha raqamd
 | Sorting (kartochkalarni toifalarga) | saralash mashqi (2–4 toifa) | bor |
 | Flashcards | kartochkalar (1–40) | bor |
 | Topshiriq: o'qituvchi rasmi + iqtibos + «Savollar» ro'yxati | `assignment` — shablon matni, rasm, savollar Word'dagi «Savollar» bo'limidan avtomatik | bor, avtomatik |
-| «Continue» tugmalari, qadamlar | `layout: steps` | bor |
+| «Continue» tugmalari, qadamlar | `layout: rise` (standart — NEXTID'dagi Rise darslari ko'rinishi), `steps`, `scroll` | bor |
 | Bloklarni sichqoncha bilan erkin joylashtirish, istalgan tartib | tartib — kafedra shabloni (qat'iy); bloklar yoqiladi/o'chiriladi, bo'lim nomlari o'zgaradi | **yo'q** (erkin drag-drop muharrir qurilmagan) |
-| AI: subtitr yaratish, matndan ovoz (text-to-speech) | — | **yo'q** — nutq xizmati (STT/TTS) kerak, ulanmagan |
+| AI: matndan ovoz (text-to-speech) | — | **yo'q** (subtitr — Whisper ishchisi orqali bor) |
 | Boshqa Rise bloklari: accordion, tabs, timeline, labeled graphic, scenario, process, chart, embed | — | **yo'q** |
 | Rasm/video tahriri (kesish, filtr), stok rasmlar kutubxonasi | — | **yo'q** (rasm faqat o'lchamga keltiriladi) |
 | Hamkorlikda tahrir, sharh (Review 360) | bo'lim tasdiqlashi / qaytarishi (izoh bilan) | qisman |
-| Natijani LMS'ga yozish | SCORM 1.2 / 2004 / xAPI; NEXTID'da — faqat `postMessage`; ISFT Core LRS — shaxsiy havola orqali (`docs/lrs.md`) | Rise bilan bir xil cheklov (NEXTID launch parametrlarisiz) — o'z LRS'imiz va NextBrain'ga so'rov (`docs/nextid_xapi_sorov.md`) |
+| Natijani LMS'ga yozish | SCORM 1.2 / 2004 / xAPI; NEXTID — Rise bilan simda bir xil so'rovlar (`scormdriver/indexAPI.html`, Bearer, `progressed`/`passed`); ISFT Core LRS — shaxsiy havola orqali (`docs/lrs.md`) | bor (`tools/nextid_parity_check.js` — Rise yozuvi bilan solishtiriladi) |
 
 Haqiqiy `.mp4` ijrosi lokal sinovda tekshirilmagan (ffmpeg yo'q — testlarda faqat sarlavhasi to'g'ri namuna fayl): `<video>`, `<track>`, Range javoblari
 tekshiriladi, kodek mosligi (H.264/AAC tavsiya etiladi) — foydalanuvchi zimmasida.
@@ -284,14 +401,33 @@ bir xil) — tur xAPI, bir marta (`nextid_v1`). Qayta chaqirish hech narsani o'z
 Fayllar: `<DATA_DIR>/paket/assets/<kurs>/<mavzu>/…` (kurs darajasi — `<kurs>/0/`, bo'lim standarti — `0/0/`), vaqtinchalik yuklashlar — `<DATA_DIR>/paket/tmp/` (`up_*.part`; yig'ishda — paket katalogida `build_*.tmp`; uzilib qolgan, 6 soatdan eski vaqtinchalik fayllarni `init()` dagi `sweep_tmp()` o'chiradi) va `<DATA_DIR>/paket/packages/<kurs>/<mavzu>/v<N>_<tur>.zip` (doimiy disk — `ISFT_CORE_DATA_DIR`).
 Mavzu boshiga **har bir paket turi (SCORM 1.2 / SCORM 2004 / xAPI / oddiy) bo'yicha oxirgi 3 versiya** va tasdiqlangani saqlanadi; eskilari fayli bilan o'chiriladi. «O'zgarish yo'q» tekshiruvi ham tur bo'yicha: boshqa turni yig'ish keyingi qayta yig'ishni yangi versiyaga aylantirmaydi. Video faylli darsda har versiya videoning nusxasini saqlaydi (disk: tur boshiga 3 versiya × video hajmi).
 
+## Tashqi vositalar: LibreOffice va OCR (2026-11-15)
+
+`app/office_tools.py` — ixtiyoriy; serverda bo'lsa avtomatik ishlatiladi (`/api/paket/meta` → `tools: {office, ocr, ocr_lang}`, UI eslatmalari shunga qarab):
+
+- **LibreOffice** (`soffice`): eski `.ppt` → `.pptx`, eski `.doc` → `.docx` (yagona «Fayl tanlash» ham, «Almashtirish» ham; OLE ichidagi oqim nomi bo'yicha —
+  `PowerPoint Document` / `WordDocument`, kengaytmaga qaralmaydi). Har `.pptx` yuklanganda undan PDF ham chiziladi (keyingi asset, «taqdimot» `pdf`):
+  paketda slaydlar asl ko'rinishida (rasm), sarlavha/izohlar `.pptx` dan, slayd matni PDF'dan (`slides[].text` — ekran o'quvchi/qidiruv).
+  Yuklab olish kartochkasida asl nomlar (`file_name`, `pdf_name`) va hajm (`file_size`, `pdf_size`). Chizish xato bo'lsa — `.pptx` o'zi qoladi (`render_error`).
+- **Tesseract OCR** (`uzb.traineddata` — tessdata_best; bo'lmasa `eng`): matn qatlami yo'q (skaner) PDF ma'ruza → har sahifa rasm + OCR matni
+  (`pk_assets.meta.ocr`, `pages`). Paketda «MA'RUZA MATNI» — sahifalar galereyasi (NEXTID kabi), OCR matni har sahifada yashirin (`slides[].text`); reja va
+  ko'rinadigan matn bloki chiqmaydi (formula/jadvallar OCR'da buziladi — asl sahifa ko'rsatiladi). Asl PDF yuklab olish uchun qoladi.
+- Vositalar yo'q bo'lsa: `.ppt`/`.doc`/skaner PDF — aniq xabar bilan 415 («serverda LibreOffice / OCR o'rnatilmagan — .pptx/.docx qilib saqlang»).
+- Muhit: `ISFT_CORE_SOFFICE`, `ISFT_CORE_TESSERACT`, `ISFT_CORE_TESSDATA`, `ISFT_CORE_OCR_LANG`; `ISFT_CORE_OFFICE=0` / `ISFT_CORE_OCR=0` — o'chirish
+  (`tests/run_all.py` asosiy serverni shunday ishga tushiradi; vositali sinov — `tests/test_paket_office.py` o'z serverida).
+- Server o'rnatish (Debian/Ubuntu): `apt-get install libreoffice-impress libreoffice-writer tesseract-ocr tesseract-ocr-uzb`; macOS: `brew install --cask libreoffice`,
+  `brew install tesseract` + `uzb.traineddata`. Railway konfiguratsiyasiga hali qo'shilmagan (obraz ~0,5 GB kattalashadi).
+
 ## Sozlamalar
 
 Standart (bo'lim): tur (`xapi` — standart, NEXTID / `scorm12` / `scorm2004` / `none`), yakunlash (`view_all` / `quiz_pass` / `view_and_quiz`),
 o'tish foizi (mastery), savollar soni (0 — hammasi), aralashtirish, urinishlar (0 — cheksiz), javobdan keyin izoh, bloklar (bo'lim sarlavhalari,
 muqova, video, reja, matn, asosiy xulosalar, adabiyotlar, taqdimot, fayllar, kartochkalar, test, topshiriq, o'z-o'zini baholash — yoqish/o'chirish) va **kafedra shabloni**:
-`layout` (`steps` — standart, Rise kabi qadamlar / `scroll`), `sections` (`video`: «VIDEODARS», `text`: «MA'RUZA MATNI», `slides`: «DARS TAQDIMOTI»,
+`layout` (`rise` — standart, «NEXTID (Rise) ko'rinishi» / `steps` — qadamlar / `scroll`; eski standart `steps` bir marta `rise` ga o'tkaziladi — `pk_meta.rise_v1`), `sections` (`video`: «VIDEODARS», `text`: «MA'RUZA MATNI», `slides`: «TAQDIMOT»,
 `practice`: «MASHQ VA TOPSHIRIQLAR»), `assignment` (`title`, `text`, `author` — topshiriq shabloni), `video_source` (`file` — standart / `youtube`: ikkalasi bo'lsa qaysi biri),
-`reflect` (`title`, `question`: «Darsni to'liq o'zlashtirdingizmi?», `options` 2–4 ta `{text, feedback}`; 2 tadan kam — e'tiborsiz). Dars uchun
+`reflect` (`title`, `question`: «Darsni to'liq o'zlashtirdingizmi?», `options` 2–4 ta `{text, feedback}`; 2 tadan kam — e'tiborsiz),
+`auto_captions` (bool, standart `false` — video yuklangach avtomatik subtitr navbatga), `video_min` (0–100, standart 0: YouTube video kamida shuncha % ko'rilmaguncha dars yakunlanmaydi — `tracking.video_min` 0..1; pleyer YouTube IFrame API
+postMessage protokoli bilan o'lchaydi, 20 bo'lak, sakrab o'tilgani hisoblanmaydi; YouTube 15 s javob bermasa talab olib tashlanadi). Dars uchun
 alohida o'zgartirish mumkin (o'qituvchi — o'z kursida; UI'da layout va bloklar). Testsiz paketda yakunlash avtomatik `view_all`.
 Adabiyotlar bloki o'chirilsa ham adabiyotlar ro'yxati matnga qaytmaydi.
 
@@ -306,12 +442,27 @@ yozish mumkin); kunlik cheklov — `ISFT_CORE_PK_DAILY` (standart 30 so'rov / fo
 
 ## Paket kontrakti (pleyer bilan umumiy)
 
+**Kontrakt v4 qo'shimchalari (2026-11-15):** `slides[].text` (sahifa/slayd matni — OCR yoki PDF; ko'rinmaydi, ekran o'quvchi va qidiruv uchun),
+`slides.file_name` / `pdf_name` / `file_size` / `pdf_size` (yuklab olish kartochkasi), `tracking.video_min` (0..1). Rise ko'rinishidagi yaxshilashlar
+(NEXTID kamchiliklari tuzatilgan): ↓ birinchi «davom etish» bo'limini ham ochadi; ochilgan tugma o'rnida yupqa bo'lim sarlavhasi; rasm galereyalari
+(ma'ruza sahifalari, taqdimot) — «Kattalashtirish» ko'ruvchisi (6× gacha, ikki barmoq / ikki marta bosish, surish, ←/→, Esc), planshet/telefonda
+strelkalar rasm ostida, nuqtalar 24–26 px; **hisoblagich:** kompyuterda faqat nuqtalar («1 / N» matni ko'rinmaydi, ekran o'quvchi uchun jonli hudud `.counter`
+qoladi), telefonda (≤ 720 px) «3 / 10» + strelkalar (6 tadan ko'p sahifada nuqtalar yashiriladi); «Kattalashtirish» — belgi + yozuvli yengil «ghost» tugma;
+rasm galereyasi hamma sahifasi varaqlanmaguncha «ko'rildi» emas (`S.g`, sessiyalar orasida saqlanadi); **pastki tasma** ixcham: ↻ + «Yakunlash uchun: N ta qadam
+qoldi» + «Nimalar qoldi?» (aria-expanded; kichik oyna — har bir qoldiq alohida qatorda, masalan «Videodars — 0% / 80%»; Esc yopadi va fokusni tugmaga qaytaradi,
+tashqariga bosish ham yopadi; jonli hudud `role=status` saqlangan), yakunlangach — «✓ Dars yakunlandi»; ingichka progress chizig'i; **«Aa»** — kichik shaffof to'q
+tugma (oq belgi), pastki-o'ngda; pastki tasma va yopiq «davom etish» tugmasi tepasiga ko'tariladi (`--r-aoff`), pastga o'qilganda yashirinadi.
+**Imlo (faqat ko'rinish):** `a11y.js` sahifadagi matn tugunlarida «o'zlashtir», «G'oya» → «oʻzlashtir», «Gʻoya» (U+02BB, harf oldidan kelganda) qiladi —
+MutationObserver yangi tugunlarni ham tuzatadi; tutuq belgisi (ma'ruza, a'zo), atributlar, id, input/textarea, `<script>/<style>/<code>/<pre>`, MathML, URL/e-pochta
+o'xshash so'zlar va `dog's` o'zgarmaydi. Saqlanadigan ma'lumot, xAPI matnlari va javob solishtirish (`norm`: ʻ ʼ ‘ ’ → ') asl matn bilan ishlaydi;
+ovozli o'qishga matn oddiy apostrof bilan beriladi. ʻ glifi Lato / Manrope'da yo'q — `fonts.css` dagi «ISFT Uz» (Merriweather glifi, faqat U+02BB–02BC) chizadi.
+
 Zip ildizi: pleyer fayllari (`app/paket_player/*`, `index.html` — ishga tushirish fayli), `content.js` (`window.PAKET = {...};`, UTF-8),
 `content.json` (o'sha JSON), `assets/…` (`logo.png`, `img/<hash>.png|jpg`, `slides/sN.png`, `slides/pN.jpg`, `taqdimot.pptx`, `taqdimot.pdf`, `files/*`;
 v3: `cover.jpg`, `video/video.mp4|webm`, `video/video.jpg`, `video/video.<til>.vtt`, `audio/sN.<kengaytma>`, `img/avatar.jpg`) va manifest.
 
 ```
-{"v":1,"id":"isft-<kurs>-<dars kaliti>-v<versiya>","title":"…","lang":"uz","layout":"steps"|"scroll",
+{"v":1,"id":"isft-<kurs>-<dars kaliti>-v<versiya>","title":"…","lang":"uz","layout":"rise"|"steps"|"scroll",
  "course":{"subject","direction","course","kafedra","teacher"}, "topic":{"no","title"},
  "lesson":{"code":"L1"|"A1"|…,"kind":"maruza|amaliy|seminar|laboratoriya|mustaqil","no":1,"title":"…"},
  "brand":{"name":"ISFT","full":"International School of Finance and Technology","color":"#8B0033","logo":"assets/logo.png"},
@@ -356,7 +507,7 @@ Subtitrlar standart holda o'chiq — talaba pleyerda CC ni yoqadi. Sinov selekto
 bo'yicha yoyilgan element indeksi); `.fc-grid button.fc[data-k][aria-pressed]`; `.asg`, `ol.asg-list li`, `.asg-note`; `[data-act="start|submit|retry"]`.
 
 Bloklar tartibi (kafedra shabloni, v3): [muqova — `cover`] → section «VIDEODARS» → video → section «MA'RUZA MATNI» → reja → matn → asosiy xulosalar →
-adabiyotlar → section «DARS TAQDIMOTI» → taqdimot → qo'shimcha fayllar → section «MASHQ VA TOPSHIRIQLAR» (nomi sozlanadi) → kartochkalar → test
+adabiyotlar → section «TAQDIMOT» → taqdimot → qo'shimcha fayllar → section «MASHQ VA TOPSHIRIQLAR» (nomi sozlanadi) → kartochkalar → test
 (Test bank savollari, keyin moslashtirish/saralash) → topshiriq → o'z-o'zini baholash. Manbasi yo'q blok tushadi, bo'sh guruhning bo'limi ham
 chiqmaydi; reflect — kamida bitta kontent bloki bo'lsa. `id` — `b1`, `b2`, … (ketma-ket, turidan qat'i nazar); savol `id` — `q<tb_questions.id>`,
 mashq savoli — `x<pk_exercises.id>`.
@@ -367,19 +518,41 @@ mashq savoli — `x<pk_exercises.id>`.
 |---|---|---|
 | SCORM 1.2 | `imsmanifest.xml` (`imscp_rootv1p1p2`, `adlcp_rootv1p2`) | `schemaversion 1.2`, bitta `item` → `resource adlcp:scormtype="sco" href="index.html"`, `adlcp:masteryscore` (test yakunlashga kirsa), barcha fayllar `<file>` da |
 | SCORM 2004 4-nashr | `imsmanifest.xml` (`imscp_v1p1`, `adlcp_v1p3`, `imsss`, `adlseq`, `adlnav`) | `schemaversion 2004 4th Edition`, `adlcp:scormType="sco"`, `imsss:sequencing` — `primaryObjective satisfiedByMeasure="true"` + `minNormalizedMeasure` = mastery/100, `deliveryControls completionSetByContent/objectiveSetByContent`, tashkilotda `controlMode choice/flow` |
-| xAPI | `tincan.xml` | `activity id` = `tracking.activity_id`, `type …/activities/course`, `name`/`description`/`launch` (`lang="uz"`) |
+| xAPI | `tincan.xml` | `activity id` = `tracking.activity_id`, `type …/activities/course`, `name`/`description` (`lang="uz"`), `launch` = `scormdriver/indexAPI.html` (Rise yo'li; u so'rov qatorini saqlab `../index.html` ga o'tkazadi — `indexAPI.js`, Articulate kodisiz); ildizdagi `index.html` ham ishlaydi |
 | Oddiy HTML | — | `index.html` (LMS'siz, ko'rish rejimi) |
 
 **Pleyer kuzatuvi:** LMS'ga oxirgi urinish natijasi yuboriladi, lekin «passed» hech qachon pasaytirilmaydi (SCORM 1.2 `lesson_status`,
 SCORM 2004 `success_status` va ball, xAPI kurs natijasi); test o'tilgandan keyin qayta urinish berilmaydi (`suspend_data` ixchamlanib javoblar
 tushib qolsa ham — o'tganlik belgisi bo'yicha). Fill-in savolida har bir qabul qilinadigan javob — alohida `correct_responses.n.pattern`
-(2004: `{case_matters=false}…`) / xAPI `correctResponsesPattern` elementi. xAPI: kurs activity uchun `passed`/`failed` (score scaled/raw/min/max,
-success, completion) natija o'zgargan har safar, `completed` — bir marta. Asset havolalari: boshqaruv belgilari olib tashlanib, faqat nisbiy
+(2004: `{case_matters=false}…`) / xAPI `correctResponsesPattern` elementi. xAPI — quyidagi «Kuzatuv (xAPI)» bo'limiga qarang. Asset havolalari: boshqaruv belgilari olib tashlanib, faqat nisbiy
 oq ro'yxat yo'llari (`[A-Za-z0-9_\-./%]`, `/` bilan boshlanmaydi, `..` yo'q); tashqi havolalar — faqat http(s).
 
 **Kurs paketi:** bitta manifestda har dars alohida SCO, o'z papkasida (L — `t01/index.html`, A — `a01/`, S — `s01/`, Lab — `lab01/`, MT — `mt01/`;
 tartib L, A, S, Lab, MT; SCO nomi «L1. …»); har dars — oxirgi tasdiqlangan (yoki «faqat tasdiqlangan» belgilanmasa — oxirgi) dars paketidan, `content.js` dagi `tracking.mode` kurs paketi turiga qayta yoziladi.
-SCORM 1.2, SCORM 2004 va xAPI (bir nechta activity).
+SCORM 1.2, SCORM 2004 va xAPI (bir nechta activity; har birining `launch` — `<papka>/scormdriver/indexAPI.html`).
+
+### Kuzatuv (xAPI) — NEXTID / Rise moslik
+
+NEXTID Rise paketini `scormdriver/indexAPI.html?endpoint=https://lms-api.isft.uz/uz/articulate&auth=Bearer%20<token>&actor={"name":<id>}` bilan
+ochadi (actor — faqat raqamli nom, boshqa domendagi LRS, CORS). Bizning paket (`app/paket_player/lms.js`, `Xapi`) simda Rise bilan bir xil ishlaydi
+(lokal soxta LRS'da Rise yozuvi bilan solishtirilgan — `tools/nextid_parity_check.js`, `tests/test_paket_player.py` 7-bo'lim):
+
+- sarlavha `X-Experience-API-Version: 1.0.2`, `Authorization` — `auth` aynan (Bearer); actor o'zgarishsiz: `{"objectType":"Agent","name":9424693}`
+  (mbox / account / openid ham qabul qilinadi va xAPI shakliga keltiriladi);
+- ochilganda: `GET activities/state` — `language_preference`, `cumulative_time` → `PUT statements?statementId=` `attempted` (obyekt — kurs:
+  `type …/course`, `name.en`) → `GET` `suspend_data`, `bookmark` (yo'q bo'lsa — eski `isft-state`, oldingi paketlar sessiyasi davom etadi);
+- jarayonda: `PUT activities/state` `suspend_data` (`application/octet-stream`, pleyer holati) va `bookmark` (joriy qadam) — o'zgarganda;
+  `PUT statements` `progressed` — cmi5 `progress` kengaytmasi, butun foiz oshgan har safar (yakunda 100);
+- savol: `POST statements` `answered` (ota — kurs, `cmi-interaction-weighting: 1`); dars yakunlansa — `POST` `passed`
+  `{success:true, duration, completion:true}` (Rise «passed/incomplete»; test bo'lsa `score` scaled/raw/min/max), test yiqilsa — `failed`;
+  «passed» pasaytirilmaydi, bir xil natija qayta yuborilmaydi (holat `xr`, `xp`);
+- yopilishda: `attempted {duration}` va `cumulative_time` (sessiyalar bo'yicha jami ms). LRS boshqa domenda bo'lsa — xAPI 1.0.x muqobil sintaksisi
+  (`POST …?method=PUT|POST`, forma maydonlari `Authorization`, `X-Experience-API-Version`, `Content-Type`, `content` — preflight'siz, sahifa
+  yopilganda ham yetadi); bir domenda (ISFT Core LRS) — `keepalive` fetch;
+- Rise'da yo'q, bizning analitika uchun qoldirilgan: test bloki natijasi (`passed`/`failed` `…/block/<id>`), mulohaza `responded`;
+  kurs muharriri paketida har dars `experienced` (PUT) va `completed`. `initialized`/`resumed`/`suspended`/`terminated` endi yuborilmaydi
+  (ISFT Core LRS vaqtni `attempted.duration` dan ham hisoblaydi, ballsiz dars darajasidagi `passed` — «yakunlandi», urinish emas).
+- Oflayn navbat (localStorage), qayta urinish (2 → 30 s), `online` hodisasi — avvalgidek.
 
 **Deterministik zip:** yozuvlar alfavit tartibida, vaqt 1980-01-01, atributlar qotirilgan → bir xil kirish = bir xil sha256.
 Manba, sozlama va pleyer fayllari o'zgarmasa, qayta yig'ish yangi versiya yaratmaydi (barmoq izi); «majburan» (`force`) — yangi versiya.
@@ -446,7 +619,7 @@ NEXTID natijani hozircha qabul qilmaydi — kelajakda integratsiya uchun.
 1. Paket turi — **xAPI (Tin Can) — NEXTID** (standart). Darsni yig'ing, tasdiqlang, «Yuklab olish» — nomi dars kodi bilan: `ISFT_<fan>_L01_xapi.zip`, `…_A01_xapi.zip`.
 2. NEXTID.LMS → fan → **Articulate** yorlig'i → yangi dars.
 3. Dars nomi NEXTID uslubida, kodi paketdagi bilan bir xil: «L1-1-dars: MAVZU NOMI», «A1- AMALIY MASHG'ULOT: NOM».
-4. Zip'ni **ochmasdan** yuklang (ildizida `index.html` va `tincan.xml`), saqlang va darsni ochib tekshiring.
+4. Zip'ni **ochmasdan** yuklang (ildizida `index.html`, `tincan.xml` va `scormdriver/indexAPI.html` — NEXTID shu yo'l bilan ochadi), saqlang va darsni ochib tekshiring.
 5. Taqdimot aniq ko'rinishi uchun PowerPoint'da «Fayl → Saqlash → PDF» va PDF'ni ham yuklang (sahifalar rasm bo'lib galereyada chiqadi).
 6. Video fayl paket ichida ketadi — zip hajmi oshadi: NEXTID'ning yuklash chegarasini oldindan tekshiring; katta video uchun YouTube havolasi qulayroq.
 7. Topshiriq javobini talaba PDF qilib NEXTID'ning o'ziga yuklaydi (paket fayl qabul qilmaydi); kartochkalar va topshiriq baholanmaydi.
@@ -475,6 +648,14 @@ SCORM 2004 ni Moodle qisman qo'llaydi — LMS aniq talab qilmasa SCORM 1.2 tanla
 Kafedra / o'qituvchi / kurs kesimida — **darslar** bo'yicha (L + qo'shilgan A/S/Lab/MT; javobdagi `topics` — darslar soni, `by_kind` — tur bo'yicha): darslar, paketi yig'ilgan va tasdiqlangan darslar, tasdiq kutayotganlar, manbasi to'liq mavzular
 va har bir manba bo'yicha (matn, taqdimot, yaroqli video, tasdiqlangan test) soni. O'qituvchi — o'z kurslari, kafedra — o'z kafedrasi.
 
+## Dars kodi, qidiruv va ro'yxat maydonlari (zanjir)
+
+- `course_codes()` saqlangan kodlarni qaytaradi (`course_code_store`, docs/dars.md); `_has_table` natijasi keshlanadi.
+- `GET /courses`: qatorlarda `pres_sent` (taqdimot yuborilgan darslar soni), `dept_sent` (video bo'limga yuborilgan), `video_wait`; `q=<to'liq dars kodi>` (`..._L8`, `..._A3`)
+  fanni topadi va javobga `lesson_hint` (dars kaliti) qo'shiladi; `limit` ≤ 1000.
+- Yangi taqdimot yuklanganda eski taqdimotlar almashtiriladi, lekin parallel yuklashda ham eng YANGI fayl faol qoladi.
+
+
 ## «Mening vazifalarim»
 
 `pending()` (app/pending.py → `paket` manbasi): bo'limga — «tasdiqni kutayotgan paketlar» (oxirgi versiyasi «tayyor» mavzular),
@@ -493,6 +674,7 @@ video mavjud emas). Test — Test bank namunasidagi tasdiqlangan savollar. Darsl
 |---|---|---|
 | GET | `/meta`, `/coverage` | hamma (ruxsatlilar) |
 | GET | `/courses?q=&department_id=&teacher_id=&only=started\|waiting\|empty&offset=&limit=` | bo'lim, kafedra, o'qituvchi (ko'lam bo'yicha) |
+| POST/GET | `/courses/{cid}/topics/{no}/captions/auto` (+ `/cancel`) — avtomatik subtitr (Whisper) | bo'lim, o'qituvchi (GET: ko'ruvchilar ham) |
 | GET | `/courses/{cid}`, `/courses/{cid}/topics/{no}` (`no` — dars kaliti: L1 = 1, A1 = 1001 …), `/courses/{cid}/lessons`, `/courses/{cid}/topics/{no}/img/{fayl}` | bo'lim, kafedra, o'qituvchi |
 | POST | `/courses/{cid}/lessons` `{text, apply}` (NEXTID nomlari), `/courses/{cid}/lessons/{no}/delete` | bo'lim, o'qituvchi |
 | POST | `/courses/{cid}/topics/{no}/images` (rasm tanasi, `?name=&caption=`) | bo'lim, o'qituvchi |
@@ -517,9 +699,12 @@ video mavjud emas). Test — Test bank namunasidagi tasdiqlangan savollar. Darsl
 | POST | `/packages/{pid}/action` `{action: approve\|reject\|submit, note}` | approve / reject — bo'lim; submit — bo'lim, o'qituvchi |
 | GET | `/queue` | bo'lim, kafedra, o'qituvchi (ko'lam bo'yicha) |
 | POST | `/courses/{cid}/topics/{no}/upload` (`?name=&as=&lang=&caption=`), `/title` `{title}`, `/deck/create` | bo'lim, o'qituvchi (`deck/create` — o'qituvchi) |
+| POST | `/courses/{cid}/topics/{no}/upload?as=test` — tayyor test (Word/.txt/PDF, ✅ belgili) → Test bank + moslashtirish + topshiriq (Word/.txt — `as`siz ham taniladi) | bo'lim, o'qituvchi |
 | POST | `/settings` (standart sozlamalar) | bo'lim |
 
 ## Testlar
+
+`tests/test_paket_captions.py` (jarayon ichida, bazaning nusxasi, soxta ishchi): ruxsatlar (kafedra / rektor / begona kurs — 403), YouTube / video yo'q / ishchi yo'q → `unavailable`, video fayl → `queued`, takroriy so'rov — o'sha vazifa, kurs ishchi yo'llari orqali claim / Range / progress / fail / result (buzilgan VTT, eskirgan lease, qayta natija 410), natija → `subs` fayli, yig'ish (zipda `.vtt`, `content.json` captions, pleyerda `<track>`), `auto_captions` (tekshiruv, yuklangach navbat), video almashtirilishi, qo'lda subtitr ustuvorligi, kurs bilan aralash navbat.
 
 `tests/test_paket.py`: har lavozim ruxsati va ko'lami (audit bilan); NEXTID darslar ro'yxati tahlili (jadval), dars kodi ↔ kalit, migratsiya
 idempotentligi (3-bosqich sxemasidan ham); Word: 2 rasm + izohlar (keyin/oldin), ikonka tashlanishi, jadval, adabiyotlar → HTML/figure/refs va
@@ -553,22 +738,25 @@ brauzer (`tools/paket_build_check.js`): muqova qadami, `<video>` + `<track>` + p
 
 ## Ma'lum cheklovlar
 
-- Rise 360 (v3): bloklar tartibi qat'iy (erkin drag-drop muharrir yo'q); AI subtitr va AI ovoz yo'q (nutq xizmati ulanmagan) — subtitr va audio tayyor fayl
+- Rise 360 (v3): bloklar tartibi qat'iy (erkin drag-drop muharrir yo'q); AI ovoz yo'q; avtomatik subtitr faqat Whisper ishchisi (`tools/montaj`, token) ishlab turganda — aks holda tayyor `.vtt` / `.srt` yuklanadi, audio ham tayyor fayl
   sifatida yuklanadi; video qayta kodlanmaydi (kodek/bitreyt tekshirilmaydi — H.264/AAC `.mp4` tavsiya etiladi), haqiqiy ijro lokal sinovda tekshirilmagan (ffmpeg yo'q);
   subtitrlar standart holda o'chiq (talaba CC ni yoqadi); video faylli paket versiyalari diskda ko'p joy oladi; slayd izohi/audiosi slayd tartib raqamiga bog'langan;
   «Savollar» bo'limi faqat ma'lum sarlavhalar bo'yicha aniqlanadi (boshqacha nomlangan bo'lsa — savollarni qo'lda kiriting); ko'rishda (sandbox) subtitr yuklanishi
   uchun pleyer `<video crossorigin>` qo'yishi kerak (server CORS sarlavhasini beradi).
 
-- PPTX slaydlari rasmga aylantirilmaydi (LibreOffice yo'q): faqat .pptx bo'lsa pleyer slaydni sarlavha + bandlar + eng katta rasm sifatida chizadi;
+- LibreOffice bo'lmagan serverda PPTX slaydlari rasmga aylantirilmaydi: faqat .pptx bo'lsa pleyer slaydni sarlavha + bandlar + eng katta rasm sifatida chizadi;
   aniq ko'rinish uchun PDF'ni ham yuklang (sahifalar rasmga chiziladi). «Bir xil taqdimot»ni server tekshirmaydi — eng oxirgi yuklangan
   taqdimot hal qiladi: PDF `.pptx` dan keyin yuklangan bo'lsa PDF rasmlari, aks holda `.pptx` (PDF'ni `.pptx` dan oldin yuklasangiz, PDF'ni qayta yuklang). Animatsiya, SmartArt, diagrammalar `.pptx` matniga to'liq o'tmaydi.
-- Word: formulalar oddiy matn; jadval ichidagi rasmlar va birlashtirilgan kataklar (colspan) saqlanmaydi; EMF/WMF rasmlar o'tkaziladi; izohni
+- Word: formulalar MathML bo'lib chiqadi; eski brauzerlarda (Chrome < 109) «yassi» (kasr/ildizsiz) ko'rinadi. Tenglamalar tizimidagi tekislash
+  nuqtalari (`&`), `borderBox` ramkasi, formuladagi rang — e'tiborsiz; eski Equation 3.0 / MathType (OLE obyekt, WMF ko'rinish) — formula sifatida
+  olinmaydi (WMF rasm ham o'tkaziladi). Matematik shrift bo'lmagan qurilmada — tizim shrifti. Jadval ichidagi rasmlar va birlashtirilgan kataklar (colspan) saqlanmaydi; EMF/WMF rasmlar o'tkaziladi; izohni
   faqat qo'shni paragrafdan aniqlaydi. PDF ma'ruza matnidan rasm olinmaydi.
 - NEXTID rejimida (launch parametrlarisiz) davom ettirish holati brauzerning localStorage'ida: bir laboratoriya kompyuteri va brauzer profilidan
   foydalanadigan talabalar bir-birining holatini ko'radi. Natija NEXTID'ga yozilmaydi (faqat `postMessage`).
-- Skaner qilingan PDF (matnsiz) ma'ruza matni sifatida rad etiladi.
+- Skaner qilingan PDF (matnsiz) ma'ruza — OCR bo'lmasa rad etiladi; OCR bo'lsa sahifa rasmlari (telefonda kattalashtirib o'qiladi), formula/jadval matni tanilmaydi.
 - Video faqat havola (YouTube'da qoladi); YouTube bloklangan tarmoqda ko'rinmaydi. Video mavjudligi (private/o'chirilgan) tekshirilmaydi — faqat ID formati.
 - SCORM XSD fayllari paketga qo'shilmaydi (Moodle talab qilmaydi); qat'iy XSD tekshiruvi qiladigan LMS uchun qo'shish kerak bo'lishi mumkin.
-- xAPI paket LRS manzilini LMS'dan (launch parametrlari) oladi; LRS'siz LMS'da (NEXTID) natija LRS'ga yuborilmaydi.
+- xAPI paket LRS manzilini LMS'dan (launch parametrlari) oladi; launch parametrlarisiz ochilsa — natija yuborilmaydi (mustaqil rejim).
+  NEXTID'ning progress/100 % ni bizning statementlardan haqiqiy NEXTID'da ko'rsatishi hali tekshirilmagan (lokal sinov — Rise yozuvi bilan).
 - Moodle'ga to'g'ridan-to'g'ri yuklash (API) yo'q — fayl eksporti; LMS'dagi natijalar ISFT Core'ga qaytib kelmaydi.
 - Yig'ish sinxron (katta PPTX bilan bir necha soniya); ommaviy yig'ish uchun fon navbati keyinroq.

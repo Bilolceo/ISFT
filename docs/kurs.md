@@ -32,6 +32,38 @@ blok izohlarini (to'xtatuvchi ham) qoldiradi; tahrirlash, eksport, tasdiqlash �
 «AI: hujjatdan dars» tugmasi va «Dars tayyorlash» bilan bog'lanish tasmasi (`course.dars` — fan, dars kodi, eksport uchun ustun manba) — `docs/dars.md`.
 `POST /courses/{id}/action` — `submit` / `approve` ochiq to'xtatuvchi izohlar bo'lsa 409 (`override` — sabab bilan aylanib o'tish).
 
+## Muharrir ko'rinishi: «Rise» (standart) va «Klassik»
+
+**Rise ko'rinishi** (`.ku-rise`, `localStorage.kuUi`, standart): dars natijadagidek — muqova (kurs muqovasi + dars nomi joyida tahrirlanadi), och binafsha fon,
+media va mashqlar oq kartochkada, «Davom etish» — urg'u rangidagi tasma; blok asboblari (ko'chirish, ⚙ sozlamalar, nusxa, o'chirish, izoh) blok ustida
+sichqoncha olib borilganda; darslar ro'yxati (chap) va blok sozlamalari (o'ng) — yon panellar; pastda **tez qo'shish paneli** (Blok kutubxonasi, Matn, Ro'yxat,
+Rasm, Galereya, Video, Test savoli, Moslashtirish, Kartochkalar, Davom etish — tanlangan blokdan keyin). **Klassik** — avvalgi uch ustun («Yana» → «Klassik ko'rinish»).
+
+**Yuqori panel va «Tayyor».** Rise ko'rinishida bitta asosiy (to'ldirilgan) tugma bor — **«Tayyor»**: Konstruktor qadamlar tasmasida (`#kxPub`), tasma bo'lmasa —
+yuqori panelda (`#kuDone`). U `kuPublish()` oynasini ochadi: 1) Tekshiruv (sifat hisoboti) → 2) NEXTID uchun eksport (xAPI) → 3) ko'rib chiqishga yuborish va/yoki
+4) tasdiqlash (rolga qarab bittasi yoki ikkalasi; qadamlar ketma-ket raqamlanadi). Yuqori panelda faqat ikkinchi darajali tugmalar: Ko'rish, Izohlar, «Yana»
+(sifat, eksport, versiyalar, sozlamalar, dars oxiri testlari, AI, **yuborish / tasdiqlash / qaytarish**, klassik ko'rinish). Telefonda (≤ 700 px) panel bir qatorli —
+faqat belgilar (`aria-label` bilan), sarlavha uzun bo'lsa «…».
+
+**Palitra.** `.ku-rise` (va Rise ko'rinishidagi modallar — `.ku-modal-bg.rz`) ichida ilova chrome'ining qizili o'rniga yagona binafsha (`--rz-acc` #7837a8): asosiy
+tugmalar, havolalar, fokus halqasi, qadamlar tasmasi, «Tayyor» oynasi. Boshqa ekranlar qizil bo'lib qoladi. Kontrast: tuvaldagi yordamchi matn va placeholder —
+`--rz-muted` #595959 (lavanda #f2ebf6 ustida 6,0:1); `tools/konstruktor_check.js` tuvaldagi barcha matnni ≥ 4,5:1 ga tekshiradi (gradientli muqovadan tashqari).
+`select` — `appearance:none`, maxsus strelka (SVG), yumaloq, binafsha fokus; sensorli ekranda 44 px.
+
+**Muqova va takrorlanuvchi sarlavha.** Muqova ixcham (≈ 180 px, telefonda ≈ 150 px). Dars birinchi bloki sarlavha bo'lib, matni dars nomini (katta-kichik harfsiz
+o'zaro o'z ichiga olish bilan) takrorlasa, muharrirda yig'iladi («Ko'rsatish» tugmali izoh) — ma'lumot o'chirilmaydi, talaba pleyeri o'zgarmaydi. Sarlavhalar
+`<textarea data-grow>` (qatorga o'raladi, gorizontal qirqilmaydi; Enter — yangi qator emas).
+
+**«Davom etish» bloki.** Tuvalda faqat tahrirlanadigan binafsha tasma; «Tugma qachon ochiladi» (Tugmani bosish kifoya / Avval yuqoridagi mashqlar bajarilsin) va eslatma —
+⚙ panelida («Tugmani bosmaguncha keyingi qism yopiq turadi»).
+
+**Blok kutubxonasi** («Blok kutubxonasi» / «+»): har tur uchun inline-SVG eskiz (`KU_THUMB`, tashqi fayl yo'q) va bir qatorli tavsif; guruhlar — Matn, Rasm va video,
+Mashq va interaktiv, Boshqaruv; qidiruv saqlangan.
+
+**Sensorli ekran (≤ 860 px yoki `pointer:coarse`).** Blok asboblari (tutqich, izoh, ↑ ↓, ⚙, nusxa, o'chirish) tanlangan blok ustida, ekran ichida, tugmalar ≥ 44 px;
+tanlanmagan blokning asboblari bosilmaydi. Tartib: ↑ ↓ tugmalari (asosiy yo'l) yoki tutqichni ~0,35 s bosib turib sudrash (pointer hodisalari, chetga yaqinlashganda
+sahifa aylanadi); klaviatura — Alt+↑/↓.
+
 ## Ma'lumot modeli (`ku_*`)
 
 | Jadval | Mazmuni |
@@ -57,7 +89,7 @@ Migratsiya — `migrate()` (idempotent, `init()` da). Namuna kurs (`src='demo'`)
 | Tuzilma | `divider` (chiziq / nuqtalar / bo'sh joy), `continue` (qolgan qismni yashiradi; talab: «faqat bosish» yoki «yuqoridagi mashqlar bajarilsin»), `button` (faqat http(s)) |
 | Test darsi | `question` (bilimni tekshirish bilan bir xil sxema) — faqat `quiz` turidagi darsda |
 
-Tozalash qoidalari: HTML maydonlari (`html`, ro'yxat bandlari, belgilar tavsifi) — `paket.sanitize` oq ro'yxati + rasm teglari olib tashlanadi;
+Tozalash qoidalari: HTML maydonlari (`html`, ro'yxat bandlari, belgilar tavsifi) — `paket.sanitize` oq ro'yxati (MathML formulalari ham — docs/paket.md «Formulalar») + rasm teglari olib tashlanadi;
 oddiy matn maydonlari — boshqaruv belgilarisiz, uzunlik chegarasi bilan (pleyer ularni matn sifatida chiqaradi); asset havolasi — faqat shu
 kursning mos turdagi fayli; noto'g'ri qiymatlar standartga keltiriladi (avtosaqlash yarim tayyor blokni ham saqlaydi). Tekshiruv (`block_issues`):
 «xato» — eksport, yuborish va tasdiqlashni to'xtatadi (masalan, to'g'ri javobsiz savol, rasmsiz rasm bloki); «ogoh» — eslatma (alt yo'q, subtitr yo'q,
@@ -72,7 +104,7 @@ qo'llanganda guruhlar ochiladi (`GET /courses?q&status&fan` → `items`, `groups
 orasidagi **«+»** → blok kutubxonasi (toifalar, qidiruv), joyida tahrirlash (boy matn paneli: qalin, kursiv, havola, ro'yxat), blok asboblari
 (↑ ↓ sudrash, sozlamalar, nusxa, o'chirish → «Bekor qilish»), o'ngda tanlangan blok sozlamalari (1280 px dan tor ekranda — chiquvchi panel).
 Test darsi: o'tish bali, urinishlar, savollar banki (N ta), aralashtirish, to'g'ri javobni ko'rsatish siyosati, «Test bankdan» (faqat tasdiqlangan).
-Yuqorida: **Ko'rish** (kompyuter / planshet / telefon kengligi, saqlashdan keyin avtomatik yangilanadi), **Sifat**, **Versiyalar**, **Sozlamalar**,
+Yuqorida: **Ko'rish** (segmentli almashtirgich: Kompyuter 1280 / Planshet 768 / Telefon 390 px — planshet va telefon qurilma ramkasida; saqlashdan keyin avtomatik yangilanadi), **Sifat**, **Versiyalar**, **Sozlamalar**,
 **Eksport**, ko'rib chiqish tugmalari.
 
 **Avtosaqlash va ziddiyat.** Har o'zgarishdan 1,2 s keyin dars to'liq saqlanadi (`POST /lessons/{id}` — `rev`). Server joriy `rev` bilan solishtiradi:
@@ -86,8 +118,22 @@ avval versiyaga yoziladi). Kurs sozlamalari va darslar tartibi — kursning o'z 
 
 O'zimizniki (Articulate kodi yo'q), tashqi skriptsiz (faqat YouTube nocookie iframe), oflayn ishlaydi. Muqova → yon menyu (darslar, bajarilganlik) →
 dars sahifasi; «Davom etish» bosqichlari; ketma-ket o'tish; test (savollar banki, aralashtirish, urinishlar, o'tish bali, natija); kurs bo'yicha qidiruv;
-telefon birinchi; klaviatura, alt matn, fokus belgisi, `prefers-reduced-motion`, qorong'i rejim, qulaylik paneli va «Tinglash» (pastda «Qulaylik»); barcha yorliqlar — `content.labels` (o'zbekcha,
+telefon birinchi; klaviatura, alt matn, fokus belgisi, `prefers-reduced-motion`, qulaylik paneli (pastda «Qulaylik»; ovozli «Tinglash» olib tashlangan); barcha yorliqlar — `content.labels` (o'zbekcha,
 kurs sozlamasida o'zgartiriladi). `#lesson=<uid>&block=<id>` — muharrir ko'rish oynasi shu dars/blokni ochadi; `?preview=1` — «Ko'rish rejimi» banneri.
+
+**Ko'rinish — Rise 360 «classic» bilan 1:1** (NEXTID.LMS'da talabalar Rise kurslarini ko'radi; bizning eksport ulardan farq qilmasligi kerak):
+Lato (sarlavha, interfeys) + Merriweather (matn) — `app/paket_player/fonts/` (OFL, `OFL.txt`; eksportga `fonts/` bilan tushadi), **faqat yorug'**
+(`color-scheme: light` — OS qorong'i rejimida ham oq fon, Rise kabi). Muqova — chapda urg'u rangli panel (muallif, nom, qora «KURSNI BOSHLASH» pill),
+o'ngda muqova rasmi, pastda tavsif va darslar ro'yxati (telefonda — rasm ustida qoraytirilgan qatlam, oq pill). Dars — chapda 280px yon panel
+(urg'u rangli sarlavha: kurs nomi → muqova, progress chizig'i va «N% BAJARILDI», qidiruv, darslar: belgi, nom, holat halqasi — boshlangan darsda yoy,
+yakunlanganda to'la doira), o'ngda: ☰ (kompyuterda yon panelni yig'adi, telefonda chiqaradi) va «Aa», dars sarlavhasi («Dars 1 / 14» kursivda, nom,
+muallif, urg'u chiziqcha), bloklar 728px ustunda 30px oraliq bilan: raqamli ro'yxat — urg'u doiralar, akkordeon — ramka, + / −, ochiq bandda urg'u
+chiziq; yorliqlar — kulrang sarlavhalar, tanlangani oq + urg'u; kartochkalar — 252px kvadrat, tepada urg'u chiziq; jarayon va vaqt chizig'i —
+kulrang tasmada oq kartochkalar; bilimni tekshirish — oq kartochka, radio qatorlar, pill tugma, kulrang izoh paneli (doira ichida ✓/✕); «Davom etish» —
+ustun kengligidagi urg'u tugma; dars oxiri — butun kenglikdagi kulrang tasma (keyingi dars nomi). Test darsi — kulrang fonda oq «varaq», «01/08»
+hisoblagich. Rise kamchiliklari tuzatilgan: urg'u fonida matn oq (palitra — kontrast ≥ 4,5; Rise'da ko'pincha qora/past kontrast), telefonda yorliqlar
+kesilmaydi (gorizontal aylanadi), qidiruv doim ko'rinadi, holat halqasidan tashqari ekran o'quvchisi uchun matn. Ko'rish oynasi (sandbox, opaque
+origin) shriftlarni yuklamaydi — tizim shriftlari (Helvetica/Arial, Georgia) bilan ko'rinadi.
 
 LMS: `lms.js` (paket pleyeri bilan umumiy) — SCORM 1.2, SCORM 2004 4-nashr, xAPI (launch parametrlari; dars faoliyatlari
 `<kurs>/lesson/<uid>`, savollar `<kurs>/lesson/<uid>/q/<id>`), LMS'siz rejim (localStorage). Yakunlash qoidasi: darslar ko'rilganda (≥ N %),
@@ -174,14 +220,10 @@ o'zgartirish) uchun himoya. Muharrirda: «Qulaylik (a11y) N/10» ko'rsatkichi, q
 qo'shiladi; tashqi so'rov va tashqi shrift yo'q):
 
 - **«Aa» qulaylik paneli** (yuqori panelda): matn o'lchami A− / A+ (90–160 %, `<html>` font-size — barcha `rem` o'lchamlar bilan), **yuqori
-  kontrast** (oq/qora, qorong'i rejimda qora/sariq; havolalar tagiga chiziq, qalin chegaralar, qalin fokus), **o'qish uchun qulay shrift**
+  kontrast** (oq/qora — kurs pleyerida doim, chunki u faqat yorug'; paket pleyerining qorong'i rejimida qora/sariq; havolalar tagiga chiziq, qalin chegaralar, qalin fokus), **o'qish uchun qulay shrift**
   (tizim shriftlari Verdana/Tahoma…, keng harf va so'z oralig'i, kursivsiz), **harakatni kamaytirish** (`prefers-reduced-motion` bilan birga).
   Sozlamalar `localStorage['isft-a11y']` da — har murojaat try/catch: ko'rish oynasi (sandbox) va maxfiy oynada ishlaydi, faqat eslab qolinmaydi
   (panelda izoh). Esc — panel yopiladi, fokus «Aa» ga qaytadi.
-- **«Tinglash»** (matn, sarlavha+matn, iqtibos, ro'yxat, rasm+matn, vaqt chizig'i bloklari; paket pleyerida — matn qadamlari): brauzerning
-  Web Speech API'si (`speechSynthesis`), tashqi xizmatsiz. Ovoz: uz-UZ → uz-* → ru-RU → ru-* → standart (xabarda qaysi ovoz); API yo'q
-  bo'lsa yoki qurilmada ovoz yo'q bo'lsa — tushunarli xabar. O'qilayotgan blok ajratiladi (`.reading`), qayta bosish — to'xtatish; matn
-  gaplarga bo'lib o'qiladi; dars almashganda o'qish to'xtaydi.
 - **Klaviatura va ARIA** (barcha blok turlari): skip-link («Asosiy mazmunga o'tish»), akkordeon (`aria-expanded`, panel `role=region` +
   `aria-labelledby`), yorliqlar (← → Home End, roving tabindex), kartochkalar (Enter/Bo'sh joy, orqa tomon `aria-hidden` almashadi),
   saralash (faqat klaviatura bilan: element → ««Toifa» toifasiga joylash»; qayta chizilganda fokus yo'qolmaydi), moslashtirish (`<label for>`),
@@ -213,6 +255,20 @@ havolalari, id takrori, sarlavhalar, Tab bilan har elementga yetish, har blok tu
 reduced-motion, TTS — API yo'q / uz / ru / standart / ovoz yo'q), `tools/kurs_editor_check.js` (qulaylik jadvali, yozuvlar muharriri),
 `tools/paket_player_check.js` (panel, TTS), `tools/montaj/tests/test_captions_worker.py` (ishchi tomoni, Whisper o'rniga soxta natija).
 
+## «AI bilan tahrirlash» — savol bloklari (`app/kurs_ai.py`)
+
+Rise'dagi «Edit with AI» o'rnida (o'quv videosi: o'qituvchi Word'dan savolni nusxalaydi, ✅ — to'g'ri javob, AI toza «Bilimni tekshirish» savolini tuzadi, o'qituvchi to'g'ri javobni tekshiradi).
+
+**Oqim.** Savol blokida (bilimni tekshirish / test savoli) asboblar qatoridagi ✨ «AI bilan tahrirlash» (telefonda — blok ichidagi tugma) → oyna: chapda matn maydoni (blokning hozirgi savoli `A) … ✅` ko'rinishida to'ldirilgan; Word'dan yopishtiriladi yoki AI'ga ko'rsatma yoziladi), savol turi (avto / bitta / bir nechta / to'g'ri-noto'g'ri / bo'sh joy) va ko'rsatma; o'ngda natija: savol, variantlar (to'g'ri javob ajratilgan), HAR variant izohi, umumiy izohlar. «AI bilan tuzish» / «Qayta urinish» → «Bloknu almashtirish» (yoki «Bekor qilish»). Almashtirgandan keyin blokda eslatma: «AI tuzdi — to'g'ri javobni tekshiring» (✅ siz savolda AI o'zi tanlagani ham aytiladi) va «Avvalgisini qaytarish»; to'g'ri javobni boshqa variantga o'tkazish eslatmani yopadi. Yangi blok: tez qo'shish panelida va blok kutubxonasida «AI bilan savol» (test darsida — «Savol qo'shish» yonida).
+
+**Endpoint.** `POST /api/kurs/lessons/{id}/ai-question` — `{text, hint?, qtype?: auto|single|multi|tf|fill, btype?: knowledge|question}` (mualliflar; boshqa kurs — 403; text ≤ 6000 belgi). Javob: `{block: {type, data}, issues, ai, parsed, answer_guessed, answer_missing?, warnings, more, model, quota}`. Blok bazaga YOZILMAYDI (muharrir uni oddiy avtosaqlash orqali saqlaydi).
+1. Deterministik: `test_import.parse_test_text` (✅, «Javob: B», qalin/rangli variant) — kalitsiz ham tuzilma tayyor.
+2. AI (`claude_client.call_json`, qat'iy JSON sxema, model `ISFT_CORE_KURS_AI_MODEL`, standart claude-opus-5-5): savol/variantlarni tozalaydi, har variantga izoh va umumiy izoh yozadi, ✅ yo'q bo'lsa to'g'ri javobni tanlaydi (`answer_guessed=true`); yopishtirilgan matn «ma'lumot» sifatida beriladi, fakt o'ylab topilmaydi.
+3. Qat'iy tekshiruv: variantlar 2–8, takrorsiz, to'g'ri javob(lar) to'g'ri indeksda (bitta javobli — aynan bitta), To'g'ri/Noto'g'ri tartibi, bo'sh joy javoblari 1–5, ✅ dan kelgan variantlar soni o'zgarmagan; ✅ bilan belgilangan javobni AI o'zgartirsa — o'qituvchi belgisi tiklanadi (ogohlantirish bilan). Yaroqsiz javob — 502 (✅ dan tuzilma bilan).
+4. Kalit yo'q → 503 va baribir `block` (`ai=false`, izohsiz); AI xatosi → 502 va `block` (bo'lsa). Kunlik cheklov: `ISFT_CORE_KURS_AI_DAILY` (standart 100, faqat AI chaqirilganda) → 429. Har so'rov `ku_ai` jadvalida (token, xato, taxmin) va audit jurnalida («kurs: AI savol»).
+
+**Ma'lumot modeli.** Yangi maydon yo'q: har variant izohi (`answers[i].feedback`) va umumiy izohlar (`feedback_correct/_wrong`) avvaldan bor edi (muharrir va pleyer — tanlangan variant izohi). «AI tuzdi» eslatmasi — muharrir sessiyasida (saqlanmaydi). Sinov: `tests/test_kurs_ai.py` (soxta Claude), brauzer — `tools/kurs_ai_check.js`.
+
 ## API (qisqacha)
 
 | Metod | Yo'l | Kim |
@@ -227,6 +283,7 @@ reduced-motion, TTS — API yo'q / uz / ru / standart / ovoz yo'q), `tools/kurs_
 | GET | `/courses/{id}/preview-url`, `/pv/{token}/{path}` | mualliflar (imzolangan yo'l) |
 | GET/POST | `/courses/{id}/quality`, `/courses/{id}/fix`, `/import/rise` | mualliflar |
 | GET/POST | `/testbank`, `/testbank/convert` | mualliflar (o'qituvchi — o'z fanlari) |
+| POST | `/lessons/{id}/ai-question` | mualliflar (AI bilan savol tuzish; bazaga yozmaydi) |
 | GET / POST | `/assets/{id}/cues`, `/courses/{id}/vtt` | o'qish — kurs ko'ruvchilari; yozish — mualliflar |
 | GET / POST | `/courses/{id}/captions`, `/captions/{id}/cancel` | ro'yxat — kurs ko'ruvchilari; navbatga qo'yish / bekor — `masofaviy`, `masofaviy_xodim` |
 | POST/GET | `/api/montaj/kurs-captions/claim`, `/{id}/media`, `/{id}/progress`, `/{id}/result`, `/{id}/fail` | montaj ishchisi (`X-Worker-Token`) |

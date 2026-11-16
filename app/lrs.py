@@ -567,6 +567,50 @@ def _audit_sys(action: str, ok: bool, detail: str):
     except Exception:
         pass
 
+class AltSyntax:
+    """xAPI «muqobil so'rov sintaksisi» (POST /xapi/...?method=PUT, forma tanasi) — boshqa domendagi pleyer sahifa yopilayotganda shunday yuboradi
+    (Rise kabi). Oddiy so'rovga aylantiriladi: method, forma maydonlari → so'rov parametrlari/sarlavhalar, `content` → tana."""
+    LIMIT = 256 * 1024
+    HDR = {"authorization": b"authorization", "x-experience-api-version": b"x-experience-api-version", "content-type": b"content-type",
+           "if-match": b"if-match", "if-none-match": b"if-none-match"}
+
+    def __init__(self, app): self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope.get("method") != "POST" or not scope.get("path", "").startswith("/xapi/"):
+            return await self.app(scope, receive, send)
+        from urllib.parse import parse_qsl, urlencode
+        q = parse_qsl(scope.get("query_string", b"").decode("latin-1"), keep_blank_values=True)
+        meth = next((v for k, v in q if k == "method"), "").upper()
+        if meth not in ("GET", "PUT", "POST", "DELETE"):
+            return await self.app(scope, receive, send)
+        body = b""
+        while True:
+            m = await receive()
+            body += m.get("body", b"")
+            if len(body) > self.LIMIT:
+                await send({"type": "http.response.start", "status": 413, "headers": [(b"content-type", b"application/json")]})
+                return await send({"type": "http.response.body", "body": b'{"detail":"So\'rov hajmi katta"}'})
+            if not m.get("more_body"): break
+        form = dict(parse_qsl(body.decode("utf-8", "replace"), keep_blank_values=True))
+        params = [(k, v) for k, v in q if k != "method"]
+        headers = [(k, v) for k, v in scope["headers"] if k not in (b"content-type", b"content-length")]
+        content = form.pop("content", None)
+        for k, v in form.items():
+            if k.lower() in self.HDR: headers.append((self.HDR[k.lower()], v.encode("utf-8")))
+            else: params.append((k, v))
+        raw = (content or "").encode("utf-8")
+        headers.append((b"content-length", str(len(raw)).encode()))
+        sent = False
+        async def rcv():
+            nonlocal sent
+            if sent: return {"type": "http.disconnect"}
+            sent = True
+            return {"type": "http.request", "body": raw, "more_body": False}
+        scope = dict(scope, method=meth, headers=headers, query_string=urlencode(params).encode())
+        await self.app(scope, rcv, send)
+
+
 @router.options("/xapi/{rest:path}")
 def x_options(rest: str):
     return Response(status_code=204, headers=CORS)

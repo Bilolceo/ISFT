@@ -22,7 +22,7 @@ Ruxsat (moduldagi jadval, har so'rov audit jurnalida — rbac.STUDIO):
   oqituvchi — o'z darslari: bosqich, band qilish / ko'chirish / bekor qilish;  it_head — faqat YouTube sozlamasi.
 """
 from __future__ import annotations
-import asyncio, datetime as dt, hashlib, hmac, json, os, re, secrets, shutil, threading, time, uuid
+import asyncio, datetime as dt, hashlib, hmac, json, os, re, secrets, shutil, sqlite3, threading, time, uuid
 from pathlib import Path
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import Response, StreamingResponse
@@ -35,7 +35,7 @@ from .rbac import Ctx, AccessDenied
 router = APIRouter()
 _con = None
 _ctx = None
-_lock = threading.RLock()
+_lock = db.TxLock(lambda: _con)      # RLock + blokdan istisno bilan chiqsa — rollback (ochiq yozish tranzaksiyasi butun serverni qulflamasin)
 _yt_lock = threading.Lock()
 P = "/api/studio"
 W = "/api/montaj"
@@ -46,6 +46,7 @@ DEPT = (HEAD, STAFF)
 LEAD = ("rektor", "prorektor_oquv")
 OPS = DEPT + (OPER,)                      # kun rejasi, hamma bandlar, montaj, ko'rik
 ALL = OPS + LEAD + (TEACH, IT)
+OPER_DEPT_NOTIFY = (OPER,) + DEPT          # yangi taqdimot xabari: studiya operatori va Masofaviy bo'lim
 YT_ADMIN = (HEAD, IT)                     # YouTube OAuth sirlari
 ROOM_EDIT = (HEAD, OPER)
 BOARD = OPS + LEAD
@@ -117,6 +118,9 @@ CREATE TABLE IF NOT EXISTS st_log(id INTEGER PRIMARY KEY, ts TEXT, course_id INT
   job_id INT, booking_id INT);
 CREATE INDEX IF NOT EXISTS ix_st_log ON st_log(course_id, lkey);
 CREATE TABLE IF NOT EXISTS st_meta(k TEXT PRIMARY KEY, v TEXT);
+CREATE TABLE IF NOT EXISTS st_dept(job_id INTEGER PRIMARY KEY, course_id INT, lkey INT, code TEXT, pres_version INT, ts TEXT, by_id INT, by_name TEXT, note TEXT,
+  ack_at TEXT, ack_by TEXT);
+CREATE INDEX IF NOT EXISTS ix_st_dept ON st_dept(course_id, lkey);
 """
 DEMO_OPERATOR = ("Masofaviy ta'lim bo'limi — studiya operatori: Xolmatov Sardor Baxtiyor o'g'li", OPER, "STUDIYA")
 
@@ -181,6 +185,10 @@ def _mw_invalidate():
 def _PK():
     from . import paket as PK
     return PK
+
+def _TQ():
+    from . import taqdimot as TQ
+    return TQ
 
 def sla() -> dict:
     st = _meta("sla", {}) or {}
@@ -277,10 +285,10 @@ def _course(c: Ctx, cid: int) -> dict:
     co = _PK()._course_row(cid)
     k = c.role.key
     if k == TEACH and co["teacher_id"] != _tid(c):
-        rbac.audit(_con, c, "studiya: begona kurs", RES, False, f"kurs #{cid}")
+        rbac.audit_deny(_con, c, "studiya: begona kurs", RES, f"kurs #{cid}")
         raise AccessDenied("⛔ Bu kurs sizniki emas. So'rov audit jurnaliga yozildi.")
     if k not in OPS + (TEACH,):
-        rbac.audit(_con, c, "studiya: dars darajasi rad etildi", RES, False, f"kurs #{cid}")
+        rbac.audit_deny(_con, c, "studiya: dars darajasi rad etildi", RES, f"kurs #{cid}")
         raise AccessDenied("⛔ Studiya: dars tafsiloti — faqat bo'lim, operator va o'qituvchi. So'rov audit jurnaliga yozildi.")
     return co
 
@@ -413,6 +421,9 @@ def states(courses: list[dict], only_keys: dict | None = None) -> list[dict]:
                                                                               AND purpose='video' AND {w} GROUP BY course_id, topic_no""", a)}
     for r in db.rows(_con, f"SELECT course_id, topic_no, video_at FROM pk_topics WHERE video_url IS NOT NULL AND video_url!='' AND {w}", a):
         k = (r["course_id"], r["topic_no"]); vid[k] = max(x for x in (vid.get(k), r["video_at"]) if x) if (vid.get(k) or r["video_at"]) else None
+    codes = PK.course_codes()
+    pres = _TQ().latest_sends()
+    dsent = {r["job_id"] for r in db.rows(_con, f"SELECT job_id FROM st_dept WHERE {w}", a)}
     out = []
     for co in courses:
         for les in PK.lessons(co["id"], co):
@@ -429,6 +440,8 @@ def states(courses: list[dict], only_keys: dict | None = None) -> list[dict]:
                         "teacher_id": co.get("teacher_id"), "lkey": les["key"], "code": les["code"], "kind": les["kind"], "title": les["title"],
                         "planned": co["id"] in plan, "ready": {x: bool(rr.get(x)) for x in ("text", "slides", "video")},
                         "booking": _bk_row(bk[k]) if k in bk else None, "job": {"id": job[k]["id"], "status": job[k]["status"]} if k in job else None,
+                        "full_code": PK.lesson_unique_code(co["id"], les["key"], codes), "pres_version": (pres.get(k) or {}).get("version", 0),
+                        "dept_sent": bool(k in job and job[k]["status"] == "tasdiqlandi" and job[k]["id"] in dsent),
                         **s})
     return out
 
@@ -529,10 +542,16 @@ def lesson_detail(c: Ctx, cid: int, lkey: int) -> dict:
     pk = db.rows(_con, "SELECT ts, action, note, user_name FROM pk_log WHERE course_id=? AND topic_no=? ORDER BY id DESC LIMIT 30", (co["id"], les["key"]))
     hist = sorted([{**x, "src": "studiya", "user_name": _short(x["user_name"])} for x in log] +
                   [{**x, "src": "paket", "user_name": _short(x["user_name"])} for x in pk], key=lambda x: x["ts"] or "", reverse=True)[:80]
+    ack_lesson(c, co["id"], les["key"])                       # operator / bo'lim tafsilotni ochdi — «yangi taqdimot» xabari o'chadi
+    ref = _TQ().lesson_ref(co, les)
+    sends = _TQ().sends_public(co["id"], les["key"])
+    dept = [_dept_row(r) for r in db.rows(_con, "SELECT * FROM st_dept WHERE course_id=? AND lkey=? ORDER BY job_id DESC LIMIT 10", (co["id"], les["key"]))]
     return {"lesson": {"course_id": co["id"], "lkey": les["key"], "code": les["code"], "kind": les["kind"], "title": les["title"], "subject": co["subject"],
-                       "teacher": _short(co.get("teacher") or ""), "dept": co.get("dept")},
+                       "teacher": _short(co.get("teacher") or ""), "dept": co.get("dept"), "full_code": ref["full_code"], "direction": ref["direction"], "course": ref["course"]},
             "state": st[0] if st else None, "bookings": bks, "raws": raws, "jobs": jobs if ops else [{k: j[k] for k in ("id", "status", "status_label", "created_at")} for j in jobs],
-            "youtube": yts, "history": hist}
+            "youtube": yts, "history": hist, "taqdimot": {"latest": sends[0] if sends else None, "history": sends,
+                                                          "url": f"{P}/lessons/{co['id']}/{les['key']}/taqdimot"},
+            "dept_sends": dept}
 
 def mark_nextid(c: Ctx, cid: int, lkey: int, undo: bool = False) -> dict:
     guard(c, "NEXTID belgisi", DEPT, f"kurs #{cid} · {lkey} · {'bekor' if undo else 'yuklandi'}")
@@ -686,6 +705,8 @@ def day_plan(c: Ctx, day: str = "", room_id: int = 0) -> dict:
         w, a2 = _in({r["course_id"] for r in rows})
         for j in db.rows(_con, f"SELECT id, course_id, lkey, status, pct FROM st_jobs WHERE status!='bekor' AND {w} ORDER BY id", a2): jobs[(j["course_id"], j["lkey"])] = j
         raws = {(x["course_id"], x["lkey"]) for x in db.rows(_con, f"SELECT DISTINCT course_id, lkey FROM st_raw WHERE deleted=0 AND {w}", a2)}
+    codes = _PK().course_codes() if rows else {}
+    pres = _TQ().latest_sends({(r["course_id"], r["lkey"]) for r in rows}) if rows else {}
     items = []
     for r in rows:
         mine = r["teacher_id"] == tid and c.role.key == TEACH
@@ -693,7 +714,8 @@ def day_plan(c: Ctx, day: str = "", room_id: int = 0) -> dict:
             items.append({"id": None, "room_id": r["room_id"], "start": r["start"], "end": r["end"], "busy": True, "mine": False}); continue
         L = les_title(r)
         it = {**_bk_row(r), "busy": True, "mine": mine, "subject": r["subject"], "group": f"{r['direction'] or ''}, {r['course'] or ''}-kurs",
-              "teacher": _short(r["teacher"] or ""), "code": L["code"], "title": L["title"], "past": _pdt(r["end"]) <= now}
+              "teacher": _short(r["teacher"] or ""), "code": L["code"], "title": L["title"], "past": _pdt(r["end"]) <= now,
+              "full_code": _PK().lesson_unique_code(r["course_id"], r["lkey"], codes), "pres": pres.get((r["course_id"], r["lkey"]))}
         if ops:
             j = jobs.get((r["course_id"], r["lkey"]))
             it["job"] = {"id": j["id"], "status": j["status"], "status_label": JOB_ST.get(j["status"]), "pct": j["pct"]} if j else None
@@ -715,10 +737,13 @@ def my_bookings(c: Ctx) -> list[dict]:
     rows = db.rows(_con, """SELECT b.*, c.subject, c.topics, r.name room FROM st_bookings b JOIN dl_courses c ON c.id=b.course_id LEFT JOIN st_rooms r ON r.id=b.room_id
                             WHERE c.teacher_id=? AND b.status='band' AND b.end>? ORDER BY b.start""", (_tid(c), _iso(_now() - dt.timedelta(hours=12))))
     out = []
+    codes = _PK().course_codes() if rows else {}
+    pres = _TQ().latest_sends({(r["course_id"], r["lkey"]) for r in rows}) if rows else {}
     for r in rows:
         try: L = _PK().lesson_info({"id": r["course_id"], "topics": r["topics"], "subject": r["subject"]}, r["lkey"])
         except HTTPException: continue
-        out.append({**_bk_row(r), "subject": r["subject"], "room": r["room"], "code": L["code"], "title": L["title"]})
+        out.append({**_bk_row(r), "subject": r["subject"], "room": r["room"], "code": L["code"], "title": L["title"],
+                    "full_code": _PK().lesson_unique_code(r["course_id"], r["lkey"], codes), "pres": pres.get((r["course_id"], r["lkey"]))})
     return out
 
 
@@ -798,6 +823,7 @@ def create_job(c: Ctx, cid: int, lkey: int, template: str, raw_id: int = 0, note
         if redo_of:
             if _con.execute("""UPDATE st_jobs SET status='qayta', decided_at=?, decided_by=?, decided_name=?, updated_at=? WHERE id=? AND course_id=? AND lkey=?
                                AND status IN ('tayyor','operator')""", (now, c.user["id"], c.user["full_name"], now, redo_of, co["id"], les["key"])).rowcount != 1:
+                _con.rollback()
                 raise HTTPException(409, "Qayta montaj — faqat tayyor yoki xatolik bergan vazifa uchun")
             _log(c, co["id"], les["key"], "qayta montajga qaytarildi", (note or "").strip(), job_id=redo_of)
         for o in db.rows(_con, "SELECT id FROM st_jobs WHERE course_id=? AND lkey=? AND status IN ('navbatda','operator','tayyor')", (co["id"], les["key"])):
@@ -830,7 +856,7 @@ def jobs_list(c: Ctx, status: str = "") -> dict:
         except HTTPException: L = {"code": "?", "title": "(dars o'chirilgan)"}
         out.append({**_job_row(j), "subject": j["subject"], "teacher": _short(j["teacher"] or ""), "code": L["code"], "title": L["title"]})
     counts = {r["status"]: r["n"] for r in db.rows(_con, "SELECT status, COUNT(*) n FROM st_jobs GROUP BY status")}
-    return {"items": out, "counts": counts, "templates": TEMPLATES, "worker": bool(worker_token())}
+    return {"items": out, "counts": counts, "templates": TEMPLATES, "worker": bool(worker_token()), "worker_note": worker_note(c), "dept_wait": dept_wait() if status == "faol" else []}
 
 def job_detail(c: Ctx, jid: int) -> dict:
     guard(c, "montaj natijasi", OPS, f"#{jid}")
@@ -843,9 +869,11 @@ def job_detail(c: Ctx, jid: int) -> dict:
     row["media"] = {k: f"{P}/jobs/{j['id']}/media/{k}" for k, fn in (("video", "video.mp4"), ("thumb", "thumb.jpg"), ("captions", "captions.vtt")) if (d / fn).is_file()}
     raw = db.one(_con, "SELECT id, name, kind, size, ts FROM st_raw WHERE id=?", (j["raw_id"],))
     yt = db.one(_con, "SELECT * FROM st_yt WHERE job_id=? ORDER BY id DESC LIMIT 1", (j["id"],))
+    dp = db.one(_con, "SELECT * FROM st_dept WHERE job_id=?", (j["id"],))
+    info = dept_info(co, _lesson(co, j["lkey"]), j["id"]) if j["status"] in ("tasdiqlandi", "tayyor") else None
     return {"job": row, "lesson": {"course_id": co["id"], "lkey": j["lkey"], "code": L["code"], "title": L["title"], "subject": co["subject"],
                                    "teacher": _short(co.get("teacher") or "")}, "raw": raw, "youtube": _yt_row(yt) if yt else None,
-            "yt_on": YT.configured()}
+            "yt_on": YT.configured(), "dept": _dept_row(dp) if dp else None, "dept_info": info}
 
 def _job_dir(jid: int) -> Path: return store() / "jobs" / str(int(jid))
 
@@ -934,11 +962,117 @@ def cancel_job(c: Ctx, jid: int) -> dict:
     with _lock:
         if _con.execute("UPDATE st_jobs SET status='bekor', updated_at=? WHERE id=? AND status IN ('navbatda','operator','tayyor')",
                         (_iso(_now()), j["id"])).rowcount != 1:
+            _con.rollback()
             raise HTTPException(409, "Bu vazifani bekor qilib bo'lmaydi")
         _log(c, j["course_id"], j["lkey"], "montaj bekor qilindi", job_id=j["id"]); _con.commit()
     cleanup_lesson(j["course_id"], j["lkey"])                 # natija papkasi (va almashtirilgan xom video) diskdan
     _mw_invalidate()
     return {"ok": True}
+
+
+# =============================================================================================
+# Taqdimot (o'qituvchi yuborgan) va «Masofaviy bo'limga yuborish» (montajdan keyin)
+# =============================================================================================
+def on_presentation(c: Ctx, cid: int, lkey: int, code: str, ver: int, title: str, slides: int) -> None:
+    """O'qituvchi taqdimotni studiyaga va bo'limga yubordi (app/taqdimot.py send): kurs ishlab chiqarish rejasiga qo'shiladi (rejadan olib tashlangan bo'lsa —
+    qaytarilmaydi), jurnalga yoziladi — darsning (course_id, lkey) bog'lanishi bo'yicha studiya shu taqdimotni ko'radi."""
+    with _lock:
+        _con.execute("INSERT OR IGNORE INTO st_plan(course_id,ts,by_name,active) VALUES(?,?,?,1)", (int(cid), _iso(_now()), "Taqdimot yuborildi"))
+        _log(c, int(cid), int(lkey), "taqdimot yuborildi", f"{code} · v{ver} · {slides} slayd · {title}"[:300]); _con.commit()
+    _mw_invalidate()
+
+def ack_lesson(c: Ctx, cid: int, lkey: int) -> None:
+    """Operator (studiya) yoki bo'lim xodimi dars tafsilotini / kartochkasini ochdi: yangi taqdimot va montajlangan video xabarlari «ko'rildi»."""
+    k = c.role.key
+    _TQ().ack(c, cid, lkey)
+    if k in DEPT:
+        with _lock:
+            n = _con.execute("UPDATE st_dept SET ack_at=?, ack_by=? WHERE course_id=? AND lkey=? AND ack_at IS NULL", (_iso(_now()), c.user["full_name"], int(cid), int(lkey))).rowcount
+            _con.commit()
+        if n: _mw_invalidate()
+
+def _dept_row(r: dict) -> dict:
+    return {"job_id": r["job_id"], "code": r["code"], "pres_version": r["pres_version"], "ts": r["ts"], "by": _short(r["by_name"]), "note": r["note"] or "", "seen": bool(r["ack_at"])}
+
+def dept_flags(cid: int = 0) -> dict:
+    """{(course_id, lkey): {dept_sent, video_wait}} — darsning ENG YANGI tasdiqlangan montaji bo'yicha (bitta so'rov).
+    dept_sent — shu montaj masofaviy bo'limga yuborilgan; video_wait — tasdiqlangan, bo'limga yuborilmagan va undan yangiroq montaj yo'q."""
+    rows = db.rows(_con, f"""SELECT j.course_id, j.lkey, j.id jid,
+                                    (SELECT MAX(x.id) FROM st_jobs x WHERE x.course_id=j.course_id AND x.lkey=j.lkey AND x.status!='bekor') latest,
+                                    EXISTS(SELECT 1 FROM st_dept d WHERE d.job_id=j.id) sent
+                             FROM st_jobs j WHERE j.status='tasdiqlandi' {'AND j.course_id=?' if cid else ''}
+                             AND j.id=(SELECT MAX(y.id) FROM st_jobs y WHERE y.course_id=j.course_id AND y.lkey=j.lkey AND y.status='tasdiqlandi')""", (int(cid),) if cid else ())
+    return {(r["course_id"], r["lkey"]): {"dept_sent": bool(r["sent"]), "video_wait": (not r["sent"]) and r["latest"] == r["jid"]} for r in rows}
+
+def dept_info(co: dict, les: dict, jid: int = 0, codes: dict | None = None) -> dict:
+    """«Masofaviy bo'limga yuborish» oynasi uchun: dars kodi, kafedra, o'qituvchi, fan, dars, taqdimot versiyasi — syomka bandi / montaj vazifasidan AVTOMATIK
+    (operator qayta tanlamaydi, faqat tasdiqlaydi). dept_sent / video_wait — darsning eng yangi tasdiqlangan montaji holati; pres_sent — taqdimot yuborilganmi."""
+    ref = _TQ().lesson_ref(co, les, codes)
+    sends = _TQ().sends_public(co["id"], les["key"], 1)
+    f = dept_flags(co["id"]).get((co["id"], les["key"])) or {"dept_sent": False, "video_wait": False}
+    return {**ref, "pres": sends[0] if sends else None, "job_id": jid or None, "pres_sent": bool(sends), **f}
+
+def send_dept(c: Ctx, jid: int, note: str = "") -> dict:
+    """Tasdiqlangan montajni masofaviy bo'limga yuborish. Dars kodi vazifadan (course_id, lkey) avtomatik; takroriy yuborish — 409 (tranzaksiya qaytariladi —
+    oqim ulanishida yozish qulfi ochiq qolmaydi). Montaj darsning ENG YANGISI bo'lishi shart (yangiroq montaj bor — 409). Darsga taqdimot yuborilmagan bo'lsa —
+    yuboriladi, lekin javobda warnings. Studiya bosqichlari (derive) o'zgarmaydi: bu faqat belgi, jurnal (st_log) va bo'limga xabar."""
+    guard(c, "masofaviy bo'limga yuborish", OPS, f"#{jid}")
+    j = _job(c, jid); co = _course(c, j["course_id"]); les = _lesson(co, j["lkey"])
+    if j["status"] != "tasdiqlandi": raise HTTPException(409, "Avval montaj natijasini tasdiqlang — keyin masofaviy bo'limga yuboriladi")
+    if db.one(_con, "SELECT 1 x FROM st_jobs WHERE course_id=? AND lkey=? AND id>? AND status!='bekor'", (co["id"], les["key"], j["id"])):
+        raise HTTPException(409, "Bu darsning yangiroq montaji bor — shuni ko'rib chiqing va yuboring")
+    info = dept_info(co, les, j["id"])
+    ver = (info["pres"] or {}).get("version")
+    with _lock:
+        try:
+            _con.execute("INSERT INTO st_dept(job_id,course_id,lkey,code,pres_version,ts,by_id,by_name,note) VALUES(?,?,?,?,?,?,?,?,?)",
+                         (j["id"], co["id"], les["key"], info["full_code"], ver, _iso(_now()), c.user["id"], c.user["full_name"], (note or "").strip()[:300] or None))
+            _log(c, co["id"], les["key"], "masofaviy bo'limga yuborildi", f"{info['full_code']} · montaj #{j['id']}" + (f" · taqdimot v{ver}" if ver else "") +
+                 (f" · {note.strip()}" if note and note.strip() else ""), job_id=j["id"]); _con.commit()
+        except sqlite3.IntegrityError:
+            _con.rollback()                                  # yozish tranzaksiyasi ochiq qolsa — butun server «database is locked» bo'lardi
+            raise HTTPException(409, "Bu montaj allaqachon masofaviy bo'limga yuborilgan")
+        except BaseException:
+            _con.rollback(); raise
+    _mw_invalidate()
+    out = {"ok": True, "dept": _dept_row(db.one(_con, "SELECT * FROM st_dept WHERE job_id=?", (j["id"],))), "info": {**info, "dept_sent": True, "video_wait": False},
+           "state": states([co], {co["id"]: {les["key"]}})[0], "warnings": []}
+    if not ver: out["warnings"].append("Bu darsga taqdimot yuborilmagan")
+    return out
+
+def dept_wait() -> list[dict]:
+    """Tasdiqlangan, lekin hali masofaviy bo'limga yuborilmagan montajlar (har darsning oxirgi tasdiqlangani)."""
+    rows = db.rows(_con, """SELECT j.*, c.subject, c.topics, t.full_name teacher FROM st_jobs j JOIN dl_courses c ON c.id=j.course_id LEFT JOIN teachers t ON t.id=c.teacher_id
+                            WHERE j.status='tasdiqlandi' AND j.id=(SELECT MAX(x.id) FROM st_jobs x WHERE x.course_id=j.course_id AND x.lkey=j.lkey AND x.status!='bekor')
+                            AND NOT EXISTS(SELECT 1 FROM st_dept d WHERE d.job_id=j.id) ORDER BY j.decided_at DESC LIMIT 100""")
+    codes = _PK().course_codes() if rows else {}
+    out = []
+    for j in rows:
+        try: L = _PK().lesson_info({"id": j["course_id"], "topics": j["topics"], "subject": j["subject"]}, j["lkey"])
+        except HTTPException: continue
+        out.append({"job_id": j["id"], "course_id": j["course_id"], "lkey": j["lkey"], "code": L["code"], "title": L["title"], "subject": j["subject"],
+                    "teacher": _short(j["teacher"] or ""), "full_code": _PK().lesson_unique_code(j["course_id"], j["lkey"], codes), "decided_at": j["decided_at"]})
+    return out
+
+def taqdimot_outline(c: Ctx, cid: int, lkey: int, ver: int) -> dict:
+    """Yuborilgan versiya paytidagi reja — studiya syomkada o'qiy olishi uchun: {title, slides:[{n, kind, title, bullets(≤8), notes}]}. Eski yozuvlar uchun
+    PPTX yoki taqdimot rejasidan, bo'lmasa bo'sh slaydlar. Ruxsat: bo'lim, operator va kursning o'z o'qituvchisi; begona kurs — 403."""
+    guard(c, "taqdimot rejasi", OPS + (TEACH,), f"kurs #{cid} · {lkey} · v{ver}")
+    co = _course(c, cid); les = _lesson(co, lkey)
+    ack_lesson(c, co["id"], les["key"])
+    r = db.one(_con, "SELECT * FROM pres_sends WHERE course_id=? AND lkey=? AND version=?", (co["id"], les["key"], int(ver)))
+    if not r: raise HTTPException(404, "Taqdimot versiyasi topilmadi")
+    o = _TQ().send_outline(r)
+    slides = [{"n": int(x.get("n") or i), "kind": str(x.get("kind") or "slide"), "title": str(x.get("title") or ""),
+               "bullets": [str(b) for b in (x.get("bullets") or [])][:8], "notes": str(x.get("notes") or "")} for i, x in enumerate(o.get("slides") or [], 1)]
+    return {"title": o.get("title") or r["title"] or "", "version": r["version"], "slides": slides}
+
+def taqdimot_file(c: Ctx, cid: int, lkey: int, ver: int, kind: str):
+    """Studiya: darsning yuborilgan taqdimoti (pptx / pdf) — operator syomkada ochadi; o'qituvchi faqat o'z darsini."""
+    guard(c, "taqdimotni ochish", OPS + (TEACH,), f"kurs #{cid} · {lkey} · v{ver} · {kind}")
+    co = _course(c, cid); les = _lesson(co, lkey)
+    ack_lesson(c, co["id"], les["key"])
+    return _TQ().serve_send(co["id"], les["key"], ver, kind)
 
 
 # =============================================================================================
@@ -1710,6 +1844,13 @@ TABS = {HEAD: ["holat", "kun", "montaj", "darslar", "sozlama"], STAFF: ["holat",
         OPER: ["kun", "montaj", "darslar", "holat", "sozlama"], "rektor": ["holat"], "prorektor_oquv": ["holat"], TEACH: ["darslar"], IT: ["sozlama"]}
 TAB_T = {"holat": "Holat", "kun": "Kun rejasi", "montaj": "Montaj", "darslar": "Darslar", "sozlama": "Sozlamalar"}
 
+def worker_note(c: Ctx) -> str | None:
+    """Montaj ishchisi ulanmagan bo'lsa — rolga mos matn: texnik tafsilot (muhit o'zgaruvchisi) faqat IT va bo'lim boshlig'iga; operator va boshqalarga — oddiy."""
+    if worker_token(): return None
+    if c.role.key in (IT, HEAD):
+        return "Montaj ishchisi ulanmagan (serverda ISFT_CORE_WORKER_TOKEN sozlanmagan) — vazifalar navbatda kutadi. tools/montaj va docs/studio.md."
+    return "Montaj hozircha ishlamayapti — IT bilan bog'laning. Vazifalar navbatda saqlanadi."
+
 def meta(c: Ctx) -> dict:
     guard(c, "ochish", ALL)
     k = c.role.key
@@ -1720,7 +1861,7 @@ def meta(c: Ctx) -> dict:
                       for r in _rooms()] if k != IT else [],
             "caps": {"ops": k in OPS, "dept": k in DEPT, "teacher": k == TEACH, "board": k in BOARD, "aggregate": k in LEAD, "plan": k in DEPT,
                      "nextid": k in DEPT, "review": k in OPS},
-            "yt_on": YT.configured(), "worker_on": bool(worker_token()), "today": _now().date().isoformat(), "now": _iso(_now()),
+            "yt_on": YT.configured(), "worker_on": bool(worker_token()), "worker_note": worker_note(c), "today": _now().date().isoformat(), "now": _iso(_now()),
             "limits": {"raw_gb": round(raw_max() / 1024 ** 3, 2)}, "my_bookings": my_bookings(c) if k == TEACH else []}
 
 def _red_items(c: Ctx, I, owner: str, S: list[dict]) -> list:
@@ -1768,6 +1909,26 @@ def mywork_items(c: Ctx, I) -> list:
         if rest:
             out.append(I("studio", "syomka", "st-day", f"Studiya: {len(rest)} ta syomka (bugun va ertaga)", "Kun rejasini oching", rest[0]["start"],
                          {"view": "studio", "tab": "kun"}, "bolimga", "", "mid", len(rest), icon="clock"))
+    if k in OPER_DEPT_NOTIFY:
+        out += _TQ().mywork_items(c, I)
+    if k in DEPT:
+        dv = db.rows(_con, "SELECT * FROM st_dept WHERE ack_at IS NULL ORDER BY ts DESC LIMIT 30")
+        for r in dv[:5]:
+            it = I("studio", "dept", f"st-dv{r['job_id']}", f"Montajlangan video keldi: {r['code']}", f"Studiya operatori yubordi · {_short(r['by_name'])} · {str(r['ts'] or '')[:16].replace('T', ' ')} · dars kartochkasini oching",
+                   None, {"view": "paket", "tab": "fanlar", "card": {"cid": r["course_id"], "lkey": r["lkey"]}}, "bolimga", "yuborildi", "mid", icon="video")
+            it["fresh"] = True              # yuborilgan vaqt muddat emas — yangi xabar «Muddati o'tdi» bo'lmasin (due yo'q), «Yangi» belgisi uchun fresh
+            out.append(it)
+        if len(dv) > 5:
+            it = I("studio", "dept", "st-dv-more", f"Montajlangan videolar: yana {len(dv) - 5} ta", "Dars kartochkalarini oching", None,
+                   {"view": "paket", "tab": "fanlar"}, "bolimga", "", "mid", len(dv) - 5, icon="video")
+            it["fresh"] = True
+            out.append(it)
+    if k == OPER:
+        dw = dept_wait()                      # tasdiqlangan, lekin Masofaviy bo'limga yuborilmagan montajlar — operatorning oxirgi qadami
+        if dw:
+            it = I("studio", "dept", "st-dw", f"Masofaviy bo'limga yuborilmagan montaj: {len(dw)} ta", " · ".join(x["full_code"] for x in dw[:3]) + (" …" if len(dw) > 3 else ""),
+                   None, {"view": "studio", "tab": "montaj"}, "bolimga", "yuborilmagan", "mid", len(dw), icon="video")
+            out.append(it)
     if k in OPS:
         n = db.rows(_con, "SELECT id, result_at FROM st_jobs WHERE status='tayyor' ORDER BY result_at")
         if n and k in (OPER,) + DEPT:
@@ -1877,6 +2038,18 @@ async def api_raw(cid: int, lkey: int, request: Request, name: str = "video", te
 
 @router.post(P + "/lessons/{cid}/{lkey}/jobs")
 def api_job_new(cid: int, lkey: int, body: JobIn, request: Request): return create_job(C(request), cid, lkey, body.template, body.raw_id, body.note)
+
+class DeptIn(BaseModel):
+    note: str = ""
+
+@router.post(P + "/jobs/{jid}/send-dept")
+def api_send_dept(jid: int, body: DeptIn, request: Request): return send_dept(C(request), jid, body.note)
+
+@router.get(P + "/lessons/{cid}/{lkey}/taqdimot/{ver}/outline")
+def api_taqdimot_outline(cid: int, lkey: int, ver: int, request: Request): return taqdimot_outline(C(request), cid, lkey, ver)
+
+@router.get(P + "/lessons/{cid}/{lkey}/taqdimot/{ver}/{kind}")
+def api_taqdimot_file(cid: int, lkey: int, ver: int, kind: str, request: Request): return taqdimot_file(C(request), cid, lkey, ver, kind)
 
 @router.post(P + "/lessons/{cid}/{lkey}/nextid")
 def api_nextid(cid: int, lkey: int, body: NextIn, request: Request): return mark_nextid(C(request), cid, lkey, body.undo)

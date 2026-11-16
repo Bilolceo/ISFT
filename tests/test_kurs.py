@@ -290,9 +290,12 @@ z = zipfile.ZipFile(io.BytesIO(zips["xapi"]))
 names = set(z.namelist())
 ok({"index.html", "player.js", "player.css", "lms.js", "content.js", "content.json", "tincan.xml"} <= names and any(n.startswith("fonts/") for n in names)
    and "imsmanifest.xml" not in names, "xAPI: pleyer, umumiy lms.js, shriftlar, content.js/json, tincan.xml")
+ok({"scormdriver/indexAPI.html", "scormdriver/indexAPI.js"} <= names and "../index.html" in z.read("scormdriver/indexAPI.js").decode()
+   and not any(n.startswith("scormdriver/") for m_ in ("scorm12", "scorm2004", "none") for n in zipfile.ZipFile(io.BytesIO(zips[m_])).namelist()),
+   "xAPI: scormdriver/indexAPI.html → ../index.html (NEXTID launch yo'li, Rise kabi); SCORM/HTML eksportida yo'q")
 root = ET.fromstring(z.read("tincan.xml")); acts = root.findall(f"{TCN}activities/{TCN}activity")
 cont = json.loads(z.read("content.json"))
-ok(acts[0].get("id") == f"https://isft.uz/xapi/kurs/{dc}" and acts[0].find(f"{TCN}launch").text == "index.html"
+ok(acts[0].get("id") == f"https://isft.uz/xapi/kurs/{dc}" and acts[0].find(f"{TCN}launch").text == "scormdriver/indexAPI.html"
    and sum(1 for a in acts if a.get("type").endswith("/module")) == sum(1 for l in cont["lessons"] if l["type"] == "blocks")
    and any(a.get("type").endswith("/assessment") for a in acts)
    and sum(1 for a in acts if a.get("type").endswith("cmi.interaction")) == sum(len(l.get("questions") or []) for l in cont["lessons"]) + sum(1 for l in cont["lessons"] for b in l.get("blocks") or [] if b["type"] == "knowledge"),
@@ -625,10 +628,20 @@ finally:
     shutil.rmtree(wtmp, ignore_errors=True)
 
 # =============================================================================================
+print("== 13e. «AI bilan tahrirlash» (to'liq sinov — tests/test_kurs_ai.py): bog'lanish va variant izohi modeli")
+kjs = (ROOT / "static" / "kurs.js").read_text()
+ok(all(x in kjs for x in ("kuAiOpen", 'data-act="ai"', 'aria-label="AI bilan tahrirlash"', "/ai-question", "AI tuzdi — to'g'ri javobni tekshiring", 'data-act="qai"')), "kurs.js: AI tugmasi (aria-label), «AI bilan savol» (tez qo'shish), eslatma, endpoint")
+fb = K.clean_block("knowledge", {"kind": "single", "question": "S?", "answers": [{"text": "a", "correct": True, "feedback": "Nega to'g'ri"}, {"text": "b", "feedback": "Nega noto'g'ri <script>x</script>"}],
+                                 "feedback_correct": "Umumiy", "feedback_wrong": "Takrorlang"}, K._Assets(None))
+ok(fb["answers"][0]["feedback"] == "Nega to'g'ri" and fb["answers"][1]["feedback"].startswith("Nega noto'g'ri") and fb["feedback_correct"] == "Umumiy", "Har variant izohi (answers[i].feedback) va umumiy izohlar modelda saqlanadi")
+ok("afb" in (ROOT / "app" / "kurs_player" / "player.js").read_text(), "Pleyer: tanlangan variant izohi ko'rsatiladi (afb)")
+ok(q("SELECT name FROM sqlite_master WHERE type='table' AND name='ku_ai'") and head.post(f"{P}/lessons/{hl}/ai-question", json={"text": "1. Savol?\nA) bir ✅\nB) ikki"}).status_code in (200, 503, 502),
+   "ku_ai jadvali bor; /lessons/{id}/ai-question endpointi javob beradi (kalitsiz — 503 + tuzilma)")
+
 print("== 14. Brauzer: pleyer (mock LMS) va muharrir")
 pwj, chrome, node = os.environ.get("PW"), os.environ.get("CHROME"), shutil.which("node")
 if node:
-    for f in ("app/kurs_player/player.js", "app/paket_player/lms.js", "static/kurs.js", "tools/kurs_player_check.js", "tools/kurs_editor_check.js"):
+    for f in ("app/kurs_player/player.js", "app/paket_player/lms.js", "static/kurs.js", "tools/kurs_player_check.js", "tools/kurs_editor_check.js", "tools/kurs_ai_check.js"):
         if (ROOT / f).is_file():
             rr = subprocess.run([node, "--check", str(ROOT / f)], capture_output=True, text=True)
             ok(rr.returncode == 0, f"node --check {f}" + ("" if rr.returncode == 0 else ": " + rr.stderr.strip()[:200]))

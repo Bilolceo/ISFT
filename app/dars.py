@@ -41,7 +41,7 @@ from .rbac import Ctx, AccessDenied
 router = APIRouter()
 _con = None
 _ctx = None
-_lock = threading.RLock()
+_lock = db.TxLock(lambda: _con)      # RLock + blokdan istisno bilan chiqsa — rollback
 P = "/api/dars"
 RES = rbac.PAKET
 
@@ -120,7 +120,7 @@ def _it(kind, key=None, text=""):
     return d
 DEFAULT_LAYOUT = {
     "maruza": [_it("cover"), _it("section", "secvideo", "VIDEODARS"), _it("video"), _it("section", "sectext", "MA'RUZA MATNI"), _it("plan"), _it("text"),
-               _it("keypoints"), _it("refs"), _it("section", "secslides", "DARS TAQDIMOTI"), _it("slides"), _it("files"),
+               _it("keypoints"), _it("refs"), _it("section", "secslides", "TAQDIMOT"), _it("slides"), _it("files"),
                _it("section", "secpractice", "MASHQ VA TOPSHIRIQLAR"), _it("flashcards"), _it("exercises"), _it("assignment"), _it("reflect"), _it("quiz")],
     "amaliy": [_it("cover"), _it("section", "secvideo", "VIDEODARS"), _it("video"), _it("section", "sectask", "AMALIY MASHG'ULOT"), _it("plan"), _it("text"),
                _it("files"), _it("section", "secpractice", "MASHQ VA TOPSHIRIQLAR"), _it("flashcards"), _it("exercises"), _it("assignment"), _it("reflect"), _it("quiz")]}
@@ -225,7 +225,8 @@ def _clean(t: str, d: dict) -> dict: return KU.clean_block(t, d, KU._Assets(None
 def placeholder(item: dict, heading: str = "") -> list[tuple[str, dict]]:
     """Shablon bandi uchun bo'sh (to'ldirilishi kerak) bloklar. Video / ro'yxat kabi bo'sh bloklar «xato» beradi — to'ldirilmaguncha eksport bo'lmaydi."""
     k = item["kind"]
-    if k == "section": return [("heading", {"text": item.get("text") or "BO'LIM", "level": 2})]
+    # bo'lim — NEXTID'dagi Rise darslari kabi «davom etish» tasmasi (yozuvi — bo'lim nomi): bosilmaguncha bo'lim mazmuni yashirin
+    if k == "section": return [("continue", {"label": (item.get("text") or "BO'LIM")[:60], "require": "none"})]
     if k == "continue": return [("continue", {"label": KU.LABELS["continue"], "require": "none"})]
     if k == "divider": return [("divider", {"style": "line"})]
     if k == "cover": return [("heading", {"text": heading or "Dars", "level": 2})]
@@ -404,6 +405,11 @@ class _Copier:
             aid = KU._save_asset(self.c, self.kcid, kind, ext, name or Path(rel).name, tmp=tmp, size=src.stat().st_size, sha=PK._file_sha(src))
         self.done[rel] = aid; return aid
 
+def _set_author(kcid: int, co: dict) -> None:
+    """Muqovadagi muallif — fan o'qituvchisi (NEXTID kabi), darsni yaratgan xodim («Bo'lim boshlig'i: …») emas."""
+    t = PK._short(co.get("teacher") or "").strip()
+    if t: _con.execute("UPDATE ku_courses SET author_name=? WHERE id=?", (t[:200], kcid))
+
 def _p(text: str) -> str: return f"<p>{html.escape(str(text or ''))}</p>"
 
 def blocks_from_gather(g: dict, cp: _Copier | None) -> dict:
@@ -534,13 +540,45 @@ def _new_lesson(kcid: int, uid: str, pos: int, ltype: str, title: str, settings:
     return _con.execute("INSERT INTO ku_lessons(course_id,uid,pos,type,title,settings,rev,updated_at,updated_by) VALUES(?,?,?,?,?,?,1,?,?)",
                         (kcid, uid, pos, ltype, title[:200], json.dumps(settings or ({**KU.QUIZ} if ltype == "quiz" else {})), _now(), by)).lastrowid
 
+_link_locks: dict = {}
+_link_guard = threading.Lock()
+
+def link_lock(dl_cid: int, key: int) -> threading.RLock:
+    """Dars (dl_course_id, lkey) bo'yicha jarayon ichidagi qulf: bir vaqtda bitta «dars yaratish / muharrirga o'tkazish». Qulf ichida bog'lanish QAYTA tekshiriladi —
+    parallel so'rovlar bitta kurs yaratadi, qolganlari shu kursni qaytaradi (yetim kurs va ds_links ustidan yozish bo'lmaydi)."""
+    with _link_guard:
+        return _link_locks.setdefault((int(dl_cid), int(key)), threading.RLock())
+
 def _create_linked(c: Ctx, co: dict, les: dict, tpl: dict, src: str, built: dict | None = None) -> dict:
-    """Bog'langan kurs yaratiladi: asosiy dars (shablon bo'yicha) + (shablonda bo'lsa) yakuniy test darsi. built — blocks_from_gather natijasi."""
+    """Bog'langan kurs yaratiladi: asosiy dars (shablon bo'yicha) + (shablonda bo'lsa) yakuniy test darsi. built — blocks_from_gather natijasi.
+    Dars bo'yicha qulf ostida; allaqachon bog'langan bo'lsa — yangi kurs yaratilmaydi ({existing: True, ku_course_id}); yaratish yarim yo'lda yiqilsa —
+    yarim tayyor kurs o'chiriladi (yetim qolmaydi) va tranzaksiya qaytariladi."""
+    with link_lock(co["id"], les["key"]):
+        ex = _link(co["id"], les["key"])
+        if ex:
+            return {"existing": True, "ku_course_id": ex["ku_course_id"], "authority": ex["authority"], "lesson_id": None, "quiz_lesson_id": None, "blocks": 0, "counts": {}}
+        made: list = []
+        try:
+            return _create_linked_locked(c, co, les, tpl, src, built, made)
+        except BaseException:
+            try: _con.rollback()
+            except Exception: pass
+            if made:
+                try:
+                    _con.execute("UPDATE ku_courses SET deleted=1 WHERE id=?", (made[0],)); _con.commit()
+                except Exception:
+                    try: _con.rollback()
+                    except Exception: pass
+            raise
+
+def _create_linked_locked(c: Ctx, co: dict, les: dict, tpl: dict, src: str, built, made: list) -> dict:
     lt = ltype_of(les["kind"])
     items = _items(tpl["layout"], lt)
     heading = PK._lesson_heading(les)
     title = f"{les['code']}. {les['title']}"
     kcid = KU.create_course(c, title, f"<p>{html.escape(co.get('subject') or '')}</p>", dl_course_id=co["id"], src="dars", first_lesson=False)["id"]
+    made.append(kcid)
+    _set_author(kcid, co)
     if built is None: built = {"slots": {}, "quiz": [], "quiz_settings": None, "cover": None, "counts": {}}
     elif callable(built): built = built(kcid)
     blocks = assemble(items, built["slots"], heading, fill_empty=src == "skelet")
@@ -564,20 +602,25 @@ def _create_linked(c: Ctx, co: dict, les: dict, tpl: dict, src: str, built: dict
     return {"ku_course_id": kcid, "lesson_id": lid, "quiz_lesson_id": qlid, "blocks": len(blocks), "counts": built.get("counts") or {}}
 
 def convert_lesson(c: Ctx, dl_cid: int, key: int) -> dict:
-    """«Muharrirda tahrirlash»: avtomatik yig'ilgan dars (paket.gather) → Kurs muharriri kursi. Bog'langan bo'lsa — o'sha kurs qaytadi."""
+    """«Muharrirda tahrirlash»: avtomatik yig'ilgan dars (paket.gather) → Kurs muharriri kursi. Bog'langan bo'lsa — o'sha kurs qaytadi.
+    Dars bo'yicha qulf: parallel chaqiruvlar (ikki marta bosish, bir necha xodim) bitta kurs yaratadi, qolganlari shu kursni qaytaradi (idempotent)."""
     co = PK._course(c, dl_cid, write=True); les = PK._check_topic(co, key)
-    ex = _link(dl_cid, key)
-    if ex: return {"ok": True, "created": False, "ku_course_id": ex["ku_course_id"], "authority": ex["authority"]}
-    st = PK.topic_settings(dl_cid, key)[0]
-    g = PK.gather(dl_cid, key, co, st, les)
-    tpl = template_for(co.get("department_id"))
-    r = _create_linked(c, co, les, tpl, "paket", built=lambda kcid: blocks_from_gather(g, _Copier(c, kcid, g["files"])))
-    try:      # o'tkazish vaqtidagi paket holati (bandlar barmoq izi) — keyingi «Yangi fayllar bor» shu bilan solishtiriladi
-        _record_sync(c, dl_cid, key, r["ku_course_id"], les, g, tpl, n=0)
-    except Exception as e:
-        print("dars.convert: sync yozuvi:", repr(e))
-    _audit(c, "paket muharrirga o'tkazildi", f"kurs #{dl_cid} · {les['code']} → ku #{r['ku_course_id']} · {r['blocks']} blok")
-    return {"ok": True, "created": True, "authority": "kurs", **r}
+    with link_lock(dl_cid, key):
+        ex = _link(dl_cid, key)
+        if ex: return {"ok": True, "created": False, "ku_course_id": ex["ku_course_id"], "authority": ex["authority"]}
+        st = PK.topic_settings(dl_cid, key)[0]
+        g = PK.gather(dl_cid, key, co, st, les)
+        tpl = template_for(co.get("department_id"))
+        r = _create_linked(c, co, les, tpl, "paket", built=lambda kcid: blocks_from_gather(g, _Copier(c, kcid, g["files"])))
+        if r.get("existing"): return {"ok": True, "created": False, "ku_course_id": r["ku_course_id"], "authority": r["authority"]}
+        try:      # o'tkazish vaqtidagi paket holati (bandlar barmoq izi) — keyingi «Yangi fayllar bor» shu bilan solishtiriladi
+            _record_sync(c, dl_cid, key, r["ku_course_id"], les, g, tpl, n=0)
+        except Exception as e:
+            try: _con.rollback()
+            except Exception: pass
+            print("dars.convert: sync yozuvi:", repr(e))
+        _audit(c, "paket muharrirga o'tkazildi", f"kurs #{dl_cid} · {les['code']} → ku #{r['ku_course_id']} · {r['blocks']} blok")
+        return {"ok": True, "created": True, "authority": "kurs", **r}
 
 def set_authority(c: Ctx, dl_cid: int, key: int, authority: str) -> dict:
     PK._course(c, dl_cid, write=True)
@@ -778,6 +821,7 @@ def resync(c: Ctx, dl_cid: int, key: int, preview: bool = True) -> dict:
         _con.execute("UPDATE ku_lessons SET rev=rev+1, updated_at=?, updated_by=? WHERE id=?", (_now(), c.user["full_name"], main["id"]))
         if real.get("cover") and any(x["kind"] == "cover" and acts.get(x["key"]) in SYNC_ACT for x in items):
             _con.execute("UPDATE ku_courses SET cover_asset=?, cover_alt=? WHERE id=?", (real["cover"], f"Dars muqovasi: {les['title']}"[:300], kcid))
+        _set_author(kcid, co)
         KU._bump(kcid, c)
         KU._log(c, kcid, "paketdan yangilandi", f"{les['code']} · +{diff['added']} ~{diff['updated']} −{diff['removed']} · muallif bloklari {diff['author']} (tegilmadi)"
                 + (f" · o'zgartirilgan bandlar tegilmadi: {', '.join(conf)}" if conf else ""))
@@ -806,6 +850,16 @@ def subject_view(c: Ctx, dl_cid: int) -> dict:
     cm = _open_comments([r["ku_course_id"] for r in links.values()])
     exports = {r["course_id"]: r for r in db.rows(_con, f"""SELECT course_id, MAX(id) id, MAX(ts) ts FROM ku_exports WHERE course_id IN
                                                           ({','.join('?' * len(links)) or 'NULL'}) GROUP BY course_id""", tuple(r["ku_course_id"] for r in links.values()))} if links else {}
+    pres, flags = {}, {}
+    try:       # Taqdimot → Studiya → Masofaviy bo'lim zanjiri: dars bo'yicha oxirgi yuborilgan taqdimot versiyasi, video bo'limga yuborilganmi / kutayaptimi
+        if PK._has_table("pres_sends"):
+            pres = {r["lkey"]: r for r in db.rows(_con, """SELECT s.lkey, s.version, s.sent_at FROM pres_sends s WHERE s.course_id=?
+                                                          AND s.version=(SELECT MAX(x.version) FROM pres_sends x WHERE x.course_id=s.course_id AND x.lkey=s.lkey)""", (dl_cid,))}
+        if PK._has_table("st_jobs") and PK._has_table("st_dept"):
+            from . import studio as STU
+            flags = {k[1]: v for k, v in STU.dept_flags(dl_cid).items()}
+    except Exception as e:
+        print("dars.subject_view zanjir:", repr(e))
     out = []
     for l in PK.lessons(dl_cid, co):
         no = l["key"]; r = rd.get((dl_cid, no)) or {}; p_ = pk.get((dl_cid, no)); ln = links.get(no)
@@ -816,6 +870,8 @@ def subject_view(c: Ctx, dl_cid: int) -> dict:
         out.append({"key": no, "code": l["code"], "kind": l["kind"], "no": l["no"], "title": l["title"], "untitled": l["untitled"], "topic": l.get("topic"),
                     "material": bool(r.get("text") or r.get("slides")), "text": bool(r.get("text")), "slides": bool(r.get("slides")), "video": bool(r.get("video")),
                     "quiz": bool(r.get("quiz") or r.get("exercises")),
+                    "pres_version": (pres.get(no) or {}).get("version"), "pres_at": (pres.get(no) or {}).get("sent_at"),
+                    "dept_sent": bool((flags.get(no) or {}).get("dept_sent")), "video_wait": bool((flags.get(no) or {}).get("video_wait")),
                     "package": {"id": p_["last"]["id"], "version": p_["last"]["version"], "status": p_["last"]["status"]} if p_ else None,
                     "export": {"id": exports[ln["ku_course_id"]]["id"], "ts": exports[ln["ku_course_id"]]["ts"]} if ln and ln["ku_course_id"] in exports else None,
                     "review": review, "approved": approved, "authority": auth,
@@ -826,6 +882,7 @@ def subject_view(c: Ctx, dl_cid: int) -> dict:
     tpl = template_for(co.get("department_id"))
     n = int(co["topics"] or 15)
     return {"course": {"id": co["id"], "subject": co["subject"], "direction": co["direction"], "course": co["course"], "dept": co.get("dept"),
+                       "code": PK.course_codes().get(co["id"]), "dir_code": PK.dir_abbr(co["direction"]),
                        "department_id": co.get("department_id"), "teacher": PK._short(co.get("teacher") or ""), "topics": n},
             "lessons": out, "template": {"id": tpl["id"], "version": tpl["version"], "name": tpl["name"], "tkey": tpl["tkey"]},
             "counts": {"L": sum(1 for x in out if x["kind"] == "maruza"), "A": sum(1 for x in out if x["kind"] == "amaliy"), "linked": len(links),
@@ -869,7 +926,7 @@ def skeleton(c: Ctx, dl_cid: int, ratio: int = 2, apply: bool = True, with_kurs:
         ls = {l["key"]: l for l in PK.lessons(dl_cid, co)}
         for p in plan:
             if p["linked"] or p["key"] not in ls: continue
-            _create_linked(c, co, ls[p["key"]], tpl, "skelet"); created += 1
+            if not _create_linked(c, co, ls[p["key"]], tpl, "skelet").get("existing"): created += 1
     res.update(applied=True, created=created)
     _audit(c, "fan skeleti", f"kurs #{dl_cid} · L{n} + A{ratio * n} · {created} ta muharrir kursi")
     return res

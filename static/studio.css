@@ -30,8 +30,9 @@
 .st-item-h{display:flex;flex-wrap:wrap;gap:8px 12px;justify-content:space-between;align-items:center;margin-bottom:8px}
 .st-item-h h3{margin:0}
 .st-empty{padding:16px;text-align:center;color:var(--muted);font-size:13px}
-.st-note{font-size:12.5px;color:var(--muted);margin:10px 0 0;line-height:1.45;overflow-wrap:anywhere;display:flex;gap:6px;align-items:flex-start;flex-wrap:wrap}
-.st-note svg{flex:0 0 auto;margin-top:2px}
+.st-note{font-size:12.5px;color:var(--muted);margin:10px 0 0;line-height:1.45;overflow-wrap:anywhere}
+.st-note.ic{display:flex;gap:8px;align-items:flex-start}
+.st-note.ic svg{flex:0 0 auto;margin-top:2px}.st-note.ic>span{min-width:0}
 .st-acts{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 0;align-items:center}
 .st-acts.end{justify-content:flex-end}
 .st-acts.tight{margin:0;justify-content:flex-end}
@@ -74,14 +75,21 @@
 .st-slots{display:flex;flex-direction:column;gap:8px}
 .st-slot{display:grid;grid-template-columns:96px minmax(0,1fr) auto;gap:8px 12px;align-items:center;padding:10px 12px;border-radius:14px;border:1px solid var(--line);background:var(--surface-3)}
 .st-slot.busy{background:var(--surface);border-color:var(--line-2)}
-.st-slot.past{opacity:.7}
+.st-slot.past .st-time{color:var(--muted)}
 .st-time{font-weight:800;font-variant-numeric:tabular-nums;font-size:13.5px}
 .st-slot-m{display:flex;flex-direction:column;gap:2px;min-width:0}
 .st-slot-m b{font-size:13.5px;overflow-wrap:anywhere}
+.st-slot-m .st-code{align-self:flex-start}
+.st-slot-m.muted{color:var(--muted)}
 .st-slot .st-acts{margin:0;justify-content:flex-end}
 /* modal */
-.st-modal-bg{position:fixed;inset:0;z-index:1000;background:rgba(10,8,9,.45);display:flex;align-items:flex-start;justify-content:center;padding:5vh 16px;overflow-y:auto}
-.st-modal{background:var(--surface);color:var(--ink);border-radius:20px;box-shadow:var(--shadow-pop);width:min(560px,100%);padding:18px 20px;max-width:100%}
+.st-modal-bg{position:fixed;inset:0;z-index:1000;background:rgba(10,8,9,.45);display:flex;align-items:flex-start;justify-content:center;padding:5vh 16px 0;overflow-y:auto}
+.st-modal{background:var(--surface);color:var(--ink);border-radius:20px;box-shadow:var(--shadow-pop);width:min(560px,100%);padding:18px 20px;max-width:100%;overflow:clip;outline:none;margin-bottom:5vh}
+.st-modal-sub{margin:4px 0 0;min-width:0}.st-modal-sub p{margin:2px 0;overflow-wrap:anywhere}
+.st-modal .st-foot{position:sticky;bottom:0;z-index:2;background:var(--surface);margin:14px -20px -18px;padding:12px 20px 14px;border-top:1px solid var(--line)}
+.st-err{margin:12px 0 0;padding:10px 12px;border-radius:12px;background:var(--bad-soft);border-left:4px solid var(--bad);color:var(--ink);font-size:13px;line-height:1.45;overflow-wrap:anywhere}
+.st-err:empty{display:none}
+.st-why{flex:1 1 100%;margin:0;font-size:12.5px;line-height:1.4;color:var(--warn);text-align:right}
 .st-modal.wide{width:min(980px,100%)}
 .st-modal-h{display:flex;gap:10px;align-items:flex-start;justify-content:space-between}
 .st-modal-h h3{margin:0;font-size:17px;overflow-wrap:anywhere}
@@ -119,17 +127,46 @@
 .st-rev{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:16px}
 .st-rev video{width:100%;max-height:60vh;border-radius:14px;background:#000;display:block}
 .st-rev-s{min-width:0;max-height:66vh;overflow:auto}
+.st-pres-nm{margin:4px 0 2px;font-size:14px}.st-pres-i{margin:6px 0}
+.st-pres-a{margin:12px 0 4px}
+.st-vers{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.st-vers li{display:flex;flex-wrap:wrap;gap:4px 12px;align-items:center;justify-content:space-between;padding:6px 6px 6px 12px;border:1px solid var(--line);border-radius:12px;background:var(--surface-3);font-size:13px}
+.st-vers-a{display:flex;gap:4px;flex-wrap:wrap}
 .st-ch,.st-cuts,.st-ul{margin:0;padding-left:20px;font-size:13px;display:flex;flex-direction:column;gap:4px}
 .st-cuts{list-style:none;padding-left:0}
 .st-redo{margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
 .st-hist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;font-size:13px}
 .st-hist li{display:flex;flex-direction:column;gap:1px;padding-bottom:6px;border-bottom:1px solid var(--line)}
 .st-hist li span{overflow-wrap:anywhere}
+.st-hist-d{margin-top:2px}.st-hist-d>summary{font-size:12.5px;padding:6px 0;font-weight:600;color:var(--teal)}
+.st-hist-in{list-style:none;margin:2px 0 6px;padding:0 0 0 10px;border-left:2px solid var(--line-2);display:flex;flex-direction:column;gap:5px}
+.st-hist .st-hist-in li{padding-bottom:0;border-bottom:0;display:block}
+.btn.st-loading{cursor:progress}
+.btn.st-loading::after{content:"";width:12px;height:12px;border-radius:50%;border:2px solid currentColor;border-right-color:transparent;animation:stSpin .7s linear infinite;flex:0 0 auto}
+@keyframes stSpin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.btn.st-loading::after{animation-duration:2.4s}}
+/* to'liq ekranli o'qish rejimi (taqdimot slaydlari — syomkada PowerPoint bo'lmasa ham o'qish) */
+.st-reader{position:fixed;inset:0;z-index:1100;background:var(--bg-solid);color:var(--ink);display:flex}
+.st-reader-in{display:flex;flex-direction:column;width:100%;height:100%;min-height:0;outline:none}
+.st-rd-top{display:flex;align-items:center;gap:12px;padding:8px 8px 8px 16px;border-bottom:1px solid var(--line);background:var(--surface)}
+.st-rd-t{flex:1;min-width:0;font-weight:700;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.st-rd-n{font-variant-numeric:tabular-nums;font-weight:700;font-size:14px;color:var(--ink-2);white-space:nowrap}
+.st-rd-x{border:0;background:var(--surface-2);color:var(--ink);width:44px;height:44px;border-radius:12px;font-size:24px;line-height:1;cursor:pointer;flex:0 0 auto}
+.st-rd-x:focus-visible,.st-rd-slide:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+.st-rd-bar{height:4px;background:var(--track)}.st-rd-bar i{display:block;height:100%;background:var(--teal);width:0;transition:width .2s var(--ease)}
+.st-rd-body{flex:1;min-height:0;overflow:auto;display:flex;justify-content:center;padding:clamp(16px,4vw,56px)}
+.st-rd-slide{width:min(1100px,100%);margin:auto 0;outline:none}
+.st-rd-h{font-size:clamp(28px,4.4vw,60px);line-height:1.15;margin:0 0 .6em;overflow-wrap:anywhere}
+.st-rd-ul{font-size:clamp(20px,2.8vw,40px);line-height:1.4;padding-left:1.1em;margin:0;display:flex;flex-direction:column;gap:.45em;overflow-wrap:anywhere}
+.st-rd-notes{margin-top:2em;padding:14px 18px;border-radius:14px;background:var(--surface-2);border:1px solid var(--line);font-size:clamp(15px,1.6vw,20px);line-height:1.5;color:var(--ink-2);overflow-wrap:anywhere}
+.st-rd-nav{display:flex;gap:10px;justify-content:space-between;padding:10px 16px calc(10px + env(safe-area-inset-bottom));border-top:1px solid var(--line);background:var(--surface)}
+.st-rd-nav .btn{min-height:48px;min-width:112px;font-size:15px}
 /* panel: rahbariyat KPI kartasi (app.js) */
 .pn-studio{margin-bottom:16px}
+.st-tabs button,.st-seg button,.st-day{min-height:40px}
 @media (max-width:760px){
-  .st-tabs{flex-wrap:wrap;overflow-x:visible}
-  .st-tabs button{flex:1 1 auto;padding:8px 10px}
+  .st-tabs{scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch}   /* yorliqlar bitta qatorda, gorizontal siljiydi — «Sozlamalar» yolg'iz qolmaydi */
+  .st-tabs button{scroll-snap-align:start}
   .st-card{padding:14px 14px}
   .st-row{grid-template-columns:minmax(0,1fr)}
   .st-slot.busy{grid-template-columns:minmax(0,1fr)}
@@ -139,6 +176,31 @@
   .st-acts.tight{justify-content:flex-start}
   .st-rev{grid-template-columns:minmax(0,1fr)}
   .st-rev-s{max-height:none}
-  .st-modal{padding:14px}
   .st-kpi b{font-size:21px}
+  /* modal telefonda pastdan chiqadigan varaq; tugmalar paneli pastda (sticky) */
+  .st-modal-bg{padding:40px 0 0}
+  .st-modal{padding:14px;border-radius:20px 20px 0 0;margin:auto 0 0;width:100%}
+  .st-modal .st-foot{margin:12px -14px -14px;padding:10px 14px calc(12px + env(safe-area-inset-bottom))}
+  .st-modal .st-foot .btn{flex:1 1 auto}
+  .st-why{text-align:left}
+  .st-vers li{padding:8px 10px}.st-vers-t{flex:1 1 100%}
+  .st-rd-nav .btn{flex:1 1 0;min-width:0}
 }
+/* tegish maydoni ≥44px (telefon va sensorli ekran) */
+@media (max-width:760px),(pointer:coarse){
+  #v-studio .btn.sm,#v-studio .btn,.st-modal .btn,.st-modal .btn.sm{min-height:44px;min-width:44px}
+  .st-x{width:44px;height:44px}
+  .st-date input{height:44px}
+  .st-seg button,.st-tabs button,.st-day,.st-pslot{min-height:44px}
+  .st-link{min-height:44px;display:inline-flex;align-items:center;padding:0 6px}
+  .st-det>summary{min-height:44px;display:flex;align-items:center}
+  .st-hist-d>summary{min-height:44px;display:flex;align-items:center}
+  .st-form input[type=text],.st-form input[type=search],.st-form input[type=password],.st-form input[type=number],.st-form input[type=time],.st-form input[type=date],.st-form select,.st-pickrow select{min-height:44px}
+}
+
+/* ---------- Taqdimot, unikal dars kodi, masofaviy bo'limga yuborish ---------- */
+.st-code{font-size:11.5px;font-weight:700;color:var(--ink-2);background:var(--surface-2);border:1px solid var(--line-2);border-radius:7px;padding:1px 7px;overflow-wrap:anywhere;max-width:100%;display:inline-block;vertical-align:middle}
+.st-dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px 16px;margin:0 0 12px;padding:12px 14px;border-radius:12px;background:var(--surface-2);border:1px solid var(--line)}
+.st-dl div{min-width:0}.st-dl dt{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}.st-dl dd{margin:2px 0 0;font-size:13.5px;overflow-wrap:anywhere}
+.st-lbl2{display:flex;flex-direction:column;gap:4px;font-size:12.5px;font-weight:600;color:var(--ink-2)}
+.st-lbl2 textarea{font:inherit;font-size:14px;font-weight:400;border:1px solid var(--line-2);border-radius:10px;padding:8px 10px;background:var(--surface);color:var(--ink);resize:vertical;width:100%;box-sizing:border-box}

@@ -1,0 +1,43 @@
+/* ---------- Dars kartochkasi (dars_card.js) — tokenlar style.css'da ---------- */
+.lc-bg .pk-modal{width:min(980px,96vw);max-height:92vh;overflow:auto}
+.lc{display:flex;flex-direction:column;gap:14px;min-width:0}
+.lc-head{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;justify-content:space-between}
+.lc-code{font-size:15px;font-weight:700;color:var(--ink);background:var(--surface-2);border:1px solid var(--line-2);border-radius:10px;padding:5px 10px;overflow-wrap:anywhere;max-width:100%}
+.lc-chips{display:flex;flex-wrap:wrap;gap:6px}
+.lc-chip{display:inline-flex;align-items:center;font-size:12px;font-weight:600;padding:3px 10px;border-radius:99px;background:var(--surface);border:1px solid var(--line);color:var(--ink-2);max-width:100%;overflow-wrap:anywhere}
+.lc-chip.ok{background:var(--ok-soft);color:var(--ok);border-color:transparent}.lc-chip.warn{background:var(--warn-soft);color:var(--warn);border-color:transparent}
+.lc-chip.bad{background:var(--bad-soft);color:var(--bad);border-color:transparent}.lc-chip.info{background:var(--teal-soft);color:var(--teal);border-color:transparent}
+.lc-ref{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px 16px;margin:0;padding:12px 14px;border-radius:12px;background:var(--surface-2);border:1px solid var(--line)}
+.lc-ref div{min-width:0}.lc-ref dt{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}.lc-ref dd{margin:2px 0 0;font-size:13.5px;overflow-wrap:anywhere}
+.lc-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.lc-sec{border:1px solid var(--line);border-radius:14px;padding:12px 14px;background:var(--surface);min-width:0}
+.lc-sec h4{margin:0 0 8px;font-size:14px}.lc-sec p{margin:0 0 8px;font-size:13.5px;overflow-wrap:anywhere}
+.lc-acts{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+.lc-more{font-size:13px;margin-top:6px}.lc-more ul,.lc-files,.lc-log ul{margin:6px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px;font-size:13px}
+.lc-pv{color:var(--ink-2);max-height:96px;overflow:auto}
+.lc-player video{width:100%;max-height:260px;border-radius:10px;background:#000;margin-top:8px}
+.lc-log ul{max-height:220px;overflow:auto}.lc-log li{display:flex;flex-direction:column;gap:1px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+.lc-bar{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;justify-content:space-between;position:sticky;bottom:0;z-index:2;background:var(--raised,var(--surface));margin:0 -22px -20px;padding:10px 22px 14px;border-top:1px solid var(--line);border-radius:0 0 20px 20px}
+.lc-hint{flex:1 1 240px;margin:0;font-size:12.5px;color:var(--ink-2);line-height:1.35;min-width:0}
+.lc-bar-b{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;flex:0 1 auto}
+.lc-warn{display:flex;gap:6px;align-items:flex-start;margin:0;padding:6px 10px;border-radius:10px;background:var(--warn-soft);color:var(--warn);font-size:12.5px;font-weight:600;flex:1 1 100%}.lc-warn svg{flex:none;margin-top:2px}
+.lc-pv:focus-visible,.lc-log ul:focus-visible{outline:2px solid var(--teal);outline-offset:2px;border-radius:8px}
+.lc-v{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center;justify-content:space-between}.lc-lk{display:flex;gap:4px}
+.lc-tech{margin-top:4px;font-size:12.5px}.lc-tech summary{cursor:pointer;color:var(--muted)}.lc-tech ul{margin:4px 0 0;padding:0 0 0 12px;list-style:none;display:flex;flex-direction:column;gap:3px;max-height:none;overflow:visible}
+.lc-tech li{border:0;padding:0;display:block}
+body.lc-loading,body.lc-loading *{cursor:progress!important}
+.lc-bg .pk-modal{position:relative}
+.lc-up{cursor:pointer}
+@media (max-width:760px){
+  .lc-grid{grid-template-columns:minmax(0,1fr)}
+  .lc-bg .pk-modal{padding:14px}
+  .lc-bar{margin:0 -14px -14px;padding:8px 14px 10px;gap:4px}
+  .lc-hint{flex:1 1 100%;font-size:11.5px;line-height:1.25}
+  .lc-bar-b{flex:1 1 100%;flex-wrap:nowrap;gap:6px;min-width:0;max-width:100%}
+  .lc-bar .btn{flex:1 1 0;min-height:44px;padding:6px 8px;font-size:12.5px;justify-content:center;text-align:center;line-height:1.15;min-width:0;white-space:normal}
+  .lc-acts .btn,.lc-lk .btn,.lc-up,.lc-more summary,.lc-tech summary{min-height:44px}
+  .lc-more summary,.lc-tech summary{display:flex;align-items:center}
+  .lc-acts a,.lc-sec a:not(.btn){display:inline-flex;align-items:center;min-height:44px}
+  .lc-v{flex-direction:column;align-items:stretch;padding:8px 10px;border:1px solid var(--line);border-radius:12px;background:var(--surface-2)}
+  .lc-lk .btn{flex:1;justify-content:center}
+}

@@ -71,8 +71,7 @@ async function renderYuzma(tab) {
   if (!tabs.includes(YY.tab)) YY.tab = tabs[0];
   v.innerHTML = `<div class="dl-head"><div><h2>Yuzma-yuz tadbirlar</h2><span class="muted">${esc(M.scope)} · ${esc(M.term_label)} · ${dlD(M.today)}</span></div>
       <div class="dl-acts">${!document.querySelector('#nav a[data-v="masofaviy"]')?.classList.contains("hidden") ? `<button type="button" class="btn sm ghost" data-dl>${ico("monitor", 15)} Masofaviy ta'lim</button>` : ""}</div></div>
-    ${M.demo ? `<div class="dl-demo">${ico("info", 15)}<span><b>Namuna ma'lumot.</b> O'tgan sessiyalar, fuqarolik va kirish jurnali — sun'iy. ${esc(M.legal_note)}</span></div>`
-             : `<div class="dl-demo">${ico("info", 15)}<span>${esc(M.legal_note)}</span></div>`}
+    ${`<div class="dl-demo">${ico("info", 15)}<span>${esc(M.legal_note)}</span></div>`}
     <div class="dl-tabs" role="tablist">${tabs.map(t => `<button type="button" role="tab" aria-selected="${t === YY.tab}" class="${t === YY.tab ? "on" : ""}" data-t="${t}">${esc(YY_TABS[t])}</button>`).join("")}</div>
     <div id="yyBox"><div class="dl-empty">Yuklanmoqda…</div></div>`;
   v.querySelectorAll(".dl-tabs [data-t]").forEach(b => b.onclick = () => { YY.tab = b.dataset.t; YY.sess = 0; renderYuzma(); });

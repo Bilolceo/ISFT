@@ -62,6 +62,16 @@ ok(s3["status"] == "otmadi" and s3["attempts"] == 2 and s3["fails"] == 2, "Kurs 
 ok(LA.lesson_summary([E("completed", "2026-10-03T09:00:00", completion=1)])["status"] == "yakunlandi", "completed (testsiz dars) — yakunlandi, 100 %")
 ok(LA.lesson_summary([E("failed", "2026-10-03T09:00:00", success=0, score=50), E("completed", "2026-10-03T09:01:00", completion=1)])["status"] == "otmadi",
    "Test yiqilgan, dars «completed» — baribir «testdan o'tmadi» (bajarilgan hisoblanmaydi)")
+# Rise / NEXTID mos pleyer: attempted → progressed … 100 → passed (ballsiz, testsiz dars) → attempted {duration}
+s4 = LA.lesson_summary([E("attempted", "2026-10-04T09:00:00"), E("progressed", "2026-10-04T09:02:00", progress=37),
+                        E("progressed", "2026-10-04T09:05:00", progress=100), E("passed", "2026-10-04T09:05:00", success=1, completion=1, duration=300),
+                        E("attempted", "2026-10-04T09:06:00", duration=360)])
+ok(s4["status"] == "yakunlandi" and s4["pct"] == 100 and s4["attempts"] == 0 and s4["time_s"] == 360,
+   f"Rise ketma-ketligi (testsiz): ballsiz passed — yakunlanish (urinish emas), 100 %, vaqt — yopilishdagi attempted ({s4})")
+s5 = LA.lesson_summary([E("attempted", "2026-10-04T09:00:00"), E("progressed", "2026-10-04T09:01:00", progress=42)])
+ok(s5["status"] == "jarayonda" and s5["pct"] == 42 and s5["time_s"] == 0, f"Rise: faqat progressed — jarayonda, foiz kengaytmadan ({s5['pct']})")
+s6 = LA.lesson_summary([E("failed", "2026-10-04T09:00:00", success=0, score=40), E("passed", "2026-10-04T09:10:00", success=1, completion=1, score=80)])
+ok(s6["status"] == "otdi" and s6["attempts"] == 2 and s6["best"] == 80, "Rise: ballli dars darajasidagi failed/passed — test urinishlari (o'tdi, 80)")
 
 # savollar: 20 talaba × 3 savol. Q1 — oson, Q2 — kuchlilar topadi (yaxshi farqlaydi), Q3 — hamma «b» ni tanlaydi (chalg'ituvchi)
 ans = []
@@ -414,15 +424,24 @@ else:
     mk = lambda verb, act_, **k: {"id": str(uuid.uuid4()), "actor": actor, "verb": {"id": "http://adlnet.gov/expapi/verbs/" + verb, "display": {"en-US": verb}},
                                   "object": {"objectType": "Activity", "id": act_, **({"definition": k.pop("definition")} if "definition" in k else {})},
                                   "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(), "context": {"registration": reg}, **k}
-    rr = lrs_post_as_player(qp["auth"], actor, reg, [mk("initialized", base_act),
+    H2 = {"Authorization": qp["auth"], "X-Experience-API-Version": "1.0.2"}     # yangi pleyer (Rise moslik): 1.0.2, PUT-statement, Rise state hujjatlari
+    att = mk("attempted", base_act); prg = mk("progressed", base_act, result={"extensions": {L.PROGRESS_EXT: 35}})
+    rp = [X.put("/xapi/statements", params={"statementId": x_["id"]}, json=x_, headers={**H2, "Content-Type": "application/json"}).status_code for x_ in (att, prg)]
+    sq = lambda sid_: {"stateId": sid_, "activityId": base_act, "agent": json.dumps(actor, separators=(",", ":")), "registration": reg}
+    sp_ = [X.put("/xapi/activities/state", params=sq(k_), content=v_, headers={**H2, "Content-Type": "application/octet-stream"}).status_code
+           for k_, v_ in (("suspend_data", '{"h":"x","c":1}'), ("bookmark", "l2"), ("cumulative_time", "65432"))]
+    sg_ = X.get("/xapi/activities/state", params=sq("cumulative_time"), headers=H2)
+    ok(rp == [204, 204] and sp_ == [204, 204, 204] and sg_.status_code == 200 and sg_.text == "65432" and X.get("/xapi/activities/state", params=sq("language_preference"), headers=H2).status_code == 404,
+       f"Yangi pleyer: PUT attempted/progressed (1.0.2) — 204; state suspend_data/bookmark/cumulative_time yoziladi va o'qiladi, language_preference — 404 ({rp} {sp_})")
+    rr = lrs_post_as_player(qp["auth"], actor, reg, [
         mk("answered", f"{base_act}/lesson/{qlu}/q/{qb}", result={"success": False, "response": "b"},
            definition={"type": "http://adlnet.gov/expapi/activities/cmi.interaction", "interactionType": "choice", "name": {"uz": "Narx oshsa talab nima bo'ladi?"},
                        "choices": [{"id": "a", "description": {"uz": "Kamayadi"}}, {"id": "b", "description": {"uz": "Oshadi"}}], "correctResponsesPattern": ["a"]}),
         mk("failed", f"{base_act}/lesson/{qlu}", result={"success": False, "score": {"scaled": 0.5, "raw": 50, "min": 0, "max": 100}, "completion": True})])
-    ok(rr.status_code == 200, "Pleyer statementlari (initialized, answered, failed) qabul qilindi")
+    ok(rr.status_code == 200, "Pleyer statementlari (answered, failed — POST massiv) qabul qilindi")
 st_rows = q("SELECT verb, lesson_ref, item_ref, success, response FROM lrs_statements WHERE student_id=? AND course_ref=? AND voided=0", (SA, KR))
 verbs = [r["verb"] for r in st_rows]
-ok("answered" in verbs and ("failed" in verbs or "passed" in verbs) and "initialized" in verbs, f"Statementlar bazada: {sorted(set(verbs))}")
+ok("answered" in verbs and ("failed" in verbs or "passed" in verbs) and "attempted" in verbs, f"Statementlar bazada (Rise moslik — attempted bilan): {sorted(set(verbs))}")
 ans_row = next(r for r in st_rows if r["verb"] == "answered")
 ok(ans_row["response"] and ans_row["success"] in (0, 1) and (ans_row["item_ref"] or "").startswith("q/"), f"answered: javob «{ans_row['response']}», natija, savol yo'li")
 after_row = next((x for x in head.get(O + "/list", params={"course": KR, "only_risk": "false", "limit": 500}).json()["items"] if x["student_id"] == SA), None)

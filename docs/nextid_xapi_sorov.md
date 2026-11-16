@@ -13,6 +13,20 @@ Hurmatli hamkasblar!
 Institut masofaviy ta'lim darslarini NEXTID.LMS (my.isft.uz) ga xAPI paket (`tincan.xml` bilan .zip) sifatida yuklaydi —
 Articulate Rise 360 eksportlari va o'zimizning paketlar («ISFT Core»). Tahlil natijasida quyidagi muammo aniqlandi.
 
+## 0. Kuzatilgan NEXTID xatti-harakati (2026-11, haqiqiy tizim)
+
+> Yangilanish: quyidagi 1-bo'limdagi «launch parametrlarisiz» kuzatuvi eskirgan. NEXTID Rise paketini launch parametrlari **bilan** ochadi.
+
+- iframe: `<paket>/scormdriver/indexAPI.html?endpoint=https://lms-api.isft.uz/uz/articulate&auth=Bearer%20<token>&actor={"name":9424693}`
+  (Rise `tincan.xml`: `<launch lang="en">scormdriver/indexAPI.html</launch>`); `activity_id` va `registration` berilmaydi.
+- actor — faqat raqamli `name` (mbox/account yo'q); `auth` — `Bearer`; LRS boshqa domenda, CORS ishlaydi.
+- Rise (lokal soxta LRS'da yozib olingan): sarlavha `X-Experience-API-Version: 1.0.2`; state hujjatlari `language_preference`, `cumulative_time`,
+  `suspend_data`, `bookmark`; `attempted`/`progressed`/`experienced` — `PUT statements?statementId=`, `answered`/`passed` va yopilishdagi
+  `attempted {duration}` — `POST statements` (massiv); progress — cmi5 `…/result/extensions/progress` (0..100); yakunlanish — `passed`
+  `{success:true, duration, completion:true}`; yopilishda — xAPI 1.0.x muqobil sintaksisi (`POST …?method=PUT`, forma).
+- ISFT Core paketlari (2026-11 dan) aynan shu yo'l va so'rovlar to'plamini ishlatadi (`docs/paket.md` «Kuzatuv (xAPI)»). NEXTID ekranida
+  bizning paketlar uchun progress/100 % chiqishi — haqiqiy tizimda tasdiqlanishi kerak.
+
 ## 1. Muammo
 
 1. **Paket launch parametrlarisiz ochilmoqda.** NEXTID paketni `index.html` ni iframe'da ochadi, lekin so'rov qatorida xAPI launch

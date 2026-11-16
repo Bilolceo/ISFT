@@ -136,7 +136,6 @@ Ishga tushishda (`app/occupancy.py: cleanup`, idempotent):
 
 HEMIS va NEXTID bilan integratsiya hali yo'q. Shuning uchun:
 
-- ilova tepasida yupqa tasma: «Namuna ma'lumot — haqiqiy tizimlar (HEMIS, NEXTID) hali ulanmagan»;
 - KPI va sahifalarda «Manba: HEMIS» o'rniga «Namuna ma'lumot (HEMIS ulanmagan)» belgisi.
 
 Haqiqiy tizimlar ulangach: `ISFT_CORE_REAL_DATA=1` — tasma va belgilar yo'qoladi, manba nomlari o'z holicha chiqadi.

@@ -23,6 +23,8 @@ const ok = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails
   const br = await chromium.launch({ executablePath: process.env.CHROME, headless: true });
   const ctx = await br.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await ctx.newPage();
+  /* bu tekshiruv klassik muharrir (3 ustun) va B versiya (avtomatik yig'ish + muharrir) oqimini tekshiradi; Rise ko'rinishi va Konstruktor (A) — tools/konstruktor_check.js */
+  await page.addInitScript(() => { try { localStorage.setItem('kuUi', 'classic'); localStorage.setItem('dsVer', 'b'); } catch (e) {} });
   const errs = [];
   page.on('console', m => { if (m.type() === 'error' && !/favicon/.test(m.text())) errs.push(m.text()); });
   page.on('pageerror', e => errs.push('pageerror: ' + e.message));
@@ -37,12 +39,32 @@ const ok = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails
     await page.waitForSelector('.ds-subj .ds-sc', { timeout: 20000 });
     ok(await page.$eval('.pk-tabs button.on', b => b.textContent.trim()) === 'Fanlar', 'Kirish sahifasi — «Fanlar» yorlig\'i');
     await page.screenshot({ path: path.join(OUT, 'dars-fanlar.png') });
+    // Fanlar: kurs → ta'lim yo'nalishi → fan (ichma-ich); fan kodi «<kurs>_<YO'NALISH>_<fan>»
+    ok(await page.$$eval('.ds-subj [data-kurs]', e => e.map(x => x.dataset.kurs).join(',')) === '1,2,3,4' && /Barcha kurslar/.test(await page.textContent('.ds-crumbs')), 'Fanlar 1-qadam: faqat kurslar (1, 2, 3, 4) tanlanadi');
+    await page.click('.ds-subj [data-kurs="2"]'); await page.waitForSelector('.ds-subj [data-dir]');
+    const nDir = await page.$$eval('.ds-subj [data-dir]', e => e.length);
+    ok(nDir >= 2 && (await page.$$('.ds-subj [data-cid]')).length === 0 && /2-kurs/.test(await page.textContent('.ds-crumbs')), `Fanlar 2-qadam: 2-kurs — ta'lim yo'nalishlari (${nDir} ta), fanlar hali yo'q`);
+    await page.screenshot({ path: path.join(OUT, 'dars-fanlar-yonalish.png') });
+    await page.click('.ds-subj [data-dir]'); await page.waitForSelector('.ds-subj [data-cid]');
+    const cc = await page.$$eval('.ds-subj .ds-sc .ds-code-s', e => e.map(x => x.textContent.trim()));
+    ok(cc.length >= 1 && cc.every(x => /^2_[A-Z0-9]{2,6}_[a-z0-9]+$/.test(x)) && new Set(cc).size === cc.length, `Fanlar 3-qadam: fan kodlari «kurs_YO'NALISH_fan» (${cc.slice(0, 2).join(', ')}) va takrorlanmaydi`);
+    await page.screenshot({ path: path.join(OUT, 'dars-fanlar-fan.png') });
+    await page.click('.ds-crumbs [data-lv="1"]'); await page.waitForSelector('.ds-subj [data-dir]');
+    await page.click('.ds-crumbs [data-lv="0"]'); await page.waitForSelector('.ds-subj [data-kurs]');
+    ok(true, 'Fanlar: yo\'l tasmasi orqali orqaga qaytish (kurs, barcha kurslar)');
+    await page.fill('#dsQ', 'ATT'); await page.waitForSelector('.ds-subj [data-cid]:not([data-kurs])', { timeout: 10000 });
+    ok((await page.$$('.ds-subj [data-kurs]')).length === 0 && (await page.$$('.ds-subj [data-cid]')).length >= 1, 'Qidiruv (kod bo\'yicha): tekis natijalar ro\'yxati');
+    await page.fill('#dsQ', ''); await page.waitForSelector('.ds-subj [data-kurs]', { timeout: 10000 });
     await page.evaluate(cid => dsOpenSubject(cid), CID);
     await page.waitForSelector('.ds-grid .ds-l', { timeout: 20000 });
     const codes = await page.$$eval('.ds-l .ds-code', x => x.map(e => e.textContent.trim()));
     ok(codes[0] === 'L1' && codes.length >= 2, `Fan: NEXTID darslar to'ri (${codes.length} dars: ${codes.slice(0, 4).join(', ')} …)`);
     const row = await page.$eval('.ds-l[data-key="1"]', li => ({ st: li.querySelectorAll('.ds-st').length, build: !!li.querySelector('[data-build]'), ku: !!li.querySelector('[data-ku],[data-conv]'), src: !!li.querySelector('[data-auth]') }));
     ok(row.st === 3 && row.build && row.ku && row.src, 'Har darsda holat (material, video, paket/eksport), «Avtomatik yig\'ish (shablon)», «Muharrirda tahrirlash», eksport manbai');
+    const chips = await page.$$eval('.ds-l[data-key="1"] .ds-st', es => es.map(e => e.textContent.replace(/[✓–]/g, '').trim()));
+    ok(chips.join('|') === 'Material|Video|Paket', `Holat belgilari bir xil atamada: Material | Video | Paket (${chips.join(' | ')})`);
+    ok(await page.$$eval('.ds-grid .ds-l b.ds-un', es => es.every(e => e.textContent === 'Mavzu nomi kiritilmagan')) && await page.$eval('.ds-grid', g => !/(^|\s)\d+-mavzu(\s|$)/.test(g.textContent.replace(/Mavzu nomi kiritilmagan/g, ''))), "Nomi kiritilmagan darslar — «Mavzu nomi kiritilmagan» (o'rinbosar «2-mavzu» emas)");
+    ok(await page.$eval('#dsBulkUp', b => /Ko'p faylni yuklash/.test(b.textContent)) && await page.$eval('.ds-l[data-key="1"] [data-ku],.ds-l[data-key="1"] [data-conv]', b => getComputedStyle(b).backgroundColor !== 'rgb(120, 55, 168)'), "B versiya: «Ko'p faylni yuklash» bor; asosiy tugma qizil (binafsha faqat Konstruktorda)");
     ok(await page.isVisible('#dsSkel') && await page.isVisible('#dsApply') && await page.isVisible('#dsBulk') && await page.isVisible('#dsTpl'), 'Fan asboblari: skelet, shablonni qo\'llash, ommaviy yig\'ish, kafedra shabloni');
     await page.screenshot({ path: path.join(OUT, 'dars-fan-tori.png'), fullPage: true });
     // shablonni qo'llash — oldin farq

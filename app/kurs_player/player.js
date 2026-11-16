@@ -40,10 +40,12 @@
   var ICONS = {
     check: '<path d="M5 12l5 5 9-10"/>', x: '<path d="M6 6l12 12M18 6L6 18"/>', left: '<path d="M15 6l-6 6 6 6"/>', right: '<path d="M9 6l6 6-6 6"/>',
     menu: '<path d="M4 7h16M4 12h16M4 17h16"/>', lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
-    search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>', down: '<path d="M12 4v12M7 11l5 5 5-5M5 20h14"/>', ext: '<path d="M14 4h6v6M20 4l-9 9M18 14v6H4V6h6"/>',
+    arrdn: '<path d="M12 4v16M5 13l7 7 7-7"/>', search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>', down: '<path d="M12 4v12M7 11l5 5 5-5M5 20h14"/>', ext: '<path d="M14 4h6v6M20 4l-9 9M18 14v6H4V6h6"/>',
     quiz: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.6M12 17h.01"/>', flip: '<path d="M4 9a8 8 0 0 1 14-3l2 2M20 4v4h-4M20 15a8 8 0 0 1-14 3l-2-2M4 20v-4h4"/>',
     home: '<path d="M4 11l8-7 8 7v9H4z"/><path d="M10 20v-6h4v6"/>', restart: '<path d="M4 4v6h6"/><path d="M5.5 15a7 7 0 1 0 1.6-7.3L4 10"/>', plus: '<path d="M12 5v14M5 12h14"/>',
-    file: '<path d="M14 3H6v18h12V7z"/><path d="M14 3v4h4"/>', chev: '<path d="M6 9l6 6 6-6"/>'
+    file: '<path d="M14 3H6v18h12V7z"/><path d="M14 3v4h4"/>', chev: '<path d="M6 9l6 6 6-6"/>',
+    lines: '<path d="M4 6h16M4 11h16M4 16h10"/>', pm: '<path d="M4 12h16"/><path class="pm-v" d="M12 4v16"/>', up: '<path d="M6 15l6-6 6 6"/>',
+    flipc: '<path d="M20 11a8 8 0 0 0-14.3-4.3L4 8.5M4 4v4.5h4.5"/><path d="M4 13a8 8 0 0 0 14.3 4.3l1.7-1.8M20 20v-4.5h-4.5"/>'
   };
   function hash(s) { var h = 2166136261; s = str(s); for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
   function shuffled(n) { var a = [], i, j, t; for (i = 0; i < n; i++) a.push(i); for (i = n - 1; i > 0; i--) { j = Math.floor(Math.random() * (i + 1)); t = a[i]; a[i] = a[j]; a[j] = t; } return a; }
@@ -76,8 +78,35 @@
   // ------------------------------------------------------------------ HTML tozalash (server tozalaganidan keyin ikkinchi qatlam)
   var ALLOW = { p: [], br: [], h2: [], h3: [], h4: [], ul: [], ol: ['start'], li: [], strong: [], b: [], em: [], i: [], u: [], s: [], sub: [], sup: [],
     blockquote: [], pre: [], code: [], span: [], div: [], table: [], caption: [], thead: [], tbody: [], tr: [], th: ['colspan', 'rowspan', 'scope'], td: ['colspan', 'rowspan'], a: ['href', 'title'] };
-  var DROP = { script: 1, style: 1, iframe: 1, object: 1, embed: 1, noscript: 1, template: 1, svg: 1, math: 1, form: 1, input: 1, button: 1, select: 1, textarea: 1, link: 1, meta: 1,
+  var DROP = { script: 1, style: 1, iframe: 1, object: 1, embed: 1, noscript: 1, template: 1, svg: 1, annotation: 1, 'annotation-xml': 1, form: 1, input: 1, button: 1, select: 1, textarea: 1, link: 1, meta: 1,
     base: 1, frame: 1, frameset: 1, audio: 1, video: 1, source: 1, canvas: 1, title: 1, head: 1, img: 1 };
+  // MathML Core (Word formulalari): faqat MathML nomlar fazosidagi oq ro'yxat teglari, xavfsiz atributlar (href/style/class/on* — yo'q);
+  // maction va boshqa noma'lum teglar ochiladi (mazmuni qoladi), annotation — mazmuni bilan tashlanadi; blok formula — aylantiriladigan quti
+  var MNS = 'http://www.w3.org/1998/Math/MathML', MTAG = {}, MATTR = {};
+  'math semantics mrow mi mn mo ms mtext mspace mfrac msqrt mroot msub msup msubsup munder mover munderover mmultiscripts mprescripts none mtable mtr mtd mstyle mpadded mphantom'
+    .split(' ').forEach(function (t) { MTAG[t] = 1; });
+  'display alttext mathvariant displaystyle scriptlevel linethickness stretchy fence separator form lspace rspace accent accentunder columnalign rowalign columnspacing rowspacing columnlines rowlines frame largeop movablelimits symmetric minsize maxsize width height depth voffset columnspan rowspan'
+    .split(' ').forEach(function (a) { MATTR[a] = 1; });
+  function mathEl(n, tag, dst) {
+    var inMath = dst.namespaceURI === MNS;
+    if (!MTAG[tag] || n.namespaceURI !== MNS || (tag === 'math') === inMath) { mathKids(n, dst); return; }
+    var out = D.createElementNS(MNS, tag);
+    Array.prototype.forEach.call(n.attributes, function (a) {
+      var k = a.name.toLowerCase(), v = a.value;
+      if (!MATTR[k]) return;
+      if (k === 'alttext') out.setAttribute(k, v.replace(/\s+/g, ' ').slice(0, 500));
+      else if (/^[A-Za-z0-9 .,%#+\-]{0,100}$/.test(v) && (k !== 'display' || /^(block|inline)$/.test(v))) out.setAttribute(k, v);
+    });
+    if (tag === 'math' && out.getAttribute('display') === 'block') { var w = D.createElement('div'); w.className = 'mth'; w.appendChild(out); dst.appendChild(w); }
+    else dst.appendChild(out);
+    mathKids(n, out);
+  }
+  function mathKids(n, dst) {   // MathML ichida faqat MathML teglari va matn (HTML teglari ochiladi)
+    Array.prototype.forEach.call(n.childNodes, function (c) {
+      if (c.nodeType === 3) dst.appendChild(D.createTextNode(c.nodeValue));
+      else if (c.nodeType === 1) { var t = c.nodeName.toLowerCase(); if (!DROP[t]) { if (c.namespaceURI === MNS || t === 'math') mathEl(c, t, dst); else mathKids(c, dst); } }
+    });
+  }
   function sanitize(html) {
     var frag = D.createDocumentFragment(), doc;
     try { doc = new DOMParser().parseFromString('<!doctype html><body>' + str(html), 'text/html'); } catch (e) { return frag; }
@@ -87,6 +116,7 @@
         if (n.nodeType !== 1) return;
         var tag = n.nodeName.toLowerCase();
         if (DROP[tag]) return;
+        if (n.namespaceURI === MNS || tag === 'math') { mathEl(n, tag, dst); return; }   // MathML (formulalar) — alohida oq ro'yxat
         if (tag === 'h1') tag = 'h2';
         if (!ALLOW[tag]) { walk(n, dst); return; }
         var out = D.createElement(tag);
@@ -113,6 +143,8 @@
   LMS.setLog(note);
   var C = RAW && typeof RAW === 'object' && RAW.kind === 'kurs' ? RAW : null;
   var LS = C ? arr(C.lessons).filter(function (l) { return l && /^(blocks|quiz)$/.test(l.type) && l.id; }) : [];
+  // Bitta darsli kurs (NEXTID/Rise darsi kabi): alohida «muqova + darslar ro'yxati» ekrani va yon panel yo'q — to'liq ekranli muqova, pastga strelka, bloklar
+  var SINGLE = !!C && LS.length === 1 && LS[0].type === 'blocks' && (!C.settings || C.settings.single !== false);
   if (!C || !LS.length) { fatal('Kurs tarkibi topilmadi', "content.js fayli yo'q yoki darslar bo'sh. Kursni qayta eksport qiling."); return; }
   C.settings = C.settings || {}; C.tracking = C.tracking || {}; C.labels = C.labels || {};
   LS.forEach(function (l) {
@@ -134,7 +166,7 @@
   RS.setProperty('--brand', ACC); RS.setProperty('--brand-ink', shade(ACC, -0.25)); RS.setProperty('--brand-soft-l', shade(ACC, 0.9)); RS.setProperty('--brand-lite', shade(ACC, 0.45));
   D.documentElement.lang = /^[a-z]{2}$/.test(str(C.lang)) ? C.lang : 'uz';
   D.title = str(C.title) + ' — ' + (str((C.brand || {}).name) || 'ISFT');
-  try { var org = typeof W.origin === 'string' ? W.origin : W.location.origin; if (org && org !== 'null') D.head.appendChild(el('link', { rel: 'stylesheet', href: 'fonts/fonts.css' })); } catch (e) { /* jim */ }
+  try { var org = typeof W.origin === 'string' ? W.origin : W.location.origin; if ((org && org !== 'null') || W.location.protocol === 'file:') D.head.appendChild(el('link', { rel: 'stylesheet', href: 'fonts/fonts.css' })); } catch (e) { /* jim */ }
   var reduced0 = false; try { reduced0 = W.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { /* jim */ }
   function reduced() { return A11Y ? A11Y.reduced() : reduced0; }
   var INTERACTIVE = { accordion: 1, tabs: 1, flashcards: 1, process: 1, sorting: 1, matching: 1, knowledge: 1, labeled_graphic: 1 };
@@ -206,36 +238,39 @@
     var skip = el('a', { cls: 'skip', href: '#main', text: "Asosiy mazmunga o'tish", onclick: function (e) { e.preventDefault(); R.main.focus(); } });
     var banner = tracker.preview ? el('div', { cls: 'banner', role: 'note' }, [el('strong', { text: "Ko'rish rejimi" }), " — natija LMS'ga yuborilmaydi"])
       : tracker.nolms ? el('div', { cls: 'banner warn', role: 'alert' }, [el('strong', { text: 'LMS bilan aloqa topilmadi' }), " — natija saqlanmaydi. O'qituvchiga xabar bering."]) : null;
-    R.menuBtn = el('button', { cls: 'btn icon menu-btn', type: 'button', 'aria-label': T('menu'), 'aria-controls': 'side', 'aria-expanded': 'false', onclick: toggleSide }, [icon('menu')]);
-    R.pct = el('span', { cls: 'chip' });
+    R.menuBtn = el('button', { cls: 'nav-b menu-btn', type: 'button', 'aria-label': T('menu'), 'aria-controls': 'side', 'aria-expanded': String(wide() && !!C.settings.sidebar), onclick: toggleSide }, [icon('menu')]);
     R.bar = el('span');
-    var logo = assetUrl((C.brand || {}).logo);
-    R.a11y = A11Y ? A11Y.panel({ announce: announce }) : null;
-    var top = el('header', { cls: 'top' }, [el('div', { cls: 'top-in' }, [R.menuBtn,
-      logo ? el('img', { cls: 'logo', src: logo, alt: str((C.brand || {}).name) || 'ISFT' }) : null,
-      el('button', { cls: 'ttl', type: 'button', onclick: function () { go(-1); }, 'aria-label': 'Muqovaga qaytish: ' + C.title }, [el('span', { cls: 'h', text: C.title })]),
-      R.pct, R.a11y ? R.a11y.button : null]), el('div', { cls: 'bar', 'aria-hidden': 'true' }, [R.bar])]);
+    // Rise «classic»: yon panel (urg'u rangli sarlavha) + o'ng ustun; ustun tepasida yupqa progress chizig'i, ☰ va «Aa» — kontent ustida suzib turadi
+    var top = el('header', { cls: 'top' }, [el('div', { cls: 'bar', 'aria-hidden': 'true' }, [R.bar]), el('div', { cls: 'top-in' }, [R.menuBtn,
+      el('span', { cls: 'top-sp' })])]);
     R.side = el('nav', { cls: 'side', id: 'side', 'aria-label': T('lessons') });
     R.main = el('main', { cls: 'main', id: 'main', tabindex: '-1' });
     R.scrim = el('div', { cls: 'scrim', onclick: closeSide });
-    app.appendChild(skip); if (banner) app.appendChild(banner); app.appendChild(top);
-    app.appendChild(el('div', { cls: 'wrap' }, [R.side, R.main])); app.appendChild(R.scrim); app.appendChild(R.live);
-    if (R.a11y) app.appendChild(R.a11y.panel);
+    app.appendChild(skip); if (banner) app.appendChild(banner);
+    app.appendChild(el('div', { cls: 'wrap' }, [R.side, el('div', { cls: 'mainw' }, [top, R.main])])); app.appendChild(R.scrim); app.appendChild(R.live);
     buildSide();
     D.addEventListener('keydown', function (e) { if (e.key === 'Escape' && app.classList.contains('side-open')) { closeSide(); R.menuBtn.focus(); } });
   }
+  function wide() { return W.innerWidth > 980; }
   function toggleSide() {
-    if (!C.settings.sidebar && !app.classList.contains('side-open') && W.innerWidth > 980) { go(-1); return; }
+    if (!C.settings.sidebar && !app.classList.contains('side-open') && wide()) { go(-1); return; }
+    if (wide() && C.settings.sidebar) {   // kompyuterda (Rise kabi) — yon panel yig'iladi / ochiladi
+      var shut = !app.classList.contains('side-closed');
+      app.classList.toggle('side-closed', shut); R.menuBtn.setAttribute('aria-expanded', String(!shut));
+      return;
+    }
     var open = !app.classList.contains('side-open');
     app.classList.toggle('side-open', open); R.menuBtn.setAttribute('aria-expanded', String(open));
     if (open) { var f = R.side.querySelector('input,button'); if (f) f.focus(); }
   }
-  function closeSide() { app.classList.remove('side-open'); R.menuBtn.setAttribute('aria-expanded', 'false'); }
+  function closeSide() { app.classList.remove('side-open'); R.menuBtn.setAttribute('aria-expanded', String(wide() && !!C.settings.sidebar && !app.classList.contains('side-closed'))); }
   function buildSide() {
     R.side.textContent = '';
-    R.sidePct = el('span', { cls: 'sm muted' });
+    R.sidePct = el('span', { cls: 'side-pct' });
     R.sideBar = el('span');
-    R.side.appendChild(el('div', { cls: 'side-h' }, [el('div', { cls: 'side-t', text: C.title }), el('div', { cls: 'meter' }, [R.sideBar]), R.sidePct]));
+    R.side.appendChild(el('div', { cls: 'side-h' }, [
+      el('button', { cls: 'side-t', type: 'button', onclick: function () { closeSide(); go(-1); }, 'aria-label': 'Muqovaga qaytish: ' + C.title }, C.title),
+      el('div', { cls: 'meter', 'aria-hidden': 'true' }, [R.sideBar]), R.sidePct]));
     if (C.settings.search !== false) {
       R.q = el('input', { type: 'search', cls: 'search', placeholder: T('search') + '…', 'aria-label': T('search'), autocomplete: 'off', oninput: function () { runSearch(R.q.value); } });
       R.results = el('div', { cls: 'results', role: 'region', 'aria-label': 'Qidiruv natijalari', 'aria-live': 'polite' });
@@ -245,23 +280,30 @@
     R.side.appendChild(R.list);
     paintNav();
   }
+  // Dars holati belgisi (Rise kabi halqa): yakunlangan — to'la doira + belgi; boshlangan — ochilgan qismlar ulushi bo'yicha yoy
+  function segCount(l) { return l.type === 'quiz' ? 1 : l.blocks.filter(function (b) { return b.type === 'continue'; }).length + 1; }
+  function ring(l, i, lk) {
+    var done = l.type === 'quiz' ? qst(l).p : lessonDone(l), failedQ = l.type === 'quiz' && !qst(l).p && qst(l).n > 0;
+    if (lk) return el('span', { cls: 'st lk', title: 'Oldingi darslarni yakunlang' }, [icon('lock')]);
+    if (done) return el('span', { cls: 'st ok' }, [icon('check')]);
+    var g = S.g[l.id], p = failedQ ? 100 : g != null || i === cur ? Math.max(8, Math.round(100 * (num(g, 0) + 1) / (segCount(l) + 1))) : 0;
+    return el('span', { cls: 'st' + (failedQ ? ' bad' : p ? ' part' : ''), style: p ? '--p:' + p : null });
+  }
   function paintNav() {
     if (!R.list) return;
     R.list.textContent = '';
     LS.forEach(function (l, i) {
-      var lk = locked(i), done = l.type === 'quiz' ? qst(l).p : lessonDone(l), failedQ = l.type === 'quiz' && !qst(l).p && qst(l).n > 0;
-      var st = lk ? el('span', { cls: 'st lk', title: 'Oldingi darslarni yakunlang' }, [icon('lock')]) : done ? el('span', { cls: 'st ok' }, [icon('check')]) : el('span', { cls: 'st' + (failedQ ? ' bad' : '') });
+      var lk = locked(i), done = l.type === 'quiz' ? qst(l).p : lessonDone(l);
       var b = el('button', { type: 'button', cls: 'les-b' + (i === cur ? ' on' : ''), 'aria-current': i === cur ? 'page' : null, disabled: lk, 'data-lesson': l.id,
         onclick: function () { closeSide(); go(i); } }, [
-        C.settings.lesson_count !== false ? el('span', { cls: 'no', text: String(i + 1) }) : null,
-        el('span', { cls: 'les-t' }, [l.type === 'quiz' ? el('span', { cls: 'tag', text: T('quiz') }) : null, l.title]),
-        st, el('span', { cls: 'sr', text: lk ? ' (yopiq)' : done ? ' (yakunlangan)' : '' })]);
+        el('span', { cls: 'les-ic' }, [icon(l.type === 'quiz' ? 'quiz' : 'lines')]),
+        el('span', { cls: 'les-t' }, [l.type === 'quiz' ? el('span', { cls: 'tag', text: T('quiz') + ': ' }) : null, l.title]),
+        ring(l, i, lk), el('span', { cls: 'sr', text: lk ? ' (yopiq)' : done ? ' (yakunlangan)' : '' })]);
       R.list.appendChild(el('li', null, [b]));
     });
   }
   function paintProgress(r) {
     var p = Math.round(r.progress * 100);
-    if (R.pct) { R.pct.textContent = p + '% ' + T('progress'); R.pct.className = 'chip' + (r.complete ? ' good' : ''); }
     if (R.bar) R.bar.style.width = p + '%';
     if (R.sideBar) R.sideBar.style.width = p + '%';
     if (R.sidePct) R.sidePct.textContent = p + '% ' + T('progress');
@@ -300,51 +342,99 @@
   }
 
   // ------------------------------------------------------------------ navigatsiya
-  function cleanup() { var c = CLEAN; CLEAN = []; c.forEach(function (f) { try { f(); } catch (e) { /* jim */ } }); if (A11Y) A11Y.stop(); }
+  function cleanup() { var c = CLEAN; CLEAN = []; c.forEach(function (f) { try { f(); } catch (e) { /* jim */ } }); }
   function go(i, blockId, noFocus) {
     if (i >= 0 && locked(i)) { announce('Bu dars hali yopiq: oldingi darslarni yakunlang'); return; }
     cleanup();
     cur = i;
     R.main.textContent = '';
-    if (i < 0) renderCover(); else if (LS[i].type === 'quiz') renderQuiz(LS[i]); else renderLesson(LS[i], blockId);
+    if (SINGLE) { i = 0; cur = 0; app.classList.add('single', 'no-side'); app.classList.remove('on-cover'); }
+    app.classList.toggle('on-cover', i < 0); app.classList.toggle('on-quiz', i >= 0 && LS[i].type === 'quiz');
+    if (i < 0) closeSide();
+    if (SINGLE) { renderSingleCover(); renderLesson(LS[0], blockId); }
+    else if (i < 0) renderCover(); else if (LS[i].type === 'quiz') renderQuiz(LS[i]); else renderLesson(LS[i], blockId);
     paintNav(); report(false);
     if (i >= 0 && tracker.visit) tracker.visit({ id: LS[i].id, type: LS[i].type === 'quiz' ? 'quiz' : 'lesson', title: LS[i].title });
     if (!blockId) { try { W.scrollTo({ top: 0, behavior: 'instant' }); } catch (e) { W.scrollTo(0, 0); } }
     if (!noFocus) { var h = R.main.querySelector('h1'); if (h && !blockId) h.focus({ preventScroll: true }); }
     emit('lesson');
   }
+  // Dars oxiri (Rise «full» navigatsiyasi): butun kenglikdagi och kulrang tasma — keyingi dars nomi; chapda — oldingi dars
   function lessonNav(i) {
-    var prev = i > 0 ? el('button', { cls: 'btn ghost', type: 'button', onclick: function () { go(i - 1); } }, [icon('left'), T('prev_lesson')]) : el('span');
+    var prev = i > 0 ? el('button', { cls: 'pg-b pg-prev', type: 'button', onclick: function () { go(i - 1); } }, [icon('up'), el('span', { cls: 'pg-l', text: T('prev_lesson') })]) : null;
     var nx = i < LS.length - 1;
-    var next = el('button', { cls: 'btn primary next-lesson', type: 'button', onclick: function () {
+    var next = el('button', { cls: 'pg-b pg-next next-lesson', type: 'button', onclick: function () {
       if (LS[i].type === 'blocks') completeLesson(LS[i]);
       if (nx) go(i + 1); else { go(-1); announce(T('finish')); }
-    } }, nx ? [T('next_lesson'), icon('right')] : status().complete ? [T('finish'), icon('check')] : [icon('home'), T('menu')]);
+    } }, nx ? [el('span', { cls: 'pg-l', text: T('next_lesson') }), el('span', { cls: 'pg-t', text: LS[i + 1].title }), icon('chev')]
+      : status().complete ? [el('span', { cls: 'pg-t', text: T('finish') }), icon('check')] : [el('span', { cls: 'pg-t', text: T('menu') }), icon('home')]);
     return el('div', { cls: 'pager' }, [prev, next]);
   }
+  // Muallif: «Lavozim: F.I.Sh.» ko'rinishida bo'lsa — faqat ism; avatar — bosh harflar (Rise kabi)
+  function authorName() { var a = str(C.author).trim(), k = a.lastIndexOf(':'); return (k >= 0 ? a.slice(k + 1) : a).trim(); }
+  function authorRow(cls) {
+    var n = authorName(); if (!n) return null;
+    var ini = n.split(/\s+/).filter(Boolean).slice(0, 2).map(function (w) { return w.charAt(0).toUpperCase(); }).join('');
+    return el('p', { cls: 'author ' + (cls || '') }, [el('span', { cls: 'av', 'aria-hidden': 'true', text: ini }), el('span', { cls: 'au-n', text: n })]);
+  }
 
-  // ------------------------------------------------------------------ muqova
+  // ------------------------------------------------------------------ muqova (Rise «split»: chapda urg'u rangli panel, o'ngda rasm; pastda tavsif va darslar)
   function renderCover() {
     var r = status(), started = S.c >= 0 || Object.keys(S.v).length > 0, cv = C.cover && assetUrl(C.cover.src);
     var first = 0; if (S.c >= 0 && S.c < LS.length && !locked(S.c)) first = S.c;
-    var start = el('button', { cls: 'btn primary lg', type: 'button', id: 'startBtn', onclick: function () { go(first); } }, [started ? T('resume') : T('start'), icon('right')]);
+    var start = el('button', { cls: 'btn pill cover-start', type: 'button', id: 'startBtn', onclick: function () { go(first); } }, [started ? T('resume') : T('start')]);
+    var logo = assetUrl((C.brand || {}).logo);
     var hero = el('section', { cls: 'cover' + (cv ? ' has-img' : '') }, [
-      cv ? el('img', { cls: 'cover-img', src: cv, alt: str(C.cover.alt) }) : null,
-      el('div', { cls: 'cover-in' }, [
-        el('p', { cls: 'eyebrow', text: (C.settings.lesson_count !== false ? LS.length + ' ta dars · ' : '') + (str((C.brand || {}).name) || 'ISFT') }),
+      el('div', { cls: 'cover-l' }, [el('div', { cls: 'cover-in' }, [
+        logo ? el('img', { cls: 'logo', src: logo, alt: str((C.brand || {}).name) || 'ISFT' }) : null,
+        authorRow('on-accent'),
         el('h1', { tabindex: '-1', text: C.title }),
-        C.description ? rich(C.description, 'lead') : null,
-        C.author ? el('p', { cls: 'author', text: C.author }) : null,
-        el('div', { cls: 'cover-acts' }, [start, started ? el('span', { cls: 'chip' + (r.complete ? ' good' : ''), text: Math.round(r.progress * 100) + '% ' + T('progress') }) : null])])]);
+        el('div', { cls: 'cover-acts' }, [start, started ? el('span', { cls: 'chip' + (r.complete ? ' good' : ''), text: Math.round(r.progress * 100) + '% ' + T('progress') }) : null])])]),
+      cv ? el('div', { cls: 'cover-r' }, [el('img', { cls: 'cover-img', src: cv, alt: str(C.cover.alt) })]) : null]);
     var list = el('ol', { cls: 'outline' });
     LS.forEach(function (l, i) {
       var lk = locked(i), done = l.type === 'quiz' ? qst(l).p : lessonDone(l);
       list.appendChild(el('li', null, [el('button', { type: 'button', cls: 'out-b', disabled: lk, onclick: function () { go(i); } }, [
-        el('span', { cls: 'no', text: C.settings.lesson_count !== false ? String(i + 1) : '' }), el('span', { cls: 'les-t' }, [l.type === 'quiz' ? el('span', { cls: 'tag', text: T('quiz') }) : null, l.title]),
-        lk ? icon('lock') : done ? el('span', { cls: 'st ok' }, [icon('check')]) : icon('right')])]));
+        el('span', { cls: 'les-ic' }, [icon(l.type === 'quiz' ? 'quiz' : 'lines')]),
+        el('span', { cls: 'les-t' }, [l.type === 'quiz' ? el('span', { cls: 'tag', text: T('quiz') + ': ' }) : null, l.title]),
+        ring(l, i, lk), el('span', { cls: 'sr', text: lk ? ' (yopiq)' : done ? ' (yakunlangan)' : '' })])]));
     });
     R.main.appendChild(hero);
-    R.main.appendChild(el('section', { cls: 'card outline-c', 'aria-label': T('lessons') }, [el('h2', { text: T('lessons') }), list]));
+    R.main.appendChild(el('div', { cls: 'cover-d' }, [C.description ? rich(C.description, 'lead') : null,
+      el('section', { cls: 'outline-c', 'aria-label': T('lessons') }, [el('h2', { cls: 'sr', text: T('lessons') }), list])]));
+  }
+
+  // Bitta darsli kurs muqovasi (Rise «full»): to'liq ekranli rasm, sarlavha, muallif, pastga strelka
+  function renderSingleCover() {
+    var cv = C.cover && assetUrl(C.cover.src);
+    var go_ = el('button', { cls: 'scv-go', type: 'button', 'aria-label': 'Darsni boshlash', onclick: function () {
+      var t = D.getElementById('les-start'); if (t) { try { t.scrollIntoView({ behavior: reduced() ? 'auto' : 'smooth', block: 'start' }); } catch (e) { t.scrollIntoView(); } var f = t.querySelector('.blk,h2,h3,p'); if (f) { f.setAttribute('tabindex', '-1'); f.focus({ preventScroll: true }); } }
+    } }, [icon('arrdn')]);
+    R.main.appendChild(el('header', { cls: 'scv' + (cv ? ' has-img' : '') }, [
+      cv ? el('img', { cls: 'scv-bg', src: cv, alt: '' }) : null,
+      el('div', { cls: 'scv-in' }, [el('h1', { tabindex: '-1', text: C.title }), authorRow('on-accent')]), go_]));
+    R.main.appendChild(el('span', { id: 'les-start', cls: 'les-start', 'aria-hidden': 'true' }));
+  }
+  // Bir sahifali rejimda muqovada ko'rsatilgan sarlavha va muqova rasmi bloklar ichida takrorlanmaydi
+  function normT(t) {
+    return str(t).toLowerCase().replace(/[ʻʼ’‘`´]/g, "'").replace(/^\s*(l|a|s|mt|lab)\d+\s*[.\-:]\s*/, '').replace(/^\s*\d+\s*[-.]?\s*(mavzu|ma'ruza)?\s*[:.\-]?\s*/, '')
+      .replace(/^\s*(mavzu|ma'ruza)\s*:\s*/, '').replace(/[^\p{L}\p{N}' ]+/gu, ' ').replace(/\s+/g, ' ').trim();
+  }
+  function dupBlock(b) {
+    if (!SINGLE) return false;
+    if (b.type === 'image' && C.cover && b.src && b.src === C.cover.src) return true;
+    if (b.type === 'heading') {
+      var x = normT(b.text), y = normT(C.title), z = normT(LS[0].title);
+      return x.length > 6 && ((y && (x === y || y.indexOf(x) >= 0 || x.indexOf(y) >= 0)) || (z && (x === z || z.indexOf(x) >= 0 || x.indexOf(z) >= 0)));
+    }
+    return false;
+  }
+
+  // Dars sarlavhasi (Rise kabi): «Dars 1 / 14» (kursiv), nom, muallif, urg'u rangli chiziqcha
+  function lessonHead(l, i) {
+    return el('header', { cls: 'les-h' }, [el('div', { cls: 'les-h-in' }, [
+      C.settings.lesson_count !== false ? el('p', { cls: 'les-n', text: T('lesson') + ' ' + (i + 1) + ' / ' + LS.length }) : null,
+      el('h1', { tabindex: '-1', text: l.title }), authorRow(), el('span', { cls: 'les-bar', 'aria-hidden': 'true' })])]);
   }
 
   // ------------------------------------------------------------------ dars sahifasi: bloklar «Davom etish» bo'yicha bo'laklarga ajraladi
@@ -353,10 +443,7 @@
     HL = 1;
     l.blocks.forEach(function (b) { segs[segs.length - 1].push(b); if (b.type === 'continue') segs.push([]); });
     var open = clamp(num(S.g[l.id], 0), 0, segs.length - 1);
-    var head = el('header', { cls: 'les-h' }, [
-      C.settings.lesson_count !== false ? el('p', { cls: 'eyebrow', text: T('lesson') + ' ' + (i + 1) + ' / ' + LS.length }) : null,
-      el('h1', { tabindex: '-1', text: l.title })]);
-    R.main.appendChild(head);
+    if (!SINGLE) R.main.appendChild(lessonHead(l, i));
     var gates = [], segEls = [];
     var endBox = el('div', { cls: 'les-end' });
     function refreshGates() {
@@ -381,15 +468,17 @@
       seg.forEach(function (b) {
         if (b.type === 'continue') {
           var hid = 'h-' + b.id, hint = el('p', { cls: 'gate-hint', id: hid, text: b.hint || T('complete_hint') });
-          var btn = el('button', { cls: 'btn primary lg', type: 'button', 'data-gate': b.id, onclick: function () { reveal(k + 1, true); } }, [b.label || T('continue'), icon('chev')]);
+          var btn = el('button', { cls: 'btn gate-b', type: 'button', 'data-gate': b.id, onclick: function () { reveal(k + 1, true); } }, [b.label || T('continue')]);
           var wrap = el('div', { cls: 'gate blk', id: 'b-' + b.id }, [btn, hint]);
           gates.push({ b: b, btn: btn, hint: hint, hintId: hid, wrap: wrap, above: l.blocks.slice(0, l.blocks.indexOf(b)) });
           box.appendChild(wrap);
-        } else box.appendChild(block(b, l, refreshGates));
+        } else if (!dupBlock(b)) box.appendChild(block(b, l, refreshGates));
       });
       segEls.push(box); R.main.appendChild(box);
     });
-    endBox.appendChild(lessonNav(i));
+    if (SINGLE) endBox.appendChild(el('div', { cls: 'scv-end' }, [el('button', { cls: 'scv-up', type: 'button', 'aria-label': 'Boshiga qaytish', onclick: function () {
+      try { W.scrollTo({ top: 0, behavior: reduced() ? 'auto' : 'smooth' }); } catch (e) { W.scrollTo(0, 0); } var h = R.main.querySelector('h1'); if (h) h.focus({ preventScroll: true }); } }, [icon('up')])]));
+    else endBox.appendChild(lessonNav(i));
     R.main.appendChild(endBox);
     segEls.forEach(function (s, j) { s.hidden = j > open; });
     gates.forEach(function (g, j) { g.wrap.hidden = j !== open; });
@@ -436,19 +525,12 @@
     labeled_graphic: "Klaviatura: Tab — rasmdagi raqamli nuqtalar, Enter — nuqta izohini ochish.",
     gallery: "Klaviatura: Tab — «Oldingi rasm» / «Keyingi rasm» tugmalari, Enter — rasmni almashtirish."
   };
-  var TTS = { paragraph: 1, heading_paragraph: 1, quote: 1, list: 1, image_text: 1, timeline: 1 };
   function block(b, l, refresh) {
     var f = RENDER[b.type], inner = null;
     try { inner = f ? f(b, l, refresh) : null; } catch (e) { note('blok ' + b.type + ' xato: ' + (e && e.message)); }
     var w = el('div', { cls: 'blk b-' + b.type + (b.layout ? ' lay-' + b.layout : ''), id: 'b-' + b.id }, inner);
     var hint = C.settings.kbd_hints && KBD[b.type] && (b.type !== 'gallery' || b.style === 'carousel') && w.childNodes.length ? KBD[b.type] : null;
     if (hint) w.insertBefore(el('p', { cls: 'kbd-h', id: 'kh-' + b.id, text: hint }), w.firstChild);   // blokdan oldin — ekran o'quvchisi avval ko'rsatmani o'qiydi
-    if (A11Y && TTS[b.type] && w.childNodes.length) {
-      w.appendChild(A11Y.ttsButton(function () {
-        return Array.prototype.filter.call(w.childNodes, function (n) { return !(n.classList && (n.classList.contains('tts') || n.classList.contains('kbd-h'))); })
-          .map(function (n) { return n.textContent; }).join('. ').replace(/\s+/g, ' ').trim();
-      }, w, { announce: announce, label: 'Blok matnini ovozli tinglash' }));
-    }
     return w;
   }
   var RENDER = {
@@ -478,9 +560,21 @@
     gallery: function (b) {
       var items = arr(b.items).filter(function (x) { return assetUrl(x.src); });
       if (b.style !== 'carousel' || items.length < 2) return el('div', { cls: 'gal' }, items.map(function (x) { return figure(x.src, x.alt, x.caption); }));
-      var k = 0, stage = el('div', { cls: 'car-stage', 'aria-live': 'polite' }), cnt = el('span', { cls: 'sm muted' });
-      function show() { stage.textContent = ''; stage.appendChild(figure(items[k].src, items[k].alt, items[k].caption)); cnt.textContent = (k + 1) + ' / ' + items.length; }
-      show();
+      // Hamma slaydlar oldindan quriladi (eager) va faqat ko'rsatiladi/yashiriladi — rasm almashganda blok «qulab» sakramaydi; balandlik eng kattasiga qulflanadi
+      var k = 0, stage = el('div', { cls: 'car-stage', 'aria-live': 'polite' }), cnt = el('span', { cls: 'sm muted' }), figs = [];
+      items.forEach(function (x, j) {
+        var f = figure(x.src, x.alt, x.caption); if (!f) return;
+        var im = f.querySelector('img'); if (im) { im.loading = 'eager'; im.decoding = 'async'; im.addEventListener('load', lockH); }
+        f.hidden = j !== 0; figs[j] = f; stage.appendChild(f);
+      });
+      var unlockH = function () { stage._h = 0; stage.style.minHeight = ''; }; W.addEventListener('resize', unlockH); CLEAN.push(function () { W.removeEventListener('resize', unlockH); });
+      function lockH() { var h = stage.getBoundingClientRect().height; if (h > num(stage._h, 0)) { stage._h = h; stage.style.minHeight = Math.ceil(h) + 'px'; } }
+      function show() {
+        lockH();
+        figs.forEach(function (f, j) { if (f) f.hidden = j !== k; });
+        cnt.textContent = (k + 1) + ' / ' + items.length;
+      }
+      cnt.textContent = '1 / ' + items.length;
       return el('div', { cls: 'car', role: 'group', 'aria-roledescription': 'karusel' }, [stage, el('div', { cls: 'car-nav' }, [
         el('button', { cls: 'btn icon', type: 'button', 'aria-label': 'Oldingi rasm', onclick: function () { k = (k + items.length - 1) % items.length; show(); } }, [icon('left')]), cnt,
         el('button', { cls: 'btn icon', type: 'button', 'aria-label': 'Keyingi rasm', onclick: function () { k = (k + 1) % items.length; show(); } }, [icon('right')])])]);
@@ -490,7 +584,13 @@
       if (b.title) out.push(el(hx(), { text: b.title }));
       if (b.source === 'youtube') {
         if (!/^[A-Za-z0-9_-]{11}$/.test(str(b.yt_id))) return null;
-        out.push(el('div', { cls: 'vid' }, [el('iframe', { src: 'https://www.youtube-nocookie.com/embed/' + b.yt_id + '?rel=0' + (num(b.yt_start, 0) > 0 ? '&start=' + Math.floor(b.yt_start) : ''),
+if (location.protocol === 'file:') {
+          // file:// da brauzer Referer yubormaydi — YouTube «Error 153» beradi; o'rniga havola
+          out.push(el('div', { cls: 'vid', style: 'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;background:#111;color:#fff;padding:24px;text-align:center' }, [
+            el('p', { text: "Video faylni to'g'ridan-to'g'ri ochganda (file://) ko'rinmaydi — LMS yoki http orqali ochilganda ishlaydi.", style: 'margin:0;max-width:34em' }),
+            el('a', { href: 'https://www.youtube.com/watch?v=' + b.yt_id + (num(b.yt_start, 0) > 0 ? '&t=' + Math.floor(b.yt_start) + 's' : ''), target: '_blank', rel: 'noopener noreferrer', text: "YouTube'da ochish", style: 'background:#fff;color:#111;padding:10px 20px;border-radius:999px;font-weight:700;text-decoration:none' })]));
+        } else
+                out.push(el('div', { cls: 'vid' }, [el('iframe', { src: 'https://www.youtube-nocookie.com/embed/' + b.yt_id + '?rel=0' + (num(b.yt_start, 0) > 0 ? '&start=' + Math.floor(b.yt_start) : ''),
           title: b.title || 'Video', loading: 'lazy', allow: 'accelerometer; encrypted-media; gyroscope; picture-in-picture; fullscreen', allowfullscreen: true, referrerpolicy: 'strict-origin-when-cross-origin' })]));
       } else {
         var src = assetUrl(b.src); if (!src) return null;
@@ -538,7 +638,7 @@
         var btn = el('button', { type: 'button', cls: 'acc-b', id: pid + '-b', 'aria-expanded': 'false', 'aria-controls': pid, onclick: function () {
           var o = btn.getAttribute('aria-expanded') !== 'true'; btn.setAttribute('aria-expanded', String(o)); panel.hidden = !o;
           if (o) { seen[k] = 1; if (Object.keys(seen).length >= items.length) done(b, refresh); }
-        } }, [el('span', { text: x.title || (k + 1) + '-bo\'lim' }), icon('chev')]);
+        } }, [el('span', { text: x.title || (k + 1) + '-bo\'lim' }), icon('pm')]);
         return el('div', { cls: 'acc-i' }, [el(hl, null, [btn]), panel]);
       }));
     },
@@ -565,7 +665,7 @@
     flashcards: function (b, l, refresh) {
       var cards = arr(b.cards), seen = {};
       function card(c, k) {
-        var fF = el('span', { cls: 'fc-f', 'aria-hidden': 'false' }, [el('span', { text: c.front })]), fB = el('span', { cls: 'fc-b', 'aria-hidden': 'true' }, [el('span', { text: c.back })]);
+        var fF = el('span', { cls: 'fc-f', 'aria-hidden': 'false' }, [el('span', { text: c.front }), icon('flipc')]), fB = el('span', { cls: 'fc-b', 'aria-hidden': 'true' }, [el('span', { text: c.back }), icon('flipc')]);
         var btn = el('button', { type: 'button', cls: 'fc', 'aria-pressed': 'false', onclick: function () {
           var o = btn.getAttribute('aria-pressed') !== 'true'; btn.setAttribute('aria-pressed', String(o)); btn.classList.toggle('flip', o);
           fF.setAttribute('aria-hidden', String(o)); fB.setAttribute('aria-hidden', String(!o));
@@ -582,21 +682,24 @@
         el('button', { cls: 'btn icon', type: 'button', 'aria-label': 'Keyingi kartochka', onclick: function () { k = (k + 1) % cards.length; show(); } }, [icon('right')])])];
     },
     process: function (b, l, refresh) {
-      var items = arr(b.items), k = 0, hl = hx(), body = el('div', { cls: 'proc-b', 'aria-live': 'polite' }), cnt = el('span', { cls: 'sm muted' });
-      var prev = el('button', { cls: 'btn ghost', type: 'button', onclick: function () { show(k - 1); } }, [icon('left'), 'Oldingi']);
-      var next = el('button', { cls: 'btn primary', type: 'button', onclick: function () { show(k + 1); } }, ['Keyingi qadam', icon('right')]);
+      // Rise kabi: kulrang tasmada oq kartochka («Qadam N» belgisi), yonlarida dumaloq ← → tugmalar, pastda qadam raqamlari
+      var items = arr(b.items), k = 0, hl = hx(), body = el('div', { cls: 'proc-b', 'aria-live': 'polite' }), cnt = el('span', { cls: 'sr' });
+      var dots = el('span', { cls: 'proc-dots', 'aria-hidden': 'true' }, items.map(function (x, j) { return el('i', { text: String(j + 1) }); }));
+      var prev = el('button', { cls: 'btn round prev', type: 'button', 'aria-label': 'Oldingi qadam', onclick: function () { show(k - 1); } }, [icon('left')]);
+      var next = el('button', { cls: 'btn primary round next', type: 'button', 'aria-label': 'Keyingi qadam', onclick: function () { show(k + 1); } }, [icon('right')]);
       function show(n) {
         k = clamp(n, 0, items.length - 1); body.textContent = '';
-        body.appendChild(el('p', { cls: 'eyebrow', text: 'Qadam ' + (k + 1) + ' / ' + items.length }));
+        body.appendChild(el('p', { cls: 'proc-s', text: 'Qadam ' + (k + 1) }));
         var ph = el(hl, { text: items[k].title, tabindex: '-1' }); body.appendChild(ph); body.appendChild(rich(items[k].html));
         var had = D.activeElement === prev ? prev : D.activeElement === next ? next : null;
         prev.disabled = k === 0; next.disabled = k >= items.length - 1; cnt.textContent = (k + 1) + ' / ' + items.length;
+        Array.prototype.forEach.call(dots.children, function (d, j) { d.className = j === k ? 'on' : j < k ? 'seen' : ''; });
         if (had && had.disabled) (!next.disabled ? next : !prev.disabled ? prev : ph).focus();   // o'chgan tugmadan fokus yo'qolmasin
         if (k >= items.length - 1) done(b, refresh);
       }
       if (!items.length) return null;
       show(0);
-      return el('div', { cls: 'card proc' }, [el('div', { cls: 'dots', 'aria-hidden': 'true' }, items.map(function () { return el('i'); })), body, el('div', { cls: 'proc-n' }, [prev, cnt, next])]);
+      return el('div', { cls: 'proc' }, [el('div', { cls: 'proc-c' }, [body]), el('div', { cls: 'proc-n' }, [prev, dots, cnt, next])]);
     },
     timeline: function (b) {
       var hl = hx();
@@ -706,7 +809,7 @@
       var ai = +o.getAttribute('data-ai'), a = q.answers[ai], mine = arr(resp).indexOf(ai) >= 0;
       if (mine) o.classList.add(a.correct ? 'ok' : 'bad');
       if (showCorrect && a.correct) o.classList.add('right');
-      if ((mine || (showCorrect && a.correct)) && !o.querySelector('.ic')) o.appendChild(icon(a.correct ? 'check' : 'x'));
+      if ((mine || showCorrect) && !o.querySelector('.ic')) o.insertBefore(icon(a.correct ? 'check' : 'x'), o.firstChild);   // Rise kabi: belgi — radio o'rnida
       if (mine && a.feedback) o.appendChild(el('p', { cls: 'afb', text: a.feedback }));
     });
   }
@@ -731,7 +834,7 @@
   function kcView(b, l, box, refresh) {
     box.textContent = '';
     var st = S.k[b.id], order = b.kind === 'truefalse' || b.kind === 'fill' ? ident(arr(b.answers).length) : shuffled(arr(b.answers).length);
-    box.appendChild(el('p', { cls: 'eyebrow', text: 'Bilimni tekshirish' }));
+    box.appendChild(el('p', { cls: 'sr', text: 'Bilimni tekshirish' }));
     var form = qForm(b, order, 'k' + b.id, st ? st.a : null, function (v) { sub.disabled = !answered(v); });
     var fb = el('div', { cls: 'fbx', 'aria-live': 'polite' });
     var sub = el('button', { cls: 'btn primary', type: 'button', disabled: true, onclick: function () {
@@ -760,18 +863,17 @@
     var i = LS.indexOf(l), q = qst(l), Q = l.quiz, att = clamp(num(Q.attempts, 0), 0, 99), pp = passPct(l);
     var nq = Q.draw > 0 ? Math.min(Q.draw, l.questions.length) : l.questions.length;
     var box = el('div', { cls: 'quiz' });
-    R.main.appendChild(el('header', { cls: 'les-h' }, [C.settings.lesson_count !== false ? el('p', { cls: 'eyebrow', text: T('lesson') + ' ' + (i + 1) + ' / ' + LS.length }) : null,
-      el('h1', { tabindex: '-1', text: l.title })]));
-    R.main.appendChild(box);
+    // Rise kabi: kulrang fonda oq «varaq» — ichida dars sarlavhasi va test ekranlari
+    R.main.appendChild(el('div', { cls: 'qz-sheet' }, [lessonHead(l, i), box]));
     if (q.n > 0) quizResult(l, box, false); else quizStart(l, box);
     R.main.appendChild(el('div', { cls: 'les-end' }, [lessonNav(i)]));
     function quizStart() {
       box.textContent = '';
-      box.appendChild(el('div', { cls: 'card qz-start' }, [el('span', { cls: 'qz-ic' }, [icon('quiz')]),
-        Q.intro ? el('p', { text: Q.intro }) : null,
+      box.appendChild(el('div', { cls: 'qz-start' }, [
+        Q.intro ? el('p', { cls: 'qz-intro', text: Q.intro }) : null,
         el('ul', { cls: 'facts' }, [el('li', null, [el('b', { text: String(nq) }), ' ta savol']), el('li', null, ["O'tish bali: ", el('b', { text: pp + '%' })]),
           el('li', null, ['Urinishlar: ', el('b', { text: att ? String(att) : 'cheklanmagan' })])]),
-        el('button', { cls: 'btn primary lg', type: 'button', disabled: !l.questions.length, onclick: function () { attempt(l, box); } }, [T('quiz_start'), icon('right')])]));
+        el('button', { cls: 'btn primary qz-go', type: 'button', disabled: !l.questions.length, onclick: function () { attempt(l, box); } }, [T('quiz_start'), icon('right')])]));
     }
   }
   function attempt(l, box) {
@@ -802,8 +904,9 @@
         }
         if (last) finish(); else { k++; screen(); }
       } }, T('submit'));
-      box.appendChild(el('div', { cls: 'card qz' }, [el('div', { cls: 'qz-top' }, [el('span', { cls: 'eyebrow', text: (k + 1) + ' / ' + idx.length }),
-        el('div', { cls: 'meter' }, [el('span', { style: 'width:' + Math.round(100 * k / idx.length) + '%' })])]), form.el, fb, el('div', { cls: 'acts' }, [btn])]));
+      var p2 = function (n) { return n < 10 ? '0' + n : String(n); };
+      box.appendChild(el('div', { cls: 'qz' }, [el('p', { cls: 'qz-no' }, [el('span', { cls: 'sr', text: 'Savol ' }), p2(k + 1) + '/' + p2(idx.length)]),
+        form.el, fb, el('div', { cls: 'acts' }, [btn])]));
       var f = form.el.querySelector('input'); if (f) f.focus({ preventScroll: true });
     }
     function finish() {
@@ -827,7 +930,7 @@
     var canRetry = !passed && (att === 0 || st.n < att), reveal = Q.reveal || 'always';
     box.textContent = '';
     var head = el('h2', { tabindex: '-1', cls: 'score-h', text: T('result') + ': ' + shown + '%' });
-    var card = el('div', { cls: 'card qz-res ' + (passed ? 'pass' : 'fail') }, [
+    var card = el('div', { cls: 'qz-res ' + (passed ? 'pass' : 'fail') }, [
       el('div', { cls: 'ring', style: '--p:' + shown, 'aria-hidden': 'true' }, [el('span', { text: shown + '%' })]), head,
       el('p', { cls: 'res-st', text: passed ? T('passed') : T('failed') }),
       el('p', { cls: 'sm muted', text: "O'tish bali " + pp + '% · urinish: ' + st.n + (att ? ' / ' + att : '') + (st.b != null && st.b !== shown ? ' · eng yaxshi natija ' + st.b + '%' : '') })]);
@@ -845,7 +948,7 @@
         rv.appendChild(el('li', { cls: ok ? 'ok' : 'bad' }, [el('p', { cls: 'rq' }, [icon(ok ? 'check' : 'x'), qq.question]),
           el('p', { cls: 'sm', text: 'Sizning javobingiz: ' + (mine || '—') }), ok ? null : el('p', { cls: 'sm', text: "To'g'ri javob: " + right })]));
       });
-      box.appendChild(el('details', { cls: 'card' }, [el('summary', { text: 'Javoblarni ko\'rish' }), rv]));
+      box.appendChild(el('details', { cls: 'qz-rev' }, [el('summary', { text: 'Javoblarni ko\'rish' }), rv]));
     }
     if (fresh) { head.focus({ preventScroll: false }); announce((passed ? T('passed') : T('failed')) + '. ' + T('result') + ' ' + shown + '%'); }
   }

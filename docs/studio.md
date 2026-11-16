@@ -1,9 +1,10 @@
 # «Studiya» — dars ishlab chiqarish oqimi
 
 **Kod:** `app/studio.py` (oqim, API, ishchi API), `app/studio_yt.py` (YouTube yuklovchisi), `static/studio.js`, `static/studio.css`
+**Dars kartochkasi:** `app/lesson_card.py`, `static/dars_card.js`, `static/dars_card.css` (`/api/dars/card/*`) · **Taqdimot yuborish:** `app/taqdimot.py` (`docs/taqdimot.md`) · **Dars tanlagich:** `static/lesson_picker.js`
 **Paket ilgaklari:** `app/paket.py` — «Studiya ilgaklari» bo'limi (`studio_lesson`, `studio_slides_pdf`, `studio_logo`, `studio_set_video`,
 `studio_set_youtube`, `studio_build`)
-**Testlar:** `tests/test_studio.py` (A — server orqali, B — jarayon ichida bazaning nusxasida; YouTube HTTP — `httpx.MockTransport`)
+**Testlar:** `tests/test_zanjir.py` (+ `tools/zanjir_check.js`) — taqdimot → studiya → bo'lim zanjiri; `tests/test_studio.py` (A — server orqali, B — jarayon ichida bazaning nusxasida; YouTube HTTP — `httpx.MockTransport`)
 **API:** `/api/studio/*` (sessiya), `/api/montaj/*` (montaj ishchisi, `X-Worker-Token`)
 **Ruxsat resursi:** `rbac.STUDIO` · **Bo'lim kaliti:** `studio` (standart yoqilgan, `app/modules.py`)
 **Montaj ishchisi** (studiya kompyuterida, Python + ffmpeg) — alohida dastur: `tools/montaj/`, `docs/montaj.md`.
@@ -27,6 +28,43 @@ ISFT Core'da hammasi bitta oqim:
 | xAPI paket | Avtomatik (matn + taqdimot bo'lsa) | `paket.build_topic` |
 | Paketni tasdiqlash | Bo'lim | «Dars tayyorlash» |
 | «NEXTID'ga yuklandi» belgisi | Bo'lim | Studiya → Darslar → Tafsilot |
+
+
+## Taqdimot → Studiya → Masofaviy bo'lim: bitta unikal dars kodi
+
+Zanjir: o'qituvchi **«Taqdimot»**da dars tanlab taqdimot yaratadi va **«Studiyaga va masofaviy bo'limga yuborish»**ni bosadi (`docs/taqdimot.md`) → studiyada syomka va montaj → operator montajni tasdiqlab
+**masofaviy bo'limga yuboradi** → bo'lim har dars uchun bitta **dars kartochkasi**dan «Dars yaratish»ni bosadi. Hammasining kaliti — darsning unikal kodi `2_ATT_dasturiyinjiniring_L2` (`paket.lesson_unique_code`;
+fan kodi `<kurs>_<YO'NALISH>_<fan>` + `_L2`). **Yangi identifikator yaratilmagan:** studiya darsni (course_id, lkey) bo'yicha biladi (`st_bookings`, `st_jobs`, `st_raw`), kod shundan hisoblanadi.
+
+**Studiyada ko'rinishi.** `lesson_detail` (`GET /lessons/{cid}/{lkey}`): `lesson.full_code` (kod, kafedra, o'qituvchi, fan), `taqdimot.latest` (oxirgi versiya) va `taqdimot.history` (v2, v1 …), `dept_sends`.
+Kun rejasi (`/day`) va «Mening darslarim» (`my_bookings`) bandlarida `full_code` va `pres` (taqdimot versiyasi, «yangi» belgisi); darslar ro'yxati (`states`) — `full_code`, `pres_version`, `dept_sent`.
+Operator syomkada taqdimotni shu yerdan ochadi: `GET /lessons/{cid}/{lkey}/taqdimot/{ver}/{pptx|pdf}` (operator, bo'lim; o'qituvchi — faqat o'z darsi; rektor 403). Ochilganda «yangi taqdimot» xabari «ko'rildi» bo'ladi.
+Taqdimot yuborilganda kurs ishlab chiqarish rejasiga (`st_plan`) qo'shiladi va `st_log` ga «taqdimot yuborildi» yoziladi. `derive()` (10 bosqich) o'zgarmagan.
+
+**Montajdan keyin — «Masofaviy bo'limga yuborish»** (`POST /jobs/{id}/send-dept {note?}`, operator va bo'lim). Tasdiqlash (`approve`) oqimi o'zgarmadi (video darsga qo'yiladi, YouTube / paket); tasdiqlangach
+operatorga yuborish oynasi ochiladi: **kod, kafedra, o'qituvchi, fan, dars va taqdimot versiyasi montaj vazifasidan AVTOMATIK** to'ldirilgan — operator qayta tanlamaydi, faqat tasdiqlaydi
+(«Montaj» bo'limida ham «Masofaviy bo'limga yuborilmagan» ro'yxati: `jobs?status=faol` → `dept_wait`). Faqat tasdiqlangan montaj yuboriladi (aks holda 409), takroriy yuborish — 409.
+Natija: `st_dept` (job_id, kod, taqdimot versiyasi, kim, qachon, izoh, `ack_at`), `st_log` «masofaviy bo'limga yuborildi», `states[].dept_sent`, bo'limga xabar «Montajlangan video keldi: <kod>»
+(«Mening vazifalarim» / qo'ng'iroqcha; dars kartochkasi ochilgach o'chadi). Audit: `studiya: masofaviy bo'limga yuborish` (rad etilganlari ham).
+
+**Bildirishnomalar** (mavjud pull mexanizmi — `studio.mywork_items`): operator — «Yangi taqdimot: <kod> · vN»; bo'lim (boshliq va xodim) — «Taqdimot yuborildi: <kod> · vN» va «Montajlangan video keldi: <kod>».
+Xabar havolasi `{view, tab, card: {cid, lkey}}` — bosilsa dars kartochkasi ochiladi (`extras.js openLink` → `lcOpen`).
+
+## Dars kartochkasi (masofaviy bo'lim)
+
+Har dars uchun BITTA oyna: «Dars tayyorlash» → Fanlar → fan → dars qatoridagi **«Kartochka»** yoki Studiya → Darslar → Tafsilot → «Dars kartochkasi» (`lcOpen(cid, lkey)`).
+Mazmuni: unikal kod; kafedra, o'qituvchi, fan, yo'nalish·kurs, dars; **taqdimot** (oxirgi versiya + eski versiyalar, .pptx / PDF, paketda borligi); **montajlangan video** (holati: Video yo'q → Syomka belgilangan →
+Xom video → Montajda → Ko'rib chiqishda → Tasdiqlangan → Masofaviy bo'limga yuborilgan; davomiylik, fayl, YouTube); **ma'ruza matni** (nomi, hajmi, ko'rinish, yuklab olish); qo'shimcha fayllar (xodim
+«Fayl qo'shish» — mavjud paket yuklash `/api/paket/…/upload?as=fayl`); **jurnal** (`st_log` + `pk_log`).
+
+| Tugma | Ish |
+|---|---|
+| **Dars yaratish** (faqat `masofaviy`, `masofaviy_xodim`) | `POST /api/dars/card/{cid}/{lkey}/create`: taqdimot (yuborilgan oxirgi versiya) va montajlangan video darsning paketida bo'lmasa — qo'yiladi (ilgaklar `paket.upload_slides`, `paket.studio_set_video`; qayta yozilmagan — faqat ulangan; paketda bor narsaga tegilmaydi), dars Konstruktorga o'tkaziladi (`dars.convert_lesson`; bog'langan bo'lsa — `dars.resync`) va Konstruktor ochiladi. Javob: `filled`, `missing` (taqdimot / video / matn), `ku_course_id` |
+| **Hammasini ZIP qilib yuklab olish** | `GET /api/dars/card/{cid}/{lkey}/zip` → `<kod>/taqdimot_vN.pptx` (+ `.pdf`), `<kod>/eski_versiyalar/`, `<kod>/video.mp4`, `<kod>/matn.docx|pdf|txt`, `<kod>/qoshimcha/…`, `<kod>/meta.json` (kod, fan, kafedra, o'qituvchi, versiyalar, jurnal). ZIP_STORED (video siqilmaydi) |
+
+API (`/api/dars/card`, resurs `paket`, har so'rov audit jurnalida): `GET /{cid}/{lkey}`, `POST /{cid}/{lkey}/create`, `GET /{cid}/{lkey}/taqdimot/{ver}/{pptx|pdf}`, `GET /{cid}/{lkey}/video` (Range; bo'lim, operator),
+`GET /{cid}/{lkey}/text`, `GET /{cid}/{lkey}/zip`. Ruxsat: ko'rish va ZIP — bo'lim, operator, o'qituvchi (o'z fani), kafedra (o'z kafedrasi); «Dars yaratish» — faqat bo'lim; rahbariyat va boshqalar — 403;
+begona kurs — 403 + audit. Yangi ruxsat darajasi qo'shilmagan.
 
 ## Bosqichlar (har bir L / A dars)
 
@@ -78,6 +116,21 @@ faqat bosqich egasiga (5 tadan ko'p bo'lsa — bitta jamlangan qator). Operator 
 * Ziddiyat — **409**: xona band; o'qituvchining o'sha vaqtda boshqa syomkasi bor; darsning allaqachon faol bandi bor.
 * Ko'chirish va bekor qilish — sabab majburiy (≥ 3 belgi), tarixda. O'qituvchi faqat o'z kursi bandini o'zgartiradi.
 * «Syomka qilindi» / «Kelmadi» — operator (syomka vaqtidan 12 soatdan ko'p oldin emas). Xom video yuklansa — faol band avtomatik «qilindi».
+
+## Tuzatish bosqichi (zanjir): send-dept, outline, xabarlar
+
+- `POST /jobs/{id}/send-dept`: takroriy yuborish 409 (tranzaksiya qaytariladi — qulf ochiq qolmaydi; 8 parallel → 1×200 + 7×409). Darsning yangiroq montaji bo'lsa — 409
+  «Bu darsning yangiroq montaji bor». Darsga taqdimot yuborilmagan bo'lsa yuboriladi, javobda `warnings:["Bu darsga taqdimot yuborilmagan"]`.
+- `dept_info` va dars kartochkasi video holati: `dept_sent`, `video_wait` (eng yangi tasdiqlangan montaj bo'yicha), `pres_sent`.
+- `GET /lessons/{cid}/{lkey}/taqdimot/{ver}/outline` → `{title, version, slides:[{n, kind, title, bullets(≤8), notes}]}` — yuborilgan versiya paytidagi reja
+  (n — PPTX slayd raqami: titul 1, reja 2, kontent 3 dan). Eski yozuv: PPTX dan, bo'lmasa taqdimot rejasidan, bo'lmasa `slides: []`. Ruxsat: bo'lim, operator, kursning o'z o'qituvchisi; begona — 403.
+- «Mening vazifalarim»: yangi taqdimot / video xabarlarida `due=null`, `fresh:true`; operatorga «Masofaviy bo'limga yuborilmagan montaj: N ta» qatori (`st-dw`).
+- Montaj ishchisi ulanmagan: `worker_note` (`/meta`, `/jobs`) — texnik matn (ISFT_CORE_WORKER_TOKEN) faqat IT va bo'lim boshlig'iga; qolganlarga «Montaj hozircha ishlamayapti — IT bilan bog'laning».
+- **ZIP siyosati:** video faqat video havolasini ko'ra oladigan rollarga (bo'lim, operator); o'qituvchi va kafedra ZIP'ida video yo'q, `meta.json`: `video: "ruxsat yo'q"`.
+  Fayl nomlari: `<kod>_taqdimot_vN.pptx`, `<kod>_video.mp4`, `<kod>_matn.*`, eskilari `eski_versiyalar/<kod>_taqdimot_vK.pptx`; qo'shimcha fayl nomi tozalanadi
+  (`.strip(". ")`, bo'sh/`.`/`..` → `fayl_<id>`, ≤120 belgi, kengaytma saqlanadi). Dars kursdan olib tashlangan bo'lsa kartochka/ZIP `gone:true` (tarix bilan), 400 emas.
+- «Dars yaratish» / convert: dars bo'yicha qulf, qulf ichida qayta tekshirish — parallel so'rovlar bitta kurs yaratadi (idempotent), yarim yo'lda yiqilsa yetim kurs o'chiriladi.
+
 
 ## Montaj ishchisi API (kontrakt — `tools/montaj` bilan AYNAN bir xil)
 
@@ -244,6 +297,9 @@ Rahbariyat — o'sha raqamlar, video/fayl havolalarisiz. Bosh panelda (rektor, o
 | POST | `/api/studio/bookings/{id}/done` `{status: otdi\|kelmadi, note}` | bo'lim, operator |
 | GET | `/api/studio/jobs?status=faol`, `/api/studio/jobs/{id}`, `/api/studio/jobs/{id}/media/{video\|thumb\|captions}` (Range) | bo'lim, operator |
 | POST | `/api/studio/jobs/{id}/approve`, `/redo` `{note, template?}`, `/retry`, `/cancel` | bo'lim, operator |
+| POST | `/api/studio/jobs/{id}/send-dept` `{note?}` | bo'lim, operator (tasdiqlangan montaj → masofaviy bo'lim; kod avtomatik) |
+| GET | `/api/studio/lessons/{cid}/{lkey}/taqdimot/{ver}/{pptx\|pdf}` | bo'lim, operator, o'qituvchi (o'z darsi) |
+| GET/POST | `/api/dars/card/{cid}/{lkey}[/create\|/zip\|/text\|/video\|/taqdimot/{ver}/{pptx\|pdf}]` | dars kartochkasi (yuqorida) |
 | POST | `/api/studio/youtube/{id}/retry` | bo'lim, operator |
 | GET | `/api/studio/settings`; POST `/api/studio/rooms`, `/api/studio/sla` `{sla: {bosqich: kun}}` | xonalar — boshliq, operator; SLA — boshliq |
 | GET/POST | `/api/studio/youtube`, `/youtube/clear`, `/youtube/test` | boshliq, AT boshlig'i |

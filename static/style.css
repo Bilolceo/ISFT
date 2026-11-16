@@ -290,7 +290,8 @@ main>section:not(.hidden){animation:rise .35s var(--ease) both}
 
 /* ---------- bildirishnoma ---------- */
 /* xabar — suzuvchi shisha */
-.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);z-index:50;max-width:min(560px,92vw);padding:13px 20px;border-radius:16px;
+.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);z-index:1100;   /* modallardan (.pk-modal-bg 80, .st-modal-bg 1000) yuqorida */
+  max-width:min(560px,92vw);padding:13px 20px;border-radius:16px;
   background:var(--toast-bg);color:var(--toast-ink);font-weight:600;border:1px solid var(--toast-brd);
   -webkit-backdrop-filter:var(--glass-blur);backdrop-filter:var(--glass-blur);
   box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 16px 36px -12px rgba(0,0,0,.45);animation:rise .3s var(--ease)}
@@ -645,7 +646,7 @@ details.script ol{margin:8px 0;padding-left:18px;display:flex;flex-direction:col
 /* Telefonda bildirish (toast) pastdagi yopishqoq amallar qatorini (masalan, «Dars tayyorlash»dagi Qayta tayyorlash / Yuklab olish) ~4 s yopib qo'yardi:
    ≤600px da u tepaga — sarlavha ostiga (iPhone «chiqiq»i — safe-area hisobga olinadi; ilovada «Namuna ma'lumot» tasmasi uchun joy qoldiriladi) */
 @media (max-width:600px){
-  .toast{top:calc(env(safe-area-inset-top,0px) + var(--hdr,64px) + 10px);bottom:auto;width:max-content;max-width:calc(100vw - 32px);box-sizing:border-box;z-index:60;animation:toastDrop .25s var(--ease)}
+  .toast{top:calc(env(safe-area-inset-top,0px) + var(--hdr,64px) + 10px);bottom:auto;width:max-content;max-width:calc(100vw - 32px);box-sizing:border-box;z-index:1100;animation:toastDrop .25s var(--ease)}
   #app.has-banner:not(.hidden)~.toast{top:calc(env(safe-area-inset-top,0px) + var(--hdr,64px) + 52px)}   /* tasma telefonda 2 qator (~41px) */
   .toast.undo-toast{bottom:auto;margin-top:58px}   /* oddiy bildirish bilan bir vaqtda chiqsa — ustma-ust tushmasin */
 }

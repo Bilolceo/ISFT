@@ -11,6 +11,54 @@ NEXTID'da (my.isft.uz) fan sahifasida, masalan, 45 dars: L1–L15 ma'ruza va A1�
 Avval «Dars tayyorlash» (shablon bo'yicha avtomatik yig'ish) va «Kurs muharriri» (Rise kabi bloklar) ikki alohida menyu bandi edi. Endi — bitta bo'lim:
 fan → darslar to'ri → har darsda avtomatik yig'ish yoki muharrirda erkin tahrirlash; eksport uchun qaysi manba ustunligi aniq ko'rinadi.
 
+## Ikki versiya (taqqoslash uchun, 2026-11-15)
+
+Rise'dan o'tgan bo'lim xodimlari uchun ikki oqim yonma-yon — fan sahifasidagi **«Ko'rinish: A / B»** (brauzerda saqlanadi, `localStorage.dsVer`):
+
+- **A — Konstruktor** (`static/konstruktor.js`, standart): har darsda bitta tugma → uch qadam: **1 Materiallar** (umumiy tashlash maydoni + 4 kartochka:
+  videodars — YouTube havola yoki fayl; ma'ruza — Word / skaner PDF; taqdimot — .pptx / .ppt / .pdf; mashq va topshiriqlar — ✅ belgili test Word, glossariy,
+  «Savollar»; har biri holati bilan) → **2 Tahrirlash** («Darsni yig'ish» — `convert`, avval o'tkazilgan bo'lsa `resync`; keyin muharrir Rise ko'rinishida,
+  yuqorida qadamlar tasmasi) → **3 Nashr** (bloklardagi xatolar, eksport — NEXTID xAPI, ko'rib chiqishga yuborish / tasdiqlash). «← Materiallar» — 1-qadamga qaytadi.
+- **B — Yig'ish + muharrir**: avvalgidek — «Avtomatik yig'ish (shablon)», «Muharrirda tahrirlash», «Fayllar».
+
+Ikkala versiyada muharrir standart holda **Rise ko'rinishida** (`docs/kurs.md` — «Rise ko'rinishi»). Shablondagi bo'limlar (VIDEODARS, MA'RUZA MATNI …)
+endi `continue` bloki (yozuvi — bo'lim nomi), NEXTID'dagi darslar kabi; «Dars tayyorlash»dan o'tkazilgan kurslar rangi — NEXTID binafsha `#7837A8`.
+Brauzer tekshiruvi: `tools/konstruktor_check.js` + `tools/kx_materials_assert.js` (materiallar, rang, subtitr), `tools/bulk_upload_check.js` (ko'p fayl) — hammasi `tests/test_konstruktor.py`dan; `tools/dars_check.js` va `tools/kurs_editor_check.js` — B versiya va klassik muharrir.
+
+### Konstruktor: rang, qator ko'rinishi, materiallar kartochkalari (2026-11-15)
+
+- **Rang:** Konstruktor (`.kx`), «Ko'p faylni yuklash» paneli (`.kxb`) va A versiyadagi dars qatorlari (`.ds-grid.a`) uchun CSS o'zgaruvchisi `--brand-fill` binafsha
+  (`#7837A8`) qilib qayta belgilanadi — asosiy tugmalar shu ko'rinishlarda binafsha, ilovaning boshqa joylarida va B versiyada qizil qoladi.
+- **Dars qatori (fan sahifasi):** chap — dars raqami belgisi (L2); nomi yo'q dars — «Mavzu nomi kiritilmagan» (xira, qiya; «2-mavzu» o'rinbosari yo'q);
+  tayyorlik — 3 ta kichik qadam **Material · Video · Paket** (✓ — bor; tooltip va `aria-label`, `role=list`), keyin «Ko'rib chiqishda» / «Tasdiqlangan» / izoh belgilari;
+  bitta asosiy tugma. Atama hamma joyda «Paket» («Eksport» faqat «Eksport manbai» tanlovida qoladi).
+- **«Namuna» tasmasi:** fan ro'yxatidan pastga siljib kirilganda Konstruktor sarlavha ostida qirqilib qolardi — endi `kxOpen` sahifani tepaga qaytaradi.
+- **Materiallar kartochkalari:** bir xil balandlik (`grid-auto-rows:1fr`), sarlavha va «✓ Tayyor / Bo'sh» belgisi alohida qatorda (to'qnashmaydi), bir xil 20 px ikonkalar,
+  YouTube maydoni — to'liq kenglik (ostida «Saqlash» va «Video fayl»), 4-kartochka — qisqa matn, belgilash qoidasi «Batafsil» ostida.
+- **Avtomatik subtitr (AI):** faqat video **fayl** yuklangan bo'lsa (YouTube'da yo'q). Mavjud subtitrlar (`ready.video.captions`) chip ko'rinishida; tugma
+  `POST /api/paket/courses/{cid}/topics/{key}/captions/auto {"lang":"uz"}` → `{ok, state: queued|exists|unavailable, message}`; server xabari ko'rsatiladi
+  (`aria-live`), endpoint hali yo'q (404 «Not Found») — neytral «Hozircha mavjud emas», boshqa xato — serverning o'qiladigan matni.
+
+### Ko'p faylni yuklash (fan sahifasi, `static/konstruktor.js`)
+
+«Fan skeleti» yonidagi **«Ko'p faylni yuklash»** (`#dsBulkUp`) fan sahifasida panel ochadi (Esc — yopish). Oqim: fayllarni tanlash / tashlash → **ko'rib chiqish jadvali**
+(fayl → dars, turi, holat; dars va turini o'zgartirish yoki faylni o'tkazib yuborish) → birma-bir yuklash (umumiy jarayon, har fayl foizi va natijasi) → xulosa
+(muvaffaqiyatli / xato, «Konstruktorda ochish», «Yuklanmaganlarni qayta yuklash»). Har fayl — mavjud `POST /api/paket/courses/{cid}/topics/{key}/upload?name=…&as=…`
+(ruxsat va hajm serverda; mijoz hajmni `PK.meta.limits` bo'yicha oldindan tekshiradi). Xatolar o'qiladigan: 413 (hajm), 403, 429, 5xx, tarmoq; boshqalari — serverning matni.
+
+**Moslashtirish** — sof funksiyalar `kxbParse(name)` / `kxbMatch(files, lessons)` (DOM'siz; `tools/bulk_upload_check.js` node'da 24 nom bilan sinaydi):
+1. «raqam + so'z»: `1-ma'ruza`, `3-mavzu`, `5 amaliy`; 2. «so'z + raqam»: `L3`, `A5`, `maruza_07`, `lab4`, `mt_2`, `dars3`; 3. nom boshidagi raqam (`07.docx`, ma'ruza deb olinadi);
+4. istalgan alohida raqam («taxminiy» deb belgilanadi). So'z → dars turi: ma'ruza/mavzu/dars/L → L; amaliy/A → A; seminar/S; laboratoriya/lab; mustaqil/MT.
+5. Yillar (2024) va `v2` kabi qo'shimchalar raqam hisoblanmaydi. Yuklash turi: `.docx/.doc/.txt` — matn, `.pptx/.ppt/.pdf` — taqdimot, `.mp4/.mov/.webm` — video, `.srt/.vtt` — subtitr,
+`.xlsx` — qo'shimcha fayl; nomida «test» bo'lgan Word/PDF/txt — test. Moslanmagan (raqam yo'q, dars yo'q, turi noma'lum) fayllar jadvalda ajratiladi — darsni qo'lda tanlash mumkin;
+bir darsga bir turdagi ikkita fayl — «takror — oldingisini almashtiradi».
+
+### Dars kartochkasi, unikal kod va taqdimot zanjiri (2026-11-15)
+
+Har dars qatorida **«Kartochka»** (`static/dars_card.js`, `docs/studio.md` — «Dars kartochkasi»): unikal kod (`2_ATT_dasturiyinjiniring_L2`), kafedra, o'qituvchi, taqdimot versiyalari (o'qituvchi «Taqdimot»dan yuborgan),
+montajlangan video holati, matn, jurnal, **«Dars yaratish»** (Konstruktorni shu ma'lumotlar bilan to'ldirib ochadi) va **ZIP**. «Fanlar» daraxti (kurs → yo'nalish → fan) mantiqi `static/lesson_picker.js` (`lpLevels`) ga chiqarilgan —
+«Taqdimot»dagi dars tanlagich ham shuni ishlatadi (`docs/taqdimot.md`).
+
 ## Menyu va yo'nalish
 
 - Menyuda bitta «Dars tayyorlash» bandi (`data-v="paket"`). «Kurs muharriri» bandi olib tashlandi; `go("kurs", {cid})` — **taxallus**: muharrir ochiladi,
@@ -127,6 +175,15 @@ har dars alohida .zip (`ISFT_<fan>_<L01>_<tur>.zip`, ZIP_STORED, oqim bilan). Is
   Ochiq to'xtatuvchi izoh bo'lsa — **409** `{gate: true, blocking: N}`; `override` (sabab ≥ 10 belgi) — o'tkaziladi, `ds_overrides` va audit («izohlar to'sig'i aylanib o'tildi»).
 - Bildirishnoma («Mening vazifalarim» / qo'ng'iroqcha, `paket.pending` orqali): o'qituvchiga — o'z kurslaridagi ochiq to'xtatuvchi yoki o'zini eslatgan izohlar; bo'limga —
   oxirgi javobi muallifniki bo'lgan ochiq to'xtatuvchi izohlar.
+
+## Dars kodi: saqlanadi (`course_code_store`)
+
+Fan kodi (`2_ATT_dasturiyinjiniring`) BIR MARTA beriladi va `course_code_store(course_id, code UNIQUE, created_at)` da saqlanadi: fan/yo'nalish nomi yoki yangi semestr
+qo'shilsa ham o'zgarmaydi. Ishga tushirishda mavjud kurslarga hozirgi qoida bilan bir martalik to'ldirish (takrori hech narsani o'zgartirmaydi); keyin qo'shilgan kurs: asosiy
+kod band bo'lsa `_<sem>s`, u ham band bo'lsa `_<sem>s_<kurs id>` — UNIKAL. Kirill nomlar lotinga o'giriladi (`slug_translit`), ʻ ' ‘ ’ olib tashlanadi. Kurs o'chirilsa kodi
+tozalanadi va uning yuborilgan taqdimotlari «yetim» bo'ladi (id qayta ishlatilsa yangi kurs eski versiyalarni olmaydi; o'chirish keyingi kod so'rovida aniqlanadi).
+`GET /subjects/{cid}` darslarida: `pres_version`, `pres_at`, `dept_sent`, `video_wait`.
+
 
 ## Ruxsatlar (qisqacha)
 

@@ -115,7 +115,6 @@ document.write(v==="0"?'<link rel="stylesheet" href="login.css">':'<link rel="st
   </aside>
   <div class="scrim" id="scrim"></div>
   <div class="shell">
-    <div class="data-banner" id="dataBanner" role="note" hidden>Namuna ma'lumot — haqiqiy tizimlar (HEMIS, NEXTID) hali ulanmagan</div>
     <header class="top">
       <button type="button" class="icon-btn menu-btn" id="menuOpen" aria-label="Menyuni ochish" title="Menyuni ochish" aria-controls="side" aria-expanded="false"><span data-ico="menu"></span></button>
       <img class="top-logo" src="/brand/logo-sm.png" alt="ISFT" width="40" height="36"><div class="crumb"><b id="crumb">Boshqaruv paneli</b></div>
@@ -197,6 +196,7 @@ document.write(v==="0"?'<link rel="stylesheet" href="login.css">':'<link rel="st
 <script src="ops_focus.js"></script>
 <script src="flows.js"></script>
 <script src="ilmiy.js"></script>
+<script src="lesson_picker.js"></script><!-- umumiy dars tanlagich: kurs → yo'nalish → fan → dars (taqdimot.js, dars.js) -->
 <script src="taqdimot.js"></script>
 <script src="tekshiruv.js"></script>
 <script src="xalqaro.js"></script>
@@ -207,6 +207,8 @@ document.write(v==="0"?'<link rel="stylesheet" href="login.css">':'<link rel="st
 <script src="paket.js"></script>
 <script src="kurs.js"></script>
 <script src="dars.js"></script>
+<script src="konstruktor.js"></script>
+<script src="dars_card.js"></script><!-- Dars kartochkasi: taqdimot versiyalari, video holati, matn, jurnal, «Dars yaratish», ZIP -->
 <script src="studio.js"></script>
 <script src="moliya.js"></script>
 <script src="yoshlar.js"></script>
@@ -215,6 +217,7 @@ document.write(v==="0"?'<link rel="stylesheet" href="login.css">':'<link rel="st
 <script src="tutor_admin.js"></script><!-- Ortda qolganlar → «AI tutor» (pilot) yorlig'i -->
 <script src="keyslar.js"></script><!-- Ortda qolganlar: keyslar, natija, haftalik taqvim, eslatmalar/tajriba; Nazorat markazi kartasi -->
 <script src="hemis.js"></script><!-- HEMIS almashinuvi: import (dry-run), farqlar navbati, eksport, sifat, API skeleti -->
+<script src="nav_history.js"></script><!-- brauzer «Orqaga» / «Oldinga» (SPA tarixi) — barcha modullardan keyin -->
 <script>
 window.LOGIN_AFTER && LOGIN_AFTER();
 /* Sovuq yuklanishda /api/users javobi shu qatordan OLDIN kelib, ro'yxat variant ilgaklarisiz chizilgan bo'lishi mumkin

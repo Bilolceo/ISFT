@@ -10,14 +10,21 @@ Kalit bo'lmasa — AI siz: reja hujjat tuzilmasidan (sarlavhalar, xatboshilar, r
 ISFT_CORE_PRES_FAKE=1 — testlar uchun soxta AI (tarmoqqa chiqmaydi).
 Cheklovlar: fayl ≤ 20 MB, faqat .docx/.pdf/.txt (sehrli baytlar bo'yicha), kuniga ISFT_CORE_PRES_DAILY (20) ta reja generatsiyasi.
 Ruxsat: oqituvchi va kafedra (kafedra — o'z kafedrasi taqdimotlarini ko'radi); boshqa rollar — 403. Har bir murojaat audit jurnalida.
+
+DARS BILAN BOG'LASH (docs/taqdimot.md «Dars kodi va yuborish»): taqdimot fan/mavzu matni bilan emas, DARS tanlanib yaratiladi — kurs → yo'nalish → fan → dars
+(faqat o'qituvchining O'Z yuklamasi: dl_courses.teacher_id; faqat L va A darslari). Dars kodi — paket.lesson_unique_code: `2_ATT_dasturiyinjiniring_L2`.
+Tayyor taqdimot «Studiyaga va masofaviy bo'limga yuborish» tugmasi bilan BITTA amalda ikkala tomonga ketadi: `pres_sends` — dars kodi bo'yicha VERSIYALAR
+(v1, v2 …; eski versiyalar fayli bilan tarixda qoladi), pptx (va LibreOffice bo'lsa PDF) saqlanadi, darsning paketiga (pk_assets) ham qo'yiladi,
+studiya (st_plan, st_log) va masofaviy bo'lim «Mening vazifalarim» orqali xabar oladi (studio.mywork_items). Bog'lanmagan eski taqdimotlar buzilmaydi —
+«Darsni belgilash» (POST /decks/{id}/lesson) bilan keyin bog'lanadi.
 """
 from __future__ import annotations
-import base64, io, json, os, re, shutil, threading, time
+import base64, hashlib, io, json, os, re, shutil, sqlite3, threading, time
 from pathlib import Path
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from . import clock, db, rbac
 from . import taqdimot_extract as EX
 from . import taqdimot_render as RD
@@ -26,7 +33,7 @@ from .rbac import Ctx, AccessDenied
 router = APIRouter()
 _con = None
 _ctx = None
-_lock = threading.Lock()
+_lock = db.TxLock(lambda: _con)      # RLock + blokdan istisno bilan chiqsa — rollback (ochiq yozish tranzaksiyasi butun serverni qulflamasin)
 RES = rbac.PRESENT
 P = "/api/taqdimot"
 
@@ -66,17 +73,45 @@ def status() -> dict:
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS pres_decks(id INTEGER PRIMARY KEY, user_id INT, user_name TEXT, dept_id INT, title TEXT, subject TEXT, topic_no TEXT,
   audience TEXT, target INT, source_name TEXT, source_kind TEXT, source_chars INT, truncated INT DEFAULT 0, images INT DEFAULT 0,
-  outline TEXT, engine TEXT, model TEXT, status TEXT DEFAULT 'reja', slides INT, built_at TEXT, created_at TEXT, updated_at TEXT, deleted INT DEFAULT 0);
+  outline TEXT, engine TEXT, model TEXT, status TEXT DEFAULT 'reja', slides INT, built_at TEXT, created_at TEXT, updated_at TEXT, deleted INT DEFAULT 0,
+  course_id INT, lkey INT, lesson_code TEXT, sent_version INT DEFAULT 0, sent_at TEXT);
 CREATE INDEX IF NOT EXISTS ix_pres_user ON pres_decks(user_id, deleted);
 CREATE INDEX IF NOT EXISTS ix_pres_dept ON pres_decks(dept_id, deleted);
 CREATE TABLE IF NOT EXISTS pres_gen(id INTEGER PRIMARY KEY, user_id INT, deck_id INT, day TEXT, at TEXT, engine TEXT, ok INT, ms INT, err TEXT,
   in_tok INT, out_tok INT);
 CREATE INDEX IF NOT EXISTS ix_pres_gen ON pres_gen(user_id, day);
+CREATE TABLE IF NOT EXISTS pres_sends(id INTEGER PRIMARY KEY, deck_id INT, course_id INT, lkey INT, code TEXT, version INT, title TEXT, slides INT,
+  pptx_path TEXT, pdf_path TEXT, size INT, sha256 TEXT, note TEXT, sent_by INT, sent_by_name TEXT, sent_at TEXT,
+  studio_ack_at TEXT, studio_ack_by TEXT, dept_ack_at TEXT, dept_ack_by TEXT, paket_asset_id INT, paket_error TEXT,
+  UNIQUE(course_id, lkey, version));
+CREATE INDEX IF NOT EXISTS ix_pres_sends ON pres_sends(course_id, lkey);
 """
+_SEND_COLS = (("course_code", "TEXT"), ("outline", "TEXT"))        # course_code — yuborilgan paytdagi fan kodi (id qayta ishlatilsa eski versiyalar ajratiladi); outline — shu versiya reja nusxasi (JSON)
+_DECK_COLS = (("course_id", "INT"), ("lkey", "INT"), ("lesson_code", "TEXT"), ("sent_version", "INT DEFAULT 0"), ("sent_at", "TEXT"))
 
 
 def init(con):
     con.executescript(SCHEMA)
+    have = {r[1] for r in con.execute("PRAGMA table_info(pres_decks)")}       # eski baza: dars bilan bog'lash ustunlari (ma'lumot saqlanadi)
+    for col, typ in _DECK_COLS:
+        if col not in have:
+            con.execute(f"ALTER TABLE pres_decks ADD COLUMN {col} {typ}")
+    con.execute("CREATE INDEX IF NOT EXISTS ix_pres_lesson ON pres_decks(course_id, lkey)")
+    have = {r[1] for r in con.execute("PRAGMA table_info(pres_sends)")}
+    for col, typ in _SEND_COLS:
+        if col not in have:
+            con.execute(f"ALTER TABLE pres_sends ADD COLUMN {col} {typ}")
+    try:        # kurs o'chirilsa uning yuborilgan taqdimotlari yetim bo'ladi (id qayta ishlatilsa ham yangi kursga o'tib ketmaydi) — darhol, so'rovni kutmasdan
+        if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dl_courses'").fetchone():
+            con.execute("CREATE TRIGGER IF NOT EXISTS trg_dlc_pres_del AFTER DELETE ON dl_courses BEGIN UPDATE pres_sends SET course_id=-id WHERE course_id=OLD.id; END")
+    except Exception as e:
+        print("taqdimot.init trigger:", repr(e))
+    try:        # eski yozuvlar: fan kodi saqlangan kodlar jadvalidan (paket.course_code_store — PK.init dan keyin to'ladi; yo'q bo'lsa — keyingi ishga tushirishda)
+        if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='course_code_store'").fetchone():
+            con.execute("""UPDATE pres_sends SET course_code=(SELECT code FROM course_code_store s WHERE s.course_id=pres_sends.course_id)
+                           WHERE course_code IS NULL AND course_id>0""")
+    except Exception as e:
+        print("taqdimot.init course_code:", repr(e))
     con.commit()
 
 
@@ -91,6 +126,25 @@ def root() -> Path:
 
 def ddir(did: int) -> Path:
     return root() / str(int(did))
+
+
+# ---- ko'p oqimli xavfsizlik ------------------------------------------------------------------
+_locks_guard = threading.Lock()
+_lesson_locks: dict = {}
+
+
+def _lesson_lock(cid: int, lkey: int) -> threading.Lock:
+    """Dars (course_id, lkey) bo'yicha jarayon ichidagi qulf: versiya hisobi + fayl + paketga qo'yish bitta butun amal (parallel /send da taqdimot yo'qolmasin)."""
+    with _locks_guard:
+        return _lesson_locks.setdefault((int(cid), int(lkey)), threading.Lock())
+
+
+def _rollback() -> None:
+    """Yozish tranzaksiyasi ochiq qolsa (xato / HTTPException yozishdan keyin) — oqimning ulanishi qulfni ushlab turadi va butun server «database is locked» beradi."""
+    try:
+        _con.rollback()
+    except Exception:
+        pass
 
 
 # =============================================================================================
@@ -126,7 +180,7 @@ def _deck(c: Ctx, did: int, write=False) -> dict:
         return d
     if not write and mode(c) == "dept" and d["dept_id"] and d["dept_id"] == _dept(c):
         return d
-    rbac.audit(_con, c, "taqdimot: begona taqdimot", RES, False, f"#{did}" + (" · tahrirlash" if write else ""))
+    rbac.audit_deny(_con, c, "taqdimot: begona taqdimot", RES, f"#{did}" + (" · tahrirlash" if write else ""))
     same_dept = mode(c) == "dept" and d["dept_id"] and d["dept_id"] == _dept(c)
     raise AccessDenied("⛔ " + ("Kafedra mudiri o'qituvchi taqdimotini faqat ko'radi va yuklab oladi — tahrirlash muallifga" if same_dept
                               else "Bu taqdimot sizniki emas") + ". So'rov audit jurnaliga yozildi.")
@@ -156,13 +210,46 @@ def _s(v, n=600):
     return re.sub(r"\s+", " ", str(v or "")).strip()[:n]
 
 
+_AP = "['ʻʼ‘’`´]"
+_TOPIC_WORD = rf"(?:mavzu|ma{_AP}?ruza|maruza|мавзу|маъруза|тема|лекция)"
+_TOPIC_PFX = re.compile(rf"^\s*(?:\d{{1,3}}\s*[-–.]?\s*{_TOPIC_WORD}|{_TOPIC_WORD}\s*(?:№|#)?\s*\d{{1,3}})\s*[:.\-–—]?\s*", re.I)
+_TOPIC_NO = re.compile(rf"^\s*(?:(\d{{1,3}})\s*[-–.]?\s*{_TOPIC_WORD}|{_TOPIC_WORD}\s*(?:№|#)?\s*(\d{{1,3}}))(?!\d)", re.I)
+
+
+def strip_topic_prefix(t) -> str:
+    """«7-MAVZU: Differensial tenglamalar» → «Differensial tenglamalar» (titul slaydda raqam o'zi qo'shiladi — mavzu nomi ikki marta raqamlanmasin).
+    Faqat «7-MAVZU» bo'lsa — bo'sh satr (nom emas)."""
+    t = _s(t, 300)
+    m = _TOPIC_PFX.match(t)
+    rest = t[m.end():].strip(" .:;–—-") if m else t
+    return t if m and rest.lower() == "nomsiz" else rest        # «7-mavzu — nomsiz» — nomsiz dars sarlavhasi, o'zgarmaydi
+
+
+def doc_topic_no(blocks) -> int | None:
+    """Hujjat boshidagi «N-MAVZU» (yoki «Mavzu N») sarlavhasidan mavzu raqami: birinchi 14 ta bo'sh bo'lmagan blok ichida; topilmasa — None."""
+    n = 0
+    for b in blocks or []:
+        if b.get("k") not in ("h", "p"):
+            continue
+        t = (b.get("t") or "").strip()
+        if not t:
+            continue
+        m = _TOPIC_NO.match(t.replace("**", ""))
+        if m:
+            return int(m.group(1) or m.group(2))
+        n += 1
+        if n >= 14:
+            break
+    return None
+
+
 def _sl(v, n=40, m=400):
     return [x for x in (_s(i, m) for i in (v or [])[:n] if not isinstance(i, (dict, list))) if x]
 
 
 def normalize(o: dict, n_images: int) -> dict:
     o = o if isinstance(o, dict) else {}
-    out = {"subject": _s(o.get("subject"), 120), "topic_no": _s(o.get("topic_no"), 20), "title": _s(o.get("title"), 200) or "Mavzu",
+    out = {"subject": _s(o.get("subject"), 120), "topic_no": _s(o.get("topic_no"), 20), "title": strip_topic_prefix(_s(o.get("title"), 200)) or "Mavzu",
            "subtitle": _s(o.get("subtitle"), 200), "slides": []}
     for s in (o.get("slides") or [])[:MAX_SLIDES * 2]:
         if not isinstance(s, dict):
@@ -319,10 +406,12 @@ def rule_outline(ex: dict, meta: dict) -> dict:
         sections.append(cur)
     title = meta.get("title") or ""
     if not title and sections and sections[0]["h"] and len(sections[0]["h"]) <= 140:
-        title = sections[0]["h"]
-        if not sections[0]["items"]:
-            sections = sections[1:]
-    title = title or meta.get("source_stem") or "Mavzu"
+        cand = strip_topic_prefix(sections[0]["h"])       # «7-MAVZU: Nom» → «Nom»; faqat «7-MAVZU» — nom emas
+        if cand:
+            title = cand
+            if not sections[0]["items"]:
+                sections = sections[1:]
+    title = title or meta.get("title_fallback") or "Mavzu"
     slides = []
     for sec in sections:
         h = _short(sec["h"] or "Asosiy tushunchalar", 120)
@@ -428,20 +517,26 @@ def generate(c: Ctx, did: int, meta: dict) -> dict:
             raw = rule_outline(ex, meta)
         outline = normalize(raw, len(ex["images"]))
         for k in ("subject", "topic_no", "title"):   # o'qituvchi kiritgan qiymat ustun
-            if meta.get(k): outline[k] = _s(meta[k], 200)
+            if meta.get(k): outline[k] = (strip_topic_prefix(meta[k]) or outline[k]) if k == "title" else _s(meta[k], 200)
+        if not meta.get("title"):                    # «Mavzu nomi» bo'sh: matn sarlavhasi → dars nomi → «N-mavzu — nomsiz»; hech qachon fayl nomi («matn»)
+            if outline["title"].strip().lower() in ("", "mavzu", "sinov mavzusi", "matn", (meta.get("source_stem") or "\0").lower()):
+                outline["title"] = meta.get("title_fallback") or "Nomsiz taqdimot"
     except AIError as e:
         err = str(e)
     except ValueError as e:
         err = f"Reja tuzilmadi: {e}"
     ms = int((time.time() - t0) * 1000)
-    with _lock:
-        _con.execute("INSERT INTO pres_gen(user_id,deck_id,day,at,engine,ok,ms,err,in_tok,out_tok) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                     (c.user["id"], did, clock.today().isoformat(), clock.now_iso(), eng, 0 if err else 1, ms, err, info.get("in"), info.get("out")))
-        if not err:
-            _con.execute("UPDATE pres_decks SET outline=?, engine=?, model=?, status='reja', title=?, subject=?, topic_no=?, updated_at=? WHERE id=?",
-                         (json.dumps(outline, ensure_ascii=False), eng, info.get("model"), outline["title"], outline["subject"], outline["topic_no"],
-                          clock.now_iso(), did))
-        _con.commit()
+    try:
+        with _lock:
+            _con.execute("INSERT INTO pres_gen(user_id,deck_id,day,at,engine,ok,ms,err,in_tok,out_tok) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                         (c.user["id"], did, clock.today().isoformat(), clock.now_iso(), eng, 0 if err else 1, ms, err, info.get("in"), info.get("out")))
+            if not err:
+                _con.execute("UPDATE pres_decks SET outline=?, engine=?, model=?, status='reja', title=?, subject=?, topic_no=?, updated_at=? WHERE id=?",
+                             (json.dumps(outline, ensure_ascii=False), eng, info.get("model"), outline["title"], outline["subject"], outline["topic_no"],
+                              clock.now_iso(), did))
+            _con.commit()
+    except BaseException:
+        _rollback(); raise
     rbac.audit(_con, c, "taqdimot: reja tuzildi" if not err else "taqdimot: reja xatosi", RES, True,
                f"#{did} · {ENGINE_LABEL[eng]} · {ms} ms" + (f" · {err[:120]}" if err else ""))
     if err:
@@ -449,7 +544,18 @@ def generate(c: Ctx, did: int, meta: dict) -> dict:
     return view(c, did)
 
 
+def _drop_deck(did: int) -> None:
+    """Yaratish yarim yo'lda to'xtadi: qator «o'chirilgan», papka tozalanadi (tranzaksiya ochiq qolmaydi)."""
+    shutil.rmtree(ddir(did), ignore_errors=True)
+    try:
+        with _lock:
+            _con.execute("UPDATE pres_decks SET deleted=1 WHERE id=?", (did,)); _con.commit()
+    except BaseException:
+        _rollback()
+
+
 def create(c: Ctx, raw: bytes | None, text: str | None, name: str, meta: dict) -> dict:
+    meta = _bind_meta(c, meta)               # dars tanlangan bo'lsa: fan/mavzu raqami darsdan olinadi (qo'lda yozilmaydi), ko'lam tekshiriladi
     if raw is not None:
         if not raw:
             _bad("Fayl bo'sh")
@@ -469,31 +575,88 @@ def create(c: Ctx, raw: bytes | None, text: str | None, name: str, meta: dict) -
         raw, kind, name = text.encode("utf-8"), "txt", name or "matn.txt"
     _check_limit(c)
     now = clock.now_iso()
-    with _lock:
-        did = _con.execute("""INSERT INTO pres_decks(user_id,user_name,dept_id,title,subject,topic_no,audience,target,source_name,source_kind,
-                              status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                           (c.user["id"], c.user["full_name"], _dept(c), meta.get("title") or Path(name).stem[:120], meta.get("subject"),
-                            meta.get("topic_no"), meta.get("audience"), meta.get("target"), name[:160], kind, "yangi", now, now)).lastrowid
-        _con.commit()
+    title0 = strip_topic_prefix(meta.get("title") or "") or meta.get("title_fallback") or "Nomsiz taqdimot"      # fayl nomi («matn») sarlavha bo'lmaydi
+    try:
+        with _lock:
+            did = _con.execute("""INSERT INTO pres_decks(user_id,user_name,dept_id,title,subject,topic_no,audience,target,source_name,source_kind,
+                                  status,created_at,updated_at,course_id,lkey,lesson_code) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                               (c.user["id"], c.user["full_name"], _dept(c), title0, meta.get("subject"),
+                                meta.get("topic_no"), meta.get("audience"), meta.get("target"), name[:160], kind, "yangi", now, now,
+                                meta.get("course_id"), meta.get("lkey"), meta.get("lesson_code"))).lastrowid
+            _con.commit()
+    except BaseException:
+        _rollback(); raise
     d = ddir(did)
     try:
         d.mkdir(parents=True, exist_ok=True)
         (d / f"manba.{kind}").write_bytes(raw)
         ex = EX.extract(raw, kind, d / "img")
-    except EX.BadFile as e:
-        shutil.rmtree(d, ignore_errors=True)
+        (d / "material.json").write_text(json.dumps(ex, ensure_ascii=False), encoding="utf-8")
+        _, trunc = EX.as_text(ex["blocks"], MAX_CHARS)
         with _lock:
-            _con.execute("UPDATE pres_decks SET deleted=1 WHERE id=?", (did,)); _con.commit()
+            _con.execute("UPDATE pres_decks SET source_chars=?, truncated=?, images=? WHERE id=?", (ex["chars"], int(trunc), len(ex["images"]), did))
+            _con.commit()
+    except EX.BadFile as e:
+        _rollback(); _drop_deck(did)
         rbac.audit(_con, c, "taqdimot: material o'qilmadi", RES, False, f"{name[:60]} · {e}")
         _bad(str(e), 415)
-    (d / "material.json").write_text(json.dumps(ex, ensure_ascii=False), encoding="utf-8")
-    _, trunc = EX.as_text(ex["blocks"], MAX_CHARS)
-    with _lock:
-        _con.execute("UPDATE pres_decks SET source_chars=?, truncated=?, images=? WHERE id=?", (ex["chars"], int(trunc), len(ex["images"]), did))
-        _con.commit()
+    except BaseException:
+        _rollback(); _drop_deck(did); raise
     rbac.audit(_con, c, "taqdimot: material yuklandi", RES, True, f"#{did} · {name[:60]} · {kind} · {ex['chars']} belgi · {len(ex['images'])} rasm")
     meta = {**meta, "source_stem": Path(name).stem}
-    return generate(c, did, meta)
+    out = generate(c, did, meta)
+    if meta.get("course_id"):                # shu darsga ikkinchi taqdimot — bloklanmaydi, UI ogohlantiradi
+        out["existing"] = [{"id": r["id"], "title": r["title"] or ""} for r in db.rows(
+            _con, "SELECT id, title FROM pres_decks WHERE user_id=? AND course_id=? AND lkey=? AND deleted=0 AND id!=? ORDER BY id DESC LIMIT 10",
+            (c.user["id"], meta["course_id"], meta["lkey"], did))]
+    else:
+        out["existing"] = []
+    return out
+
+
+def _scope_ok(c: Ctx, d: dict) -> bool:
+    """Chaqiruvchi shu taqdimot darsining HOZIRGI kursiga egami (o'qituvchi — hozirgi o'qituvchi; kafedra — hozirgi kafedra)? Kurs boshqa o'qituvchiga o'tsa —
+    eski o'qituvchi yangisining versiyalarini, izohini va ismini ko'rmaydi va yuklab ololmaydi."""
+    if not d.get("course_id"):
+        return False
+    co = db.one(_con, "SELECT teacher_id, department_id FROM dl_courses WHERE id=?", (d["course_id"],))
+    if not co:
+        return False
+    m = mode(c)
+    if m == "own":
+        return bool(_tid(c)) and co["teacher_id"] == _tid(c)
+    if m == "dept":
+        return bool(co["department_id"]) and co["department_id"] == _dept(c)
+    return False
+
+
+def _lesson_sent(cid, lkey) -> dict:
+    """DARS bo'yicha oxirgi yuborilgan versiya (qaysi taqdimot orqali yuborilganidan qat'i nazar) — versiya raqami dars bo'yicha hisoblanadi."""
+    r = db.one(_con, "SELECT * FROM pres_sends WHERE course_id=? AND lkey=? ORDER BY version DESC LIMIT 1", (int(cid or 0), int(lkey or 0))) if cid and lkey else None
+    if not r:
+        return {"lesson_sent_version": None, "lesson_sent_deck_id": None, "lesson_sent_deck_title": None, "lesson_sent_at": None}
+    t = db.one(_con, "SELECT title FROM pres_decks WHERE id=? AND deleted=0", (r["deck_id"],))
+    return {"lesson_sent_version": r["version"], "lesson_sent_deck_id": r["deck_id"], "lesson_sent_deck_title": (t or {}).get("title") or r["title"] or "",
+            "lesson_sent_at": r["sent_at"]}
+
+
+def _decks_of(uid: int, cid, lkey) -> list[dict]:
+    if not cid or not lkey:
+        return []
+    return [{"id": r["id"], "title": r["title"] or ""} for r in db.rows(
+        _con, "SELECT id, title FROM pres_decks WHERE user_id=? AND course_id=? AND lkey=? AND deleted=0 ORDER BY id DESC LIMIT 20", (int(uid), int(cid), int(lkey)))]
+
+
+def _pptx_info(d: dict) -> dict | None:
+    f = ddir(d["id"]) / "taqdimot.pptx"
+    if not f.is_file():
+        return None
+    return {"filename": file_name(d), "size": f.stat().st_size, "built_at": d.get("built_at")}
+
+
+def _last_send_info(r: dict) -> dict:
+    return {"version": r["version"], "at": r["sent_at"], "size": r["size"], "filename": f"{r['code']}_taqdimot_v{r['version']}.pptx",
+            "sha256_short": (r["sha256"] or "")[:8], "deck_id": r["deck_id"]}
 
 
 def view(c: Ctx, did: int) -> dict:
@@ -502,16 +665,47 @@ def view(c: Ctx, did: int) -> dict:
                              "images", "engine", "model", "status", "slides", "built_at", "created_at", "updated_at", "user_name")}
     out["engine_label"] = ENGINE_LABEL.get(d["engine"] or "", "—")
     out["outline"] = json.loads(d["outline"]) if d["outline"] else None
+    scope = _scope_ok(c, d)
+    out["lesson"] = lesson_view(d, scope)
+    if out["lesson"] is not None and scope:
+        out["lesson"].update(_lesson_sent(d["course_id"], d["lkey"]))
+        out["lesson"]["decks"] = _decks_of(d["user_id"], d["course_id"], d["lkey"])
+    out["sent_version"], out["sent_at"] = int(d.get("sent_version") or 0), d.get("sent_at")
+    out["sends"] = deck_sends(c, d, scope) if out["lesson"] else []
     out["mine"] = d["user_id"] == c.user["id"]
     out["can_edit"] = out["mine"]
-    if out["outline"]:
-        out["pages"] = len(RD.plan_pages(out["outline"])) + 3      # titul + reja + kontent + rahmat
+    out["pptx"] = _pptx_info(d)
+    mine_last = db.one(_con, "SELECT * FROM pres_sends WHERE deck_id=? ORDER BY version DESC LIMIT 1", (d["id"],)) if (scope or out["mine"]) else None
+    lesson_last = db.one(_con, "SELECT * FROM pres_sends WHERE course_id=? AND lkey=? ORDER BY version DESC LIMIT 1", (d["course_id"], d["lkey"])) \
+        if scope and d.get("course_id") and d.get("lkey") else None
+    out["last_send"] = _last_send_info(lesson_last) if lesson_last else (_last_send_info(mine_last) if mine_last else None)
+    out["changed_since_send"] = False
+    if mine_last:           # oxirgi yuborilgandan keyin reja tahrirlangan yoki PPTX qayta yaratilgan (fayl farqi)
+        f = ddir(did) / "taqdimot.pptx"
+        out["changed_since_send"] = d["status"] != "tayyor" or not f.is_file() or hashlib.sha256(f.read_bytes()).hexdigest() != mine_last["sha256"]
     try:
         ex = _ex_load(did)
+        out["doc_topic_no"] = doc_topic_no(ex["blocks"])
         out["image_list"] = [{"n": i["n"], "w": i["w"], "h": i["h"], "ctx": i.get("ctx", "")} for i in ex["images"]]
     except Exception:
-        out["image_list"] = []
+        out["image_list"], out["doc_topic_no"] = [], None
+    if out["outline"]:
+        out["pages"] = len(RD.plan_pages(out["outline"])) + 3      # titul + reja + kontent + rahmat
     return out
+
+
+def deck_sends(c: Ctx, d: dict, scope: bool | None = None) -> list[dict]:
+    """Taqdimotning ko'rinadigan yuborilgan versiyalari. Hozirgi kurs egasi (ko'lam ichida): shu taqdimot VA shu muallifning boshqa taqdimotlari orqali
+    yuborilganlar; ko'lamdan chiqqan (kurs boshqaga o'tgan): faqat o'zining shu taqdimotdan yuborganlari."""
+    if not d.get("course_id") or not d.get("lkey"):
+        return []
+    scope = _scope_ok(c, d) if scope is None else scope
+    if scope:
+        rows = db.rows(_con, "SELECT * FROM pres_sends WHERE course_id=? AND lkey=? AND (deck_id=? OR sent_by=?) ORDER BY version DESC LIMIT 50",
+                       (d["course_id"], d["lkey"], d["id"], d["user_id"]))
+    else:
+        rows = db.rows(_con, "SELECT * FROM pres_sends WHERE deck_id=? AND sent_by=? ORDER BY version DESC LIMIT 50", (d["id"], c.user["id"]))
+    return [_send_pub(r) for r in rows]
 
 
 def save_outline(c: Ctx, did: int, outline: dict) -> dict:
@@ -520,10 +714,20 @@ def save_outline(c: Ctx, did: int, outline: dict) -> dict:
         o = normalize(outline, d["images"] or 0)
     except ValueError as e:
         _bad(str(e))
-    with _lock:
-        _con.execute("UPDATE pres_decks SET outline=?, title=?, subject=?, topic_no=?, status='reja', updated_at=? WHERE id=?",
-                     (json.dumps(o, ensure_ascii=False), o["title"], o["subject"], o["topic_no"], clock.now_iso(), did))
-        _con.commit()
+    if d.get("course_id") and d.get("lkey"):      # darsga bog'langan: fan nomi va mavzu raqami SERVER tomonida darsdan majburlanadi (qo'lda o'zgartirib bo'lmaydi)
+        try:
+            co = _PK()._course_row(d["course_id"]); les = _PK().lesson_info(co, d["lkey"])
+            o["subject"] = (co["subject"] or "")[:120]
+            o["topic_no"] = str(les["no"]) if les["kind"] == "maruza" else str(les.get("topic") or "")
+        except HTTPException:                      # dars o'chirilgan — saqlangan qiymat (deckdagi) qoladi
+            o["subject"], o["topic_no"] = d["subject"] or o["subject"], d["topic_no"] or o["topic_no"]
+    try:
+        with _lock:
+            _con.execute("UPDATE pres_decks SET outline=?, title=?, subject=?, topic_no=?, status='reja', updated_at=? WHERE id=?",
+                         (json.dumps(o, ensure_ascii=False), o["title"], o["subject"], o["topic_no"], clock.now_iso(), did))
+            _con.commit()
+    except BaseException:
+        _rollback(); raise
     rbac.audit(_con, c, "taqdimot: reja tahrirlandi", RES, True, f"#{did} · {len(o['slides'])} slayd")
     return view(c, did)
 
@@ -539,9 +743,12 @@ def build(c: Ctx, did: int) -> dict:
     except Exception as e:
         rbac.audit(_con, c, "taqdimot: pptx xatosi", RES, True, f"#{did} · {type(e).__name__}: {str(e)[:120]}")
         _bad("Taqdimot faylini yaratib bo'lmadi. Rejani tekshirib, qayta urinib ko'ring.", 500)
-    with _lock:
-        _con.execute("UPDATE pres_decks SET status='tayyor', slides=?, built_at=?, updated_at=? WHERE id=?", (r["slides"], clock.now_iso(), clock.now_iso(), did))
-        _con.commit()
+    try:
+        with _lock:
+            _con.execute("UPDATE pres_decks SET status='tayyor', slides=?, built_at=?, updated_at=? WHERE id=?", (r["slides"], clock.now_iso(), clock.now_iso(), did))
+            _con.commit()
+    except BaseException:
+        _rollback(); raise
     rbac.audit(_con, c, "taqdimot: pptx yaratildi", RES, True, f"#{did} · {r['slides']} slayd")
     return view(c, did)
 
@@ -557,8 +764,9 @@ def listing(c: Ctx, scope: str) -> dict:
         rows = db.rows(_con, "SELECT * FROM pres_decks WHERE deleted=0 AND dept_id=? AND user_id!=? ORDER BY id DESC LIMIT 200", (_dept(c), c.user["id"]))
     else:
         rows = db.rows(_con, "SELECT * FROM pres_decks WHERE deleted=0 AND user_id=? ORDER BY id DESC LIMIT 200", (c.user["id"],))
-    items = [{k: r[k] for k in ("id", "title", "subject", "topic_no", "source_name", "source_kind", "engine", "status", "slides", "created_at", "updated_at", "user_name")}
-             | {"engine_label": ENGINE_LABEL.get(r["engine"] or "", "—")} for r in rows]
+    items = [{k: r[k] for k in ("id", "title", "subject", "topic_no", "source_name", "source_kind", "engine", "status", "slides", "created_at", "updated_at", "user_name",
+                                "course_id", "lkey", "lesson_code")}
+             | {"engine_label": ENGINE_LABEL.get(r["engine"] or "", "—"), "sent_version": int(r.get("sent_version") or 0)} for r in rows]
     return {"items": items, "scope": "dept" if scope == "dept" and m == "dept" else "mine"}
 
 
@@ -573,11 +781,416 @@ def meta(c: Ctx) -> dict:
         except Exception:
             subjects = []
     return {**status(), "mode": mode(c), "limit": daily_limit(), "used": used_today(u["id"]), "max_mb": MAX_BYTES // (1024 * 1024),
-            "subjects": subjects, "types": {t: TYPE_LABEL[t] for t in SLIDE_TYPES}}
+            "subjects": subjects, "types": {t: TYPE_LABEL[t] for t in SLIDE_TYPES}, "teacher": bool(_tid(c)), "can_send": bool(_tid(c)) and mode(c) is not None}
 
 
 TYPE_LABEL = {"plan": "Reja", "definition": "Ta'rif", "theory": "Nazariya", "two_column": "Ikki ustun", "steps": "Qadamlar", "example": "Ishlangan misol",
               "image": "Rasm", "tasks": "Topshiriqlar", "questions": "Nazorat savollari", "summary": "Xulosa", "references": "Adabiyotlar"}
+
+
+# =============================================================================================
+# Dars bilan bog'lash (kurs → yo'nalish → fan → dars) va «Studiyaga va masofaviy bo'limga yuborish»
+# =============================================================================================
+LESSON_KINDS = ("maruza", "amaliy")      # studiyada faqat L va A darslari tayyorlanadi (studio.KINDS_OK)
+OPER, HEADS = "montaj_operator", ("masofaviy", "masofaviy_xodim")
+
+
+def _PK():
+    from . import paket as PK
+    return PK
+
+
+def _tid(c: Ctx) -> int:
+    return int(c.user.get("teacher_id") or 0)
+
+
+def sends_root() -> Path:
+    return root() / "sends"
+
+
+def send_dir(cid: int, lkey: int, ver: int) -> Path:
+    return sends_root() / f"{int(cid)}_{int(lkey)}" / f"v{int(ver)}"
+
+
+def _own_course(c: Ctx, cid: int, action: str) -> dict:
+    """Faqat o'qituvchining O'Z yuklamasidagi fan (dl_courses.teacher_id == uning teacher_id). Boshqa fan — 403 + audit."""
+    co = _PK()._course_row(cid)           # yo'q bo'lsa — 404
+    tid = _tid(c)
+    if not tid or co["teacher_id"] != tid:
+        rbac.audit_deny(_con, c, f"taqdimot: begona fan ({action})", RES, f"kurs #{cid}")
+        raise AccessDenied("⛔ Bu fan sizning yuklamangizda emas — taqdimot faqat o'z fanlaringiz darslariga bog'lanadi va yuboriladi. So'rov audit jurnaliga yozildi.")
+    return co
+
+
+def _lesson_of(co: dict, lkey: int) -> dict:
+    les = _PK().lesson_info(co, int(lkey))          # dars kursda yo'q — 400
+    if les["kind"] not in LESSON_KINDS:
+        _bad("Taqdimot faqat ma'ruza (L) va amaliy (A) darsiga bog'lanadi")
+    return les
+
+
+def lesson_ref(co: dict, les: dict, codes: dict | None = None) -> dict:
+    """Dars kartochkasining umumiy boshi: unikal kod, kafedra, o'qituvchi, fan, dars (Taqdimot, Studiya va Masofaviy bo'lim uchun BITTA ko'rinish)."""
+    PK = _PK()
+    codes = codes if codes is not None else PK.course_codes()
+    return {"course_id": co["id"], "lkey": les["key"], "code": les["code"], "full_code": PK.lesson_unique_code(co["id"], les["key"], codes),
+            "course_code": codes.get(co["id"]), "title": les["title"], "untitled": bool(les.get("untitled")), "kind": les["kind"],
+            "subject": co.get("subject") or "", "direction": co.get("direction") or "", "course": co.get("course"), "dept": co.get("dept") or "",
+            "teacher": PK._short(co.get("teacher") or "")}
+
+
+def _bind_meta(c: Ctx, meta: dict) -> dict:
+    """Dars tanlangan bo'lsa: ko'lam tekshiriladi, fan va mavzu raqami darsdan olinadi. Tanlanmagan bo'lsa — eski usul (bog'lanmagan)."""
+    cid, lkey = int(meta.get("course_id") or 0), int(meta.get("lkey") or 0)
+    if not cid and not lkey:
+        return {**meta, "course_id": None, "lkey": None, "lesson_code": None}
+    if not (cid and lkey):
+        _bad("Darsni to'liq tanlang: kurs va dars")
+    co = _own_course(c, cid, "taqdimot yaratish")
+    les = _lesson_of(co, lkey)
+    ref = lesson_ref(co, les)
+    fb = les["title"] if not les.get("untitled") else (f"{les['no']}-mavzu — nomsiz" if les["kind"] == "maruza" else f"{les['no']}-{les.get('kind_label', 'dars').lower()} — nomsiz")
+    return {**meta, "course_id": cid, "lkey": les["key"], "lesson_code": ref["full_code"], "subject": (co["subject"] or "")[:120],
+            "topic_no": str(les["no"]) if les["kind"] == "maruza" else str(les.get("topic") or ""), "title_fallback": fb}
+
+
+def lesson_view(d: dict, scope: bool = True) -> dict | None:
+    if not d.get("course_id") or not d.get("lkey"):
+        return None
+    if not scope:                        # kurs boshqa o'qituvchiga o'tgan (yoki ko'lamdan tashqari): yangi o'qituvchining ismi/fan ma'lumoti ko'rsatilmaydi
+        return {"course_id": d["course_id"], "lkey": d["lkey"], "full_code": d.get("lesson_code") or "", "code": "", "title": "", "subject": d.get("subject") or "",
+                "direction": "", "course": None, "dept": "", "teacher": "", "moved": True}
+    try:
+        co = _PK()._course_row(d["course_id"])
+        return lesson_ref(co, _PK().lesson_info(co, d["lkey"]))
+    except HTTPException:                  # kurs yoki dars keyin o'chirilgan — kod saqlangan nusxadan
+        return {"course_id": d["course_id"], "lkey": d["lkey"], "full_code": d.get("lesson_code") or "", "code": "", "title": "", "subject": d.get("subject") or "",
+                "direction": "", "course": None, "dept": "", "teacher": "", "gone": True}
+
+
+def my_lessons(c: Ctx) -> dict:
+    """«Darsni tanlash» uchun: o'qituvchining O'Z fanlari (kurs 1–4 → yo'nalish → fan) va ularning L/A darslari — unikal kodlari bilan.
+    Qatorlar /api/paket/courses bilan bir xil maydonlar (id, subject, direction, course, code, dir_code, dept, teacher) — umumiy tanlagich (static/lesson_picker.js)."""
+    PK, tid = _PK(), _tid(c)
+    cos = PK.course_rows_where("c.teacher_id=?", (tid,)) if tid else []
+    codes = PK.course_codes()
+    cids = [co["id"] for co in cos]
+    inq = ",".join("?" * len(cids)) or "NULL"
+    sent = {(r["course_id"], r["lkey"]): r for r in db.rows(
+        _con, f"""SELECT s.course_id, s.lkey, s.version, s.deck_id, s.title, s.sent_at, (SELECT d.title FROM pres_decks d WHERE d.id=s.deck_id AND d.deleted=0) dtitle
+                  FROM pres_sends s WHERE s.course_id IN ({inq}) AND s.version=(SELECT MAX(x.version) FROM pres_sends x WHERE x.course_id=s.course_id AND x.lkey=s.lkey)""", tuple(cids))}
+    decks: dict = {}
+    for r in db.rows(_con, f"SELECT id, title, course_id, lkey FROM pres_decks WHERE user_id=? AND deleted=0 AND course_id IN ({inq}) ORDER BY id DESC", (c.user["id"], *cids)):
+        decks.setdefault((r["course_id"], r["lkey"]), []).append({"id": r["id"], "title": r["title"] or ""})
+    items = []
+    for co in cos:
+        ls = []
+        for les in PK.lessons(co["id"], co):
+            if les["kind"] not in LESSON_KINDS:
+                continue
+            sd = sent.get((co["id"], les["key"]))
+            ls.append({"key": les["key"], "code": les["code"], "kind": les["kind"], "title": les["title"], "untitled": bool(les.get("untitled")),
+                       "full_code": PK.lesson_unique_code(co["id"], les["key"], codes), "sent_version": sd["version"] if sd else 0,
+                       "lesson_sent_version": sd["version"] if sd else None, "lesson_sent_deck_id": sd["deck_id"] if sd else None,
+                       "lesson_sent_deck_title": ((sd["dtitle"] or sd["title"] or "") if sd else None), "lesson_sent_at": sd["sent_at"] if sd else None,
+                       "decks": decks.get((co["id"], les["key"]), [])})
+        items.append({"id": co["id"], "subject": co["subject"], "direction": co.get("direction") or "", "course": co.get("course"), "semester": co.get("semester"),
+                      "code": codes.get(co["id"]), "dir_code": PK.dir_abbr(co.get("direction")), "dept": co.get("dept") or "", "teacher": PK._short(co.get("teacher") or ""),
+                      "lessons": ls})
+    return {"items": items, "total": len(items)}
+
+
+def assign_lesson(c: Ctx, did: int, cid: int, lkey: int) -> dict:
+    """«Darsni belgilash»: mavjud (bog'lanmagan) taqdimotni darsga bog'lash. Yuborilgan taqdimotning darsi almashtirilmaydi."""
+    d = _deck(c, did, write=True)
+    if int(d.get("sent_version") or 0):
+        _bad("Bu taqdimot allaqachon yuborilgan — darsini o'zgartirib bo'lmaydi", 409)
+    meta = _bind_meta(c, {"course_id": cid, "lkey": lkey})
+    if not meta["course_id"]:
+        _bad("Darsni tanlang")
+    changed = (d["subject"] or "") != meta["subject"] or (d["topic_no"] or "") != meta["topic_no"]
+    o = json.loads(d["outline"]) if d["outline"] else None
+    try:
+        with _lock:
+            if o is not None:
+                o["subject"], o["topic_no"] = meta["subject"], meta["topic_no"]
+            status_ = "reja" if (changed and d["status"] == "tayyor") else d["status"]     # titul o'zgardi — PPTX qayta yaratilsin
+            _con.execute("UPDATE pres_decks SET course_id=?, lkey=?, lesson_code=?, subject=?, topic_no=?, outline=?, status=?, updated_at=? WHERE id=?",
+                         (meta["course_id"], meta["lkey"], meta["lesson_code"], meta["subject"], meta["topic_no"],
+                          json.dumps(o, ensure_ascii=False) if o is not None else d["outline"], status_, clock.now_iso(), did))
+            _con.commit()
+    except BaseException:
+        _rollback(); raise
+    rbac.audit(_con, c, "taqdimot: dars belgilandi", RES, True, f"#{did} · {meta['lesson_code']}")
+    return view(c, did)
+
+
+# ---- yuborilgan versiyalar --------------------------------------------------------------------
+def _send_pub(r: dict) -> dict:
+    return {"id": r["id"], "version": r["version"], "code": r["code"], "title": r["title"], "slides": r["slides"], "size": r["size"], "note": r["note"] or "",
+            "sent_at": r["sent_at"], "sent_by": (r["sent_by_name"] or "").split(":")[-1].strip(), "deck_id": r["deck_id"], "has_pdf": bool(r["pdf_path"]),
+            "studio_seen": bool(r["studio_ack_at"]), "dept_seen": bool(r["dept_ack_at"]), "paket_ok": not r["paket_error"]}
+
+
+def sends_public(cid, lkey, limit: int = 50) -> list[dict]:
+    """Darsning yuborilgan taqdimot versiyalari (yangisi birinchi). Fayl yo'llari tashqariga chiqmaydi."""
+    if not cid or not lkey:
+        return []
+    return [_send_pub(r) for r in db.rows(_con, "SELECT * FROM pres_sends WHERE course_id=? AND lkey=? ORDER BY version DESC LIMIT ?", (int(cid), int(lkey), limit))]
+
+
+def latest_sends(keys=None) -> dict:
+    """{(course_id, lkey): oxirgi yuborilgan versiya (_send_pub)} — studiya ro'yxatlari uchun bitta so'rov."""
+    rows = db.rows(_con, "SELECT * FROM pres_sends s WHERE s.course_id>0 AND version=(SELECT MAX(version) FROM pres_sends x WHERE x.course_id=s.course_id AND x.lkey=s.lkey)")
+    out = {(r["course_id"], r["lkey"]): _send_pub(r) for r in rows}
+    return out if keys is None else {k: v for k, v in out.items() if k in set(keys)}
+
+
+def send_file(cid: int, lkey: int, ver: int, kind: str) -> tuple[dict, Path | None]:
+    r = db.one(_con, "SELECT * FROM pres_sends WHERE course_id=? AND lkey=? AND version=?", (int(cid), int(lkey), int(ver)))
+    if not r:
+        raise HTTPException(404, "Taqdimot versiyasi topilmadi")
+    rel = r["pptx_path"] if kind == "pptx" else r["pdf_path"] if kind == "pdf" else None
+    if kind not in ("pptx", "pdf"):
+        raise HTTPException(400, "Fayl turi: pptx yoki pdf")
+    f = root() / rel if rel else None
+    return r, (f if f and f.is_file() else None)
+
+
+def serve_send(cid: int, lkey: int, ver: int, kind: str):
+    r, f = send_file(cid, lkey, ver, kind)
+    if not f:
+        raise HTTPException(404, "Bu versiyaning PDF nusxasi yo'q (serverda LibreOffice o'rnatilmagan)" if kind == "pdf" else "Fayl diskda topilmadi")
+    mt = "application/pdf" if kind == "pdf" else "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    return FileResponse(str(f), filename=f"{r['code']}_taqdimot_v{r['version']}.{kind}", media_type=mt,
+                        content_disposition_type="inline" if kind == "pdf" else "attachment", headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store"})
+
+
+def ack(c: Ctx, cid: int, lkey: int) -> None:
+    """Operator (studiya) yoki bo'lim xodimi dars tafsilotini ochdi — shu darsning yuborilgan taqdimotlari «ko'rildi» (xabar o'chadi)."""
+    k = c.role.key
+    col = "studio" if k == OPER else "dept" if k in HEADS else None
+    if not col:
+        return
+    try:
+        with _lock:
+            n = _con.execute(f"UPDATE pres_sends SET {col}_ack_at=?, {col}_ack_by=? WHERE course_id=? AND lkey=? AND {col}_ack_at IS NULL",
+                             (clock.now_iso(), c.user["full_name"], int(cid), int(lkey))).rowcount
+            _con.commit()
+    except BaseException:
+        _rollback(); raise
+    if n:
+        try:
+            from . import studio as STU
+            STU._mw_invalidate()
+        except Exception:
+            pass
+
+
+def mywork_items(c: Ctx, I) -> list:
+    """«Mening vazifalarim» / qo'ng'iroqcha (studio.mywork_items orqali): yangi yuborilgan taqdimot — studiya operatoriga va Masofaviy bo'limga
+    (har birida o'z «ko'rildi» belgisi: tafsilot ochilgach xabar o'chadi)."""
+    k = c.role.key
+    col = "studio" if k == OPER else "dept" if k in HEADS else None
+    if not col:
+        return []
+    rows = db.rows(_con, f"""SELECT s.* FROM pres_sends s WHERE s.{col}_ack_at IS NULL AND s.course_id>0
+                             AND s.version=(SELECT MAX(version) FROM pres_sends x WHERE x.course_id=s.course_id AND x.lkey=s.lkey) ORDER BY s.id DESC LIMIT 30""")
+    out = []
+
+    def fresh(it):          # muddat berilmaydi (yuborilgan vaqt muddat emas — yangi xabar darrov «Muddati o'tdi» bo'lib qolmasin); «Yangi» belgisi — fresh
+        it["fresh"] = True
+        return it
+
+    for r in rows[:6]:
+        sub = f"{r['title'] or ''} · {r['slides'] or '?'} slayd · {(r['sent_by_name'] or '').split(':')[-1].strip()} · yuborildi: {(r['sent_at'] or '')[:16].replace('T', ' ')}"
+        if col == "studio":
+            out.append(fresh(I("studio", "taqdimot", f"st-pr{r['id']}", f"Yangi taqdimot: {r['code']} · v{r['version']}", sub + " · syomkaga tayyorlang", None,
+                               {"view": "studio", "tab": "darslar", "card": {"cid": r["course_id"], "lkey": r["lkey"]}}, "bolimga", "yuborildi", "mid", icon="file")))
+        else:
+            out.append(fresh(I("studio", "taqdimot", f"st-pr{r['id']}", f"Taqdimot yuborildi: {r['code']} · v{r['version']}", sub + " · dars kartochkasida", None,
+                               {"view": "paket", "tab": "fanlar", "card": {"cid": r["course_id"], "lkey": r["lkey"]}}, "bolimga", "yuborildi", "mid", icon="file")))
+    if len(rows) > 6:
+        out.append(fresh(I("studio", "taqdimot", f"st-pr-more-{col}", f"Yangi taqdimotlar: yana {len(rows) - 6} ta", "Dars kartochkalarini oching", None,
+                           {"view": "studio" if col == "studio" else "paket", "tab": "darslar" if col == "studio" else "fanlar"}, "bolimga", "", "mid", len(rows) - 6, icon="file")))
+    return out
+
+
+DUP_SECONDS = 30      # bir xil fayl, bir xil foydalanuvchi — shu muddat ichida takror bosish yangi versiya yaratmaydi
+
+
+def _bullets_of(sl: dict, k: int = 8) -> list[str]:
+    """Reja slaydidan syomka uchun qisqa bandlar (≤ k): ro'yxat, ustunlar, qadamlar, kartochkalar, matn, javob."""
+    out = [x for x in (sl.get("bullets") or []) if x]
+    for cl in sl.get("columns") or []:
+        out += ([f"{cl.get('title')}:"] if cl.get("title") else []) + [x for x in cl.get("bullets") or [] if x]
+    for st in sl.get("steps") or []:
+        out.append(f"{st.get('title') or ''} {st.get('text') or ''}".strip())
+    for cd in sl.get("cards") or []:
+        out.append(f"{cd.get('title') or ''}: {cd.get('text') or ''}".strip(": "))
+    if not out and sl.get("text"):
+        out.append(sl["text"])
+    for key, lab in (("highlight", ""), ("answer", "Javob: "), ("note", "Eslatma: ")):
+        if sl.get(key):
+            out.append(lab + sl[key])
+    return [re.sub(r"\s+", " ", re.sub(r"\*\*", "", x)).strip()[:240] for x in out if x][:k]
+
+
+def outline_snapshot(o: dict | None, fallback_title: str = "") -> dict:
+    """Yuborilgan versiya paytidagi reja: {title, slides:[{n, kind, title, bullets(≤8), notes}]} — n PPTX slayd raqamiga mos (titul 1, reja 2, kontent 3 dan)."""
+    if not o:
+        return {"title": fallback_title, "slides": []}
+    title = o.get("title") or fallback_title
+    top = [x for x in (o.get("subject"), f"{o['topic_no']}-mavzu" if o.get("topic_no") else "", o.get("subtitle")) if x]
+    slides = [{"n": 1, "kind": "title", "title": title, "bullets": top[:8], "notes": ""},
+              {"n": 2, "kind": "plan", "title": "Reja", "bullets": [str(x)[:240] for x in RD.plan_items(o)][:8], "notes": ""}]
+    n = 3
+    for sl in o.get("slides") or []:
+        if (sl.get("type") or "") in ("title", "plan"):
+            continue
+        try:
+            pages = max(1, len(RD.paginate(sl)))
+        except Exception:
+            pages = 1
+        slides.append({"n": n, "kind": sl.get("type") or "theory", "title": sl.get("title") or "", "bullets": _bullets_of(sl), "notes": sl.get("notes") or ""})
+        n += pages
+    return {"title": title, "slides": slides}
+
+
+def send_outline(r: dict) -> dict:
+    """Yuborilgan versiya rejasi: saqlangan nusxa; eski yozuv (nusxa yo'q) — yuborilgan PPTX'dan, bo'lmasa taqdimotning rejasidan; bo'lmasa — bo'sh slaydlar."""
+    if r.get("outline"):
+        try:
+            o = json.loads(r["outline"])
+            if isinstance(o, dict) and isinstance(o.get("slides"), list):
+                return o
+        except ValueError:
+            pass
+    f = root() / r["pptx_path"] if r.get("pptx_path") else None
+    if f and f.is_file():
+        try:
+            ps = _PK().parse_pptx(f.read_bytes(), None, {})
+            sl = [{"n": i, "kind": "title" if i == 1 else "slide", "title": x.get("title") or "", "bullets": [str(b)[:240] for b in (x.get("bullets") or [])][:8],
+                   "notes": x.get("notes") or ""} for i, x in enumerate(ps["slides"], 1)]
+            if sl:
+                return {"title": r.get("title") or "", "slides": sl}
+        except Exception:
+            pass
+    d = db.one(_con, "SELECT outline, title FROM pres_decks WHERE id=? AND deleted=0", (r["deck_id"],)) if r.get("deck_id") else None
+    if d and d["outline"]:
+        try:
+            return outline_snapshot(json.loads(d["outline"]), r.get("title") or "")
+        except Exception:
+            pass
+    return {"title": r.get("title") or "", "slides": []}
+
+
+def _age(ts, now) -> float:
+    try:
+        import datetime as _dt
+        return (now.replace(tzinfo=None) - _dt.datetime.fromisoformat(str(ts)[:19])).total_seconds()
+    except (TypeError, ValueError):
+        return 1e9
+
+
+def send(c: Ctx, did: int, note: str = "") -> dict:
+    """«Studiyaga va masofaviy bo'limga yuborish» — BITTA amal: yangi versiya (dars kodi o'zgarmaydi, versiya DARS bo'yicha oshadi), fayllar saqlanadi, darsning
+    paketiga qo'yiladi, studiya va bo'limga xabar ketadi. Faqat o'qituvchining O'Z fani darsi; boshqa fan — 403 + audit.
+    Butun jarayon (versiya hisobi + fayl + paketga qo'yish + eskisini almashtirish) DARS bo'yicha qulf ostida: parallel /send da taqdimot paketda yo'qolmaydi
+    va yolg'on muvaffaqiyat bo'lmaydi. Bir xil fayl, bir xil foydalanuvchi, <30 s — takror bosish: yangi versiya yaratilmaydi ({unchanged: true, version})."""
+    d = _deck(c, did, write=True)
+    if not d["course_id"] or not d["lkey"]:
+        _bad("Avval darsni tanlang («Darsni belgilash») — kod shu darsdan olinadi")
+    co = _own_course(c, d["course_id"], "yuborish")
+    les = _lesson_of(co, d["lkey"])
+    if d["status"] != "tayyor" or not (ddir(did) / "taqdimot.pptx").is_file():
+        _bad("Avval «PPTX yaratish» — tayyor taqdimotni yuborasiz")
+    ref = lesson_ref(co, les)
+    with _lesson_lock(co["id"], les["key"]):
+        return _send_locked(c, did, co, les, ref, _s(note, 400))
+
+
+def _send_locked(c: Ctx, did: int, co: dict, les: dict, ref: dict, note: str) -> dict:
+    PK = _PK()
+    d = _deck(c, did, write=True)                                   # qulfni kutganda holat o'zgargan bo'lishi mumkin
+    pptx = ddir(did) / "taqdimot.pptx"
+    if d["status"] != "tayyor" or not pptx.is_file() or d["course_id"] != co["id"] or d["lkey"] != les["key"]:
+        _bad("Taqdimot holati o'zgargan — sahifani yangilab, qayta urinib ko'ring", 409)
+    code, cid, lkey = ref["full_code"], co["id"], les["key"]
+    raw = pptx.read_bytes()
+    sha = hashlib.sha256(raw).hexdigest()
+    now_dt, now = clock.now(), clock.now_iso()
+    prev = db.one(_con, "SELECT * FROM pres_sends WHERE course_id=? AND lkey=? AND sent_by=? ORDER BY version DESC LIMIT 1", (cid, lkey, c.user["id"]))
+    if prev and prev["sha256"] == sha and _age(prev["sent_at"], now_dt) < DUP_SECONDS:
+        rbac.audit(_con, c, "taqdimot: takror yuborish (o'zgarmagan fayl)", RES, True, f"#{did} · {code} · v{prev['version']}")
+        out = view(c, did)
+        out["send"] = _send_pub(prev)
+        out["version"], out["unchanged"], out["paket_error"] = prev["version"], True, prev["paket_error"]
+        return out
+    ccode = PK.course_codes().get(cid)
+    snap = json.dumps(outline_snapshot(json.loads(d["outline"]) if d["outline"] else None, d["title"] or ""), ensure_ascii=False)
+    fd = None
+    try:
+        with _lock:
+            if ccode:       # kurs id qayta ishlatilgan bo'lsa — boshqa fanning eski versiyalari yangi kursga meros bo'lmaydi
+                _con.execute("UPDATE pres_sends SET course_id=-id WHERE course_id=? AND lkey=? AND course_code IS NOT NULL AND course_code!=?", (cid, lkey, ccode))
+            ver = int((db.one(_con, "SELECT MAX(version) v FROM pres_sends WHERE course_id=? AND lkey=?", (cid, lkey)) or {}).get("v") or 0) + 1
+            fd = send_dir(cid, lkey, ver)
+            fd.mkdir(parents=True, exist_ok=True)
+            (fd / "taqdimot.pptx").write_bytes(raw)
+            rel = str((fd / "taqdimot.pptx").relative_to(root()))
+            sid = _con.execute("""INSERT INTO pres_sends(deck_id,course_id,lkey,code,version,title,slides,pptx_path,size,sha256,note,sent_by,sent_by_name,sent_at,course_code,outline)
+                                  VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                               (did, cid, lkey, code, ver, (d["title"] or "")[:200], d["slides"], rel, len(raw), sha, note or None,
+                                c.user["id"], c.user["full_name"], now, ccode, snap)).lastrowid
+            _con.execute("UPDATE pres_decks SET sent_version=?, sent_at=?, updated_at=? WHERE id=?", (ver, now, now, did))
+            _con.commit()
+    except BaseException as e:
+        _rollback()
+        if fd is not None:
+            shutil.rmtree(fd, ignore_errors=True)
+        if isinstance(e, sqlite3.IntegrityError):
+            _bad("Bu versiya hozirgina yuborildi — sahifani yangilab, qayta urinib ko'ring", 409)
+        raise
+    # darsning paketiga (pk_assets, purpose='taqdimot'): slaydlar paketga, PDF — montajda slayd sifatida. Xato bo'lsa yuborish bekor bo'lmaydi.
+    paket_err, pdf_rel, paket_id = None, None, None
+    try:
+        r = PK.upload_slides(c, cid, lkey, raw, f"{code}_taqdimot_v{ver}.pptx")
+        if r.get("pdf_id"):
+            a = db.one(PK._con, "SELECT * FROM pk_assets WHERE id=?", (r["pdf_id"],))
+            if a and PK._apath(a).is_file():
+                shutil.copyfile(PK._apath(a), send_dir(cid, lkey, ver) / "taqdimot.pdf")
+                pdf_rel = str((send_dir(cid, lkey, ver) / "taqdimot.pdf").relative_to(root()))
+        with PK._lock:
+            try:
+                PK._con.execute("""INSERT INTO pk_topics(course_id,topic_no,deck_id,updated_at) VALUES(?,?,?,?)
+                                   ON CONFLICT(course_id,topic_no) DO UPDATE SET deck_id=excluded.deck_id, updated_at=excluded.updated_at""", (cid, lkey, did, now))
+                PK._log(c, cid, lkey, "taqdimot: studiya va bo'limga yuborildi", f"v{ver} · {d['slides'] or '?'} slayd · {d['title'] or ''}"[:300]); PK._con.commit()
+            except BaseException:
+                _rollback(); raise
+        paket_id = r.get("id")
+        if not PK._latest_asset(cid, lkey, "taqdimot", ("pptx", "pdf")):
+            paket_err = "Taqdimot paketda ko'rinmadi — dars kartochkasidan «Dars yaratish» orqali qayta qo'yiladi"
+    except HTTPException as e:
+        _rollback(); paket_err, paket_id = str(e.detail)[:300], None
+    except Exception as e:                                       # kutilmagan xato yuborishni yiqitmasin
+        _rollback(); paket_err, paket_id = f"{type(e).__name__}: {e}"[:300], None
+    try:
+        with _lock:
+            _con.execute("UPDATE pres_sends SET pdf_path=?, paket_asset_id=?, paket_error=? WHERE id=?", (pdf_rel, paket_id, paket_err, sid)); _con.commit()
+    except BaseException:
+        _rollback(); raise
+    try:
+        from . import studio as STU
+        STU.on_presentation(c, cid, lkey, code, ver, d["title"] or "", d["slides"] or 0)      # studiya rejasi + jurnal + xabar
+    except Exception as e:
+        _rollback()
+        print("taqdimot.send → studiya:", repr(e))
+    rbac.audit(_con, c, "taqdimot: studiyaga va bo'limga yuborildi", RES, True, f"#{did} · {code} · v{ver}" + (f" · paket: {paket_err}" if paket_err else ""))
+    out = view(c, did)
+    out["send"] = _send_pub(db.one(_con, "SELECT * FROM pres_sends WHERE id=?", (sid,)))
+    out["version"], out["unchanged"], out["paket_error"] = ver, False, paket_err
+    return out
 
 
 # =============================================================================================
@@ -593,8 +1206,45 @@ def _meta_from(q: dict) -> dict:
         t = max(5, min(MAX_SLIDES, int(t))) if t not in (None, "", "0", 0) else None
     except (TypeError, ValueError):
         t = None
+    def _i(v):
+        try: return int(v or 0)
+        except (TypeError, ValueError): return 0
     return {"subject": _s(q.get("subject"), 120), "topic_no": _s(q.get("topic_no"), 20), "title": _s(q.get("title"), 200),
-            "audience": _s(q.get("audience"), 500), "target": t}
+            "audience": _s(q.get("audience"), 500), "target": t, "course_id": _i(q.get("course_id")), "lkey": _i(q.get("lkey"))}
+
+
+def _begin(request: Request, action: str, detail: str = "") -> Ctx:
+    """Kirish tekshiruvi (sessiya + ruxsat + audit) — DB ishlari uchun oqimda (threadpool) bajariladi: qulf bo'lsa event loop qotmaydi."""
+    c = C(request)
+    guard(c, action, detail)
+    return c
+
+
+async def _read_limited(request: Request, limit: int) -> bytes:
+    """Yuklangan tana — oqim bilan: Content-Length oldindan tekshiriladi (limitdan katta — 413, tana o'qilmaydi); Content-Length bo'lmasa yoki yolg'on bo'lsa ham
+    chegaradan oshgan zahoti to'xtatiladi (xotira to'lmaydi)."""
+    try:
+        n = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        n = 0
+    if n > limit:
+        raise HTTPException(413, f"Fayl hajmi {limit // (1024 * 1024)} MB dan oshmasin")
+    buf = bytearray()
+    async for chunk in request.stream():
+        buf += chunk
+        if len(buf) > limit:
+            raise HTTPException(413, f"Fayl hajmi {limit // (1024 * 1024)} MB dan oshmasin")
+    return bytes(buf)
+
+
+def _small_body(request: Request, limit: int = 2 * 1024 * 1024) -> None:
+    """JSON so'rovlar (reja, izoh, dars) kichik: Content-Length juda katta bo'lsa — rad."""
+    try:
+        n = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        n = 0
+    if n > limit:
+        raise HTTPException(413, "So'rov hajmi juda katta")
 
 
 @router.get(P + "/meta")
@@ -603,9 +1253,10 @@ def api_meta(request: Request):
 
 
 @router.post(P + "/decks")
-async def api_upload(request: Request, name: str = "material", subject: str = "", topic_no: str = "", title: str = "", slides: str = "", audience: str = ""):
-    c = C(request); guard(c, "material yuklash", name[:60])
-    raw = await request.body()
+async def api_upload(request: Request, name: str = "material", subject: str = "", topic_no: str = "", title: str = "", slides: str = "", audience: str = "",
+                     course_id: int = 0, lkey: int = 0):
+    c = await run_in_threadpool(_begin, request, "material yuklash", name[:60])         # ruxsat — tana o'qilishidan OLDIN (ruxsatsiz foydalanuvchi 20 MB yubormaydi)
+    raw = await _read_limited(request, MAX_BYTES)
     return await run_in_threadpool(create, c, raw, None, name[:160], _meta_from(locals()))
 
 
@@ -616,11 +1267,18 @@ class TextIn(BaseModel):
     title: str = ""
     slides: int | None = None
     audience: str = ""
+    course_id: int = 0
+    lkey: int = 0
 
 
 @router.post(P + "/decks/text")
-async def api_text(request: Request, body: TextIn):
-    c = C(request); guard(c, "matndan taqdimot")
+async def api_text(request: Request):
+    c = await run_in_threadpool(_begin, request, "matndan taqdimot")
+    raw = await _read_limited(request, MAX_BYTES + 64 * 1024)
+    try:
+        body = TextIn.model_validate_json(raw)
+    except ValidationError:
+        raise HTTPException(422, "So'rov noto'g'ri: «text» maydoni kerak")
     return await run_in_threadpool(create, c, None, body.text, "matn.txt", _meta_from(body.model_dump()))
 
 
@@ -640,6 +1298,7 @@ class OutlineIn(BaseModel):
 
 @router.post(P + "/decks/{did}/outline")
 def api_save(request: Request, did: int, body: OutlineIn):
+    _small_body(request, 5 * 1024 * 1024)
     c = C(request); guard(c, "reja saqlash", f"#{did}"); return save_outline(c, did, body.outline)
 
 
@@ -649,21 +1308,25 @@ class RegenIn(BaseModel):
 
 
 @router.post(P + "/decks/{did}/regenerate")
-async def api_regen(request: Request, did: int, body: RegenIn):
+def api_regen(request: Request, did: int, body: RegenIn):
+    _small_body(request)
     c = C(request); guard(c, "rejani qayta tuzish", f"#{did}")
     d = _deck(c, did, write=True)
     _check_limit(c)
     m = _meta_from({"subject": d["subject"], "topic_no": d["topic_no"], "title": d["title"], "slides": body.slides if body.slides is not None else d["target"],
                     "audience": body.audience or d["audience"]})
-    with _lock:
-        _con.execute("UPDATE pres_decks SET target=?, audience=? WHERE id=?", (m["target"], m["audience"], did)); _con.commit()
-    return await run_in_threadpool(generate, c, did, m)
+    try:
+        with _lock:
+            _con.execute("UPDATE pres_decks SET target=?, audience=? WHERE id=?", (m["target"], m["audience"], did)); _con.commit()
+    except BaseException:
+        _rollback(); raise
+    return generate(c, did, m)
 
 
 @router.post(P + "/decks/{did}/build")
-async def api_build(request: Request, did: int):
+def api_build(request: Request, did: int):
     c = C(request); guard(c, "pptx yaratish", f"#{did}")
-    return await run_in_threadpool(build, c, did)
+    return build(c, did)
 
 
 @router.get(P + "/decks/{did}/download")
@@ -693,7 +1356,55 @@ def api_img(request: Request, did: int, n: int):
 def api_delete(request: Request, did: int):
     c = C(request); guard(c, "taqdimot o'chirildi", f"#{did}")
     _deck(c, did, write=True)
-    with _lock:
-        _con.execute("UPDATE pres_decks SET deleted=1, updated_at=? WHERE id=?", (clock.now_iso(), did)); _con.commit()
+    try:
+        with _lock:
+            _con.execute("UPDATE pres_decks SET deleted=1, updated_at=? WHERE id=?", (clock.now_iso(), did)); _con.commit()
+    except BaseException:
+        _rollback(); raise
     shutil.rmtree(ddir(did), ignore_errors=True)
     return {"ok": True}
+
+
+class LessonIn(BaseModel):
+    course_id: int
+    lkey: int
+
+
+class SendIn(BaseModel):
+    note: str = ""
+
+
+@router.get(P + "/lessons")
+def api_lessons(request: Request):
+    c = C(request); guard(c, "darslar ro'yxati"); return my_lessons(c)
+
+
+@router.post(P + "/decks/{did}/lesson")
+def api_lesson(request: Request, did: int, body: LessonIn):
+    c = C(request); guard(c, "darsni belgilash", f"#{did} · kurs #{body.course_id} · {body.lkey}"); return assign_lesson(c, did, body.course_id, body.lkey)
+
+
+@router.post(P + "/decks/{did}/send")
+def api_send(request: Request, did: int, body: SendIn):
+    """Sinxron `def` — FastAPI uni oqimlar havzasida bajaradi: baza qulfi bo'lsa ham event loop (butun server) qotmaydi."""
+    _small_body(request)
+    c = C(request); guard(c, "studiyaga va bo'limga yuborish", f"#{did}")
+    return send(c, did, body.note)
+
+
+@router.get(P + "/decks/{did}/sends/{ver}/{kind}")
+def api_send_file(request: Request, did: int, ver: int, kind: str):
+    """Yuborilgan versiyani yuklab olish. Versiya shu taqdimotniki (yoki shu muallifning boshqa taqdimotidan yuborilgan) bo'lishi va chaqiruvchi shu darsning
+    HOZIRGI kursiga ega (yoki kafedra ko'lamida) bo'lishi shart — kurs boshqaga o'tsa eski o'qituvchi yangisining versiyalarini ololmaydi (IDOR)."""
+    c = C(request); guard(c, "yuborilgan versiyani yuklab olish", f"#{did} · v{ver} · {kind}")
+    d = _deck(c, did)
+    if not d["course_id"] or not d["lkey"]:
+        raise HTTPException(404, "Taqdimot darsga bog'lanmagan")
+    if not _scope_ok(c, d):
+        rbac.audit_deny(_con, c, "taqdimot: begona dars versiyasi", RES, f"#{did} · v{ver}")
+        raise AccessDenied("⛔ Bu dars endi sizning yuklamangizda emas — yuborilgan versiyalarni yuklab olish mumkin emas. So'rov audit jurnaliga yozildi.")
+    r, f = send_file(d["course_id"], d["lkey"], ver, kind)
+    if r["deck_id"] != did and r["sent_by"] != d["user_id"]:
+        rbac.audit_deny(_con, c, "taqdimot: begona versiya", RES, f"#{did} · v{ver}")
+        raise HTTPException(404, "Taqdimot versiyasi topilmadi")
+    return serve_send(d["course_id"], d["lkey"], ver, kind)

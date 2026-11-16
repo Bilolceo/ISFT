@@ -44,7 +44,7 @@ const shot = (p, n) => p.screenshot({ path: path.join(OUT, n), fullPage: false }
     await ap.evaluate(() => go('ortda'));
     await ap.waitForSelector('#orBox .dl-t tbody tr', { timeout: 20000 });
     ok((await ap.$$('#orBox .dl-t tbody tr')).length > 5, 'Ro\'yxat: ortda qolgan talabalar (namuna ma\'lumot)');
-    ok(await ap.isVisible('.dl-demo'), "«Namuna ma'lumot» ogohlantirishi ko'rinadi");
+    ok(!(await ap.isVisible('.dl-demo')), "«Namuna ma'lumot» bannerini ko'rsatmaydi (olib tashlangan)");
     await shot(ap, 'ortda-talabalar.png');
     await ap.click('#orBox .dl-t tbody tr:first-child [data-st]');
     await ap.waitForSelector('.dl-modal .or-grid .or-cell');
@@ -71,7 +71,7 @@ const shot = (p, n) => p.screenshot({ path: path.join(OUT, n), fullPage: false }
     const serr = [], posts = [];
     sp.on('console', m => { if (m.type() === 'error' && !/favicon|status of 404/.test(m.text())) serr.push(m.text()); });
     sp.on('pageerror', e => serr.push('pageerror: ' + e.message));
-    sp.on('response', r => { if (/\/xapi\/statements$/.test(r.url()) && r.request().method() === 'POST') posts.push(r.status()); });
+    sp.on('response', r => { if (/\/xapi\/statements(\?|$)/.test(r.url()) && /^(POST|PUT)$/.test(r.request().method())) posts.push(r.request().method() + ' ' + r.status()); });
     await sp.goto(B + process.env.LAUNCH);
     await sp.waitForFunction(() => window.ISFTKurs && window.ISFTKurs.ready, null, { timeout: 20000 });
     const u = new URL(sp.url());
@@ -87,7 +87,7 @@ const shot = (p, n) => p.screenshot({ path: path.join(OUT, n), fullPage: false }
     for (let n = 0; n < 40; n++) {
       await sleep(120);
       if (await sp.$('.qz-res')) break;
-      const leg = await sp.$eval('.qz legend', e => e.textContent.trim()).catch(() => '');
+      const leg = await sp.$eval('.qz legend', e => e.textContent.trim().replace(/\u02bb/g, "'")).catch(() => '');
       const qq = quiz.q.find(x => x.question === leg);
       if (qq && await sp.$('.qz .opt input:not(:checked)') && !(await sp.$('.qz .fb .ok, .qz .fb .bad'))) {
         const wrong = qq.answers.findIndex(a => !a);
@@ -105,9 +105,10 @@ const shot = (p, n) => p.screenshot({ path: path.join(OUT, n), fullPage: false }
       const l = await api(`/api/ortda/list?course=${encodeURIComponent(COURSE)}&only_risk=false&limit=500&q=${encodeURIComponent(STUDENT)}`);
       row = l.items.find(x => x.student_id === sid);
     }
-    ok(posts.length > 0 && posts.every(s => s === 200), `Pleyer /xapi/statements ga yubordi (POST: ${posts.join(',')})`);
+    ok(posts.some(x => /^PUT /.test(x)) && posts.some(x => /^POST /.test(x)) && posts.every(x => / (200|204)$/.test(x)),
+      `Pleyer /xapi/statements ga yubordi (Rise moslik: PUT attempted/progressed, POST answered/…: ${posts.join(',')})`);
     ok(row && row.last && row.days_inactive === 0, 'LRS: talaba faolligi bugun qayd etildi');
-    await sp.close();   // pagehide → terminated / suspended
+    await sp.close();   // pagehide → attempted {duration} + cumulative_time
     await sleep(800);
     ok(!serr.length, 'Talaba sahifasida konsol xatolari yo\'q' + (serr.length ? ': ' + serr.slice(0, 3).join(' | ') : ''));
 

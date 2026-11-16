@@ -39,9 +39,9 @@ function modOffCard(v) {
     <span class="tiny">«${esc(name)}» hozircha ishlatilmaydi: egasi (mas'ul bo'lim) va haqiqiy ma'lumot manbai belgilanmagan. ${adm ? "Uni «Bo'limlar» sahifasida yoqishingiz mumkin." : "Kerak bo'lsa, AT bo'limi boshlig'iga murojaat qiling."}</span>
     <div class="row-actions" style="margin-top:10px;justify-content:center">${adm ? `<button class="btn sm primary" onclick="go('modullar')">Bo'limlar sahifasi →</button>` : ""}<button class="btn sm" onclick="go('panel')">Boshqaruv paneliga qaytish</button></div></div>`;
 }
-/* «Namuna ma'lumot» belgisi va tepadagi tasma (ISFT_CORE_REAL_DATA=1 bo'lsa ko'rsatilmaydi) */
+/* «Namuna ma'lumot» belgilari va tasma olib tashlangan; realData() faqat «Manba: …» matnlari uchun */
 const realData = () => !!(ME && ME.flags && ME.flags.real_data);
-const demoChip = (t = "Namuna ma'lumot (HEMIS ulanmagan)") => realData() ? "" : `<span class="demo-chip" title="Bu raqamlar namuna (sun'iy) ma'lumotdan — haqiqiy tizim bilan integratsiya hali yo'q">${esc(t)}</span>`;
+const demoChip = () => "";   /* «Namuna ma'lumot» belgilari interfeysdan olib tashlangan */
 function dataBanner() {
   const b = document.getElementById("dataBanner"); if (!b) return;
   b.hidden = realData();
@@ -365,6 +365,7 @@ function modGate(v) {
   return true;
 }
 function go(v) {
+  if (window.tqBeforeLeave && window.tqBeforeLeave(v) === false) return;     /* taqdimot.js: saqlanmagan tahrir (confirm) / yangilangan muharrirni tiklash */
   clearInterval(SPC.timer); if (v !== "tasks") clearInterval(DEC.timer);
   $("#app").classList.remove("nav-open");
   const nv = MOD_ALIAS[v] || v;      /* taxallus: go("kurs") — menyuda «Dars tayyorlash» */
@@ -511,7 +512,7 @@ function kpiHtml(k, P = DASH?.panels || {}, K = DASH?.kpis || []) {
   const tr = k.trend ? `<span class="trend ${k.trend < 0 ? "dn" : "up"}" title="o'tgan davrga nisbatan">${ico(k.trend < 0 ? "trend_dn" : "trend_up", 14)}${Math.abs(k.trend)}</span>` : "";
   /* manba: integratsiya yo'q ekan — ko'rinib turadigan «Namuna ma'lumot (HEMIS ulanmagan)» belgisi; aks holda ikonka + izoh (ux.css matnni yashiradi) */
   const demoSrc = /^Namuna/i.test(k.source || "");
-  const src = demoSrc ? `<div class="kc-src kc-demo">${demoChip(k.source)}</div>`
+  const src = demoSrc ? ""
     : k.source || k.updated ? `<div class="kc-src" title="${esc([k.source && "Manba: " + k.source, k.updated && "yangilandi " + k.updated].filter(Boolean).join(" · "))}">${ico("server", 13)}<span>${[k.source && "Manba: " + esc(String(k.source).replace(/\s*\(.*\)\s*$/, "")), k.updated && kUpd(k.updated)].filter(Boolean).join(" · ")}</span></div>` : "";
   return `<div class="card kpi kc ${st}"${k.key ? ` data-k="${esc(k.key)}"` : ""}>
     <div class="l">${esc(k.label)}</div>
@@ -621,7 +622,7 @@ function pnReportsHtml() {
   const mine = repList(), desk = DESK_ROLES.includes(ME.role_key) && ME.role_key !== "yuridik";
   if (!mine.length && !desk) return "";
   return `<section class="card pn-reps" aria-label="Hisobotlar"><h3 class="pn-h">${pnH("report", "Hisobotlar")}</h3>
-    <p class="tiny muted" style="margin:2px 0 10px">Word hisobot bir tugmada — yuklab olingan paytdagi holat bo'yicha, faqat ruxsatingiz doirasida. ${demoChip("Namuna ma'lumot")}</p>
+    <p class="tiny muted" style="margin:2px 0 10px">Word hisobot bir tugmada — yuklab olingan paytdagi holat bo'yicha, faqat ruxsatingiz doirasida.</p>
     <div class="pn-reps-l">${mine.map(([k, t, d]) => `<a class="btn sm" href="/api/report/${k}" download title="${esc(d)}">${ico("report", 15)} ${esc(t)}</a>`).join("")}${desk ? `<a class="btn sm" href="/api/desk/export.csv" download>${ico("chart", 15)} Ish stoli jadvali (.csv)</a>` : ""}</div></section>`;
 }
 async function renderPanel() {
@@ -1303,7 +1304,7 @@ async function renderOps() {
   const T = {stol: "Ish stoli", holatlar: "Holatlar", navbat: rk === "call_center" ? "Qo'ng'iroqlar navbati" : `Mening navbatim${mine ? ` <span class="tag ${mine.late ? "high" : "gray"}">${fmt(mine.n)}</span>` : ""}`,
     calls: "Call-markaz navbati", otrabotka: "Otrabotka", ruxsatnoma: "Ruxsatnoma", qoidalar: "Qoidalar"};
   const canRun = ["talabalar", "prorektor_oquv"].includes(rk);
-  const src = pgSrc(`${realData() ? "Manba: HEMIS (baho, davomat, buyruqlar) va buxgalteriya (kontrakt)" : demoChip() + " baho, davomat, buyruq va kontrakt — sun'iy"} · qoidalar har 10 daqiqada tekshiriladi${OPSV.sum.last_run ? `, oxirgisi: <b>${whenTxt(OPSV.sum.last_run)}</b>` : ""}`);
+  const src = pgSrc(`${realData() ? "Manba: HEMIS (baho, davomat, buyruqlar) va buxgalteriya (kontrakt) · " : ""}qoidalar har 10 daqiqada tekshiriladi${OPSV.sum.last_run ? `, oxirgisi: <b>${whenTxt(OPSV.sum.last_run)}</b>` : ""}`);
   const intro = `Tizim o'zi aniqlagan xavf holatlari (davomat, baho, kontrakt, hujjat) — mas'ul bo'lim navbatiga topshiriq bo'lib tushadi. Talaba yozgan murojaatlar — «Murojaatlar va nosozliklar»da.`;
   const info = `<details class="pg-info" id="opsInfo" style="margin:4px 0 10px"><summary>${ico("info", 14)}${op ? "Qanday ishlaydi: qoidalar, manba va raqamlar" : "Me'yorlar, huquqiy asos va ma'lumot manbasi"}</summary>
       ${op ? `<p class="tiny muted">${intro}</p><div>${src}</div>` : ""}
@@ -1648,7 +1649,7 @@ function renderReports() {
   $("#v-reports").innerHTML = `<div class="head"><div><h2>Tahliliy hisobotlar</h2><span class="muted">Word hisobotlar, bir tugmada — faqat ruxsatingiz doirasida. Rasmiy buyruqlar — «Buyruqlar»da, ma'lumotnomalar — «Hujjat chiqarish»da.</span><span id="repSrc"></span></div></div>
   <div class="grid g2">${mine.map(([k, t, d]) => `<div class="card"><h3>${ico("report", 18)} ${t}</h3><p class="muted">${d}</p><a class="btn primary" href="/api/report/${k}" download>Yuklab olish (.docx)</a></div>`).join("")}${desk}</div>
   ${!mine.length && !desk ? `<div class="card"><p class="muted">Lavozimingiz uchun tahliliy hisobot yo'q.</p></div>` : ""}`;
-  syncInfo().then(s => { const e = $("#repSrc"); if (e) e.outerHTML = pgSrc(`${realData() ? `Manba: HEMIS va buxgalteriya${s.updated ? ` · yangilandi <b>${whenTxt(s.updated)}</b>` : ""}` : demoChip()} · hisobot yuklab olingan paytdagi holat bo'yicha tuziladi`); }).catch(() => {});
+  syncInfo().then(s => { const e = $("#repSrc"); if (e) e.outerHTML = pgSrc(`${realData() ? `Manba: HEMIS va buxgalteriya${s.updated ? ` · yangilandi <b>${whenTxt(s.updated)}</b>` : ""} · ` : ""}hisobot yuklab olingan paytdagi holat bo'yicha tuziladi`); }).catch(() => {});
 }
 
 /* ---------- docs ---------- */

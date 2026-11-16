@@ -525,6 +525,7 @@
     if (l.href) { location.href = l.href; return; }
     if (!l.view) return;
     { const st = MOD_STATE()[l.view]; if (st && l.tab) st.tab = l.tab; }
+    if (l.card && typeof lcOpen === "function") { go(l.view); lcOpen(l.card.cid, l.card.lkey); return; }   /* dars_card.js: «Dars kartochkasi» (yangi taqdimot / montajlangan video xabari) */
     const hasPT = typeof PT !== "undefined";
     switch (l.view) {
       case "ops":

@@ -7,7 +7,7 @@
  *
  * Tekshiradi: kurslar ro'yxati, kurs ochilishi (darslar, bloklar), «+» → blok kutubxonasi → yangi blok, joyida yozish va avtosaqlash (server
  * holati bilan solishtiriladi), o'ng panel sozlamasi, o'chirish → «Bekor qilish», ↑ ↓ ko'chirish, klaviatura bilan ko'chirish (Alt+↑/↓ — blok va dars, aria-live), ziddiyat (boshqa joyda saqlangan rev → 409 →
- * ogohlantirish va «Oxirgi holatni yuklash»), ko'rish oynasi (pleyer iframe'da, telefon kengligi), sifat hisoboti, telefon kengligida gorizontal
+ * ogohlantirish va «Oxirgi holatni yuklash»), ko'rish oynasi (pleyer iframe'da, planshet va telefon kengligi), eskizli blok kutubxonasi, sifat hisoboti, telefon kengligida gorizontal
  * aylantirish yo'qligi, konsol xatolari yo'qligi. Natija: "  ✓ …" / "  ✗ …"; xato bo'lsa chiqish kodi 1. Skrinshotlar: $OUT.
  */
 'use strict';
@@ -24,8 +24,10 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   const br = await chromium.launch({ executablePath: process.env.CHROME, headless: true });
   const ctx = await br.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await ctx.newPage();
+  /* bu tekshiruv klassik muharrir (3 ustun) va B versiya (avtomatik yig'ish + muharrir) oqimini tekshiradi; Rise ko'rinishi va Konstruktor (A) — tools/konstruktor_check.js */
+  await page.addInitScript(() => { try { localStorage.setItem('kuUi', 'classic'); localStorage.setItem('dsVer', 'b'); } catch (e) {} });
   const errs = [];
-  page.on('console', m => { if (m.type() === 'error' && !/favicon|status of 409/.test(m.text())) errs.push(m.text()); });   // 409 — ataylab chaqirilgan ziddiyat
+  page.on('console', m => { if (m.type() === 'error' && !/favicon|status of 409|status of 503/.test(m.text())) errs.push(m.text()); });   // 409 — ataylab chaqirilgan ziddiyat; 503 — kalitsiz AI (kurs_ai_check)
   page.on('pageerror', e => errs.push('pageerror: ' + e.message));
   const api = async (url, body) => { const r = body === undefined ? await page.request.get(B + url) : await page.request.post(B + url, { data: body }); return { status: r.status(), data: await r.json().catch(() => ({})) }; };
   try {
@@ -52,6 +54,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     await page.waitForSelector('.ku-tile');
     const tiles = await page.$$eval('.ku-tile', x => x.map(t => t.dataset.t));
     ok(tiles.length >= 23 && ['accordion', 'flashcards', 'knowledge', 'continue', 'labeled_graphic', 'sorting', 'matching', 'table', 'video'].every(t => tiles.includes(t)), `Blok kutubxonasi: ${tiles.length} tur, toifalar bo'yicha`);
+    ok((await page.$$('.ku-tile .th svg')).length === tiles.length && (await page.$$('#kuLib h4')).length >= 4, `Blok kutubxonasi: har tur uchun eskiz (${tiles.length}) va guruhlar`);
     await page.fill('#kuLibQ', 'kartoch');
     ok((await page.$$eval('.ku-tile', x => x.filter(t => !t.hidden).map(t => t.dataset.t))).join() === 'flashcards', 'Kutubxonada qidiruv («kartoch» → Kartochkalar)');
     await page.fill('#kuLibQ', '');
@@ -120,6 +123,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     await page.click('#kuUndo button');
     await sleep(300);
     ok(((await page.textContent('#kuBlocks')) || '').includes(MARK), '«Bekor qilish» — blok qaytdi');
+    await require('./kurs_ai_check').run(page, ok, 'c', OUT);   // «AI bilan tahrirlash» (klassik ko'rinish: asboblar qatori, blok kutubxonasi, soxta endpoint)
     await page.waitForFunction(() => /Saqlandi/.test(document.querySelector('#kuSave')?.textContent || ''), null, { timeout: 10000 });
 
     // ziddiyat: boshqa joyda saqlash → bu oynada 409
@@ -144,9 +148,12 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     const fr = await (await page.$('#kuPvF')).contentFrame();
     await fr.waitForFunction(t => document.body && document.body.innerText.includes(t), co.title.slice(0, 20), { timeout: 20000 }).catch(() => {});
     ok((await fr.evaluate(() => document.body.innerText)).includes(co.title.slice(0, 20)), 'Ko\'rish: pleyer iframe ichida kursni ko\'rsatdi');
+    await page.click('.ku-pvbar [data-w="768px"]');
+    await sleep(500);
+    ok(Math.round((await (await page.$('#kuPvF')).boundingBox()).width) === 768, 'Ko\'rish: planshet kengligi (768px)');
     await page.click('.ku-pvbar [data-w="390px"]');
     await sleep(500);
-    ok(Math.round((await (await page.$('#kuPvF')).boundingBox()).width) === 390, 'Ko\'rish: telefon kengligi (390px)');
+    ok(Math.round((await (await page.$('#kuPvF')).boundingBox()).width) === 390 && await page.$eval('.ku-pvw', e => e.dataset.dev === 'phone'), 'Ko\'rish: telefon kengligi (390px), telefon ramkasi');
     await page.screenshot({ path: path.join(OUT, 'kurs-preview.png') });
     await page.keyboard.press('Escape');
 

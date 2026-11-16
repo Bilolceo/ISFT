@@ -37,6 +37,8 @@ const EXP = {
 fs.mkdirSync(OUT, { recursive: true });
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+// pleyer ko'rinadigan matnda oʻ/gʻ ni ʻ (U+02BB) bilan chizadi (a11y.js); asl ma'lumot bilan solishtirishda ʻ → ' ga qaytariladi
+const A = x => String(x == null ? '' : x).replace(/\u02bb/g, "'");
 let sect = '';
 const fails = [], counts = {};
 function ok(c, m) {
@@ -241,7 +243,7 @@ const lms = http.createServer((req, res) => {
   }
   res.writeHead(404); res.end('404');
 });
-// mock LRS
+// mock LRS (boshqa port — boshqa domen: yopilishda pleyer xAPI 1.0.x muqobil sintaksisidan foydalanadi — POST ?method=…, forma maydonlari)
 const LRS = { statements: [], heads: [], posts: 0, failFirst: 0, state: {}, stateReq: [], ids: new Set(), dup: 0 };
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Experience-API-Version',
   'Access-Control-Allow-Methods': 'GET, PUT, POST, OPTIONS', 'Access-Control-Expose-Headers': 'X-Experience-API-Version', 'X-Experience-API-Version': '1.0.3' };
@@ -250,24 +252,30 @@ const lrs = http.createServer((req, res) => {
   let body = ''; req.on('data', c => body += c);
   req.on('end', () => {
     if (req.method === 'OPTIONS') { res.writeHead(204, cors); res.end(); return; }
-    if (u.pathname === '/xapi/statements' && req.method === 'POST') {
+    const alt = u.searchParams.get('method'), form = alt ? Object.fromEntries(new URLSearchParams(body)) : null;
+    const eff = (alt || req.method).toUpperCase(), P = Object.assign(Object.fromEntries(u.searchParams), form || {});
+    const content = form ? form.content : body, auth = form ? form.Authorization : req.headers.authorization;
+    const ver = form ? form['X-Experience-API-Version'] : req.headers['x-experience-api-version'], ct = form ? form['Content-Type'] : req.headers['content-type'];
+    if (u.pathname === '/xapi/statements' && (eff === 'POST' || eff === 'PUT')) {
       LRS.posts++;
       if (LRS.failFirst > 0) { LRS.failFirst--; res.writeHead(503, cors); res.end(); return; }
-      LRS.heads.push({ auth: req.headers.authorization, ver: req.headers['x-experience-api-version'], ct: req.headers['content-type'] });
-      let arr; try { arr = JSON.parse(body); } catch (e) { res.writeHead(400, cors); res.end(); return; }
+      LRS.heads.push({ auth, ver, ct, m: eff, alt: !!alt });
+      let arr; try { arr = JSON.parse(content); } catch (e) { res.writeHead(400, cors); res.end(); return; }
+      if (eff === 'PUT' && (Array.isArray(arr) || arr.id !== P.statementId)) { res.writeHead(400, cors); res.end(); return; }
       if (!Array.isArray(arr)) arr = [arr];
       arr.forEach(s => { if (LRS.ids.has(s.id)) { LRS.dup++; return; } LRS.ids.add(s.id); LRS.statements.push(s); });
+      if (eff === 'PUT') { res.writeHead(204, cors); res.end(); return; }
       res.writeHead(200, Object.assign({ 'Content-Type': 'application/json' }, cors)); res.end(JSON.stringify(arr.map(s => s.id))); return;
     }
     if (u.pathname === '/xapi/activities/state') {
-      const key = [u.searchParams.get('activityId'), u.searchParams.get('agent'), u.searchParams.get('stateId'), u.searchParams.get('registration')].join('|');
-      LRS.stateReq.push({ m: req.method, auth: req.headers.authorization, ver: req.headers['x-experience-api-version'], key });
-      if (req.method === 'GET') {
-        if (key in LRS.state) { res.writeHead(200, Object.assign({ 'Content-Type': 'application/json' }, cors)); res.end(LRS.state[key]); }
+      const key = [P.activityId, P.agent, P.stateId, P.registration].join('|');
+      LRS.stateReq.push({ m: eff, auth, ver, key, sid: P.stateId, alt: !!alt });
+      if (eff === 'GET') {
+        if (key in LRS.state) { res.writeHead(200, Object.assign({ 'Content-Type': 'application/octet-stream' }, cors)); res.end(LRS.state[key]); }
         else { res.writeHead(404, cors); res.end(); }
         return;
       }
-      if (req.method === 'PUT') { LRS.state[key] = body; res.writeHead(204, cors); res.end(); return; }
+      if (eff === 'PUT') { LRS.state[key] = content; res.writeHead(204, cors); res.end(); return; }
     }
     res.writeHead(404, cors); res.end();
   });
@@ -340,7 +348,7 @@ async function answerQuiz(fr, right, kb) {
 async function answerReflect(fr, k) {
   await clickStep(fr, await stepIndex(fr, 'reflect'));
   await fr.click(`.choice[data-k="${k}"]`); await sleep(150);
-  return fr.evaluate(() => ({ fb: (document.querySelector('.scn-fb') || {}).textContent, pressed: [...document.querySelectorAll('.choice')].map(b => b.getAttribute('aria-pressed')).join() }));
+  return fr.evaluate(() => ({ fb: ((document.querySelector('.scn-fb') || {}).textContent || '').replace(/\u02bb/g, "'"), pressed: [...document.querySelectorAll('.choice')].map(b => b.getAttribute('aria-pressed')).join() }));
 }
 // skrinshot uchun yarim to'ldirilgan match/sort holati
 async function demoFill(p) {
@@ -403,7 +411,7 @@ async function checkBlocks(fr) {
   await fr.click('.deck-bar [aria-controls]');
   const notes = await fr.evaluate(() => ({ h: document.querySelector('.notes').hidden, e: document.querySelector('.deck-bar [aria-controls]').getAttribute('aria-expanded') }));
   ok(!notes.h && notes.e === 'true', 'Izohlar tugmasi ochadi (aria-expanded)');
-  const dl = await fr.evaluate(() => [...document.querySelectorAll('.t-slides .tools a')].map(a => a.textContent.trim() + '|' + a.getAttribute('href')));
+  const dl = await fr.evaluate(() => [...document.querySelectorAll('.t-slides .tools a')].map(a => a.textContent.trim().replace(/\u02bb/g, "'") + '|' + a.getAttribute('href')));
   ok(dl.includes("PDF ko'rinishida ochish|assets/taqdimot.pdf") && dl.includes('Taqdimotni yuklab olish|assets/taqdimot.pptx'), 'PDF ochish va taqdimotni yuklab olish havolalari');
   // video
   await clickStep(fr, await stepIndex(fr, 'video'));
@@ -494,7 +502,7 @@ async function runScorm(br, base, kind) {
       `match (${is12 ? 'klaviatura' : 'bosish'} bilan, noto'g'ri): type=matching, javob «${mi[rk]}», namuna «${mi['correct_responses.0.pattern']}», result=${mi.result}`);
     ok(si.type === 'matching' && si[rk] === (is12 ? EXP.s12(false) : EXP.s04(false)) && si['correct_responses.0.pattern'] === (is12 ? EXP.s12(true) : EXP.s04(true)) && si.result === (is12 ? 'wrong' : 'incorrect'),
       `sort (${is12 ? 'klaviatura' : 'bosish'} bilan, noto'g'ri): type=matching (manba — kartochka, nishon — toifa), javob «${si[rk]}», result=${si.result}`);
-    const fbp = await fr().evaluate(([m, s]) => { const f = id => document.querySelector('.fb[data-qid="' + id + '"]'); return [m, s].map(id => f(id) && { no: f(id).classList.contains('no'), mine: f(id).querySelectorAll('.fb-a:not(.fb-c) .fb-pairs li.no').length, corr: [...f(id).querySelectorAll('.fb-c .fb-pairs li')].map(li => li.textContent.replace(/\s*→\s*/, '→')) }); }, [MATCH.id, SORT.id]);
+    const fbp = await fr().evaluate(([m, s]) => { const f = id => document.querySelector('.fb[data-qid="' + id + '"]'); return [m, s].map(id => f(id) && { no: f(id).classList.contains('no'), mine: f(id).querySelectorAll('.fb-a:not(.fb-c) .fb-pairs li.no').length, corr: [...f(id).querySelectorAll('.fb-c .fb-pairs li')].map(li => li.textContent.replace(/\u02bb/g, "'").replace(/\s*→\s*/, '→')) }); }, [MATCH.id, SORT.id]);
     ok(fbp[0] && fbp[0].no && fbp[0].mine === MATCH.pairs.length && JSON.stringify(fbp[0].corr) === JSON.stringify(MATCH.pairs.map(p => p.left + '→' + p.right)), `match izohi: sizning juftliklaringiz (${fbp[0] && fbp[0].mine} ta xato) va to'g'ri juftliklar ko'rsatildi`);
     ok(fbp[1] && fbp[1].no && fbp[1].mine === SORT_ITEMS.length && JSON.stringify(fbp[1].corr) === JSON.stringify(SORT_ITEMS.map(it => it.text + '→' + SORT.categories[it.c].title)), "sort izohi: har kartochkaning to'g'ri toifasi ko'rsatildi");
     const sdA = JSON.parse(s0.values['cmi.suspend_data']).q[QUIZ.id];
@@ -542,7 +550,7 @@ async function runScorm(br, base, kind) {
     ok(mi.type === 'matching' && mi[rk] === (is12 ? EXP.m12(true) : EXP.m04(true)) && mi.result === 'correct' && si.type === 'matching' && si[rk] === (is12 ? EXP.s12(true) : EXP.s04(true)) && si.result === 'correct',
       `match/sort (${is12 ? 'bosish' : 'klaviatura'} bilan, to'g'ri): «${mi[rk]}» · «${si[rk]}» → correct`);
   }
-  ok((await fr().evaluate(() => document.querySelector('.chip').textContent)).startsWith("O'tdi") && (await doneCount(fr())) === N, 'UI: «O\'tdi» va barcha qadamlar ✓');
+  ok((await fr().evaluate(() => document.querySelector('.chip').textContent)).startsWith('O\u02bbtdi') && (await doneCount(fr())) === N, 'UI: «O\'tdi» va barcha qadamlar ✓');
   ok(ord1 !== '' && ord2 !== '' && QUIZ.questions.every(q => ord2.split(',').includes(q.id)), `Aralashtirish: urinish tartiblari (${ord1} | ${ord2})`);
   // mulohaza (reflect) — baholanmaydigan interaction: result=neutral
   const rf = await answerReflect(fr(), 1);
@@ -571,7 +579,7 @@ async function runScorm(br, base, kind) {
       `${label}: LMS holati passed qoldi, pasaytirilmadi (${sets.join(', ') || 'yozuv yo\'q'})`);
     if (!drop) {
       const ui = await fr().evaluate(() => ({ retry: !!document.querySelector('[data-act="retry"],[data-act="start"]'), ring: document.querySelector('.ring span') && document.querySelector('.ring span').textContent, chip: document.querySelector('.chip').textContent }));
-      ok(!ui.retry && ui.ring === '100%' && ui.chip.startsWith("O'tdi"), `${label}: qayta urinish tugmasi yo'q, natija 100%, «O'tdi» (${JSON.stringify(ui)})`);
+      ok(!ui.retry && ui.ring === '100%' && ui.chip.startsWith('O\u02bbtdi'), `${label}: qayta urinish tugmasi yo'q, natija 100%, «O'tdi» (${JSON.stringify(ui)})`);
     }
     await page.evaluate(() => window.unload()); await sleep(300);
   }
@@ -627,21 +635,24 @@ async function runXapi(br, base, lrsBase) {
   const qi = await stepIndex(page, 'quiz');
   await clickStep(page, qi); await page.click('[data-act="start"]'); await answerQuiz(page, false);
   await sleep(2600);   // 503 dan keyin 2 s qayta urinish
-  ok(LRS.posts >= 2 && LRS.statements.some(s => s.verb.id.endsWith('/initialized')), `503 dan keyin qayta yuborildi (POST: ${LRS.posts})`);
+  ok(LRS.posts >= 2 && LRS.statements.some(s => s.verb.id.endsWith('/attempted')), `503 dan keyin qayta yuborildi (so'rovlar: ${LRS.posts})`);
   await page.reload(); await waitReady(page); await sleep(500);
-  const vAll = LRS.statements.map(s => s.verb.id.split('/').pop()), v1 = vAll.slice(0, vAll.indexOf('terminated') + 1);
-  ok(v1[0] === 'initialized' && v1.filter(x => x === 'experienced').length === NBLOCKS && v1.filter(x => x === 'answered').length === QUIZ.questions.length
-     && v1.includes('failed') && v1.indexOf('terminated') > v1.indexOf('failed'), '1-sessiya fe\'llari (experienced — har blokka bir marta): ' + compact(v1));
+  const isExit = s => s.verb.id.endsWith('/attempted') && s.result && s.result.duration;   // yopilishdagi attempted (Rise kabi)
+  const vAll = LRS.statements.map(s => s.verb.id.split('/').pop()), x1 = LRS.statements.findIndex(isExit), v1 = vAll.slice(0, x1 + 1);
+  ok(x1 > 0 && v1[0] === 'attempted' && !v1.includes('experienced') && v1.filter(x => x === 'answered').length === QUIZ.questions.length
+     && v1.includes('progressed') && v1.includes('failed') && x1 > v1.lastIndexOf('failed'), '1-sessiya fe\'llari (Rise kabi — blok experienced yo\'q): ' + compact(v1));
   ok((await currentType(page)) === 'quiz' && (await doneCount(page)) === N - 1, 'State API orqali resume: test qadami va ✓ belgilar tiklandi');
-  ok(LRS.stateReq.some(r => r.m === 'PUT') && LRS.stateReq.filter(r => r.m === 'GET').length >= 2 && LRS.stateReq.every(r => r.key.endsWith('|isft-state|' + reg) && r.auth === auth && r.ver === '1.0.3'),
-    `State API: GET/PUT stateId=isft-state + registration + auth (${LRS.stateReq.map(r => r.m).join(',')})`);
+  const sids = [...new Set(LRS.stateReq.map(r => r.m + ':' + r.sid))];
+  ok(LRS.stateReq.some(r => r.m === 'PUT' && r.sid === 'suspend_data') && LRS.stateReq.some(r => r.m === 'PUT' && r.sid === 'bookmark')
+     && LRS.stateReq.filter(r => r.m === 'GET' && r.sid === 'suspend_data').length >= 2 && LRS.stateReq.some(r => r.sid === 'cumulative_time' && r.m === 'PUT' && r.alt)
+     && LRS.stateReq.every(r => r.key.endsWith('|' + reg) && r.auth === auth && r.ver === '1.0.2' && /^(suspend_data|bookmark|cumulative_time|language_preference|isft-state)$/.test(r.sid)),
+    `State API (Rise nomlari): suspend_data, bookmark, cumulative_time (yopilishda — muqobil sintaksis), registration + auth (${sids.join(',')})`);
   await page.click('[data-act="retry"]'); await answerQuiz(page, true); await sleep(400);
   await answerReflect(page, 0); await sleep(300);
   await page.goto(base + '/lms.html'); await sleep(1200);   // talaba LMS'ga qaytdi (about:blank ga Playwright goto keepalive so'rovlarini uzadi — real yopilishga mos emas)
   const st = LRS.statements, verbs = st.map(s => s.verb.id.split('/').pop());
-  const n0 = verbs.indexOf('terminated');
-  const v2 = verbs.slice(n0 + 1);
-  ok(v2[0] === 'initialized' && v2.filter(x => x === 'answered').length === QUIZ.questions.length && v2.indexOf('passed') < v2.indexOf('completed') && v2[v2.length - 1] === 'terminated',
+  const v2 = verbs.slice(x1 + 1);
+  ok(v2[0] === 'attempted' && v2.filter(x => x === 'answered').length === QUIZ.questions.length && v2.includes('passed') && !v2.includes('completed') && isExit(st[st.length - 1]),
     '2-sessiya fe\'llari: ' + compact(v2));
   ok(st.every(s => /^http:\/\/adlnet\.gov\/expapi\/verbs\/\w+$/.test(s.verb.id) && s.verb.display && s.verb.display['en-US']), 'Hamma fe\'llar ADL IRI + display');
   const actorOut = { objectType: 'Agent', name: 'Ali Valiyev', account: { homePage: 'https://lms.isft.uz', name: 'u123' } };
@@ -649,7 +660,7 @@ async function runXapi(br, base, lrsBase) {
   ok(st.every(s => s.context && s.context.registration === reg), 'context.registration hamma statementda');
   const child = st.filter(s => /experienced|answered|responded|passed|failed/.test(s.verb.id) && s.object.id !== actId);   // kurs darajasidagi passed/failed — ota-activity'siz
   ok(child.every(s => s.context.contextActivities.parent[0].id === actId), 'Blok/savol statementlarida contextActivities.parent = kurs activity');
-  ok(st.filter(s => s.verb.id.endsWith('/experienced')).every(s => s.object.id.startsWith(actId + '/block/')), 'experienced obyekti: activity_id + "/block/<id>"');
+  ok(!st.some(s => s.verb.id.endsWith('/experienced')), 'Bitta darsli paket: blok «experienced» yuborilmaydi (Rise kabi)');
   const ans = st.filter(s => s.verb.id.endsWith('/answered'));
   ok(ans.every(s => typeof s.result.success === 'boolean' && typeof s.result.response === 'string' && s.object.definition.interactionType), 'answered: result.success, result.response, interactionType');
   const fq = QUIZ.questions.find(q => q.type === 'fill'), fAns = ans.filter(s => s.object.definition.interactionType === 'fill-in');
@@ -676,11 +687,13 @@ async function runXapi(br, base, lrsBase) {
   const passed = st.find(s => s.verb.id.endsWith('/passed')), failed = st.find(s => s.verb.id.endsWith('/failed'));
   ok(passed && passed.result.success === true && passed.result.score.scaled === 1 && passed.result.score.raw === 100 && passed.result.score.min === 0 && passed.result.score.max === 100, 'passed: score.scaled/raw/min/max, success=true');
   ok(failed && failed.result.success === false && failed.result.score.scaled === 0, 'failed: success=false, scaled=0');
-  const compl = st.filter(s => s.verb.id.endsWith('/completed'));
-  ok(compl.length === 1 && compl[0].object.id === actId && compl[0].result.completion === true, 'completed bir marta, kurs activity uchun');
-  const terms = st.filter(s => s.verb.id.endsWith('/terminated'));
-  ok(terms.length === 2 && terms.every(t => /^PT\d+H\d+M[\d.]+S$/.test(t.result.duration)), 'terminated har sessiyada, result.duration ISO 8601: ' + terms.map(t => t.result.duration).join(', '));
-  ok(LRS.heads.every(h => h.auth === auth && h.ver === '1.0.3' && /application\/json/.test(h.ct)), 'Sarlavhalar: Authorization, X-Experience-API-Version 1.0.3, Content-Type JSON');
+  ok(!st.some(s => /\/(completed|initialized|terminated|suspended|resumed)$/.test(s.verb.id)), "Rise'da yo'q fe'llar (completed/initialized/terminated/suspended/resumed) yo'q");
+  const pv = st.filter(s => s.verb.id.endsWith('/progressed')).map(s => s.result.extensions['https://w3id.org/xapi/cmi5/result/extensions/progress']);
+  ok(pv.length && pv.every((v, i) => Number.isInteger(v) && (i === 0 || v > pv[i - 1])) && pv[pv.length - 1] === 100, 'progressed: butun foiz, o\'sib boradi, oxiri 100 (' + pv.join(',') + ')');
+  const exits = st.filter(isExit);
+  ok(exits.length === 2 && exits.every(t => t.object.id === actId && /^PT(\d+H)?(\d+M)?[\d.]+S$/.test(t.result.duration)), 'Yopilishda attempted har sessiyada, result.duration ISO 8601: ' + exits.map(t => t.result.duration).join(', '));
+  ok(LRS.heads.every(h => h.auth === auth && h.ver === '1.0.2' && /application\/json/.test(h.ct)) && LRS.heads.some(h => h.m === 'PUT') && LRS.heads.some(h => h.alt),
+    'Sarlavhalar: Authorization, X-Experience-API-Version 1.0.2, Content-Type JSON (PUT-statement, yopilishda — muqobil sintaksis)');
   ok(new Set(st.map(s => s.id)).size === st.length && st.every(s => /^[0-9a-f-]{36}$/.test(s.id) && s.timestamp), `Statement id (UUID) noyob; qayta yuborilgan dublikatlar: ${LRS.dup}`);
   ok(T.errs.filter(e => !/status of (404|503)/.test(e)).length === 0 && T.bad.filter(b => /^404/.test(b)).every(b => /activities\/state/.test(b)),
     "Konsol xatolari yo'q (State GET 404 — spec bo'yicha «hujjat yo'q», 503 — sinovda ataylab)" + (T.errs.length ? ': ' + T.errs.slice(0, 3).join(' | ') : ''));
@@ -688,7 +701,7 @@ async function runXapi(br, base, lrsBase) {
   fs.writeFileSync(path.join(OUT, 'xapi_statements.json'), JSON.stringify(st, null, 1));
   await T.ctx.close();
 }
-// xAPI, completion=view_all: «completed» ko'rish bilan (testsiz natija), keyin test — kurs activity uchun failed/passed ball bilan
+// xAPI, completion=view_all: ko'rish bilan — kurs passed (ballsiz, Rise «passed/incomplete»), keyin test — passed ball bilan (failed passed'ni pasaytirmaydi)
 async function runXapiViewAll(br, base, lrsBase) {
   section('xAPI · view_all');
   const T = await newCtx(br, {}, 'xapi_va'), page = T.page;
@@ -700,16 +713,19 @@ async function runXapiViewAll(br, base, lrsBase) {
   await visitAllContent(page, page, null); await sleep(600);
   const mine = () => LRS.statements.slice(n0).filter(s => s.context && s.context.registration === reg);
   const course = () => mine().filter(s => s.object.id === actId).map(s => s.verb.id.split('/').pop());
-  ok(course().includes('completed') && !course().some(v => /passed|failed/.test(v)), "Barcha qadamlar ko'rildi → kurs uchun completed (testsiz — passed/failed yo'q): " + course().join(','));
+  const cp0 = mine().filter(s => s.object.id === actId && s.verb.id.endsWith('/passed'));
+  ok(cp0.length === 1 && !cp0[0].result.score && cp0[0].result.completion === true && !course().some(v => /failed|completed/.test(v)),
+    "Barcha qadamlar ko'rildi → kurs uchun passed (ballsiz, completion — Rise «passed/incomplete»): " + course().join(','));
   const qi = await stepIndex(page, 'quiz');
   await clickStep(page, qi); await page.click('[data-act="start"]'); await answerQuiz(page, false); await sleep(400);
   await page.click('[data-act="retry"]'); await answerQuiz(page, true); await sleep(600);
   const cs = mine().filter(s => s.object.id === actId && /\/(passed|failed)$/.test(s.verb.id));
-  const pz = cs.find(s => s.verb.id.endsWith('/passed'));
-  ok(cs.map(s => s.verb.id.split('/').pop()).join() === 'failed,passed', 'Kurs activity: failed, keyin passed (' + cs.map(s => s.verb.id.split('/').pop() + ':' + s.result.score.raw).join(',') + ')');
+  const pz = cs.find(s => s.verb.id.endsWith('/passed') && s.result.score);
+  const csv = cs.map(s => s.verb.id.split('/').pop() + ':' + (s.result.score ? s.result.score.raw : '-')).join();
+  ok(csv === 'passed:-,passed:100', 'Kurs activity: passed (ko\'rish), test yiqilsa failed yuborilmaydi (passed pasaytirilmaydi), o\'tilganda passed ball bilan (' + csv + ')');
   ok(pz && pz.result.success === true && pz.result.completion === true && pz.result.score.scaled === 1 && pz.result.score.raw === 100 && pz.result.score.min === 0 && pz.result.score.max === 100 && !pz.context.contextActivities,
     'Kurs passed: score scaled/raw/min/max, success, completion');
-  ok(mine().filter(s => s.verb.id.endsWith('/completed')).length === 1, 'completed bir marta');
+  ok(!mine().some(s => s.verb.id.endsWith('/completed')), "completed yuborilmaydi (Rise: yakunlanish — passed)");
   ok(!(await page.$('[data-act="retry"],[data-act="start"]')), "O'tgandan keyin qayta urinish yo'q");
   await page.reload(); await waitReady(page); await sleep(500);
   ok(mine().filter(s => s.object.id === actId && /\/(passed|failed)$/.test(s.verb.id)).length === 2, 'Qayta yuklashda kurs natijasi takror yuborilmaydi (holat: xr)');
@@ -870,7 +886,7 @@ async function runV3(br, base) {
   ok(v0 && v0.controls && v0.inline && v0.pre === 'metadata' && v0.src === VFILE.src && v0.poster === VFILE.poster && v0.label === VFILE.title && !v0.yt,
     `Fayl-video: <video controls playsinline preload="metadata"> src=${v0 && v0.src}, poster, aria-label`);
   ok(v0 && v0.tracks.length === 1 && v0.tracks[0] === "subtitles|uz|O'zbekcha|assets/video/dars.uz.vtt", `Subtitr: bitta <track kind="subtitles"> (tashqi va javascript: manzillar tashlandi): ${v0 && v0.tracks.join(' ; ')}`);
-  ok(v0 && v0.rates === '0.75:false,1:true,1.25:false,1.5:false,2:false' && v0.grp === 'group/Ijro tezligi' && v0.pct === "Ko'rildi: 0%", `Tezlik menyusi (${v0 && v0.rates}), «${v0 && v0.pct}»`);
+  ok(v0 && v0.rates === '0.75:false,1:true,1.25:false,1.5:false,2:false' && v0.grp === 'group/Ijro tezligi' && A(v0.pct) === "Ko'rildi: 0%", `Tezlik menyusi (${v0 && v0.rates}), «${v0 && v0.pct}»`);
   await fr.press('.v-speed [data-rate="1.5"]', 'Enter');
   const r15 = await fr.evaluate(() => ({ r: document.querySelector('video').playbackRate, p: document.querySelector('.v-speed [data-rate="1.5"]').getAttribute('aria-pressed'), one: document.querySelector('.v-speed [data-rate="1"]').getAttribute('aria-pressed') }));
   ok(r15.r === 1.5 && r15.p === 'true' && r15.one === 'false', `Tezlik 1.5× (klaviatura): playbackRate=${r15.r}, aria-pressed`);
@@ -887,7 +903,7 @@ async function runV3(br, base) {
   await stub(fr);
   await fr.evaluate(() => window.__play(0, 12)); await sleep(650);
   const p1 = await vst(fr), l1 = ((await stored(fr)).m || {})[VFILE.id];
-  ok(p1.m.t === 12 && p1.w === 15 && p1.pct === "Ko'rildi: 15%" && l1 && l1.t === 12, `Ijro 0→12 s: joy ${p1.m.t} s, ko'rildi ${p1.w}%; ~10 s da holat saqlandi (localStorage t=${l1 && l1.t})`);
+  ok(p1.m.t === 12 && p1.w === 15 && A(p1.pct) === "Ko'rildi: 15%" && l1 && l1.t === 12, `Ijro 0→12 s: joy ${p1.m.t} s, ko'rildi ${p1.w}%; ~10 s da holat saqlandi (localStorage t=${l1 && l1.t})`);
   await fr.evaluate(() => { window.__ev('seeking'); window.__play(50, 51); window.__ev('pause'); }); await sleep(650);
   const p2 = await vst(fr), l2 = ((await stored(fr)).m || {})[VFILE.id];
   ok(p2.w === 20 && p2.m.t === 51 && l2 && l2.t === 51, `Oldinga sakrash (seek) ko'rilgan ulushga qo'shilmaydi (${p2.w}%), pauzada joy saqlandi (t=${l2 && l2.t})`);
@@ -895,7 +911,7 @@ async function runV3(br, base) {
   fr = await open(); await sleep(150);
   await stub(fr); await fr.evaluate(() => window.__ev('loadedmetadata'));
   const p3 = await fr.evaluate(() => ({ set: window.__set.join(), type: document.querySelector('.nav-i[aria-current]').dataset.type, pct: document.querySelector('.v-pct').textContent }));
-  ok(p3.type === 'video' && p3.set === '51' && p3.pct === "Ko'rildi: 20%", `Qayta ochilganda video o'sha joydan davom etadi (currentTime=${p3.set}), «${p3.pct}»`);
+  ok(p3.type === 'video' && p3.set === '51' && A(p3.pct) === "Ko'rildi: 20%", `Qayta ochilganda video o'sha joydan davom etadi (currentTime=${p3.set}), «${p3.pct}»`);
   await fr.evaluate(() => { window.__ev('seeking'); window.__play(0, 100); window.__ev('ended'); }); await sleep(200);
   const p4 = await vst(fr), vm = (await page.evaluate(() => window.LMS.msgs)).filter(m => m.video);
   ok(p4.w === 100 && p4.m.t === 0 && (await fr.evaluate(() => document.querySelector('.v-pct').classList.contains('good'))), `To'liq ko'rildi: ${p4.w}%, tugaganda joy 0 ga qaytadi`);
@@ -915,7 +931,7 @@ async function runV3(br, base) {
   await fr.click('.nav-a.r'); await sleep(80);
   const sl1 = await fr.evaluate(() => { const a = document.querySelector('.s-aud audio'); window.__paused = 0; if (a) a.pause = () => { window.__paused++; };
     return { cap: document.querySelector('.s-cap').textContent, vis: !document.querySelector('.s-cap').hidden, a: a && { c: a.controls, src: a.getAttribute('src'), pre: a.getAttribute('preload'), l: a.getAttribute('aria-label') } }; });
-  ok(sl0.cap && sl0.aud && sl1.vis && sl1.cap === SLIDES.slides[1].caption && sl1.a && sl1.a.c && sl1.a.src === SLIDES.slides[1].audio && sl1.a.pre === 'none' && /audio/.test(sl1.a.l),
+  ok(sl0.cap && sl0.aud && sl1.vis && A(sl1.cap) === SLIDES.slides[1].caption && sl1.a && sl1.a.c && sl1.a.src === SLIDES.slides[1].audio && sl1.a.pre === 'none' && /audio/.test(sl1.a.l),
     `Slayd izohi rasm ostida («${sl1.cap.slice(0, 28)}…») va <audio controls> (${sl1.a && sl1.a.src}); izohsiz slaydda yashirin`);
   await SHOT(page, 'v3_slide_caption_audio');
   await fr.click('.nav-a.r'); await sleep(80);
@@ -934,7 +950,7 @@ async function runV3(br, base) {
   ok(f0.n === NC && f0.tag === 'BUTTON' && f0.pr === Array(NC).fill('false').join() && f0.front === FLASH.cards[0].front && f0.bh === 'true' && f0.done, `Kartochkalar: ${f0.n} ta tugma (bo'sh kartochka tashlandi), aria-pressed=false, ochilganda «ko'rildi»`);
   await fr.click('.fc[data-k="0"]'); await sleep(650);
   const f1 = await fr.evaluate(() => { const b = document.querySelector('.fc[data-k="0"]'); return { pr: b.getAttribute('aria-pressed'), bh: b.querySelector('.fc-b').getAttribute('aria-hidden'), fh: b.querySelector('.fc-f').getAttribute('aria-hidden'), back: b.querySelector('.fc-b .fc-x').textContent, tr: getComputedStyle(b.querySelector('.fc-in')).transform }; });
-  ok(f1.pr === 'true' && f1.bh === 'false' && f1.fh === 'true' && f1.back === FLASH.cards[0].back && f1.tr !== 'none', `Bosilganda aylanadi: aria-pressed=true, orqa tomon ochiq («${f1.back.slice(0, 30)}…»)`);
+  ok(f1.pr === 'true' && f1.bh === 'false' && f1.fh === 'true' && A(f1.back) === FLASH.cards[0].back && f1.tr !== 'none', `Bosilganda aylanadi: aria-pressed=true, orqa tomon ochiq («${f1.back.slice(0, 30)}…»)`);
   await fr.press('.fc[data-k="0"]', 'Enter'); await fr.press('.fc[data-k="1"]', ' '); await sleep(100);
   {   // kartochka fokusida ← → / PageDown qadamni almashtirmaydi
     const fs0 = await curStep(fr); await fr.focus('.fc[data-k="1"]');
@@ -949,8 +965,8 @@ async function runV3(br, base) {
   await clickStep(fr, await stepIndex(fr, 'assignment'));
   const as = await fr.evaluate(() => ({ q: document.querySelector('.asg-q blockquote p').textContent, au: document.querySelector('.asg-q figcaption').textContent, svg: !!document.querySelector('.asg-q .asg-av svg'), img: !!document.querySelector('.asg-q img'),
     li: [...document.querySelectorAll('ol.asg-list li')].map(li => li.lastChild.textContent), note: document.querySelector('.asg-note').textContent, role: document.querySelector('.asg-note').getAttribute('role'), done: document.querySelector('.nav-i[data-type="assignment"]').classList.contains('done') }));
-  ok(as.q === ASSIGN.text && as.au === ASSIGN.author && as.svg && !as.img, `Topshiriq: iqtibos «${as.q.slice(0, 40)}…» — ${as.au}, chizilgan personaj (avatar berilmagan)`);
-  ok(JSON.stringify(as.li) === JSON.stringify(ASSIGN.questions) && as.note === "Javobni LMS'dagi «Vazifa yuklash» orqali yuboring" && as.role === 'note' && as.done, `Topshiriq: ${as.li.length} ta raqamli savol, eslatma «${as.note}»; baholanmaydi`);
+  ok(A(as.q) === ASSIGN.text && A(as.au) === ASSIGN.author && as.svg && !as.img, `Topshiriq: iqtibos «${as.q.slice(0, 40)}…» — ${as.au}, chizilgan personaj (avatar berilmagan)`);
+  ok(JSON.stringify(as.li.map(A)) === JSON.stringify(ASSIGN.questions) && A(as.note) === "Javobni LMS'dagi «Vazifa yuklash» orqali yuboring" && as.role === 'note' && as.done, `Topshiriq: ${as.li.length} ta raqamli savol, eslatma «${as.note}»; baholanmaydi`);
   await SHOT(page, 'v3_assignment');
   const stA = await fr.evaluate(() => window.ISFTPaket.debug.status());
   ok(stA.score === null && stA.success === 'unknown', 'Kartochkalar va topshiriq natijaga ta\'sir qilmaydi (ball yo\'q)');
@@ -1059,7 +1075,7 @@ async function runV3(br, base) {
   await patchContent(N1.ctx, c => { c.cover = { image: null }; c.id += '-cp'; c.tracking.mode = 'none'; c.lesson = { code: 'A1', kind: 'amaliy', no: 1, title: 'Excel bilan ishlash' }; });
   await N1.page.goto(base + PKG + 'index.html'); await waitReady(N1.page);
   const cp = await N1.page.evaluate(() => ({ bg: !!document.querySelector('.hero-bg'), h1: document.querySelector('.hero-t').textContent, au: document.querySelector('.hero-au').textContent, grad: /gradient/.test(getComputedStyle(document.querySelector('.hero')).backgroundImage) }));
-  ok(!cp.bg && cp.grad && cp.h1 === "A1 — Amaliy mashg'ulot: Excel bilan ishlash" && cp.au === CONTENT.course.teacher, `Rasmsiz muqova: brend gradienti, «${cp.h1}», muallif — kurs o'qituvchisi (${cp.au})`);
+  ok(!cp.bg && cp.grad && A(cp.h1) === "A1 — Amaliy mashg'ulot: Excel bilan ishlash" && cp.au === CONTENT.course.teacher, `Rasmsiz muqova: brend gradienti, «${cp.h1}», muallif — kurs o'qituvchisi (${cp.au})`);
   await SHOT(N1.page, 'v3_cover_plain');
   // reduced-motion: kartochka aylanmaydi — tomonlar almashtiriladi
   await clickStep(N1.page, await stepIndex(N1.page, 'flashcards')); await N1.page.click('.fc[data-k="0"]'); await sleep(100);
@@ -1127,7 +1143,7 @@ async function runNextid(br, base) {
   // ?preview=1 → banner
   await page.evaluate(u => window.launch('none', u), url + '?preview=1'); await sleep(200);
   fr = page.frame({ name: 'sco' }); await waitReady(fr);
-  ok((await fr.evaluate(() => window.ISFTPaket.mode)) === 'preview' && (await fr.textContent('.banner')).includes("Ko'rish rejimi — natija LMS'ga yuborilmaydi"), "?preview=1 → «Ko'rish rejimi — natija LMS'ga yuborilmaydi» banneri");
+  ok((await fr.evaluate(() => window.ISFTPaket.mode)) === 'preview' && A(await fr.textContent('.banner')).includes("Ko'rish rejimi — natija LMS'ga yuborilmaydi"), "?preview=1 → «Ko'rish rejimi — natija LMS'ga yuborilmaydi» banneri");
   await SHOT(page, 'nextid_preview_banner');
   ok(T.errs.length === 0, "Konsol xatolari yo'q" + (T.errs.length ? ': ' + T.errs.slice(0, 3).join(' | ') : ''));
   ok(T.foreign.length === 0, "Tashqi tarmoq so'rovlari yo'q");
@@ -1145,13 +1161,13 @@ async function runScormNoApi(br, base) {
     await page.evaluate(u => window.launch('none', u), base + PKG + 'index.html'); await sleep(200);
     let fr = page.frame({ name: 'sco' }); await waitReady(fr);
     const b = await fr.evaluate(() => { const e = document.querySelector('.banner'); return { mode: window.ISFTPaket.mode, txt: e && e.textContent, warn: !!(e && e.classList.contains('warn')), role: e && e.getAttribute('role') }; });
-    ok(b.mode === 'standalone' && b.warn && b.role === 'alert' && b.txt === "LMS bilan aloqa topilmadi — natija saqlanmaydi. O'qituvchiga xabar bering.",
+    ok(b.mode === 'standalone' && b.warn && b.role === 'alert' && A(b.txt) === "LMS bilan aloqa topilmadi — natija saqlanmaydi. O'qituvchiga xabar bering.",
       `tracking.mode=${kind}, SCORM API yo'q → ogohlantirish banneri («${b.txt}»)`);
     if (kind === 'scorm12') await SHOT(page, 'scorm_noapi_warning');
     await page.evaluate(u => window.launch('none', u), base + PKG + 'index.html?preview=1'); await sleep(200);
     fr = page.frame({ name: 'sco' }); await waitReady(fr);
     const p = await fr.evaluate(() => { const e = document.querySelector('.banner'); return { mode: window.ISFTPaket.mode, txt: e && e.textContent, warn: !!(e && e.classList.contains('warn')), n: document.querySelectorAll('.banner').length }; });
-    ok(p.mode === 'preview' && !p.warn && p.n === 1 && /Ko'rish rejimi — natija LMS'ga yuborilmaydi/.test(p.txt), `${kind} + ?preview=1 → faqat «Ko'rish rejimi» banneri`);
+    ok(p.mode === 'preview' && !p.warn && p.n === 1 && /Ko'rish rejimi — natija LMS'ga yuborilmaydi/.test(A(p.txt)), `${kind} + ?preview=1 → faqat «Ko'rish rejimi» banneri`);
     ok(T.errs.length === 0, "Konsol xatolari yo'q");
     await T.ctx.close();
   }
@@ -1185,6 +1201,54 @@ async function runScrollLayout(br, base) {
   ok(s3.c === '3 / ' + SLIDES.slides.length && s3.bar === SLIDES.slides[2].title && s3.li === SLIDES.slides[2].bullets.length && s3.dots === SLIDES.slides.length, `display=text: generatsiya qilingan slayd va nuqtalar (${s3.c}, «${s3.bar}»)`);
   await SHOT(page, 'scroll_slides_text');
   await visitAllContent(page, page, null);
+  ok(T.errs.length === 0, "Konsol xatolari yo'q");
+  await T.ctx.close();
+}
+
+// ---------------------------------------------------------------- «multi» savol turi: belgilash katakchalari, «hammasi va faqat shular» baholash
+async function runMulti(br, base) {
+  section('Test: bir nechta javobli savol (type «multi»)');
+  const T = await newCtx(br, { viewport: { width: 1280, height: 900 } }, 'multi'), page = T.page;
+  await patchContent(T.ctx, c => {
+    c.id += '-multi';
+    const b = c.blocks.find(x => x.type === 'quiz'); b.pass_pct = 100; b.attempts = 0;
+    b.questions.find(q => q.type === 'mcq' && q.correct.length > 1).type = 'multi';     // q102 (to'g'ri javoblar [0, 2]) — yangi tur
+    b.questions.push({ id: 'q9001', type: 'multi', stem: 'Qaysilar tub sonlar? (bir nechtasini tanlang)', options: ['2', '4', '5', '9', '11'], correct: [0, 2, 4], explanation: 'Tub sonlar: 2, 5, 11.' });
+  });
+  await page.goto(base + PKG + 'index.html?preview=1'); await waitReady(page);
+  const MQ = QUIZ.questions.find(q => q.type === 'mcq' && q.correct.length > 1), MID = MQ.id, NID = 'q9001', SQ = QUIZ.questions.find(q => q.type === 'mcq' && q.correct.length === 1);
+  await clickStep(page, await stepIndex(page, 'quiz'));
+  await page.click('[data-act="start"]'); await page.waitForSelector('form.qform');
+  const kinds = await page.evaluate(([m, n, s]) => ({ m: [...document.querySelectorAll('fieldset[data-qid="' + m + '"] input')].map(i => i.type).join(), n: [...document.querySelectorAll('fieldset[data-qid="' + n + '"] input')].map(i => i.type).join(),
+    s: [...document.querySelectorAll('fieldset[data-qid="' + s + '"] input')].map(i => i.type).join(), hint: !!document.querySelector('fieldset[data-qid="' + n + '"] .hint'), kind: document.querySelector('fieldset[data-qid="' + n + '"]').dataset.kind,
+    sHint: !!document.querySelector('fieldset[data-qid="' + s + '"] .hint') }), [MID, NID, SQ.id]);
+  ok(/^(checkbox,)+checkbox$/.test(kinds.m) && /^(checkbox,){4}checkbox$/.test(kinds.n) && /^(radio,)+radio$/.test(kinds.s) && kinds.hint && !kinds.sHint && kinds.kind === 'multi',
+    `«multi» savol — belgilash katakchalari + «bir nechta javob» izohi (${kinds.n.split(',').length} ta katakcha); bir javobli mcq — radio, izohsiz`);
+  await SHOT(page, 'multi_form');
+  const check = async (id, vals) => { for (const v of vals) await page.check(`fieldset[data-qid="${id}"] input[value="${v}"]`); };
+  const fb = () => page.evaluate(([m, n]) => ({ m: (document.querySelector('.fb[data-qid="' + m + '"]') || {}).className, n: (document.querySelector('.fb[data-qid="' + n + '"]') || {}).className,
+    nc: ((document.querySelector('.fb[data-qid="' + n + '"] .fb-c strong') || {}).textContent || ''), mc: ((document.querySelector('.fb[data-qid="' + m + '"] .fb-c strong') || {}).textContent || ''),
+    others: [...document.querySelectorAll('.fb')].filter(f => f.dataset.qid !== m && f.dataset.qid !== n).every(f => f.classList.contains('ok')),
+    st: window.ISFTPaket.debug.status() }), [MID, NID]);
+  // 1) bir qismi to'g'ri (to'liq emas) → noto'g'ri
+  await answerQuiz(page, true); await check(NID, [0, 2, 4]);
+  await page.uncheck(`fieldset[data-qid="${MID}"] input[value="${MQ.correct[1]}"]`); await page.uncheck(`fieldset[data-qid="${NID}"] input[value="4"]`);
+  await page.click('[data-act="submit"]'); await sleep(250);
+  let r = await fb();
+  ok(/\bno\b/.test(r.m) && /\bno\b/.test(r.n) && r.others && r.st.success === 'failed', `Bir nechta to'g'ri javobdan faqat bir qismi belgilansa — noto'g'ri («hammasi va faqat shular»); boshqa savollar to'g'ri (${r.m} / ${r.n})`);
+  ok(r.nc === '2; 5; 11' && r.mc.replace(/[ʻʼ‘’]/g, "'") === MQ.correct.map(i => MQ.options[i]).join('; '), `Izohda barcha to'g'ri variantlar ko'rsatiladi: «${r.nc}» / «${r.mc}» (kutilgan: «${MQ.correct.map(i => MQ.options[i]).join('; ')}»)`);
+  await SHOT(page, 'multi_failed', true);
+  // 2) ortiqcha (noto'g'ri) variant ham belgilansa → noto'g'ri
+  await page.click('[data-act="retry"]'); await answerQuiz(page, true); await check(NID, [0, 2, 4, 1]);
+  await page.click('[data-act="submit"]'); await sleep(250);
+  r = await fb();
+  ok(/\bok\b/.test(r.m) && /\bno\b/.test(r.n) && r.others && r.st.success === 'failed', `To'g'ri javoblar + ortiqcha noto'g'ri variant — noto'g'ri; ko'p javobli q102 to'g'ri (${r.m} / ${r.n})`);
+  // 3) aynan to'g'ri javoblar → o'tdi 100%
+  await page.click('[data-act="retry"]'); await answerQuiz(page, true); await check(NID, [4, 0, 2]);
+  await page.click('[data-act="submit"]'); await sleep(250);
+  r = await fb();
+  ok(/\bok\b/.test(r.m) && /\bok\b/.test(r.n) && r.others && r.st.success === 'passed' && r.st.score === 100, `Aynan to'g'ri javoblar → «multi» ham, hammasi ham to'g'ri — o'tdi ${r.st.score}%`);
+  await SHOT(page, 'multi_passed', true);
   ok(T.errs.length === 0, "Konsol xatolari yo'q");
   await T.ctx.close();
 }
@@ -1293,17 +1357,14 @@ async function runVisual(br, base) {
     pb: document.querySelector('[role=progressbar]').getAttribute('aria-valuenow'), alt: [...document.querySelectorAll('img')].every(i => i.hasAttribute('alt')), lang: document.documentElement.lang,
     lbl: [...document.querySelectorAll('.nav-i')].every(b => /^\d+-qadam: /.test(b.getAttribute('aria-label'))) }));
   ok(lm.h && lm.n && lm.m && lm.live && lm.pb != null && lm.alt && lm.lang === 'uz' && lm.lbl, 'Landmarklar (header/nav/main), aria-live, progressbar, img alt, lang=uz, qadam tugmalarida aria-label');
-  // qulaylik paneli (a11y.js — kurs pleyeri bilan umumiy): matn o'lchami, kontrast, shrift — localStorage'da; «Tinglash» — speechSynthesis yo'q bo'lsa xabar
-  await dp.click('.top .a11y-b'); await dp.click('[data-a11y="fs+"]'); await dp.click('[data-a11y="hc"]'); await dp.click('[data-a11y="dys"]');
-  await dp.keyboard.press('Escape');
-  await D.ctx.addInitScript(() => { try { Object.defineProperty(window, 'speechSynthesis', { value: undefined, configurable: true }); } catch (e) { /* */ } });
+  // «Aa» qulaylik paneli olib tashlangan (foydalanuvchi talabi); eski saqlangan sozlamalar qo'llanmaydi
+  ok((await dp.$$('.a11y-b, .a11y-p, [data-a11y]')).length === 0, "«Aa» tugmasi va qulaylik paneli yo'q");
+  await dp.evaluate(() => localStorage.setItem('isft-a11y', JSON.stringify({ fs: 160, hc: true, dys: true, rm: true })));
   await dp.reload(); await waitReady(dp);
-  const pa =await dp.evaluate(() => ({ fs: document.documentElement.style.getPropertyValue('--a11y-fs'), c: document.documentElement.className, bg: getComputedStyle(document.body).backgroundColor, ff: getComputedStyle(document.body).fontFamily }));
-  ok(pa.fs === '1.12' && /a11y-hc/.test(pa.c) && pa.bg === 'rgb(0, 0, 0)' && /Verdana/.test(pa.ff), `Qulaylik paneli: A+ (112%), yuqori kontrast (qorong'i: qora fon), qulay shrift — qayta yuklanganda saqlangan`);
+  const pa = await dp.evaluate(() => ({ fs: document.documentElement.style.getPropertyValue('--a11y-fs'), c: document.documentElement.className, bg: getComputedStyle(document.body).backgroundColor, ff: getComputedStyle(document.body).fontFamily }));
+  ok(pa.fs === '' && !/a11y-/.test(pa.c) && !/Verdana/.test(pa.ff), `Eski saqlangan sozlamalar (yuqori kontrast, shrift) qo'llanmaydi (sinf «${pa.c}»)`);
   await clickStep(dp, await stepIndex(dp, 'text'));
-  const tb = await dp.$('.card .tts-b');
-  if (tb) { await tb.click(); await sleep(100); }
-  ok(!!tb && /qo'llab-quvvatlamaydi/.test(await dp.$eval('.card .tts-m', e => e.textContent)), 'Matn qadamida «Tinglash» tugmasi; speechSynthesis yo\'q — tushunarli xabar');
+  ok(!(await dp.$('.card .tts-b')), "Matn qadamida «Tinglash» tugmasi yo'q (funksiya olib tashlangan)");
   await SHOT(dp, 'a11y_paket_contrast');
   await dp.evaluate(() => localStorage.removeItem('isft-a11y'));
   ok(D.errs.length === 0, 'Konsol xatolari yo\'q' + (D.errs.length ? ': ' + D.errs.slice(0, 3).join(' | ') : ''));
@@ -1331,6 +1392,147 @@ async function runVisual(br, base) {
   await L.ctx.close();
 }
 
+
+// ---------------------------------------------------------------- «rise» ko'rinishi: pastki tasma, galereya hisoblagichi, apostrof imlosi
+const rects = (p, sels) => p.evaluate(ss => ss.map(s => { const e = document.querySelector(s); if (!e) return null; const b = e.getBoundingClientRect(); return { l: b.left, t: b.top, r: b.right, b: b.bottom, w: b.width, h: b.height }; }), sels);
+const overlap = (a, b) => !!a && !!b && a.l < b.r && a.r > b.l && a.t < b.b && a.b > b.t;
+const risePatch = (n, extra) => c => {
+  c.layout = 'rise'; c.id += '-rise' + n; c.tracking.video_min = 0.8;
+  c.blocks.forEach(b => {
+    if (b.type !== 'slides') return;
+    b.display = 'images'; b.slides.forEach(sl => { sl.notes = ''; sl.caption = ''; sl.audio = null; });
+    b.slides = n > b.slides.length ? b.slides.concat(b.slides.slice(0, n - b.slides.length).map(sl => Object.assign({}, sl))) : b.slides.slice(0, n);
+  });
+  if (extra) extra(c);
+};
+async function riseOpenAll(p) {
+  for (let i = 0; i < 10; i++) { if (!(await p.evaluate(() => { const b = document.querySelector('.r-continue:not([hidden])'); if (b) b.click(); return !!b; }))) break; await sleep(150); }
+  await sleep(300);
+}
+async function runRise(br, base) {
+  section("Rise: pastki tasma, galereya, apostrof imlosi");
+  // ---- 390px mobil, 8 ta rasm sahifasi
+  const M = await newCtx(br, { viewport: { width: 390, height: 800 }, isMobile: true, hasTouch: true }, 'rise-m'), mp = M.page;
+  await patchContent(M.ctx, risePatch(8));
+  await mp.goto(base + PKG + 'index.html'); await waitReady(mp); await sleep(600);
+  await SHOT(mp, 'rise_m_cover');
+  await mp.click('.r-go'); await sleep(500); await riseOpenAll(mp);
+  const gal = await mp.evaluate(() => { const g = document.querySelector('.t-slides .gal'), th = g.querySelector('.thumbs'), n = g.querySelector('.r-cnt-n'), z = g.querySelector('.r-zoom'), cnt = g.querySelector('.r-cnt'), zr = z.getBoundingClientRect(), cr = cnt.getBoundingClientRect();
+    return { many: g.classList.contains('many'), th: getComputedStyle(th).display, n: getComputedStyle(n).display, nt: n.textContent, live: g.querySelector('.counter').textContent, zin: zr.left >= cr.left - 1 && zr.right <= cr.right + 1, zl: z.textContent.trim(), zh: Math.round(cr.height), arr: !!g.querySelector('.nav-a.r') && getComputedStyle(g.querySelector('.nav-a.r')).display !== 'none' }; });
+  ok(gal.many && gal.th === 'none' && gal.n !== 'none' && gal.nt === '1 / 8' && gal.arr, `390px, 8 sahifa: nuqtalar yashirin, «1 / 8» + strelkalar (${gal.th}/${gal.n}/${gal.nt})`);
+  ok(gal.zl === 'Kattalashtirish' && gal.zin, `«Kattalashtirish» — belgi + yozuv, hisoblagich qatori ichida (qator ${gal.zh}px)`);
+  await mp.evaluate(() => document.querySelector('.t-slides .gal').scrollIntoView({ block: 'center' })); await sleep(300); await SHOT(mp, 'rise_m_gallery');
+  // pastki tasma
+  await mp.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight)); await sleep(500);
+  await mp.evaluate(() => window.scrollBy(0, -30)); await sleep(500);
+  const bar = await mp.evaluate(() => { const f = document.querySelector('.r-foot'), s = document.querySelector('.r-sum'), d = document.querySelector('.r-done'), w = document.querySelector('.r-what'), li = document.querySelectorAll('.r-left-l li'); return { h: f.offsetHeight, sh: s.getBoundingClientRect().height, t: s.textContent, st: d.getAttribute('role'), vis: !w.hidden, ex: w.getAttribute('aria-expanded'), lh: document.querySelector('.r-left').hidden, li: li.length }; });
+  const m1 = /^Yakunlash uchun: (\d+) ta qadam qoldi$/.exec(bar.t);
+  ok(m1 && bar.sh < 30 && bar.h <= 120 && bar.st === 'status' && bar.vis && bar.ex === 'false' && bar.lh && bar.li === +m1[1], `Pastki tasma (390px): «${bar.t}» bir qatorda, balandlik ${bar.h}px, jonli hudud (status), ${bar.li} ta qoldiq ro'yxatda, oyna yopiq`);
+  await mp.click('.r-what'); await sleep(250);
+  const pop = await mp.evaluate(() => { const l = document.querySelector('.r-left'), b = l.getBoundingClientRect(); return { open: !l.hidden, ex: document.querySelector('.r-what').getAttribute('aria-expanded'), foc: document.activeElement === l, txt: [...l.querySelectorAll('li')].map(x => x.textContent), l: b.left, r: b.right }; });
+  ok(pop.open && pop.ex === 'true' && pop.foc && pop.l >= 0 && pop.r <= 390 && pop.txt.length >= 2, `«Nimalar qoldi?»: aria-expanded=true, fokus oynada, oyna ekranga sig'adi (${pop.txt.length} qator)`);
+  ok(pop.txt.some(t => /\d+% \/ 80%/.test(t)) && pop.txt.some(t => /\d+ \/ 8 sahifa/.test(t)), `Qoldiqlar alohida qatorda, jarayoni bilan: ${pop.txt.join(' · ')}`);
+  await SHOT(mp, 'rise_m_left');
+  await mp.keyboard.press('Escape'); await sleep(150);
+  const esc = await mp.evaluate(() => ({ ex: document.querySelector('.r-what').getAttribute('aria-expanded'), h: document.querySelector('.r-left').hidden, foc: document.activeElement === document.querySelector('.r-what') }));
+  ok(esc.ex === 'false' && esc.h && esc.foc, 'Esc oynani yopadi va fokus «Nimalar qoldi?» tugmasiga qaytadi');
+  await mp.click('.r-what'); await sleep(150); await mp.mouse.click(10, 10); await sleep(150);
+  ok(await mp.evaluate(() => document.querySelector('.r-left').hidden), 'Oyna tashqariga bosilganda yopiladi');
+  await M.ctx.close();
+  ok(M.errs.length === 0, "Rise 390px: konsol xatolari yo'q" + (M.errs.length ? ': ' + M.errs.slice(0, 3).join(' | ') : ''));
+
+  // ---- 390px, 5 ta sahifa: nuqtalar qoladi
+  const M5 = await newCtx(br, { viewport: { width: 390, height: 800 }, isMobile: true, hasTouch: true }, 'rise-m5'), p5 = M5.page;
+  await patchContent(M5.ctx, risePatch(5));
+  await p5.goto(base + PKG + 'index.html'); await waitReady(p5); await p5.click('.r-go'); await sleep(400); await riseOpenAll(p5);
+  const g5 = await p5.evaluate(() => { const g = document.querySelector('.t-slides .gal'); return { many: g.classList.contains('many'), th: getComputedStyle(g.querySelector('.thumbs')).display, n: getComputedStyle(g.querySelector('.r-cnt-n')).display }; });
+  ok(!g5.many && g5.th !== 'none' && g5.n !== 'none', `390px, 5 sahifa (≤ 6): nuqtalar ko'rinadi (${g5.th}), raqam ham (${g5.n})`);
+  await M5.ctx.close();
+
+  // ---- ish stoli 1280×860
+  const D = await newCtx(br, { viewport: { width: 1280, height: 860 } }, 'rise-d'), dp = D.page;
+  await patchContent(D.ctx, risePatch(8));
+  await dp.goto(base + PKG + 'index.html'); await waitReady(dp); await sleep(500);
+  await SHOT(dp, 'rise_d_cover');
+  await dp.click('.r-go'); await sleep(500); await riseOpenAll(dp);
+  const gd = await dp.evaluate(() => { const g = document.querySelector('.t-slides .gal'), n = g.querySelector('.r-cnt-n'), c = g.querySelector('.counter'), cb = c.getBoundingClientRect(), z = g.querySelector('.r-zoom'); return { th: getComputedStyle(g.querySelector('.thumbs')).display, nb: g.querySelectorAll('.thumbs button').length, n: getComputedStyle(n).display, live: c.textContent, cw: c.closest('.sr') ? 1 : cb.width, cl: c.getAttribute('aria-live'), z: z.getBoundingClientRect().height }; });
+  ok(gd.th !== 'none' && gd.nb === 8 && gd.n === 'none', `1280px: nuqtalar bor (${gd.nb}), «1 / N» matni ko'rinmaydi`);
+  ok(gd.live === '1 / 8' && gd.cw <= 2 && gd.cl === 'polite', "Ekran o'quvchi uchun «1 / 8» jonli hudud saqlangan (ko'rinmas)");
+  await dp.evaluate(() => document.querySelector('.t-slides .gal').scrollIntoView({ block: 'center' })); await sleep(300); await SHOT(dp, 'rise_d_gallery');
+  await dp.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight)); await sleep(400); await dp.evaluate(() => window.scrollBy(0, -30)); await sleep(500);
+  await SHOT(dp, 'rise_d_end');
+
+  // ---- apostrof: oʻ / gʻ (U+02BB) faqat ko'rinishda
+  const scan = () => dp.evaluate(() => {
+    const w = document.createTreeWalker(document.body, 4), bad = [], good = []; let n;
+    while ((n = w.nextNode())) {
+      if (n.parentNode.closest('script,style,code,pre,textarea,math')) continue;
+      if (/[oOgG]'(?=\p{L})(?!s(?!\p{L}))/u.test(n.nodeValue) && !/:\/\//.test(n.nodeValue)) bad.push(n.nodeValue.slice(0, 40));
+      if (/[oOgG]ʻ/.test(n.nodeValue)) good.push(n.nodeValue.slice(0, 40));
+    }
+    return { bad, good: good.length, ids: [...document.querySelectorAll('[id]')].filter(e => /ʻ/.test(e.id)).length };
+  });
+  const sc = await scan();
+  ok(sc.bad.length === 0 && sc.good > 0 && sc.ids === 0, `Ko'rinadigan matnda oʻ/gʻ ʻ (U+02BB) bilan (${sc.good} tugun), ASCII qolgani yo'q${sc.bad.length ? ': ' + sc.bad.join(' | ') : ''}, id lar o'zgarmagan`);
+  await dp.evaluate(() => {
+    const d = document.createElement('div'); d.id = 'uztest';
+    d.innerHTML = '<p id="u1">To\'liq o\'zlashtirish, G\'oya, O\'ZBEKISTON, bo\'lim, to\'g\'ri</p><p id="u2">ma\'ruza a\'zo ta\'lim sa\'y</p><p id="u3">dog\'s Craig\'s</p><code id="u4">to\'liq</code><pre id="u5">o\'zgaruvchi</pre>'
+      + '<textarea id="u6">to\'liq</textarea><input id="u7" value="to\'liq"><math id="u8"><mi>o\'z</mi></math><a id="u9" href="https://x.uz/o\'zb">https://x.uz/o\'zb</a>'
+      + '<p id="u10" title="to\'liq" data-x="o\'z" aria-label="o\'z">atribut</p><script id="u11" type="text/plain">o\'z</script><p id="u12">info@o\'z.uz www.go\'l.uz</p>';
+    document.body.appendChild(d);
+  });
+  await sleep(150);
+  const ut = await dp.evaluate(() => { const g = id => document.getElementById(id), t = id => g(id).textContent, a = g('u10');
+    return { u1: t('u1'), u2: t('u2'), u3: t('u3'), u4: t('u4'), u5: t('u5'), u6: g('u6').value, u7: g('u7').value, u8: t('u8'), u9: t('u9'), href: g('u9').getAttribute('href'), title: a.getAttribute('title'), dx: a.getAttribute('data-x'), al: a.getAttribute('aria-label'), u11: t('u11'), u12: t('u12') }; });
+  ok(ut.u1 === 'Toʻliq oʻzlashtirish, Gʻoya, OʻZBEKISTON, boʻlim, toʻgʻri', `oʻ/gʻ almashadi: «${ut.u1}»`);
+  ok(ut.u2 === "ma'ruza a'zo ta'lim sa'y" && ut.u3 === "dog's Craig's", 'Tutuq belgisi (ma\'ruza, a\'zo) va ingliz egalik shakli (dog\'s) o\'zgarmaydi');
+  ok(ut.u4 === "to'liq" && ut.u5 === "o'zgaruvchi" && ut.u6 === "to'liq" && ut.u7 === "to'liq" && ut.u8 === "o'z" && ut.u11 === "o'z", '<code>, <pre>, <textarea>, <input value>, MathML, <script> ichi o\'zgarmaydi');
+  ok(ut.u9 === "https://x.uz/o'zb" && ut.href === "https://x.uz/o'zb" && ut.u12 === "info@o'z.uz www.go'l.uz" && ut.title === "to'liq" && ut.dx === "o'z" && ut.al === "o'z", 'URL / e-pochta o\'xshash matn va atributlar (title, data-*, aria-label, href) o\'zgarmaydi');
+  await dp.evaluate(() => { document.getElementById('u1').textContent = "yo'q, ko'rildi"; });
+  await sleep(100);
+  ok((await dp.evaluate(() => document.getElementById('u1').textContent)) === 'yoʻq, koʻrildi', 'MutationObserver: keyin o\'zgartirilgan matn ham tuzatiladi');
+  ok(await dp.evaluate(() => window.ISFTA11y.uz("o'zbek g'oya ma'no") === 'oʻzbek gʻoya ma\'no'), 'ISFTA11y.uz(): oʻ/gʻ almashadi, tutuq qoladi');
+  // ʻ glifi: Lato / Manrope'da yo'q — tizim shrifti (Helvetica Neue …) emas, paket ichidagi shrift chizishi kerak
+  await dp.evaluate(() => { const h = document.createElement('h2'); h.className = 'r-h'; h.id = 'uzfont'; h.textContent = "O'z-o'zini g'oya"; document.body.appendChild(h); const q = document.createElement('p'); q.id = 'uzfont2'; q.className = 'prose'; q.style.fontFamily = 'var(--serif)'; q.textContent = "to'liq o'zlashtir"; document.body.appendChild(q); });
+  await sleep(500);
+  const cdp = await D.ctx.newCDPSession(dp); await cdp.send('DOM.enable'); await cdp.send('CSS.enable');
+  const root = await cdp.send('DOM.getDocument', { depth: -1 });
+  const fonts = {};
+  for (const id of ['uzfont', 'uzfont2']) { const n = await cdp.send('DOM.querySelector', { nodeId: root.root.nodeId, selector: '#' + id }); fonts[id] = (await cdp.send('CSS.getPlatformFontsForNode', { nodeId: n.nodeId })).fonts; }
+  const sys = Object.values(fonts).flat().filter(f => !f.isCustomFont);
+  ok(Object.values(fonts).flat().length > 0 && sys.length === 0, `ʻ (U+02BB) belgisi paket shriftlaridan chiziladi, tizim shriftiga o'tmaydi (${Object.values(fonts).flat().map(f => f.familyName + '×' + f.glyphCount).join(', ')})`);
+  await dp.evaluate(() => { document.getElementById('uzfont').scrollIntoView({ block: 'center' }); }); await sleep(200); await SHOT(dp, 'rise_d_uzfont');
+  // javoblarni solishtirish asl ma'lumot bilan: ASCII ', ʻ, ‘, ’ — hammasi to'g'ri
+  const nm = await dp.evaluate(() => { const n = window.ISFTPaket.debug.norm; return n("o'sadi") === n('oʻsadi') && n("o'sadi") === n('O‘SADI ') && n('oʻsadi') === n('o’sadi'); });
+  ok(nm, "Javobni solishtirish (norm): o'sadi = oʻsadi = O‘SADI = o’sadi");
+  await clickGateQuiz(dp);
+  await dp.fill(`fieldset[data-qid="${FILLQ.id}"] input`, "o'sadi");
+  const iv = await dp.evaluate(id => document.querySelector(`fieldset[data-qid="${id}"] input`).value, FILLQ.id);
+  ok(iv === "o'sadi", "Talaba yozgan javob (input.value) o'zgarmaydi");
+  await dp.fill(`fieldset[data-qid="${FILLQ.id}"] input`, 'oʻsadi');
+  await answerQuiz(dp, true, false); await sleep(400);
+  const qr = await dp.evaluate(() => { const st = window.ISFTPaket.debug.status(); return { s: st.success, c: st.complete }; });
+  ok(qr.s === 'passed', "Test: «oʻsadi» (ʻ bilan) yozilgan javob to'g'ri hisoblanadi — muvaffaqiyat: " + qr.s);
+  ok(D.errs.length === 0, "Rise 1280px: konsol xatolari yo'q" + (D.errs.length ? ': ' + D.errs.slice(0, 3).join(' | ') : ''));
+  await D.ctx.close();
+
+  // ---- yakunlangach: «Dars yakunlandi» (Nimalar qoldi? yo'q)
+  const C = await newCtx(br, { viewport: { width: 390, height: 800 }, isMobile: true, hasTouch: true }, 'rise-c'), cp = C.page;
+  await patchContent(C.ctx, risePatch(8, c => { c.tracking.completion = 'view_all'; c.tracking.video_min = 0; }));
+  await cp.goto(base + PKG + 'index.html'); await waitReady(cp); await cp.click('.r-go'); await sleep(400); await riseOpenAll(cp);
+  for (let i = 0; i < 8; i++) { await cp.evaluate(() => document.querySelector('.t-slides .nav-a.r').click()); await sleep(40); }
+  for (let y = 0; y < 60000; y += 500) { const end = await cp.evaluate(y => { window.scrollTo(0, y); return y + innerHeight >= document.documentElement.scrollHeight; }, y); await sleep(60); if (end) break; }
+  await sleep(500);
+  const fin = await cp.evaluate(() => ({ t: document.querySelector('.r-sum').textContent, w: document.querySelector('.r-what').hidden, c: window.ISFTPaket.debug.status().complete, h: document.querySelector('.r-done').hidden }));
+  ok(fin.c && fin.t === 'Dars yakunlandi' && fin.w && !fin.h, `Yakunlangach: «${fin.t}», «Nimalar qoldi?» yo'q`);
+  await SHOT(cp, 'rise_m_done');
+  await C.ctx.close();
+}
+async function clickGateQuiz(p) {
+  await p.evaluate(() => { const q = document.querySelector('.t-quiz'); if (q) q.scrollIntoView({ block: 'center' }); }); await sleep(300);
+  await p.click('.t-quiz [data-act="start"]'); await sleep(250);
+}
+
 (async () => {
   const lmsPort = await listen(lms), lrsPort = await listen(lrs);
   const base = 'http://127.0.0.1:' + lmsPort, lrsBase = 'http://127.0.0.1:' + lrsPort;
@@ -1349,7 +1551,9 @@ async function runVisual(br, base) {
     await run('nextid', () => runNextid(br, base));
     await run('noapi', () => runScormNoApi(br, base));
     await run('scroll', () => runScrollLayout(br, base));
+    await run('multi', () => runMulti(br, base));
     await run('visual', () => runVisual(br, base));
+    await run('rise', () => runRise(br, base));
   } finally {
     await br.close(); lms.close(); lrs.close();
   }

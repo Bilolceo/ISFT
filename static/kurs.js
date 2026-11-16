@@ -25,11 +25,21 @@ if (typeof ICONS === "object") {
     tablet: '<rect x="4" y="2" width="16" height="20" rx="2"/><path d="M12 18h.01"/>', phone2: '<rect x="7" y="2" width="10" height="20" rx="2"/><path d="M12 18h.01"/>',
     bold: '<path d="M6 4h8a4 4 0 0 1 0 8H6zM6 12h9a4 4 0 0 1 0 8H6z"/>', italic: '<path d="M19 4h-9M14 20H5M15 4 9 20"/>', underline: '<path d="M6 4v6a6 6 0 0 0 12 0V4M4 20h16"/>',
     link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>', ul: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
-    eraser: '<path d="m7 21-4-4L14 6l7 7-8 8z"/><path d="M22 21H7"/>', back: '<path d="m15 18-6-6 6-6"/>', history: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l4 2"/>'};
+    eraser: '<path d="m7 21-4-4L14 6l7 7-8 8z"/><path d="M22 21H7"/>', back: '<path d="m15 18-6-6 6-6"/>', history: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l4 2"/>',
+    more: '<circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/>', list2: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+    text: '<path d="M4 7V5h16v2M9 19h6M12 5v14"/>', video2: '<rect x="2" y="5" width="15" height="14" rx="2"/><path d="m17 10 5-3v10l-5-3"/>', gallery: '<rect x="3" y="5" width="13" height="13" rx="2"/><path d="M20 8v11a2 2 0 0 1-2 2H7"/>',
+    cont: '<rect x="3" y="9" width="18" height="6" rx="1"/>', cards: '<rect x="3" y="7" width="13" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-3"/>',
+    match: '<path d="M4 7h6M4 17h6M14 7h6M14 17h6M10 7l4 10M10 17l4-10"/>', blocks: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+    panel: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>'};
   Object.entries(I).forEach(([k, v]) => { if (!ICONS["ku_" + k]) ICONS["ku_" + k] = v; });
 }
 if (!document.querySelector('link[href="kurs.css"]')) document.head.insertAdjacentHTML("beforeend", '<link rel="stylesheet" href="kurs.css">');
 const kuI = (n, s = 16) => ico("ku_" + n, s);
+/* Ko'rinish: «rise» — Articulate Rise kabi (dars natijadagidek: muqova, binafsha «davom etish», oq kartochkalar; asboblar blok ustida, darslar va
+   blok sozlamalari yon panelda) / «classic» — uch ustunli. Tanlov brauzerda saqlanadi (localStorage), standart — «rise». */
+function kuUi() { try { return localStorage.getItem("kuUi") === "classic" ? "classic" : "rise"; } catch (e) { return "rise"; } }
+function kuUiSet(v) { try { localStorage.setItem("kuUi", v); } catch (e) { /* jim */ } }
+const kuRise = () => KU.view === "course" && kuUi() === "rise";
 const KU_ST = {qoralama: "", korib_chiqishda: "info", tasdiqlangan: "ok"};
 const KU_MODE = {xapi: "NEXTID uchun — xAPI (standart)", scorm12: "Boshqa LMS — SCORM 1.2", scorm2004: "Boshqa LMS — SCORM 2004 (4-nashr)", none: "LMS'siz — oddiy veb-sahifa"};
 const kuChip = (t, cls = "") => `<span class="ku-chip ${cls}">${esc(t)}</span>`;
@@ -59,6 +69,7 @@ async function kuApi(url, body, method) {
 }
 function kuModal(title, html, {onOk = null, okText = "Saqlash", wide = false, onClose = null, cls = ""} = {}) {
   const bg = document.createElement("div"); bg.className = "ku-modal-bg";
+  if (typeof kuRise === "function" && kuRise()) bg.classList.add("rz");   /* Rise ko'rinishi: modallar ham binafsha palitrada (body'ga qo'shiladi) */
   bg.innerHTML = `<div class="ku-modal ${wide ? "wide" : ""} ${cls}" role="dialog" aria-modal="true" aria-label="${esc(title)}"><div class="ku-modal-h"><h3>${esc(title)}</h3>
     <button type="button" class="ku-ib" data-x aria-label="Yopish">${ico("x", 18)}</button></div><div class="ku-modal-b">${html}</div>
     ${onOk ? `<div class="ku-acts end"><button type="button" class="btn ghost" data-x>Bekor qilish</button><button type="button" class="btn primary" data-ok>${esc(okText)}</button></div>` : ""}</div>`;
@@ -135,7 +146,7 @@ async function kuSummary(v) {
 /* ---------- kurslar ro'yxati ---------- */
 async function kuList(v) {
   KU.view = "list"; KU.cid = 0; KU.course = null;
-  v = v || $("#v-kurs");
+  v = v || $("#v-kurs"); v.classList.remove("ku-rise");
   const M = KU.meta, L = KU.list;
   const d = await kuApi(`/api/kurs/courses?q=${encodeURIComponent(L.q)}&status=${L.status}&fan=${+L.fan || 0}`);
   const all = d.counts, tot = Object.values(all).reduce((a, b) => a + b, 0);
@@ -249,18 +260,21 @@ async function kuOpen(cid, lid) {
   Object.assign(KU, {view: "course", cid, course: co, conflict: null, assets: Object.fromEntries(as.items.map(a => [a.id, a]))});
   const ls = co.lessons_list;
   lid = ls.some(l => l.id === lid) ? lid : (ls[0]?.id || 0);
+  v.classList.toggle("ku-rise", kuUi() === "rise");
   v.innerHTML = `<div class="ku-top" style="--acc:${esc(co.accent)}"><button type="button" class="ku-ib" id="kuBack" aria-label="Kurslar ro'yxatiga qaytish" title="Kurslar">${kuI("back", 18)}</button>
+      <button type="button" class="ku-ib only-rise" id="kuSideT" aria-controls="kuSide" aria-expanded="false" title="Darslar ro'yxati">${kuI("panel", 18)}</button>
       <div class="ku-top-t"><button type="button" class="ku-ct" id="kuCt" title="Kurs sozlamalari">${esc(co.title)}</button>
         <div class="ku-top-s"><span id="kuStChip">${kuChip(co.status_label, KU_ST[co.status])}</span><span class="ku-save" id="kuSave" role="status" aria-live="polite"></span>
           <span id="kuLive" aria-live="polite" aria-atomic="true" style="position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap"></span></div></div>
       <div class="ku-top-a" id="kuTopA"></div></div>
     <div id="kuNote"></div>
-    <div class="ku-ed"><aside class="ku-side" id="kuSide" aria-label="Darslar"></aside><section class="ku-canvas" id="kuCanvas" aria-label="Dars"></section>
+    <div class="ku-ed" style="--acc:${esc(co.accent)}"><aside class="ku-side" id="kuSide" aria-label="Darslar"></aside><section class="ku-canvas" id="kuCanvas" aria-label="Dars"></section>
       <aside class="ku-panel" id="kuPanel" aria-label="Blok sozlamalari"></aside></div>
     <aside class="ku-cm" id="kuCm" aria-label="Izohlar" ${KU.cmOpen ? "" : "hidden"}></aside>`;
   $("#kuBack").onclick = async () => { await kuFlush(); if (KU.course?.dars?.linked && typeof dsOpenSubject === "function") return dsOpenSubject(KU.course.dars.dl_course_id); kuList(); };
   KU.cm = null; kuCmLoad(); KU.capJobs = {}; kuCapLoad();
   $("#kuCt").onclick = kuSettings;
+  $("#kuSideT").onclick = () => { const s = $("#kuSide"), o = !s.classList.contains("open"); s.classList.toggle("open", o); $("#kuSideT").setAttribute("aria-expanded", String(o)); };
   kuTop(); kuNote(); kuRenderSide();
   kuBindCanvas(); kuBindPanel();
   if (lid) await kuLoadLesson(lid, true);
@@ -268,7 +282,8 @@ async function kuOpen(cid, lid) {
 }
 function kuTop() {
   const co = KU.course, c = co.caps, a = $("#kuTopA"); if (!a) return;
-  a.innerHTML = `<button type="button" class="btn sm ghost" id="kuPv">${ico("eye", 15)} Ko'rish</button>
+  if (kuRise()) return kuTopRise(co, c, a);
+  a.innerHTML = `<button type="button" class="btn sm ghost" id="kuUiT" title="Articulate Rise kabi ko'rinish">${kuI("layers", 15)} Rise ko'rinishi</button><button type="button" class="btn sm ghost" id="kuPv">${ico("eye", 15)} Ko'rish</button>
     <button type="button" class="btn sm ghost" id="kuQl">${ico("checkc", 15)} Sifat</button>
     ${c.write ? `<button type="button" class="btn sm ghost" id="kuVr">${kuI("history", 15)} Versiyalar</button>
     <button type="button" class="btn sm ghost" id="kuSt">${kuI("gear", 15)} Sozlamalar</button>
@@ -279,6 +294,40 @@ function kuTop() {
     ${c.submit ? `<button type="button" class="btn sm primary" id="kuSub">Ko'rib chiqishga yuborish</button>` : ""}
     ${c.approve && co.status !== "tasdiqlangan" ? `<button type="button" class="btn sm primary" id="kuApp">Tasdiqlash</button>` : ""}
     ${c.approve && co.status !== "qoralama" ? `<button type="button" class="btn sm ghost" id="kuRet">Qaytarish</button>` : ""}`;
+  kuTopBind(c);
+}
+/* Konstruktor (A versiya) qadamlar tasmasi shu kursda faolmi */
+const kuCanDone = c => !!(c.write || c.submit || c.approve);
+const kuWiz = () => { const co = KU.course; return KU.wiz && co && co.dars && co.dars.linked && co.dars.dl_course_id === KU.wiz.cid ? KU.wiz : null; };
+/* Rise ko'rinishidagi yuqori panel: bitta asosiy tugma — «Tayyor» (nashr qadamlari oynasi); Ko'rish, Izohlar va «Yana» menyusi (sifat, eksport, versiyalar,
+   sozlamalar, yuborish / tasdiqlash…). Telefonda — bir qatorli ixcham panel (faqat belgilar). Konstruktor qadamlar tasmasi bor bo'lsa «Tayyor» o'sha tasmada. */
+function kuTopRise(co, c, a) {
+  const mi = (id, ic, t, tip = "") => `<button type="button" class="ku-mi" id="${id}" role="menuitem" ${tip ? `title="${esc(tip)}"` : ""}>${ic}<span>${t}</span></button>`;
+  const ib = (id, ic, t, ex = "") => `<button type="button" class="btn sm ghost ku-tb" id="${id}" aria-label="${esc(t)}" title="${esc(t)}" ${ex}>${ic}<span class="lb">${esc(t)}</span></button>`;
+  a.innerHTML = `${ib("kuPv", ico("eye", 17), "Ko'rish")}${ib("kuCmBtn", ico("chat", 17), "Izohlar", 'aria-controls="kuCm"')}
+    <details class="ku-more"><summary class="btn sm ghost ku-tb" aria-label="Yana" title="Yana">${kuI("more", 18)}<span class="lb">Yana</span></summary><div class="ku-menu" role="menu">
+      ${mi("kuQl", ico("checkc", 15), "Sifat tekshiruvi")}
+      ${c.write ? mi("kuEx", kuI("download", 15), "Eksport (NEXTID uchun xAPI)") : ""}
+      ${c.write ? mi("kuVr", kuI("history", 15), "Versiyalar") + mi("kuSt", kuI("gear", 15), "Kurs sozlamalari") : ""}
+      ${c.write ? mi("kuAq", kuI("quiz", 15), "Dars oxiri testlari", "Har bloklar darsidan keyin 3–5 savollik past xavfli test — Test bankdagi tasdiqlangan savollardan") : ""}
+      ${KU.meta.caps.ai && c.write ? mi("kuAi", ico("spark", 15), "AI: hujjatdan dars", "Ma'ruza hujjatidan (Word / PDF) bloklar, kartochkalar va test — AI") : ""}
+      ${c.submit ? mi("kuSub", ico("send", 15), "Ko'rib chiqishga yuborish") : ""}
+      ${c.approve && co.status !== "tasdiqlangan" ? mi("kuApp", ico("check", 15), "Tasdiqlash") : ""}
+      ${c.approve && co.status !== "qoralama" ? mi("kuRet", ico("x", 15), "Muallifga qaytarish") : ""}
+      ${mi("kuUiT", kuI("panel", 15), "Klassik ko'rinish (3 ustun)")}</div></details>
+    ${kuWiz() || !kuCanDone(c) ? "" : `<button type="button" class="btn sm primary ku-done" id="kuDone" title="Tekshirish, eksport va ko'rib chiqishga yuborish">Tayyor</button>`}`;
+  a.querySelectorAll(".ku-menu .ku-mi:not(#kuAq):not(#kuSub):not(#kuApp)").forEach(b => b.addEventListener("click", () => { const d = b.closest("details"); if (d) d.open = false; }));
+  if (!window._kuMoreBound) {
+    window._kuMoreBound = true;
+    document.addEventListener("click", e => { const d = document.querySelector("#kuTopA .ku-more"); if (d && d.open && !d.contains(e.target)) d.open = false; });
+    document.addEventListener("keydown", e => { if (e.key !== "Escape") return; const d = document.querySelector("#kuTopA .ku-more"); if (d && d.open) { d.open = false; d.querySelector("summary")?.focus(); } });
+  }
+  $("#kuDone") && ($("#kuDone").onclick = () => kuPublish());
+  kuTopBind(c);
+}
+function kuTopBind(c) {
+  const co = KU.course;
+  $("#kuUiT") && ($("#kuUiT").onclick = async () => { await kuFlush(); kuUiSet(kuRise() ? "classic" : "rise"); kuOpen(KU.cid, KU.lid); });
   $("#kuPv").onclick = kuPreview; $("#kuQl").onclick = kuQuality; if (c.write) { $("#kuVr").onclick = kuVersions; $("#kuSt").onclick = kuSettings; $("#kuEx").onclick = kuExport; }
   $("#kuCmBtn").onclick = () => KU.cmOpen ? kuCmClose() : kuCmOpen(null); kuCmCount();
   $("#kuAi") && ($("#kuAi").onclick = kuAiLesson);
@@ -301,6 +350,7 @@ function kuTop() {
     if (!r.ok) { const det = r.data?.detail; toast(kuErr(r.data) + (det?.errors?.length ? ` (${det.errors.slice(0, 2).join("; ")})` : "")); return false; }
     KU.course = r.data.course; kuTop(); kuNote(); kuStatusChip(); toast({submit: "Ko'rib chiqishga yuborildi", approve: "Kurs tasdiqlandi", return: "Kurs muallifga qaytarildi"}[action]); return true;
   };
+  KU.act = act;
   $("#kuSub") && ($("#kuSub").onclick = e => { if (arm(e.currentTarget, "Yuborilsinmi?")) act("submit"); });
   $("#kuApp") && ($("#kuApp").onclick = e => { if (arm(e.currentTarget, "Tasdiqlansinmi?")) act("approve"); });
   $("#kuRet") && ($("#kuRet").onclick = () => kuModal("Kursni qaytarish", `<label class="ku-f"><span>Sabab (muallif ko'radi)</span><textarea id="kuRn" rows="3" maxlength="500" autofocus></textarea></label>`,
@@ -314,6 +364,17 @@ function kuNote() {
       <span class="ku-acts"><button type="button" class="btn sm ghost" id="kuCfL">Oxirgi holatni yuklash</button><button type="button" class="btn sm primary" id="kuCfS">Mening nusxamni saqlash</button></span></div>`;
     $("#kuCfL").onclick = () => { KU.dirty = false; KU.conflict = null; kuNote(); kuLoadLesson(KU.lid, true); };
     $("#kuCfS").onclick = () => { KU.conflict = null; kuNote(); kuSave(true); };
+    return;
+  }
+  /* Konstruktor (A versiya): qadamlar tasmasi — 1 Materiallar (qaytish) · 2 Tahrirlash (shu yer) · 3 Nashr */
+  const W = kuWiz();
+  if (W) {
+    el.innerHTML = `<div class="kx-bar"><ol class="kx-steps sm"><li class="done"><span class="n">✓</span><button type="button" class="pk-link" id="kxM"><b>Materiallar</b></button></li>
+        <li class="on" aria-current="step"><span class="n">2</span><b>Tahrirlash</b></li><li><span class="n">3</span><b>Tayyor</b></li></ol>
+      <span class="kx-bar-t">${esc(co.dars.code || W.code)} · blokni bosib tahrirlang, «+» — blok qo'shish, o'zgarishlar o'zi saqlanadi</span>
+      ${kuCanDone(co.caps) ? `<button type="button" class="btn sm primary ku-done" id="kxPub" title="Tekshirish, eksport va ko'rib chiqishga yuborish">Tayyor</button>` : ""}</div>` + (co.status_note && co.status === "qoralama" ? `<div class="ku-warn">${ico("info", 15)}<span><b>Izoh:</b> ${esc(co.status_note)}</span></div>` : "");
+    el.querySelector("#kxM").onclick = async () => { await kuFlush(); kxBack(W.cid, W.key); };
+    el.querySelector("#kxPub")?.addEventListener("click", () => kuPublish());
     return;
   }
   const ln = co.dars && co.dars.linked ? `<div class="ku-link">${ico("package", 15)}<span><b>Dars tayyorlash:</b> ${esc(co.dars.subject || "")} · <b>${esc(co.dars.code)}</b> ·
@@ -338,7 +399,7 @@ function kuState(s, msg = "") {
 function kuRenderSide() {
   const co = KU.course, el = $("#kuSide"); if (!el) return;
   const ls = co.lessons_list;
-  el.innerHTML = `<div class="ku-side-h"><b>Darslar</b><span class="muted">${ls.length}</span></div>
+  el.innerHTML = `<div class="ku-side-h"><b>Darslar</b><span class="muted">${ls.length}</span><button type="button" class="ku-ib only-rise" data-sclose aria-label="Darslar panelini yopish" title="Yopish">${ico("x", 16)}</button></div>
     <ol class="ku-ls" id="kuLs">${ls.map((l, i) => `<li draggable="true" data-lid="${l.id}" class="${l.id === KU.lid ? "on" : ""}">
       <span class="ku-grip" aria-hidden="true">${kuI("grip", 14)}</span>
       <button type="button" class="ku-l" data-go="${l.id}" aria-current="${l.id === KU.lid ? "page" : "false"}" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" aria-describedby="kuLsHint"><span class="no">${l.type === "quiz" ? kuI("quiz", 15) : i + 1}</span>
@@ -356,6 +417,7 @@ function kuRenderSide() {
     kuOrder(ids, lid);
   });
   el.querySelectorAll("[data-add]").forEach(b => b.onclick = () => kuAddLesson(b.dataset.add));
+  el.querySelector("[data-sclose]")?.addEventListener("click", () => { el.classList.remove("open"); $("#kuSideT")?.setAttribute("aria-expanded", "false"); $("#kuSideT")?.focus(); });
   let drag = null;
   el.querySelectorAll("#kuLs li").forEach(li => {
     li.ondragstart = e => { drag = li; li.classList.add("drag"); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", li.dataset.lid); };
@@ -403,8 +465,10 @@ function kuLessonHead() {
 }
 function kuRenderCanvas() {
   const el = $("#kuCanvas"); if (!el) return;
-  const quiz = KU.lesson.type === "quiz";
-  el.innerHTML = `<div class="ku-lh" id="kuLh"><input class="ku-ltitle" id="kuLt" value="${esc(KU.title)}" maxlength="200" aria-label="Dars nomi" placeholder="Dars nomi">
+  const quiz = KU.lesson.type === "quiz", rise = kuRise(), co = KU.course;
+  /* Rise: dars boshida muqova (kurs muqovasi + dars nomi joyida tahrirlanadi), pastda — tez qo'shish paneli */
+  const cover = rise && co.cover_asset ? `style="--cov:url('${kuAsset(co.cover_asset)}')"` : "";
+  el.innerHTML = `<div class="ku-lh ${rise ? "ku-hero" + (co.cover_asset ? " img" : "") : ""}" id="kuLh" ${cover}>${rise ? `<span class="ku-hero-k">${esc(quiz ? "Test" : co.title || "")}</span>` : ""}${rise ? `<textarea class="ku-ltitle" id="kuLt" rows="1" data-grow data-one maxlength="200" aria-label="Dars nomi" placeholder="Dars nomi">${esc(KU.title)}</textarea>` : `<input class="ku-ltitle" id="kuLt" value="${esc(KU.title)}" maxlength="200" aria-label="Dars nomi" placeholder="Dars nomi">`}
       <div class="ku-lh-a"><span class="ku-chip">${quiz ? "Test" : "Dars"}</span>
         <button type="button" class="ku-ib" data-lmv="-1" title="Darsni yuqoriga" aria-label="Darsni yuqoriga">${kuI("up")}</button>
         <button type="button" class="ku-ib" data-lmv="1" title="Darsni pastga" aria-label="Darsni pastga">${kuI("down")}</button>
@@ -412,10 +476,11 @@ function kuRenderCanvas() {
         <button type="button" class="ku-ib danger" data-ldel title="Darsni o'chirish" aria-label="Darsni o'chirish">${kuI("trash")}</button></div></div>
     ${quiz ? kuQuizHead() : ""}
     <div class="ku-blocks" id="kuBlocks">${kuBlocksHtml()}</div>
+    ${rise && !quiz && co.caps.write ? kuQuickBar() : ""}
     ${quiz ? `<div class="ku-acts center"><button type="button" class="btn ghost" data-act="ins" data-at="${KU.blocks.length}">${kuI("plus", 15)} Savol qo'shish</button>
-      <button type="button" class="btn ghost" data-act="tb">${ico("checkc", 15)} Test bankdan</button></div>` : ""}`;
-  kuLessonHead();
-  $("#kuLt").oninput = e => { KU.title = e.target.value; const s = document.querySelector(`#kuLs li[data-lid="${KU.lid}"] .t`); if (s) s.textContent = KU.title; kuDirty(); };
+      <button type="button" class="btn ghost" data-act="tb">${ico("checkc", 15)} Test bankdan</button>${KU.meta.caps.ai && co.caps.write ? `<button type="button" class="btn ghost" data-act="qai" data-at="${KU.blocks.length}">${ico("spark", 15)} AI bilan savol</button>` : ""}</div>` : ""}`;
+  kuLessonHead(); kuGrow(el);
+  $("#kuLt").oninput = e => { kuOne(e.target); KU.title = e.target.value; const s = document.querySelector(`#kuLs li[data-lid="${KU.lid}"] .t`); if (s) s.textContent = KU.title; kuDirty(); };
   el.querySelectorAll("[data-lmv]").forEach(b => b.onclick = () => { const ids = KU.course.lessons_list.map(l => l.id), i = ids.indexOf(KU.lid), j = i + +b.dataset.lmv;
     if (j < 0 || j >= ids.length) return; [ids[i], ids[j]] = [ids[j], ids[i]]; kuOrder(ids, KU.lid).then(() => b.isConnected && b.focus()); });
   el.querySelector("[data-ldup]").onclick = async () => { await kuFlush(); const r = await kuApi(`/api/kurs/lessons/${KU.lid}/duplicate`, {}); if (r) { KU.course = r.course; kuLoadLesson(r.id, true); toast("Darsdan nusxa olindi"); } };
@@ -431,6 +496,14 @@ function kuBlocksHtml() {
     : `<div class="ku-empty"><b>Dars bo'sh</b><span>Birinchi blokni qo'shing.</span><button type="button" class="btn primary" data-act="ins" data-at="0">${kuI("plus", 15)} Blok qo'shish</button></div>`;
   return (quiz ? "" : kuIns(0)) + KU.blocks.map((b, i) => kuCard(b, i) + (quiz ? "" : kuIns(i + 1))).join("");
 }
+/* Rise'dagi pastki tez qo'shish paneli: blok kutubxonasi + eng ko'p ishlatiladigan bloklar (tanlangan blokdan keyin, aks holda oxiriga) */
+const KU_QUICK = [["paragraph", "text", "Matn"], ["list", "list2", "Ro'yxat"], ["image", "image", "Rasm"], ["gallery", "gallery", "Galereya"], ["video", "video2", "Video"],
+  ["knowledge", "quiz", "Test savoli"], ["matching", "match", "Moslashtirish"], ["flashcards", "cards", "Kartochkalar"], ["continue", "cont", "Davom etish"]];
+function kuQuickBar() {
+  return `<div class="ku-qbar" role="toolbar" aria-label="Blok qo'shish"><button type="button" class="ku-qb lib" data-act="qlib">${kuI("blocks", 18)}<span>Blok<br>kutubxonasi</span></button>
+    ${KU_QUICK.filter(([t]) => KU.meta.blocks[t]).map(([t, ic, l]) => `<button type="button" class="ku-qb" data-act="qins" data-t="${t}">${kuI(ic, 18)}<span>${esc(l)}</span></button>`
+      + (t === "knowledge" && KU.meta.caps.ai ? `<button type="button" class="ku-qb ai" data-act="qai">${ico("spark", 18)}<span>AI bilan<br>savol</span></button>` : "")).join("")}</div>`;
+}
 const kuIns = at => `<div class="ku-ins"><button type="button" data-act="ins" data-at="${at}" aria-label="Shu joyga blok qo'shish" title="Blok qo'shish">${kuI("plus", 16)}</button></div>`;
 function kuIssues(iss) {
   if (!iss || !iss.length) return "";
@@ -439,25 +512,41 @@ function kuIssues(iss) {
 }
 function kuCard(b, i) {
   const M = KU.meta.blocks, n = KU.blocks.length;
-  return `<section class="ku-blk ${i === KU.sel ? "sel" : ""}" data-bi="${i}" id="kb-${b.id}" aria-label="${esc(M[b.type]?.label || b.type)}">
+  if (kuDupHero(b, i)) return `<section class="ku-blk ku-dup ${i === KU.sel ? "sel" : ""}" data-bi="${i}" data-t="${esc(b.type)}" id="kb-${b.id}" aria-label="Sarlavha (dars nomi bilan bir xil)">
+    <div class="ku-dup-n">${ico("eye", 14)}<span>Birinchi sarlavha («${esc(String(b.data.text || "").slice(0, 80))}») dars nomi bilan bir xil — takrorlanmasin deb yig'ildi.</span>
+    <button type="button" class="btn sm ghost" data-act="dup-show">Ko'rsatish</button></div></section>`;
+  return `<section class="ku-blk ${i === KU.sel ? "sel" : ""}" data-bi="${i}" data-t="${esc(b.type)}" id="kb-${b.id}" aria-label="${esc(M[b.type]?.label || b.type)}">
     <div class="ku-blk-h"><span class="ku-grip" draggable="true" tabindex="0" role="button" title="Sudrab yoki Alt + ↑ / ↓ bilan ko'chirish" aria-label="Blokni ko'chirish (${i + 1}/${n}): Alt + ↑ yoki Alt + ↓" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown">${kuI("grip", 14)}</span><b>${KU.lesson.type === "quiz" ? `${i + 1}-savol` : esc(M[b.type]?.label || b.type)}</b>
       <span class="ku-iss-w">${kuIssues(b.issues)}</span>${kuCmBadge(b)}
       <span class="ku-tools"><button type="button" class="ku-ib" data-act="up" ${i === 0 ? "disabled" : ""} aria-label="Yuqoriga" title="Yuqoriga">${kuI("up", 15)}</button>
         <button type="button" class="ku-ib" data-act="down" ${i === n - 1 ? "disabled" : ""} aria-label="Pastga" title="Pastga">${kuI("down", 15)}</button>
+        ${kuAiOk(b) ? `<button type="button" class="ku-ib ku-ai-b" data-act="ai" aria-label="AI bilan tahrirlash" title="AI bilan tahrirlash">${ico("spark", 15)}</button>` : ""}
         <button type="button" class="ku-ib" data-act="gear" aria-label="Sozlamalar" title="Sozlamalar">${kuI("gear", 15)}</button>
         <button type="button" class="ku-ib" data-act="dup" aria-label="Nusxa" title="Nusxa">${kuI("copy", 15)}</button>
         <button type="button" class="ku-ib danger" data-act="del" aria-label="O'chirish" title="O'chirish">${kuI("trash", 15)}</button></span></div>
-    <div class="ku-blk-b">${kuEd(b, i)}</div></section>`;
+    <div class="ku-blk-b">${kuAiInline(b)}${kuAiNote(b)}${kuEd(b, i)}</div></section>`;
 }
 function kuReblock(i) {
   const b = KU.blocks[i], el = document.querySelector(`#kuBlocks [data-bi="${i}"]`);
   if (!b || !el) return kuRenderBlocks();
   el.outerHTML = kuCard(b, i);
+  kuGrow(document.querySelector(`#kuBlocks [data-bi="${i}"]`));
 }
-function kuRenderBlocks() { const el = $("#kuBlocks"); if (el) el.innerHTML = kuBlocksHtml(); }
+function kuRenderBlocks() { const el = $("#kuBlocks"); if (el) { el.innerHTML = kuBlocksHtml(); kuGrow(el); } }
+/* ko'p qatorli sarlavhalar: <textarea data-grow> balandligi matnga qarab o'sadi; data-one — bir qatorli matn (Enter va yangi qator olib tashlanadi) */
+function kuGrow(root) { (root || document).querySelectorAll?.("textarea[data-grow]").forEach(t => { t.style.height = "auto"; t.style.height = (t.scrollHeight + 2) + "px"; }); if (root?.matches?.("textarea[data-grow]")) { root.style.height = "auto"; root.style.height = (root.scrollHeight + 2) + "px"; } }
+function kuOne(t) { if (t.matches?.("[data-one]") && /[\r\n]/.test(t.value)) { const p = t.selectionStart; t.value = t.value.replace(/\s*[\r\n]+\s*/g, " "); try { t.setSelectionRange(p, p); } catch (e) { /* jim */ } } }
+/* Rise: birinchi sarlavha dars nomini (muqovadagi) takrorlasa — muharrirda yig'iladi (ma'lumot o'chirilmaydi, o'quvchi pleyeriga ta'sir qilmaydi) */
+function kuDupHero(b, i) {
+  if (!kuRise() || i !== 0 || b.type !== "heading" || KU.lesson?.type === "quiz" || KU.dupShow?.[b.id]) return false;
+  const n = x => String(x || "").replace(/<[^>]*>/g, "").toLowerCase().replace(/[\s:.\-–—«»"'’ʻ`]+/g, " ").trim();
+  const h = n(b.data.text), t = n(KU.title);
+  return h.length >= 3 && t.length >= 3 && (h.includes(t) || t.includes(h));
+}
 
 /* ---------- blok muharrirlari (joyida tahrirlash) ---------- */
 const kuIn = (k, v, ph = "", cls = "", max = 300) => `<input class="ku-in ${cls}" data-k="${k}" value="${esc(v ?? "")}" placeholder="${esc(ph)}" maxlength="${max}" aria-label="${esc(ph)}">`;
+const kuHd = (k, v, ph, cls) => `<textarea class="ku-in ${cls} grow" data-k="${k}" data-grow data-one rows="1" placeholder="${esc(ph)}" maxlength="300" aria-label="${esc(ph)}">${esc(v ?? "")}</textarea>`;
 const kuTa = (k, v, ph = "", rows = 2, cls = "", max = 2000) => `<textarea class="ku-in ${cls}" data-k="${k}" rows="${rows}" placeholder="${esc(ph)}" maxlength="${max}" aria-label="${esc(ph)}">${esc(v ?? "")}</textarea>`;
 const kuRich = (k, h, ph = "Matn yozing…", cls = "") => `<div class="ku-rich ${cls}" contenteditable="true" role="textbox" aria-multiline="true" data-k="${k}" data-rich data-ph="${esc(ph)}" aria-label="${esc(ph)}">${h || ""}</div>`;
 const kuAsset = id => id ? `/api/kurs/assets/${id}` : "";
@@ -503,9 +592,9 @@ function kuEd(b, bi) {
   const d = b.data, t = b.type;
   d._bid = b.id;
   switch (t) {
-    case "heading": return kuIn("text", d.text, "Sarlavha", `h${d.level}`, 300);
+    case "heading": return kuHd("text", d.text, "Sarlavha", `h${d.level}`);
     case "paragraph": return kuRich("html", d.html);
-    case "heading_paragraph": return kuIn("heading", d.heading, "Sarlavha", "h3", 300) + kuRich("html", d.html);
+    case "heading_paragraph": return kuHd("heading", d.heading, "Sarlavha", "h3") + kuRich("html", d.html);
     case "quote": return `<div class="ku-quote ${d.style}">${kuTa("text", d.text, d.style === "impact" ? "Asosiy fikr" : "Iqtibos", 2, "", 1000)}${d.style === "quote" ? kuIn("cite", d.cite, "Muallif (ixtiyoriy)", "cite", 200) : ""}</div>`;
     case "list": return `<div class="ku-list ${d.style}">${d.items.map((h, i) => `<div class="ku-li"><span class="ku-mark">${d.style === "numbered" ? i + 1 + "." : d.style === "checkbox" ? "☐" : "•"}</span>${kuRich(`items.${i}`, h, "Band", "line")}${kuX("li-del", i)}</div>`).join("")}</div>${kuBtn("li-add", `${kuI("plus", 14)} Band qo'shish`)}`;
     case "table": {
@@ -516,7 +605,7 @@ function kuEd(b, bi) {
     }
     case "image": return `<div class="ku-img ${d.layout}">${kuImg("asset", d.asset, d.alt)}</div>${d.asset ? kuAlt("alt", d.alt) : ""}${kuIn("caption", d.caption, "Rasm osti yozuvi (ixtiyoriy)", "cap", 500)}`;
     case "image_text": return `<div class="ku-it ${d.side}"><div>${kuImg("asset", d.asset, d.alt)}${d.asset ? kuAlt("alt", d.alt) : ""}</div><div>${kuRich("html", d.html)}</div></div>`;
-    case "gallery": return `<div class="ku-gal">${d.items.map((x, i) => `<div class="ku-gi">${x.asset ? `<img src="${kuAsset(x.asset)}" alt="${esc(x.alt)}">` : `<div class="ku-drop sm">${kuI("image", 20)}</div>`}
+    case "gallery": return `<div class="ku-gal">${d.items.map((x, i) => `<div class="ku-gi ${x.alt ? "" : "noalt"}" tabindex="0" aria-label="${i + 1}-rasm">${x.asset ? `<img src="${kuAsset(x.asset)}" alt="${esc(x.alt)}">` : `<div class="ku-drop sm">${kuI("image", 20)}</div>`}
         ${kuIn(`items.${i}.alt`, x.alt, "Muqobil matn (alt)", x.alt ? "" : "warn", 300)}${kuIn(`items.${i}.caption`, x.caption, "Izoh", "", 300)}<div class="ku-acts tight">
         <button type="button" class="ku-ib sm" data-act="it-up" data-i="${i}" ${i ? "" : "disabled"} aria-label="Chapga">${kuI("up", 13)}</button>${kuX("it-del", i)}</div></div>`).join("")}</div>
         <div class="ku-acts">${kuBtn("gal-up", `${kuI("upload", 14)} Rasmlar yuklash`)}${kuBtn("gal-lib", `${kuI("image", 14)} Kutubxonadan`)}</div>`;
@@ -562,7 +651,8 @@ function kuEd(b, bi) {
         ${d.pairs.length < 12 ? kuBtn("pr-add", `${kuI("plus", 14)} Juft`) : ""}`;
     case "knowledge": case "question": return kuQEd(d);
     case "divider": return `<div class="ku-divp ${d.style}" role="separator"></div>`;
-    case "continue": return `<div class="ku-cont"><span class="ku-cont-btn" style="--acc:${esc(KU.course.accent)}">${kuIn("label", d.label, "Davom etish", "", 60)}</span>
+    case "continue": if (kuRise()) return `<div class="ku-cont"><span class="ku-cont-btn" style="--acc:${esc(KU.course.accent)}">${kuIn("label", d.label, "Tugma yozuvi (masalan: Davom etish)", "", 60)}</span></div>`;
+      return `<div class="ku-cont"><span class="ku-cont-btn" style="--acc:${esc(KU.course.accent)}">${kuIn("label", d.label, "Davom etish", "", 60)}</span>
         <label class="ku-f inline"><span>Talab</span><select class="ku-in sm" data-k="require"><option value="none" ${d.require === "none" ? "selected" : ""}>Faqat bosish</option><option value="interactions" ${d.require === "interactions" ? "selected" : ""}>Yuqoridagi mashqlar bajarilsin</option></select></label></div>
         <p class="ku-note">Talaba tugmani bosmaguncha darsning qolgan qismi ko'rinmaydi.</p>`;
     case "button": return `<div class="ku-btnb">${kuTa("text", d.text, "Tugma oldidagi matn (ixtiyoriy)", 2, "", 500)}<div class="ku-row">${kuIn("label", d.label, "Tugma yozuvi", "", 80)}${kuIn("url", d.url, "https://…", "", 1000)}</div></div>`;
@@ -585,6 +675,7 @@ function kuVal(el) {
 function kuBindCanvas() {
   const cv = $("#kuCanvas");
   const onField = e => {
+    if (e.target.matches?.("[data-grow]")) { kuOne(e.target); kuGrow(e.target); }
     const el = e.target.closest("[data-k]"), card = e.target.closest("[data-bi]");
     if (el && card && !el.closest("[data-q]")) {
       const bi = +card.dataset.bi, b = KU.blocks[bi]; if (!b) return;
@@ -617,7 +708,11 @@ function kuBindCanvas() {
     if (!a) return;
     kuAct(a, card ? +card.dataset.bi : -1, e);
   });
-  cv.addEventListener("keydown", e => { if ((e.key === "Enter" || e.key === " ") && e.target.matches(".ku-drop[data-act]")) { e.preventDefault(); e.target.click(); } });
+  cv.addEventListener("keydown", e => {
+    if ((e.key === "Enter" || e.key === " ") && e.target.matches(".ku-drop[data-act]")) { e.preventDefault(); e.target.click(); }
+    if (e.key === "Enter" && e.target.matches?.("[data-one]")) e.preventDefault();   /* sarlavha bir qatorli (ko'rinishda qatorga o'raladi) */
+  });
+  if (!window._kuGrowBound) { window._kuGrowBound = true; let rt = 0; window.addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => kuGrow($("#kuCanvas")), 120); }); }
   /* klaviatura bilan ko'chirish: blok (tutqich, asboblar paneli yoki blokning o'zi) fokusda — Alt+↑ / Alt+↓. Matn maydonlarida Alt+strelka
      tizimning o'z vazifasini bajaradi (kursorni ko'chirish), shuning uchun u yerda ushlanmaydi. Yangi o'rin aria-live orqali aytiladi. */
   cv.addEventListener("keydown", e => {
@@ -633,9 +728,36 @@ function kuBindCanvas() {
   cv.addEventListener("dragend", () => { drag = -1; cv.querySelectorAll(".drag,.over-t,.over-b").forEach(x => x.classList.remove("drag", "over-t", "over-b")); });
   cv.addEventListener("dragover", e => { const card = e.target.closest("[data-bi]"); if (drag < 0 || !card) return; e.preventDefault(); const r = card.getBoundingClientRect(), top = e.clientY < r.top + r.height / 2;
     cv.querySelectorAll(".over-t,.over-b").forEach(x => x.classList.remove("over-t", "over-b")); card.classList.add(top ? "over-t" : "over-b"); });
-  cv.addEventListener("drop", e => { const card = e.target.closest("[data-bi]"); if (drag < 0 || !card) return; e.preventDefault();
-    let to = +card.dataset.bi + (card.classList.contains("over-t") ? 0 : 1); const [b] = KU.blocks.splice(drag, 1); if (to > drag) to--; KU.blocks.splice(to, 0, b);
-    KU.sel = to; drag = -1; kuRenderBlocks(); kuRenderPanel(); kuDirty(); });
+  const dropAt = (from, card, top) => {
+    let to = +card.dataset.bi + (top ? 0 : 1); const [b] = KU.blocks.splice(from, 1); if (to > from) to--; KU.blocks.splice(to, 0, b);
+    KU.sel = to; kuRenderBlocks(); kuRenderPanel(); kuDirty(); kuSay(`Blok ${to + 1}-o'ringa ko'chirildi (jami ${KU.blocks.length} ta)`);
+  };
+  cv.addEventListener("drop", e => { const card = e.target.closest("[data-bi]"); if (drag < 0 || !card) return; e.preventDefault(); const from = drag; drag = -1; dropAt(from, card, card.classList.contains("over-t")); });
+  /* sensorli ekran: tutqichni uzoq bosib (~0,35 s) sudrash (pointer hodisalari). Ishonchli yo'l — blok asboblaridagi ↑ ↓ tugmalari */
+  let lp = null;
+  const lpClear = () => { if (lp) { clearTimeout(lp.t); lp.card.classList.remove("drag"); cv.querySelectorAll(".over-t,.over-b").forEach(x => x.classList.remove("over-t", "over-b")); lp.g.draggable = true; lp = null; } };
+  const lpTarget = e => { const el = document.elementFromPoint(e.clientX, e.clientY)?.closest?.("#kuBlocks [data-bi]"); return el && el !== lp.card ? el : null; };
+  cv.addEventListener("pointerdown", e => {
+    const g = e.pointerType !== "mouse" && e.target.closest(".ku-grip"), card = g && g.closest("[data-bi]"); if (!card) return;
+    lpClear(); g.draggable = false;
+    lp = {from: +card.dataset.bi, card, g, x: e.clientX, y: e.clientY, on: false, pid: e.pointerId};
+    lp.t = setTimeout(() => { if (!lp) return; lp.on = true; card.classList.add("drag"); try { g.setPointerCapture(lp.pid); } catch (x) { /* jim */ } try { navigator.vibrate?.(15); } catch (x) { /* jim */ } kuSay("Sudrash rejimi: barmoqni yuqori yoki pastga siljiting"); }, 350);
+  });
+  cv.addEventListener("pointermove", e => {
+    if (!lp || e.pointerId !== lp.pid) return;
+    if (!lp.on) { if (Math.hypot(e.clientX - lp.x, e.clientY - lp.y) > 12) lpClear(); return; }
+    e.preventDefault();
+    cv.querySelectorAll(".over-t,.over-b").forEach(x => x.classList.remove("over-t", "over-b"));
+    const t = lpTarget(e); if (t) { const r = t.getBoundingClientRect(); t.classList.add(e.clientY < r.top + r.height / 2 ? "over-t" : "over-b"); }
+    if (e.clientY < 90) window.scrollBy(0, -14); else if (e.clientY > innerHeight - 90) window.scrollBy(0, 14);
+  });
+  const lpEnd = e => {
+    if (!lp || e.pointerId !== lp.pid) return;
+    const was = lp, t = was.on && e.type === "pointerup" ? lpTarget(e) : null, top = t && e.clientY < t.getBoundingClientRect().top + t.getBoundingClientRect().height / 2;
+    lpClear(); if (t) dropAt(was.from, t, top);
+  };
+  cv.addEventListener("pointerup", lpEnd); cv.addEventListener("pointercancel", lpEnd);
+  cv.addEventListener("contextmenu", e => { if (e.target.closest(".ku-grip")) e.preventDefault(); });
 }
 function kuSelect(i, scroll = true) {
   const prev = document.querySelector("#kuBlocks .ku-blk.sel"); if (prev) prev.classList.remove("sel");
@@ -659,7 +781,13 @@ async function kuAct(a, bi, e) {
   const re = () => { kuReblock(bi); kuDirty(); };
   switch (act) {
     case "ins": return KU.lesson.type === "quiz" ? kuInsert("question", +a.dataset.at) : kuLibrary(+a.dataset.at);
+    case "qins": case "qlib": { const at = KU.sel >= 0 ? KU.sel + 1 : KU.blocks.length; return act === "qlib" ? kuLibrary(at) : kuInsert(a.dataset.t, at); }
     case "tb": return kuTestbank();
+    case "ai": return kuAiOpen({bi});
+    case "qai": return kuAiOpen({at: a.dataset.at != null ? +a.dataset.at : KU.sel >= 0 ? KU.sel + 1 : KU.blocks.length});
+    case "ai-x": delete KU.aiMark?.[b.id]; return kuReblock(bi);
+    case "ai-undo": { const m = KU.aiMark?.[b.id]; if (m?.prev) { b.data = m.prev; delete KU.aiMark[b.id]; re(); kuSay("AI o'zgartirishi bekor qilindi"); } return; }
+    case "dup-show": KU.dupShow = KU.dupShow || {}; KU.dupShow[b.id] = true; kuSelect(bi, false); kuReblock(bi); document.querySelector(`#kuBlocks [data-bi="${bi}"] textarea`)?.focus(); return;
     case "up": case "down": kuMoveBlock(bi, act === "up" ? -1 : 1, `[data-act="${act}"]:not([disabled])`); return;
     case "dup": { const c = kuClone({type: b.type, data: b.data}); KU.blocks.splice(bi + 1, 0, {id: kuUid(), ...c, issues: b.issues}); KU.sel = bi + 1; kuRenderBlocks(); kuRenderPanel(); kuDirty(); toast("Blokdan nusxa olindi"); return; }
     case "del": return kuDelete(bi);
@@ -674,6 +802,7 @@ async function kuAct(a, bi, e) {
       d.kind = k; return re();
     }
     case "corr": {
+      delete KU.aiMark?.[b.id];
       if (d.kind === "multiple") d.answers[i].correct = a.checked;
       else d.answers.forEach((x, j) => x.correct = j === i);
       return re();
@@ -822,18 +951,146 @@ function kuDelete(bi) {
   };
 }
 
+/* ---------- «AI bilan tahrirlash»: savol bloklari (Rise'dagi «Edit with AI» kabi) ---------- */
+/* Word'dan nusxa (✅ — to'g'ri javob) → server avval ✅ ni o'zi tahlil qiladi, so'ng AI tozalaydi, har variantga izoh yozadi (app/kurs_ai.py).
+   Natija bazaga yozilmaydi — avval ko'rsatiladi; «Bloknu almashtirish» bosilgandagina blok o'zgaradi (keyin oddiy avtosaqlash). */
+const kuAiOk = b => !!(KU.meta?.caps?.ai && KU.course?.caps?.write && (b.type === "knowledge" || b.type === "question"));
+/* telefonda blok asboblari qatori to'lib ketadi — shu yerda AI tugmasi blok ichida (CSS: faqat ≤ 520 px) */
+const kuAiInline = b => kuAiOk(b) ? `<div class="ku-ai-inl"><button type="button" class="btn sm ghost" data-act="ai">${ico("spark", 15)} AI bilan tahrirlash</button></div>` : "";
+function kuAiNote(b) {
+  const m = KU.aiMark?.[b.id]; if (!m) return "";
+  const why = !m.ai ? "✅ belgilaridan tuzildi, izohlarsiz." : m.guessed ? "Savolda ✅ yo'q edi — AI to'g'ri javobni o'zi tanladi." : "";
+  return `<div class="ku-ainote ${m.guessed || !m.ai ? "warn" : ""}" role="status">${ico("spark", 14)}<span><b>AI tuzdi — to'g'ri javobni tekshiring.</b>${why ? ` ${esc(why)}` : ""} Kerak bo'lsa belgini boshqa variantga o'tkazing.</span>
+    ${m.prev ? `<button type="button" class="btn sm ghost" data-act="ai-undo">Avvalgisini qaytarish</button>` : ""}<button type="button" class="ku-ib sm" data-act="ai-x" aria-label="Eslatmani yopish" title="Yopish">${ico("x", 14)}</button></div>`;
+}
+function kuAiSeed(b) {
+  const d = b?.data || {};
+  if (d.kind === "fill") return (d.question || (d.accept || []).some(Boolean)) ? `${d.question || ""}\nJavob: ${(d.accept || []).filter(Boolean).join(" / ")}`.trim() : "";
+  if (!d.question && !(d.answers || []).some(a => a.text)) return "";
+  return [d.question || "", ...(d.answers || []).map((a, i) => `${String.fromCharCode(65 + i)}) ${a.text || ""}${a.correct ? " ✅" : ""}`)].join("\n");
+}
+function kuAiPreview(r) {
+  const d = r.block.data, L = i => String.fromCharCode(65 + i), K = KU.meta.q_kinds || {};
+  const notes = [];
+  if (r.detail) notes.push(["bad", r.detail]);
+  if (r.ai && r.answer_guessed) notes.push(["warn", "Savolda ✅ yo'q edi — AI to'g'ri javobni o'zi tanladi. Almashtirishdan oldin tekshiring."]);
+  if (r.answer_missing) notes.push(["warn", "To'g'ri javob aniqlanmadi — almashtirgandan keyin blokda belgilang."]);
+  (r.warnings || []).forEach(w => notes.push(["warn", w]));
+  const body = d.kind === "fill"
+    ? `<div class="ku-aip-acc">${(d.accept || []).map(a => `<span class="ku-chip ok">${ico("check", 12)} ${esc(a)}</span>`).join("")}</div>`
+    : `<ol class="ku-aip-opts">${(d.answers || []).map((a, i) => `<li class="${a.correct ? "ok" : ""}"><span class="l" aria-hidden="true">${L(i)}</span><div><b>${esc(a.text)}</b>${a.correct ? `<span class="ku-chip ok">${ico("check", 12)} To'g'ri javob</span>` : ""}
+      ${a.feedback ? `<p>${esc(a.feedback)}</p>` : ""}</div></li>`).join("")}</ol>`;
+  return `${notes.map(([c, t]) => `<div class="ku-aip-n ${c}" role="${c === "bad" ? "alert" : "status"}">${ico(c === "bad" ? "alert" : "spark", 14)}<span>${esc(t)}</span></div>`).join("")}
+    <div class="ku-aip"><div class="ku-aip-h"><span class="ku-chip info">${esc(K[d.kind] || d.kind)}</span>${r.ai ? "" : `<span class="ku-chip">AI'siz (✅ dan)</span>`}</div>
+    <p class="ku-aip-q">${esc(d.question)}</p>${body}
+    ${d.feedback_correct || d.feedback_wrong ? `<div class="ku-aip-fb">${d.feedback_correct ? `<p><b>To'g'ri javobda:</b> ${esc(d.feedback_correct)}</p>` : ""}${d.feedback_wrong ? `<p><b>Noto'g'ri javobda:</b> ${esc(d.feedback_wrong)}</p>` : ""}</div>` : ""}</div>`;
+}
+function kuAiOpen({bi = -1, at = -1}) {
+  const old = bi >= 0 ? KU.blocks[bi] : null, quiz = KU.lesson.type === "quiz", btype = old ? old.type : quiz ? "question" : "knowledge", oldId = old?.id;
+  if (!KU.meta.blocks[btype]) return;
+  const st = {res: null, busy: false, seq: 0}, kinds = {auto: "Avto (AI o'zi aniqlaydi)", single: "Bitta javob", multi: "Bir nechta javob", tf: "To'g'ri / noto'g'ri", fill: "Bo'sh joyni to'ldirish"};
+  const bg = kuModal(old ? "AI bilan tahrirlash" : "AI bilan savol", `<div class="ku-ai">
+    <div class="ku-ai-in"><label class="ku-f"><span>Savolni shu yerga qo'ying (Word'dan nusxa — ✅ to'g'ri javobni bildiradi) yoki AI'ga ko'rsatma yozing</span>
+      <textarea class="ku-in" id="kuAiT" rows="8" maxlength="6000" autofocus placeholder="1. Startap qanday kompaniya?&#10;A) Davlat korxonasi&#10;B) Tez o'sishga yo'naltirilgan yangi kompaniya ✅&#10;C) Xolding bo'linmasi">${esc(old ? kuAiSeed(old) : "")}</textarea></label>
+      <div class="ku-ai-opts"><label class="ku-f"><span>Savol turi</span><select class="ku-in" id="kuAiK">${Object.entries(kinds).map(([k, t]) => `<option value="${k}">${esc(t)}</option>`).join("")}</select></label>
+        <label class="ku-f"><span>Ko'rsatma (ixtiyoriy)</span><input class="ku-in" id="kuAiH" maxlength="500" placeholder="Masalan: savolni soddaroq yoz"></label></div>
+      <div class="ku-acts"><button type="button" class="btn primary" id="kuAiGo">${ico("spark", 15)} AI bilan tuzish</button><button type="button" class="btn ghost" id="kuAiRe" hidden>Qayta urinish</button></div>
+      <p class="ku-note">AI savol va variantlarni tozalaydi, har variantga izoh yozadi. ✅ bilan belgilangan to'g'ri javobni o'zgartirmaydi. Matndagi fakt AI tomonidan o'ylab topilmaydi — baribir tekshirib chiqing.</p></div>
+    <div class="ku-ai-out" id="kuAiPv" aria-live="polite"><p class="ku-note">Natija shu yerda ko'rinadi.</p></div></div>`,
+    {wide: true, cls: "ai", okText: old ? "Bloknu almashtirish" : "Blokni qo'shish", onOk: () => {
+      if (!st.res?.block) return false;
+      const data = kuClone(st.res.block.data), prev = old ? KU.blocks.findIndex(x => x.id === oldId) : -1;
+      if (old && prev < 0) { toast("Blok topilmadi (o'chirilgan bo'lishi mumkin)"); return true; }
+      const mark = {guessed: !!st.res.answer_guessed || !!st.res.answer_missing, ai: !!st.res.ai};
+      if (old) {
+        const b = KU.blocks[prev]; if (b.type === "knowledge") data.retry = b.data.retry !== false;
+        mark.prev = kuClone(b.data); b.data = data; KU.aiMark = KU.aiMark || {}; KU.aiMark[b.id] = mark;
+        KU.sel = prev; kuReblock(prev); kuRenderPanel(); kuDirty();
+        document.querySelector(`#kuBlocks [data-bi="${prev}"] .ku-ainote`)?.scrollIntoView({block: "center", behavior: "smooth"});
+      } else {
+        const id = kuUid(), pos = Math.max(0, Math.min(at < 0 ? KU.blocks.length : at, KU.blocks.length));
+        if (btype === "knowledge") data.retry = true;
+        KU.blocks.splice(pos, 0, {id, type: btype, data, issues: []}); KU.aiMark = KU.aiMark || {}; KU.aiMark[id] = mark;
+        KU.sel = pos; kuRenderBlocks(); kuRenderPanel(); kuDirty();
+        document.querySelector(`#kuBlocks [data-bi="${pos}"] .ku-ainote`)?.scrollIntoView({block: "center", behavior: "smooth"});
+      }
+      kuSay("AI savolni tuzdi — to'g'ri javobni tekshiring");
+      toast("Blok AI tuzgan savol bilan almashtirildi — to'g'ri javobni tekshiring");
+      return true;
+    }});
+  const ok = bg.querySelector("[data-ok]"), go = bg.querySelector("#kuAiGo"), re = bg.querySelector("#kuAiRe"), pv = bg.querySelector("#kuAiPv"), T = bg.querySelector("#kuAiT");
+  ok.disabled = true;
+  const run = async () => {
+    const text = T.value.trim(), hint = bg.querySelector("#kuAiH").value.trim(), qtype = bg.querySelector("#kuAiK").value;
+    if (text.length < 5 && !hint) { pv.innerHTML = `<div class="ku-aip-n bad" role="alert">${ico("alert", 14)}<span>Savol matnini yoki AI uchun ko'rsatmani kiriting.</span></div>`; T.focus(); return; }
+    const my = ++st.seq; st.busy = true; st.res = null; go.disabled = re.disabled = ok.disabled = true;
+    pv.innerHTML = `<p class="ku-note ku-ai-wait"><span class="ku-spin" aria-hidden="true"></span> AI savolni tuzmoqda…</p>`;
+    let r = null;
+    try { r = await kuFetch(`/api/kurs/lessons/${KU.lid}/ai-question`, {text, hint, qtype, btype}); } catch (e) { r = null; }
+    if (my !== st.seq || !bg.isConnected) return;
+    st.busy = false; go.disabled = re.disabled = false; re.hidden = false; go.focus({preventScroll: true});   /* fokus oynada qolsin (Esc ishlaydi) */
+    if (!r) { pv.innerHTML = `<div class="ku-aip-n bad" role="alert">${ico("alert", 14)}<span>Aloqa xatosi — qayta urinib ko'ring.</span></div>`; return; }
+    if (r.data?.block) { st.res = {...r.data, detail: r.ok ? "" : r.data.detail}; pv.innerHTML = kuAiPreview(st.res); ok.disabled = false; ok.focus({preventScroll: true});
+      if (innerWidth <= 820) pv.scrollIntoView({block: "start", behavior: "smooth"}); return; }
+    pv.innerHTML = `<div class="ku-aip-n bad" role="alert">${ico("alert", 14)}<span>${esc(kuErr(r.data))}</span></div>`;
+  };
+  go.onclick = run; re.onclick = run;
+  T.addEventListener("keydown", e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); run(); } });
+}
+
 /* ---------- blok kutubxonasi ---------- */
-const KU_GLYPH = {heading: "H", paragraph: "¶", heading_paragraph: "H¶", quote: "❝", list: "≡", table: "▦", image: "▣", image_text: "▣¶", gallery: "▤", video: "▶", audio: "♪",
-  attachment: "⇩", labeled_graphic: "◎", accordion: "☰", tabs: "⊟", flashcards: "⧉", process: "→", timeline: "⋯", sorting: "⇄", matching: "⇆", knowledge: "?", divider: "—", continue: "▼", button: "↗"};
+/* Blok eskizlari: oddiy sxematik chizmalar (inline SVG, tashqi fayl yo'q); binafsha — urg'u, kulrang — matn chiziqlari */
+const kuSvg = body => `<svg viewBox="0 0 96 60" aria-hidden="true" focusable="false">${body}</svg>`;
+const kuR = (x, y, w, h, c = "l", rx = 2) => `<rect class="${c}" x="${x}" y="${y}" width="${w}" height="${h}" rx="${rx}"/>`;
+const kuLn = (x, y, w, n = 3, g = 7, c = "l") => Array.from({length: n}, (_, i) => kuR(x, y + i * g, i === n - 1 ? Math.round(w * .6) : w, 3, c, 1.5)).join("");
+const kuCr = (cx, cy, r, c = "a") => `<circle class="${c}" cx="${cx}" cy="${cy}" r="${r}"/>`;
+const kuMtn = (x, y, w, h) => `${kuR(x, y, w, h, "p", 3)}<path class="l" d="M${x} ${y + h - 3}l${w * .28} -${h * .42}l${w * .2} ${h * .22}l${w * .22} -${h * .34}l${w * .3} ${h * .54}z"/>${kuCr(x + w * .78, y + h * .26, 3.2)}`;
+const KU_THUMB = {
+  heading: () => kuR(10, 16, 58, 9, "a", 2) + kuLn(10, 33, 76, 2, 7),
+  paragraph: () => kuLn(10, 12, 76, 5, 8),
+  heading_paragraph: () => kuR(10, 11, 42, 7, "a", 2) + kuLn(10, 26, 76, 4, 8),
+  quote: () => kuR(10, 12, 3, 36, "a", 1.5) + `<text class="at" x="18" y="30" font-size="26" font-weight="800">“</text>` + kuLn(34, 22, 52, 3, 8),
+  list: () => [0, 1, 2].map(i => kuCr(14, 16 + i * 14, 3) + kuR(24, 14.5 + i * 14, i === 1 ? 50 : 62, 3, "l", 1.5)).join(""),
+  table: () => kuR(10, 10, 76, 9, "a", 2) + [0, 1, 2].map(r => [0, 1, 2].map(c => kuR(10 + c * 26, 21 + r * 11, 24, 9, "p", 1.5)).join("")).join(""),
+  image: () => kuMtn(14, 8, 68, 44),
+  image_text: () => kuMtn(8, 10, 38, 40) + kuLn(52, 14, 36, 4, 8),
+  gallery: () => kuMtn(10, 8, 36, 20) + kuMtn(50, 8, 36, 20) + kuMtn(10, 32, 36, 20) + kuMtn(50, 32, 36, 20),
+  video: () => kuR(10, 8, 76, 44, "p", 4) + kuCr(48, 30, 11) + `<path class="w" d="M44 24l11 6-11 6z"/>`,
+  audio: () => [8, 16, 26, 14, 30, 20, 10, 24, 16, 8].map((h, i) => kuR(14 + i * 7.4, 30 - h / 2, 4, h, i % 3 ? "l" : "a", 2)).join(""),
+  attachment: () => `<path class="p" d="M30 8h24l12 12v32H30z"/><path class="l" d="M54 8v12h12z"/>` + kuLn(36, 28, 24, 2, 7) + kuCr(70, 44, 8) + `<path class="w" d="M70 39v8m-3.5-3.5L70 47l3.5-3.5" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/>`,
+  labeled_graphic: () => kuMtn(12, 8, 72, 44) + kuCr(34, 28, 6) + kuCr(60, 22, 6) + kuCr(70, 40, 6) + `<text class="wt" x="34" y="31" font-size="8" text-anchor="middle" font-weight="800">1</text><text class="wt" x="60" y="25" font-size="8" text-anchor="middle" font-weight="800">2</text><text class="wt" x="70" y="43" font-size="8" text-anchor="middle" font-weight="800">3</text>`,
+  accordion: () => kuR(10, 8, 76, 10, "a", 2) + kuLn(14, 22, 68, 2, 6) + kuR(10, 36, 76, 8, "p", 2) + kuR(10, 47, 76, 8, "p", 2),
+  tabs: () => kuR(10, 8, 24, 9, "a", 3) + kuR(36, 8, 24, 9, "p", 3) + kuR(62, 8, 24, 9, "p", 3) + kuR(10, 20, 76, 32, "p", 3) + kuLn(16, 27, 64, 3, 8),
+  flashcards: () => kuR(24, 8, 60, 38, "p", 4) + kuR(12, 15, 60, 38, "a", 4) + kuR(22, 28, 36, 3, "w", 1.5) + kuR(22, 36, 24, 3, "w", 1.5),
+  process: () => `<path class="l" d="M20 30h56" stroke="#cfc4d9" stroke-width="3"/>` + [20, 48, 76].map((x, i) => kuCr(x, 30, 9) + `<text class="wt" x="${x}" y="34" font-size="10" text-anchor="middle" font-weight="800">${i + 1}</text>`).join(""),
+  timeline: () => kuR(26, 8, 2.5, 44, "l", 1) + [0, 1, 2].map(i => kuCr(27, 14 + i * 16, 4) + kuR(36, 12 + i * 16, 40, 3, "l", 1.5) + kuR(36, 18 + i * 16, 26, 3, "p", 1.5) + kuR(8, 12.5 + i * 16, 12, 3, "p", 1.5)).join(""),
+  sorting: () => kuR(8, 8, 38, 10, "a", 2) + kuR(50, 8, 38, 10, "a", 2) + kuR(8, 22, 38, 30, "p", 3) + kuR(50, 22, 38, 30, "p", 3) + kuR(12, 27, 30, 6, "l", 3) + kuR(12, 37, 22, 6, "l", 3) + kuR(54, 27, 30, 6, "l", 3),
+  matching: () => [0, 1, 2].map(i => kuR(8, 9 + i * 15, 30, 10, "p", 2) + kuR(58, 9 + i * 15, 30, 10, "p", 2)).join("") + `<path d="M38 14L58 29M38 29L58 44M38 44L58 14" stroke="#7837a8" stroke-width="1.8" fill="none"/>`,
+  knowledge: () => kuR(10, 8, 60, 4, "l", 2) + [0, 1, 2].map(i => kuCr(15, 22 + i * 12, 3.5, i === 1 ? "a" : "l") + kuR(24, 20.5 + i * 12, i === 1 ? 52 : 44, 3, i === 1 ? "p" : "l", 1.5)).join(""),
+  divider: () => kuR(10, 29, 76, 2.5, "l", 1) + kuCr(48, 30, 3.5),
+  continue: () => kuR(8, 21, 80, 18, "a", 2) + kuR(30, 28.5, 36, 3, "w", 1.5),
+  button: () => kuR(22, 20, 52, 20, "a", 10) + kuR(34, 28.5, 28, 3, "w", 1.5),
+};
+KU_THUMB.question = KU_THUMB.knowledge;
+const KU_LIB_GROUPS = [["Matn", ["heading", "paragraph", "heading_paragraph", "quote", "list", "table"]],
+  ["Rasm va video", ["image", "image_text", "gallery", "video", "audio", "attachment", "labeled_graphic"]],
+  ["Mashq va interaktiv", ["knowledge", "matching", "sorting", "flashcards", "accordion", "tabs", "process", "timeline"]],
+  ["Boshqaruv", ["continue", "divider", "button"]]];
 function kuLibrary(at) {
-  const M = KU.meta, cats = M.categories;
-  const tiles = t => `<button type="button" class="ku-tile" data-t="${t}"><span class="g">${KU_GLYPH[t] || "□"}</span><b>${esc(M.blocks[t].label)}</b><small>${esc(M.blocks[t].desc)}</small></button>`;
+  const M = KU.meta, avail = M.lesson_blocks.filter(t => M.blocks[t]);
+  const tile = t => `<button type="button" class="ku-tile" data-t="${t}"><span class="th" aria-hidden="true">${KU_THUMB[t] ? kuSvg(KU_THUMB[t]()) : ""}</span><b>${esc(M.blocks[t].label)}</b><small>${esc(M.blocks[t].desc)}</small></button>`;
+  const used = new Set(KU_LIB_GROUPS.flatMap(([, l]) => l)), rest = avail.filter(t => !used.has(t));
+  const groups = KU_LIB_GROUPS.map(([n, l]) => [n, l.filter(t => avail.includes(t))]).concat(rest.length ? [["Boshqa", rest]] : []).filter(([, l]) => l.length);
   const bg = kuModal("Blok qo'shish", `<label class="ku-search wide">${ico("search", 16)}<input type="search" id="kuLibQ" placeholder="Blok nomi" aria-label="Blok qidirish" autofocus></label>
-    <div id="kuLib">${Object.entries(cats).map(([c, title]) => `<section data-cat="${c}"><h4>${esc(title)}</h4><div class="ku-tiles">${M.lesson_blocks.filter(t => M.blocks[t].cat === c).map(tiles).join("")}</div></section>`).join("")}</div>`, {wide: true, cls: "lib"});
+    <div id="kuLib">${groups.map(([n, l]) => `<section data-cat="${esc(n)}"><h4>${esc(n)}</h4><div class="ku-tiles">${l.map(tile).join("")}</div></section>`).join("")}</div>`, {wide: true, cls: "lib"});
   bg.querySelector("#kuLibQ").oninput = e => { const q = e.target.value.toLowerCase().trim();
     bg.querySelectorAll(".ku-tile").forEach(t => t.hidden = !!q && !(t.textContent.toLowerCase().includes(q)));
     bg.querySelectorAll("#kuLib section").forEach(s => s.hidden = ![...s.querySelectorAll(".ku-tile")].some(t => !t.hidden)); };
-  bg.querySelectorAll(".ku-tile").forEach(t => t.onclick = () => { bg._close(); kuInsert(t.dataset.t, at); });
+  if (M.caps.ai && M.blocks.knowledge) {
+    const g = bg.querySelector('#kuLib section[data-cat="Mashq va interaktiv"] .ku-tiles');
+    g?.insertAdjacentHTML("afterbegin", `<button type="button" class="ku-tile ai" data-ai="1"><span class="th" aria-hidden="true">${kuSvg(KU_THUMB.knowledge())}</span><b>${ico("spark", 14)} AI bilan savol</b><small>Word'dan nusxa — AI savol va izohlarni tuzadi</small></button>`);
+  }
+  bg.querySelectorAll(".ku-tile").forEach(t => t.onclick = () => { bg._close(); t.dataset.ai ? kuAiOpen({at}) : kuInsert(t.dataset.t, at); });
 }
 
 /* ---------- rasm tanlash: kurs kutubxonasi + yuklash ---------- */
@@ -901,8 +1158,8 @@ function kuPanelFields(t, d) {
     case "knowledge": return kuSel("kind", d.kind, KU.meta.q_kinds, "Savol turi") + kuChk("retry", d.retry, "Qayta urinishga ruxsat");
     case "question": return kuSel("kind", d.kind, KU.meta.q_kinds, "Savol turi");
     case "divider": return kuSel("style", d.style, {line: "Chiziq", dots: "Nuqtalar", space: "Bo'sh joy"}, "Ko'rinish");
-    case "continue": return kuSel("require", d.require, {none: "Faqat bosish", interactions: "Yuqoridagi mashqlar bajarilsin"}, "Talab") +
-      `<label class="ku-f"><span>Eslatma (tugma bloklanganda)</span>${kuIn("hint", d.hint, KU.meta.labels.complete_hint, "", 200)}</label>`;
+    case "continue": return kuSel("require", d.require, {none: "Tugmani bosish kifoya", interactions: "Avval yuqoridagi mashqlar bajarilsin"}, "Tugma qachon ochiladi") +
+      `<p class="ku-note">Tugmani bosmaguncha keyingi qism yopiq turadi.</p><label class="ku-f"><span>Eslatma (tugma bloklanganda)</span>${kuIn("hint", d.hint, KU.meta.labels.complete_hint, "", 200)}</label>`;
   }
   return "";
 }
@@ -996,14 +1253,18 @@ window.addEventListener("beforeunload", e => { if ((KU.dirty || KU.saving) && KU
 /* ---------- ko'rish (kompyuter / planshet / telefon) ---------- */
 async function kuPreview() {
   await kuFlush();
-  const bg = kuModal("Ko'rish", `<div class="ku-pvbar"><div class="ku-seg sm" role="group" aria-label="Ekran kengligi">
-      <button type="button" class="on" data-w="100%">${ico("monitor", 15)} Kompyuter</button><button type="button" data-w="768px">${kuI("tablet", 15)} Planshet</button><button type="button" data-w="390px">${kuI("phone2", 15)} Telefon</button></div>
+  const DEV = [["desktop", "1280px", ico("monitor", 15), "Kompyuter", "1280"], ["tablet", "768px", kuI("tablet", 15), "Planshet", "768"], ["phone", "390px", kuI("phone2", 15), "Telefon", "390"]];
+  const bg = kuModal("Ko'rish", `<div class="ku-pvbar"><div class="ku-seg sm" role="group" aria-label="Qurilma: ekran kengligi">
+      ${DEV.map(([k, w, ic, t, px], i) => `<button type="button" class="${i ? "" : "on"}" data-dev="${k}" data-w="${w}" aria-pressed="${i ? "false" : "true"}">${ic} ${t} <small>${px}</small></button>`).join("")}</div>
       <span class="ku-note" style="margin:0">Joriy (saqlangan) holat · o'zgarishlar avtomatik yangilanadi · natija saqlanmaydi</span>
       <button type="button" class="btn sm ghost" id="kuPvR">${ico("refresh", 15)} Yangilash</button><a class="btn sm ghost" id="kuPvO" target="_blank" rel="noopener">Yangi oynada</a></div>
-    <div class="ku-pvw"><iframe id="kuPvF" title="Kursni ko'rish" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms" referrerpolicy="no-referrer"
-      allow="fullscreen; encrypted-media; picture-in-picture" allowfullscreen></iframe></div>`, {wide: true, cls: "pv", onClose: () => { KU.pv = null; }});
+    <div class="ku-pvw" data-dev="desktop"><div class="ku-dev"><iframe id="kuPvF" title="Kursni ko'rish" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms" referrerpolicy="no-referrer"
+      allow="fullscreen; encrypted-media; picture-in-picture" allowfullscreen style="width:1280px"></iframe></div></div>`, {wide: true, cls: "kupv", onClose: () => { KU.pv = null; }});
   KU.pv = {bg, url: null};
-  bg.querySelectorAll("[data-w]").forEach(b => b.onclick = () => { bg.querySelectorAll("[data-w]").forEach(x => x.classList.toggle("on", x === b)); bg.querySelector("#kuPvF").style.width = b.dataset.w; });
+  bg.querySelectorAll("[data-w]").forEach(b => b.onclick = () => {
+    bg.querySelectorAll("[data-w]").forEach(x => { x.classList.toggle("on", x === b); x.setAttribute("aria-pressed", String(x === b)); });
+    bg.querySelector(".ku-pvw").dataset.dev = b.dataset.dev; bg.querySelector("#kuPvF").style.width = b.dataset.w;
+  });
   bg.querySelector("#kuPvR").onclick = () => kuPvLoad();
   kuPvLoad();
 }
@@ -1139,25 +1400,48 @@ async function kuQuality() {
 }
 
 /* ---------- eksport ---------- */
+/* «Tayyor» (Rise ko'rinishidagi yagona asosiy tugma): qadamlar ketma-ket raqamlanadi — tekshiruv → NEXTID uchun eksport → ko'rib chiqishga yuborish /
+   tasdiqlash (rolga qarab bittasi yoki ikkalasi) */
+async function kuPublish() {
+  await kuFlush();
+  const iss = KU.blocks.flatMap(b => b.issues || []), bad = iss.filter(x => x.level === "xato").length, warn = iss.length - bad;
+  const co = KU.course, c = co.caps;
+  let n = 0;
+  const step = (cls, title, sub, btn) => `<li class="${cls}"><b>${++n}. ${title}</b><span>${sub}</span>${btn}</li>`;
+  const bg = kuModal("Tayyor — keyingi qadamlar", `<ol class="kx-pub">
+      ${step(bad ? "bad" : "ok", "Tekshiruv", `${bad ? `${bad} ta blokda xato — avval tuzating (blokdagi qizil belgi)` : "Bloklarda xato yo'q"}${warn ? ` · ${warn} ta ogohlantirish` : ""}`,
+        `<button type="button" class="btn sm ghost" data-p="ql">Sifat hisoboti</button>`)}
+      ${step("", "NEXTID uchun fayl", "xAPI .zip → my.isft.uz → fan → «Articulate» → yangi dars", `<button type="button" class="btn sm primary" data-p="ex">${kuI("download", 15)} Eksport</button>`)}
+      ${c.submit ? step("", "Ko'rib chiqishga yuborish", "Bo'lim tekshirib tasdiqlaydi", `<button type="button" class="btn sm" data-p="sub">Yuborish</button>`) : ""}
+      ${c.approve && co.status !== "tasdiqlangan" ? step("", "Tasdiqlash", "Tasdiqlangan versiya «Versiyalar»da saqlanadi", `<button type="button" class="btn sm" data-p="app">Tasdiqlash</button>`) : ""}</ol>`);
+  bg.querySelectorAll("[data-p]").forEach(b => b.onclick = () => { const p = b.dataset.p; bg._close();
+    if (p === "ql") kuQuality(); else if (p === "ex") kuExport(); else if (p === "sub") KU.act?.("submit"); else if (p === "app") KU.act?.("approve"); });
+}
 async function kuExport() {
   await kuFlush();
   const co = KU.course, iss = await kuApi(`/api/kurs/courses/${KU.cid}/issues`);
   const bg = kuModal("Eksport", `${iss.errors.length ? `<div class="ku-warn bad">${ico("alert", 15)}<div><b>Eksportdan oldin ${iss.errors.length} ta xatoni tuzating:</b><ul>${iss.errors.slice(0, 12).map(x => `<li>${esc(x)}</li>`).join("")}</ul></div></div>` : ""}
-    <div class="ku-modes" role="radiogroup" aria-label="Eksport turi">${Object.entries(KU_MODE).map(([k, t]) => `<label class="ku-mode"><input type="radio" name="kuMd" value="${k}" ${co.settings.mode === k ? "checked" : ""}><span><b>${esc(t)}</b><small>${esc(KU.meta.modes[k])}</small></span></label>`).join("")}</div>
+    <p class="ku-note">Format: <b>NEXTID uchun — xAPI</b> (my.isft.uz → «Articulate»).</p>
     ${iss.warnings.length ? `<details class="ku-det"><summary>${iss.warnings.length} ta ogohlantirish (eksportga to'sqinlik qilmaydi)</summary><ul class="ku-isslist">${iss.warnings.slice(0, 50).map(x => `<li class="warn">${esc(x)}</li>`).join("")}</ul></details>` : ""}
-    <div id="kuExR"></div>
+    <div id="kuExR" style="min-height:76px"></div>   <!-- natija chiqqanda modal sakramasin: tugma o'rnida qoladi -->
     ${co.exports.length ? `<h4>Oxirgi eksportlar</h4><div class="ku-vers">${co.exports.map(e => `<div class="ku-ver"><div><b>${esc(KU_MODE[e.mode] || e.mode)}</b> ${e.validation.ok ? kuChip("tekshiruvdan o'tdi", "ok") : kuChip("xato", "bad")}<div class="muted">${kuD(e.ts)} · ${esc(e.user_name || "")} · ${kuSize(e.size)}</div></div>
       <a class="btn sm ghost" href="/api/kurs/exports/${e.id}/download">${kuI("download", 14)} Yuklab olish</a></div>`).join("")}</div>` : ""}
     <ol class="ku-steps"><li>NEXTID (my.isft.uz) → fan → <b>«Articulate»</b> yorlig'i → yangi dars → yuklab olingan .zip faylni tanlang.</li><li>Faylni ochmang va ichini o'zgartirmang.</li></ol>`,
     {wide: true, okText: "Eksport qilish", onOk: async bg => {
-      const mode = bg.querySelector("[name=kuMd]:checked")?.value || "xapi";
+      const mode = "xapi";
       const out = bg.querySelector("#kuExR"); out.innerHTML = `<p class="ku-note">Paket yig'ilmoqda…</p>`;
       const r = await kuApi(`/api/kurs/courses/${KU.cid}/export`, {mode});
       if (!r) { out.innerHTML = ""; return false; }
       out.innerHTML = `<div class="ku-warn ${r.validation.ok ? "ok" : "bad"}">${ico(r.validation.ok ? "check" : "alert", 15)}<div><b>${r.validation.ok ? "Paket tayyor va tekshiruvdan o'tdi" : "Paket tekshiruvdan o'tmadi"}</b>
         <div class="muted">${esc(r.filename)} · ${kuSize(r.size)} · ${r.validation.files} ta fayl</div>${r.validation.errors.length ? `<ul>${r.validation.errors.slice(0, 8).map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}</div>
-        <a class="btn sm primary" href="${esc(r.download)}">${kuI("download", 14)} Yuklab olish (.zip)</a></div>`;
+        </div>`;
       KU.course = await kuApi(`/api/kurs/courses/${KU.cid}`);
+      const okB = bg.querySelector("[data-ok]");
+      if (okB && r.validation.ok) {   // «Eksport qilish» tugmasi o'sha joyning o'zida «Yuklab olish» ga aylanadi
+        const dl = document.createElement("a"); dl.className = "btn primary"; dl.id = "kuDl"; dl.href = r.download; dl.setAttribute("download", r.filename || "");
+        dl.innerHTML = `${kuI("download", 15)} Yuklab olish (.zip)`;
+        okB.replaceWith(dl); const cb = bg.querySelector(".ku-acts [data-x]"); if (cb) cb.textContent = "Yopish"; dl.focus();
+      }
       return false;
     }});
   if (iss.errors.length) bg.querySelector("[data-ok]").disabled = true;
@@ -1173,7 +1457,7 @@ async function kuExport() {
     if (v !== "kurs") { $("#kuPanel")?.classList.remove("open"); return; }
     if (opts && typeof opts === "object" && opts.cid) {
       const who = typeof ME !== "undefined" ? ME : null; if (KU.who !== who) { kuReset(); KU.who = who; }   /* birinchi kirish — havola holati tozalanib ketmasin */
-      KU.view = "course"; KU.cid = +opts.cid; KU.lid = +opts.lid || 0; KU.focus = opts.block || null;   /* ortda.js savollar tahlili: dars + blok */
+      KU.view = "course"; KU.cid = +opts.cid; KU.lid = +opts.lid || 0; KU.focus = opts.block || null; KU.wiz = opts.wiz || null;   /* wiz — Konstruktor (A versiya) qadamlari */   /* ortda.js savollar tahlili: dars + blok */
     }
     Promise.resolve().then(() => renderKurs()).catch(e => { if (e?.message === "auth") return; $("#v-kurs").innerHTML = e?.message === "denied" ? locked("Bu bo'lim") : errCard("kurs"); });
   };
@@ -1222,7 +1506,9 @@ function kuCmBadge(b) {
 function kuCmBadges() { document.querySelectorAll("#kuBlocks .ku-blk").forEach(el => { const b = KU.blocks[+el.dataset.bi], w = el.querySelector(".ku-cmb"); if (b && w) w.outerHTML = kuCmBadge(b); }); }
 function kuCmCount() {
   const el = $("#kuCmBtn"); if (!el) return;
-  const c = KU.cm; el.innerHTML = `${ico("chat", 15)} Izohlar${c && c.open ? ` <b class="ku-cmn ${c.blocking ? "bad" : ""}">${c.open}</b>` : ""}`;
+  const c = KU.cm, n = c && c.open, rise = el.classList.contains("ku-tb");
+  el.innerHTML = rise ? `${ico("chat", 17)}<span class="lb">Izohlar</span>${n ? `<b class="ku-cmn ${c.blocking ? "bad" : ""}">${n}</b>` : ""}` : `${ico("chat", 15)} Izohlar${n ? ` <b class="ku-cmn ${c.blocking ? "bad" : ""}">${n}</b>` : ""}`;
+  el.setAttribute("aria-label", `Izohlar${n ? ` (${n} ta ochiq)` : ""}`);
   el.setAttribute("aria-expanded", KU.cmOpen ? "true" : "false");
 }
 function kuCmClose() { KU.cmOpen = false; KU.cmBlock = null; const p = $("#kuCm"); if (p) p.hidden = true; kuCmCount(); }

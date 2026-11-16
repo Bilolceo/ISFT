@@ -5,3 +5,10 @@ __pycache__/
 *.pyc
 .DS_Store
 *.log
+
+# Foydalanuvchi fayllari (ommaviy repoga tushmasin)
+input/
+output/
+
+# Repo ildizidagi paket arxivlari (institutsional kontent — ommaviy repoga tushmasin)
+/*.zip

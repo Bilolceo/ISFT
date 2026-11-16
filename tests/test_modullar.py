@@ -265,12 +265,12 @@ ok(it.get("/api/section/audit").status_code == 200 and rk.get("/api/section/audi
 # ===================================================================== G
 print("\n— G. Statik —")
 navjs = httpx.get(B + "/nav.js").text
-ok('data-v="modullar"' in idx and 'id="v-modullar"' in idx and 'id="dataBanner"' in idx and "Namuna ma'lumot — haqiqiy tizimlar (HEMIS, NEXTID) hali ulanmagan" in idx,
-   "index.html: «Bo'limlar» menyu bandi va sahifasi, «Namuna ma'lumot» tasmasi")
+ok('data-v="modullar"' in idx and 'id="v-modullar"' in idx and 'id="dataBanner"' not in idx,
+   "index.html: «Bo'limlar» menyu bandi va sahifasi, tepadagi «Namuna ma'lumot» tasmasi yo'q")
 ok(all(s in appjs for s in ("function modGate", "function navApply", "async function renderModullar", "Bu bo'lim o'chirilgan", "function modWork")), "app.js: kalit, menyu, «Bu bo'lim o'chirilgan» kartasi, sahifa")
 ok("modGate(v)" in idx, "index.html: go() eng tashqi qatlamda kalit bilan o'ralgan")
 import re
-ok(not re.search(r'(?<!realData\(\) \? ["`])Manba: HEMIS', appjs) and "demoChip(" in appjs, "app.js: «Manba: HEMIS» faqat ISFT_CORE_REAL_DATA=1 tarmog'ida, aks holda «Namuna ma'lumot» belgisi")
+ok(not re.search(r'(?<!realData\(\) \? ["`])Manba: HEMIS', appjs) and 'class="demo-chip"' not in appjs, "app.js: «Manba: HEMIS» faqat ISFT_CORE_REAL_DATA=1 tarmog'ida; «Namuna ma'lumot» belgilari ko'rsatilmaydi")
 ok('>Nosozliklar va murojaatlar</a>' in idx and "xarid: \"Xarid so'rovlari\"" not in navjs, "Menyu: «Nosozliklar va murojaatlar» nomi lavozimga qarab o'zgarmaydi")
 ok("Portal</button>" not in httpx.get(B + "/mywork.js").text and "Hujjatlar markazi" not in appjs.replace("/* ---------- Hujjatlar markazi ---------- */", ""),
    "Nomlar: «Yozishmalar» va «Hujjat chiqarish» (foydalanuvchi matnlarida «Portal» / «Hujjatlar markazi» yo'q)")

@@ -11,6 +11,8 @@
  * Rise 360 (kontrakt v3): muqova qadami (fon rasmi, dars kodi, muallif), video FAYL — <video src> + <track> (subtitr) + poster elementlari borligi
  * (namunadagi .mp4 haqiqiy video emas — ffmpeg yo'q; ijro emas, elementlar tekshiriladi), slayd izohi va audiosi, kartochkalar (aylantirish),
  * test ichida moslashtirish va saralash (to'g'ri javob → 100 ball), topshiriq (matn, imzo, o'qituvchi rasmi, savollar ro'yxati).
+ * layout "rise" (NEXTID ko'rinishi, standart): bitta sahifa — muqova (.r-cover, ↓), har blok .r-band[data-i]; bo'lim — «davom etish» tugmasi
+ * (.r-continue): bosilmaguncha keyingi bloklar yashirin, bosilgach ochiladi; tekshiruvlar blok ichida (root) bajariladi; qorong'i OS rejimida ham yorug'.
  */
 const http = require('http'), fs = require('fs'), path = require('path');
 const { chromium } = require(process.env.PW);
@@ -45,24 +47,41 @@ const fails = []; const ok = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') +
     cur = mode; console.log('== ' + mode);
     const C = JSON.parse(fs.readFileSync(path.join(W, mode, 'content.json')));
     for (const width of [1366, 390]) {
-      const p = await br.newPage({viewport: {width, height: 900}}); const errs = [];
+      const p = await br.newPage({viewport: {width, height: 900}, colorScheme: C.layout === 'rise' ? 'dark' : 'light'}); const errs = [];   // rise — qorong'i OS rejimida ham yorug' bo'lishi tekshiriladi
       p.on('console', m => { if (m.type() === 'error') errs.push(m.text()); }); p.on('pageerror', e => errs.push(String(e)));
       p.on('response', r => { if (r.status() >= 400) errs.push('HTTP ' + r.status() + ' ' + r.url()); });
       p.on('requestfailed', r => { if (!/youtube|ytimg|google/.test(r.url()) && !/\.(mp4|webm|mp3|m4a|ogg|wav)$/.test(r.url())) errs.push('reqfail ' + r.url()); });   // namuna media haqiqiy emas — brauzer yuklashni to'xtatadi
       await p.goto(`http://127.0.0.1:${port}/lms.html?m=${mode}`);
       const fr = await (await p.waitForSelector('#sco')).contentFrame();
       await fr.waitForFunction(() => window.ISFTPaket && window.ISFTPaket.ready, null, {timeout: 15000});
-      const n = await fr.evaluate(() => document.querySelectorAll('.nav-i').length);
-      const seen = await fr.evaluate(() => [...new Set([...document.querySelectorAll('.nav-i')].map(b => b.dataset.block || b.dataset.i))].length);
-      // steps rejimida uzun matn bir nechta qadamga bo'linishi mumkin — har blok kamida bitta qadamda bo'lishi kerak
-      const want_n = C.blocks.length + (C.cover ? 1 : 0);   // muqova (content.cover) — pleyerda alohida birinchi qadam
-      ok(n >= want_n && (seen === want_n || n === want_n), `${width}px: ${n} ta qadam, ${C.blocks.length} ta blok${C.cover ? ' + muqova' : ''} (${C.blocks.map(b => b.type).join(',')}) · layout=${C.layout || '—'}`);
+      const RISE = C.layout === 'rise';
+      const NAV = RISE ? '.r-band[data-i]' : '.nav-i';
+      const n = await fr.evaluate(s => document.querySelectorAll(s).length, NAV);
+      const seen = await fr.evaluate(s => [...new Set([...document.querySelectorAll(s)].map(b => b.dataset.block || b.dataset.i))].length, NAV);
+      // steps rejimida uzun matn bir nechta qadamga bo'linishi mumkin — har blok kamida bitta qadamda bo'lishi kerak; rise — har blok bitta tasma, muqova alohida
+      const want_n = C.blocks.length + (C.cover && !RISE ? 1 : 0);   // muqova (content.cover) — steps'da alohida birinchi qadam
+      ok(n >= want_n && (seen === want_n || n === want_n), `${width}px: ${n} ta ${RISE ? 'blok tasmasi' : 'qadam'}, ${C.blocks.length} ta blok${C.cover ? ' + muqova' : ''} (${C.blocks.map(b => b.type).join(',')}) · layout=${C.layout || '—'}`);
       const did = {};
       const agg = {h2: 0, table: 0, fig: 0};
+      if (RISE) {
+        const r = await fr.evaluate(() => { const h = document.querySelector('.r-cover'), bg = h && h.querySelector('img.r-cover-bg');
+          return h ? {text: h.textContent, bg: bg ? bg.complete && bg.naturalWidth > 0 : null, go: !!h.querySelector('[data-act="begin"]'), h1: !!h.querySelector('h1'),
+            dark: getComputedStyle(document.body).backgroundColor} : null; });
+        ok(r && r.h1 && r.text.includes(C.lesson.code) && r.text.includes(C.lesson.title) && (!C.cover || !C.cover.author || r.text.includes(C.cover.author)) && (C.cover && C.cover.image ? r.bg === true : true) && r.go,
+           `${width}px: rise muqovasi — «${C.lesson.code}-${C.lesson.title}», muallif, ↓ tugmasi${C.cover && C.cover.image ? ', fon rasmi yuklangan' : ''}`);
+        ok(r && !/rgb\((\d{1,2}), (\d{1,2}), (\d{1,2})\)/.test(r.dark), `${width}px: qorong'i OS rejimida ham yorug' fon (${r && r.dark})`);
+        if (C.cover) did.cover = 1;
+        await fr.click('.r-go', {force: true}); await p.waitForTimeout(200);
+      }
       for (let i = 0; i < n; i++) {
-        const t = await fr.evaluate(i => { const b = document.querySelector('.nav-i[data-i="' + i + '"]'); b.click(); return b.dataset.type; }, i);
+        const t = RISE
+          ? await fr.evaluate(i => { const b = document.querySelector('.r-band[data-i="' + i + '"]'); const g = b.querySelector('.r-continue');
+              if (g && !b.classList.contains('open')) g.click(); b.scrollIntoView({block: 'start'}); return g ? 'section' : (b.className.match(/\bt-(\w+)/) || [])[1]; }, i)
+          : await fr.evaluate(i => { const b = document.querySelector('.nav-i[data-i="' + i + '"]'); b.click(); return b.dataset.type; }, i);
         await p.waitForTimeout(150);
         did[t] = (did[t] || 0) + 1;
+        if (RISE && t === 'section') ok(await fr.evaluate(i => { const b = document.querySelector('.r-band[data-i="' + i + '"]'), ch = b.parentNode.nextElementSibling;
+          return b.classList.contains('open') && (!ch || !ch.hidden); }, i), `${width}px: «davom etish» (${i}) bosildi — keyingi bo'lim ochildi`);
         if (t === 'cover') {
           const r = await fr.evaluate(() => { const h = document.querySelector('.hero'), bg = h && h.querySelector('.hero-bg');
             return h ? {text: h.textContent, bg: bg ? bg.complete && bg.naturalWidth > 0 : null, go: !!h.querySelector('[data-act="begin"]'), h1: !!h.querySelector('h1')} : null; });
@@ -79,7 +98,7 @@ const fails = []; const ok = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') +
         if (t === 'assignment') {
           const ab = C.blocks.find(b => b.type === 'assignment');
           const r = await fr.evaluate(() => { const a = document.querySelector('.asg'), av = a && a.querySelector('img.asg-av');
-            return a ? {text: a.innerText, li: [...a.querySelectorAll('.asg-list li')].map(x => x.innerText.replace(/^\d+\s*/, '').trim()), img: av ? av.complete && av.naturalWidth > 0 : null, svg: !!a.querySelector('svg.asg-av')} : null; });
+            return a ? {text: a.innerText.replace(/\u02bb/g, "'"), li: [...a.querySelectorAll('.asg-list li')].map(x => x.innerText.replace(/\u02bb/g, "'").replace(/^\d+\s*/, '').trim()), img: av ? av.complete && av.naturalWidth > 0 : null, svg: !!a.querySelector('svg.asg-av')} : null; });
           ok(r && r.text.includes(ab.text) && r.text.includes(ab.author) && r.li.length === ab.questions.length && ab.questions.every((x, k) => r.li[k].endsWith(x)) && (ab.avatar ? r.img === true : r.svg),
              `${width}px: topshiriq — matn, imzo, ${ab.questions.length} ta savol, ${ab.avatar ? "o'qituvchi rasmi yuklangan" : 'pleyer chizgan belgi'}`);
         }
@@ -114,12 +133,12 @@ const fails = []; const ok = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') +
             if (vb.captions.length) ok(await fr.evaluate(async u => (await (await fetch(u)).text()).startsWith('WEBVTT'), vb.captions[0].src), `${width}px: subtitr fayli — WebVTT (${vb.captions[0].src})`);
           } else ok(await fr.evaluate(() => !!document.querySelector('iframe[src*="youtube-nocookie.com/embed/ISFTdemo001"], [data-video], .video')), `${width}px: video bloki`);
         }
-        if (t === 'section') ok(await fr.evaluate(() => /\S/.test(document.body.innerText)), `${width}px: bo'lim sarlavhasi`);
+        if (t === 'section' && !RISE) ok(await fr.evaluate(() => /\S/.test(document.body.innerText)), `${width}px: bo'lim sarlavhasi`);
         if (t === 'reflect') {
           const rb = C.blocks.find(b => b.type === 'reflect');
           const fbk = await fr.evaluate(() => { const b = document.querySelector('.choice[data-k="0"]'); if (!b) return null; b.click(); return true; });
           await p.waitForTimeout(150);
-          ok(fbk && await fr.evaluate(t => document.body.innerText.includes(t), rb.options[0].feedback), `${width}px: o'z-o'zini baholash — javob va izoh`);
+          ok(fbk && await fr.evaluate(t => document.body.innerText.replace(/\u02bb/g, "'").includes(t), rb.options[0].feedback), `${width}px: o'z-o'zini baholash — javob va izoh`);
         }
       }
       const tb = C.blocks.find(b => b.type === 'text' && b.title === "Ma'ruza matni");
@@ -128,10 +147,13 @@ const fails = []; const ok = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') +
         ok(agg.h2 >= want.h2 && agg.table >= want.table && agg.fig >= want.fig, `${width}px: ma'ruza matni (h2 ${agg.h2}/${want.h2}, jadval ${agg.table}/${want.table}, rasm ${agg.fig}/${want.fig})`);
       }
       for (const b of C.blocks) if (['flashcards', 'assignment', 'video'].includes(b.type)) ok(did[b.type] >= 1, `${width}px: «${b.type}» bloki qadamlar ro'yxatida (data-type)`);
-      if (C.cover) ok(did.cover === 1, `${width}px: muqova — birinchi qadam (data-type="cover")`);
+      if (C.cover) ok(did.cover === 1, `${width}px: muqova — ${RISE ? 'sahifa boshida' : 'birinchi qadam (data-type="cover")'}`);
       const q = C.blocks.find(b => b.type === 'quiz');
-      const qi = await fr.evaluate(() => +document.querySelector('.nav-i[data-type="quiz"]').dataset.i);
-      await fr.evaluate(i => document.querySelector('.nav-i[data-i="' + i + '"]').click(), qi);
+      if (RISE) await fr.evaluate(() => document.querySelector('.r-band.t-quiz').scrollIntoView({block: 'start'}));
+      else {
+        const qi = await fr.evaluate(() => +document.querySelector('.nav-i[data-type="quiz"]').dataset.i);
+        await fr.evaluate(i => document.querySelector('.nav-i[data-i="' + i + '"]').click(), qi);
+      }
       await p.waitForTimeout(150); if (await fr.$('[data-act="start"]')) await fr.click('[data-act="start"]');
       await fr.waitForSelector('form.qform');
       for (const x of q.questions) {

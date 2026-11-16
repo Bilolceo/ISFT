@@ -48,7 +48,8 @@ ALL = DEPT + LEAD + (KAF, TEACH)
 WORK = DEPT + (KAF, TEACH)                # savollarni ko'radi
 AUTHORS = DEPT + (TEACH,)                 # manba, generatsiya, tahrir
 
-QTYPES = {"mcq": "Bir javobli test", "tf": "To'g'ri / noto'g'ri", "fill": "Bo'sh joyni to'ldirish"}
+QTYPES = {"mcq": "Bir javobli test", "multi": "Bir nechta javobli test", "tf": "To'g'ri / noto'g'ri", "fill": "Bo'sh joyni to'ldirish"}
+GEN_TYPES = ("mcq", "tf", "fill")           # AI faqat shu turlarni tuzadi («multi» — Word'dan import yoki qo'lda; Claude sxemasida bitta correct_index)
 DIFF = {"oson": "Oson", "orta": "O'rta", "qiyin": "Qiyin"}
 BLOOM = {"eslash": "Eslash", "tushunish": "Tushunish", "qollash": "Qo'llash", "tahlil": "Tahlil", "baholash": "Baholash", "yaratish": "Yaratish"}
 STATUS = {"qoralama": "Qoralama", "tekshiruvda": "Tekshiruvda", "tasdiqlandi": "Tasdiqlandi", "rad_etildi": "Rad etildi"}
@@ -130,7 +131,7 @@ _ALL_NONE = re.compile(r"(yuqoridagi\w*\s+(barchasi|hammasi|hech\s+biri)|barcha\
 SEV_BLOCK, SEV_WARN = "block", "warn"
 QC_RULES = {   # kod: (og'irlik, izoh) — UI va hujjat uchun
     "format": (SEV_BLOCK, "Savol tuzilishi noto'g'ri (matn, variantlar soni, bo'sh variant, javob)"),
-    "correct_count": (SEV_BLOCK, "Bir javobli savolda to'g'ri javob aynan bitta emas"),
+    "correct_count": (SEV_BLOCK, "To'g'ri javoblar soni mos emas (bir javobli — aynan 1; bir nechta javobli — kamida 2 ta, hammasi emas)"),
     "correct_range": (SEV_BLOCK, "To'g'ri javob raqami variantlar oralig'idan tashqarida"),
     "dup_option": (SEV_BLOCK, "Bir xil variantlar (deyarli bir xili — ogohlantirish)"),
     "num_equiv": (SEV_BLOCK, "Son jihatdan teng variantlar (20 va 20,0; 1/2 va 0,5)"),
@@ -200,13 +201,15 @@ def qc(q: dict, source_text: str | None = None, others=()) -> list[dict]:
     ans = [str(a or "").strip() for a in (q.get("answers") or []) if str(a or "").strip()]
     if t not in QTYPES: add("format", "Savol turi noma'lum")
     if not stem: add("format", "Savol matni bo'sh")
-    if t in ("mcq", "tf"):
-        if t == "mcq" and not 3 <= len(opts) <= 6: add("format", f"Variantlar soni {len(opts)} ta — 3 tadan 6 tagacha bo'lishi kerak")
+    if t in ("mcq", "multi", "tf"):
+        if t in ("mcq", "multi") and not 3 <= len(opts) <= 6: add("format", f"Variantlar soni {len(opts)} ta — 3 tadan 6 tagacha bo'lishi kerak")
         if t == "tf" and len(opts) != 2: add("format", "To'g'ri/noto'g'ri savolida 2 ta variant bo'lishi kerak")
         if any(not o for o in opts): add("format", "Bo'sh variant bor")
         try: idx = [int(i) for i in corr]
         except (TypeError, ValueError): idx = []; add("format", "To'g'ri javob raqami noto'g'ri")
-        if len(set(idx)) != 1: add("correct_count", f"To'g'ri javoblar soni: {len(set(idx))} (aynan 1 ta bo'lishi kerak)")
+        if t == "multi":
+            if not 2 <= len(set(idx)) < max(len(opts), 3): add("correct_count", f"To'g'ri javoblar soni: {len(set(idx))} (bir nechta javobli savolda kamida 2 ta, lekin hammasi emas)")
+        elif len(set(idx)) != 1: add("correct_count", f"To'g'ri javoblar soni: {len(set(idx))} (aynan 1 ta bo'lishi kerak)")
         bad = [i for i in idx if not 0 <= i < len(opts)]
         if bad: add("correct_range", f"To'g'ri javob raqami ({', '.join(str(i + 1) for i in bad)}) variantlar oralig'idan tashqarida")
         norm = [_norm(o) for o in opts]
@@ -223,9 +226,10 @@ def qc(q: dict, source_text: str | None = None, others=()) -> list[dict]:
             for j in range(i + 1, len(opts)):
                 if (i, j) not in seen_dup and nums[i] is not None and nums[i] == nums[j]:
                     add("num_equiv", f"{_L(i)} ({opts[i]}) va {_L(j)} ({opts[j]}) son jihatdan teng")
-        if t == "mcq":
+        if t in ("mcq", "multi"):
             hit = [_L(i) for i, o in enumerate(opts) if _ALL_NONE.search(_norm(o))]
             if hit: add("all_none", f"{', '.join(hit)}: «barchasi / hech biri» turidagi variant — tavsiya etilmaydi")
+        if t == "mcq":
             good = [i for i in set(idx) if 0 <= i < len(opts)]
             if len(good) == 1 and len(opts) >= 3:
                 c = good[0]
@@ -385,6 +389,7 @@ def _clean(q: dict) -> dict:
     else:
         out["options"] = [str(o if o is not None else "").strip()[:500] for o in (q.get("options") or [])][:8]
         out["correct"] = corr[:8]; out["answers"] = []
+        if t == "multi": out["correct"] = sorted(set(out["correct"]))
     return out
 
 def _insert(cid: int, no: int, q: dict, author: dict, status="qoralama", engine="qolda", gen_id=None, src="", source=None, others=None) -> int:
@@ -457,7 +462,7 @@ def save_source(c: Ctx, cid: int, no: int, raw: bytes | None, text: str | None, 
 GEN_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["questions"], "properties": {"questions": {"type": "array", "items": {
     "type": "object", "additionalProperties": False,
     "required": ["type", "stem", "options", "correct_index", "answers", "explanation", "difficulty", "bloom", "source_quote"],
-    "properties": {"type": {"type": "string", "enum": list(QTYPES)}, "stem": {"type": "string"},
+    "properties": {"type": {"type": "string", "enum": list(GEN_TYPES)}, "stem": {"type": "string"},
                    "options": {"type": "array", "items": {"type": "string"}}, "correct_index": {"type": "integer"},
                    "answers": {"type": "array", "items": {"type": "string"}}, "explanation": {"type": "string"},
                    "difficulty": {"type": "string", "enum": list(DIFF)}, "bloom": {"type": "string", "enum": list(BLOOM)},
@@ -481,7 +486,7 @@ GEN_SYSTEM = (
 
 def plan_counts(n: int, types: list[str], mix: dict) -> tuple[dict, dict]:
     """n savolni turlar va qiyinlik bo'yicha taqsimlash (eng katta qoldiq usuli)."""
-    types = [t for t in QTYPES if t in (types or [])] or ["mcq"]
+    types = [t for t in GEN_TYPES if t in (types or [])] or ["mcq"]
     def spread(total, weights: dict) -> dict:
         s = sum(max(0, w) for w in weights.values()) or 1
         raw = {k: total * max(0, w) / s for k, w in weights.items()}
@@ -546,7 +551,7 @@ def generate(c: Ctx, cid: int, topics: list[int], n: int, types: list[str], mix:
                                       content=[{"type": "text", "text": _prompt(course, titles[no], text, trunc, by_type, by_diff)}],
                                       schema=GEN_SCHEMA, max_tokens=min(32000, 1500 + 700 * n), effort="medium", timeout=300, what="test savollari")
             for it in (data or {}).get("questions") or []:
-                if isinstance(it, dict) and str(it.get("stem") or "").strip() and it.get("type") in QTYPES: items.append(_from_ai(it))
+                if isinstance(it, dict) and str(it.get("stem") or "").strip() and it.get("type") in GEN_TYPES: items.append(_from_ai(it))
                 else: dropped += 1
             if not items: err = "AI savol qaytarmadi"
         except CC.AIError as e:
@@ -774,6 +779,13 @@ def _cdata(s: str) -> str:
 
 def _x(s) -> str: return html.escape(str(s or ""), quote=True)
 
+def _multi_fraction(q: dict, i: int) -> str:
+    """Moodle / GIFT: bir nechta javobli savol — to'g'rilarining yig'indisi +100%, noto'g'rilariniki −100% (hammasi tanlansa ham, birortasi
+    xato bo'lsa ham to'liq ball chiqmaydi — pleyerdagi «hammasi yoki hech narsa» qoidasiga eng yaqini)."""
+    k = len(set(q["correct"])); w = len(q["options"]) - k
+    v = 100 / k if i in q["correct"] else (-100 / w if w else 0)
+    return f"{v:.5f}".rstrip("0").rstrip(".")
+
 def export_moodle_xml(b: dict) -> str:
     cats = _categories(b)
     L = ['<?xml version="1.0" encoding="UTF-8"?>', "<quiz>",
@@ -783,7 +795,7 @@ def export_moodle_xml(b: dict) -> str:
         if cats.get(q["topic_no"]) != cur:
             cur = cats[q["topic_no"]]
             L += ['<question type="category">', f"  <category><text>{_x(cur)}</text></category>", "</question>"]
-        typ = {"mcq": "multichoice", "tf": "truefalse", "fill": "shortanswer"}[q["qtype"]]
+        typ = {"mcq": "multichoice", "multi": "multichoice", "tf": "truefalse", "fill": "shortanswer"}[q["qtype"]]
         name = re.sub(r"\s+", " ", q["stem"]).strip()
         qname = "TB%d · %s" % (q["id"], name[:70] + ("…" if len(name) > 70 else ""))
         L += [f'<question type="{typ}">', f"  <name><text>{_x(qname)}</text></name>",
@@ -791,9 +803,10 @@ def export_moodle_xml(b: dict) -> str:
               f'  <generalfeedback format="html"><text>{_cdata(q["explanation"])}</text></generalfeedback>',
               "  <defaultgrade>1.0000000</defaultgrade>", "  <hidden>0</hidden>", f"  <idnumber>ISFT-TB-{q['id']}</idnumber>"]
         if typ == "multichoice":
-            L += ["  <penalty>0.3333333</penalty>", "  <single>true</single>", "  <shuffleanswers>true</shuffleanswers>", "  <answernumbering>abc</answernumbering>"]
+            multi = q["qtype"] == "multi"
+            L += ["  <penalty>0.3333333</penalty>", f"  <single>{'false' if multi else 'true'}</single>", "  <shuffleanswers>true</shuffleanswers>", "  <answernumbering>abc</answernumbering>"]
             for i, o in enumerate(q["options"]):
-                L.append(f'  <answer fraction="{100 if i in q["correct"] else 0}" format="html"><text>{_cdata(o)}</text>'
+                L.append(f'  <answer fraction="{_multi_fraction(q, i) if multi else (100 if i in q["correct"] else 0)}" format="html"><text>{_cdata(o)}</text>'
                          f'<feedback format="html"><text></text></feedback></answer>')
         elif typ == "truefalse":
             L.append("  <penalty>1.0000000</penalty>")
@@ -826,7 +839,10 @@ def export_gift(b: dict) -> str:
             L += [f"$CATEGORY: {cur.replace(chr(10), ' ')}", ""]
         head = f"::TB{q['id']}::[html]{gift_escape(html.escape(q['stem'], quote=False))} "
         fb = f"####{gift_escape(q['explanation'])}" if q["explanation"] else ""
-        if q["qtype"] == "mcq":
+        if q["qtype"] == "multi":
+            body = "\n".join(f"~%{_multi_fraction(q, i)}%" + gift_escape(o) for i, o in enumerate(q["options"]))
+            L.append(head + "{\n" + body + ("\n" + fb if fb else "") + "\n}")
+        elif q["qtype"] == "mcq":
             body = "\n".join(("=" if i in q["correct"] else "~") + gift_escape(o) for i, o in enumerate(q["options"]))
             L.append(head + "{\n" + body + ("\n" + fb if fb else "") + "\n}")
         elif q["qtype"] == "tf":
@@ -922,7 +938,7 @@ def api_meta(request: Request):
     return {"role": k, "tabs": tabs, "today": clock.today().isoformat(), "demo": demo, "min_q": min_q(),
             "ai": {"on": CC.has_key(), "model": model_name() if CC.has_key() else None, "daily": daily_limit(), "used_today": _gen_today(c.user["id"])},
             "limits": {"max_n": MAX_N, "max_topics": MAX_TOPICS_RUN, "min_chars": MIN_SOURCE_CHARS, "max_mb": MAX_BYTES // (1024 * 1024)},
-            "qtypes": QTYPES, "difficulty": DIFF, "bloom": BLOOM, "status": STATUS, "rules": {k2: {"sev": v[0], "label": v[1]} for k2, v in QC_RULES.items()},
+            "qtypes": QTYPES, "gen_qtypes": {k: QTYPES[k] for k in GEN_TYPES}, "difficulty": DIFF, "bloom": BLOOM, "status": STATUS, "rules": {k2: {"sev": v[0], "label": v[1]} for k2, v in QC_RULES.items()},
             "caps": {"write": k in AUTHORS, "generate": k in AUTHORS, "review": k in DEPT, "export": k in WORK, "settings": k == HEAD, "questions": k in WORK},
             "scope": ("O'z kafedrangiz kurslari (ko'rish)" if k == KAF else "O'z kurslaringiz" if k == TEACH else
                       "Jamlangan qamrov (savollar matnisiz)" if k in LEAD else "Masofaviy ta'lim — barcha kurslar")}

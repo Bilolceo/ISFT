@@ -16,7 +16,8 @@
 .pk-tabs::-webkit-scrollbar{display:none}
 .pk-tabs button{border:0;background:transparent;color:var(--muted);font:inherit;font-size:13px;font-weight:700;padding:8px 14px;border-radius:10px;cursor:pointer;white-space:nowrap}
 .pk-tabs button.on{background:var(--seg-on);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.08)}
-.pk-tabs button:focus-visible,.pk-link:focus-visible,.pk-topic:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+.pk-tabs button:focus-visible,.pk-link:focus-visible,.pk-topic:focus-visible{outline:2px solid var(--teal);outline-offset:-2px}
+.pk-tabs button:focus-visible{outline-offset:-2px}
 .pk-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:14px}
 .pk-kpi{display:flex;flex-direction:column;gap:2px;padding:14px 16px;border-radius:16px;background:var(--surface);border:1px solid var(--card-brd);min-width:0}
 .pk-kpi span{font-size:12.5px;font-weight:700;color:var(--ink-2)}
@@ -105,9 +106,14 @@
 .pk-steps{margin:6px 0 0;padding-left:20px;font-size:13px;line-height:1.55}
 /* modal */
 .pk-modal-bg{position:fixed;inset:0;background:rgba(10,8,9,.45);display:flex;align-items:flex-start;justify-content:center;z-index:80;padding:5vh 16px;overflow-y:auto}
-.pk-modal{background:var(--raised);color:var(--ink);border-radius:20px;padding:20px 22px;width:100%;max-width:560px;box-shadow:var(--shadow-pop);border:1px solid var(--card-brd);min-width:0}
+.pk-modal{position:relative;background:var(--raised);color:var(--ink);border-radius:20px;padding:20px 22px;width:100%;max-width:560px;box-shadow:var(--shadow-pop);border:1px solid var(--card-brd);min-width:0}
+.pk-modal:focus,.pk-modal:focus-visible{outline:none}   /* fokus dialogning o'zida (tabindex=-1) — halqa kerak emas */
 .pk-modal.wide{max-width:1040px}
-.pk-modal h3{margin:0 0 12px}
+.pk-modal h3{margin:0 0 12px;overflow-wrap:anywhere}
+.pk-x{position:sticky;top:0;float:right;z-index:3;margin:-8px -10px 4px 8px;width:36px;height:36px;display:grid;place-items:center;border:0;border-radius:10px;background:var(--raised);color:var(--ink-2);font-size:24px;line-height:1;cursor:pointer;padding:0}
+.pk-x:hover{background:var(--hover);color:var(--ink)}.pk-x:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+.pk-merr{margin:4px 0 10px;padding:10px 12px;border-radius:12px;background:var(--bad-soft);color:var(--bad);font-size:13.5px;font-weight:600;line-height:1.45;overflow-wrap:anywhere}
+.pk-fail{display:flex;flex-direction:column;align-items:flex-start;gap:10px}.pk-fail p{margin:0;color:var(--bad);font-weight:600}
 .pk-modal label{display:flex;flex-direction:column;gap:4px;font-size:12.5px;font-weight:600;color:var(--muted);margin-bottom:10px}
 .pk-modal textarea{min-height:200px;padding:8px 10px;border:1px solid var(--line-2);border-radius:12px;background:var(--surface);color:var(--ink);font:inherit;font-size:13.5px;resize:vertical}
 .pk-frame{width:100%;height:min(72vh,720px);border:1px solid var(--line);border-radius:14px;background:#fff}
@@ -266,3 +272,14 @@
 .pk-topics{grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:6px}
 .pk-topic{padding:7px 10px;border-radius:12px}
 .pk-tile-a .btn{white-space:normal;text-align:left;max-width:100%}
+
+/* ===== Telefon: tegish maydonlari >= 44 px (390 px) ===== */
+@media (max-width:760px){
+  #v-paket .btn.sm,#v-taqdimot .btn.sm,#v-studio .btn.sm,#v-kurs .btn.sm,.pk-modal-bg .btn.sm,.st-modal-bg .btn.sm{min-height:44px;padding-top:8px;padding-bottom:8px}
+  .pk-tabs button{min-height:44px;padding:10px 16px}
+  #v-paket select,#v-taqdimot select,.pk-modal-bg select,.lp-grid select{min-height:44px}
+  .pk-filters select,.pk-filters input,.pk-pick select,.pk-pick input,.pk-form select,.pk-form input[type=number],.pk-form input[type=url],.pk-inline input,.pk-inline select,.pk-sel{min-height:44px;height:44px}
+  .pk-x{width:44px;height:44px;margin:-10px -8px 2px 6px}
+  .pk-link{min-height:44px;display:inline-flex;align-items:center}
+  .pk-modal-bg{padding:3vh 10px}
+}

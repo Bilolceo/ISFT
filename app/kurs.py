@@ -32,7 +32,7 @@ from pathlib import Path
 from urllib.parse import quote
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import Response, FileResponse, RedirectResponse
+from fastapi.responses import Response, FileResponse, RedirectResponse, JSONResponse
 from pydantic import BaseModel, Field
 from . import clock, db, rbac
 from . import paket as PK
@@ -62,7 +62,8 @@ COMPLETION = {"view": "Darslar ko'rilganda", "quiz": "Test topshirilganda", "vie
 REVEAL = {"always": "Har doim (javobdan keyin)", "pass": "Faqat test topshirilganda", "never": "Ko'rsatilmaydi"}
 # Urg'u ranglari — oq matn bilan kontrast ≥ 4.5:1 (WCAG AA), ISFT qirmizisi birinchi
 PALETTE = {"#870037": "ISFT qirmizi", "#00575B": "Moviy-yashil", "#1D4ED8": "Ko'k", "#4338CA": "Indigo", "#15803D": "Yashil",
-           "#C2410C": "To'q sariq", "#7E22CE": "Binafsha", "#334155": "Grafit"}
+           "#C2410C": "To'q sariq", "#7E22CE": "Binafsha", "#334155": "Grafit", "#7837A8": "NEXTID binafsha"}
+NEXTID_ACCENT = "#7837A8"   # NEXTID'dagi Rise darslari rangi — «Dars tayyorlash»dan o'tkazilgan kurslar standarti
 DEFAULT_ACCENT = "#870037"
 LABELS = {"start": "Kursni boshlash", "resume": "Davom ettirish", "continue": "Davom etish", "next_lesson": "Keyingi dars",
           "prev_lesson": "Oldingi dars", "lesson": "Dars", "lessons": "Darslar", "quiz": "Test", "quiz_start": "Testni boshlash",
@@ -123,6 +124,9 @@ CREATE TABLE IF NOT EXISTS ku_meta(k TEXT PRIMARY KEY, v TEXT);
 CREATE TABLE IF NOT EXISTS ku_caption_jobs(id INTEGER PRIMARY KEY, course_id INT, asset_id INT, lang TEXT, status TEXT, attempts INT DEFAULT 0,
   lease TEXT, lease_until TEXT, stage TEXT, pct REAL DEFAULT 0, error TEXT, vtt_asset INT, cues INT, user_id INT, user_name TEXT, created_at TEXT, updated_at TEXT);
 CREATE INDEX IF NOT EXISTS ix_ku_cj ON ku_caption_jobs(status, id);
+CREATE TABLE IF NOT EXISTS ku_ai(id INTEGER PRIMARY KEY, course_id INT, lesson_id INT, user_id INT, day TEXT, ts TEXT, kind TEXT, model TEXT, ok INT, ms INT, err TEXT,
+  in_tok INT, out_tok INT, guessed INT DEFAULT 0);
+CREATE INDEX IF NOT EXISTS ix_ku_ai ON ku_ai(user_id, day);
 """
 
 def _now(): return clock.now().replace(microsecond=0).isoformat(timespec="seconds")
@@ -593,7 +597,7 @@ def create_course(c: Ctx, title: str, description: str = "", dl_course_id=None, 
         now = _now()
         cid = _con.execute("""INSERT INTO ku_courses(title,description,accent,settings,labels,author_id,author_name,dl_course_id,status,rev,created_at,updated_at,updated_by,src)
                               VALUES(?,?,?,?,?,?,?,?,'qoralama',1,?,?,?,?)""",
-                           (title, _html(description, 4000), DEFAULT_ACCENT, json.dumps(SETTINGS), "{}", c.user["id"], c.user["full_name"], dl, now, now,
+                           (title, _html(description, 4000), NEXTID_ACCENT if src == "dars" else DEFAULT_ACCENT, json.dumps(SETTINGS), "{}", c.user["id"], c.user["full_name"], dl, now, now,
                             c.user["full_name"], src)).lastrowid
         if first_lesson:
             _con.execute("INSERT INTO ku_lessons(course_id,uid,pos,type,title,settings,rev,updated_at,updated_by) VALUES(?,?,1,'blocks','1-dars','{}',1,?,?)",
@@ -1096,7 +1100,7 @@ def tincan_xml(content: dict) -> str:
             s += "      <choices>\n" + "".join(f'        <component>\n          <id>{i}</id>\n          <description lang="uz">{x(t)}</description>\n        </component>\n'
                                            for i, t in zip(_letters(len(it["choices"])), it["choices"])) + "      </choices>\n"
         return s
-    body = one(act, "course", content["title"], _plain(content.get("description") or "")[:500] or content["title"], "index.html")
+    body = one(act, "course", content["title"], _plain(content.get("description") or "")[:500] or content["title"], PK.SCORMDRIVER)   # NEXTID — Rise yo'li
     for i, l in enumerate(content["lessons"], 1):
         lid = f"{act}/lesson/{l['id']}"
         body += one(lid, "assessment" if l["type"] == "quiz" else "module", l["title"], f"{i}-dars")
@@ -1117,7 +1121,9 @@ def package_entries(cid: int, mode: str) -> tuple[dict, dict]:
     sco = [{"ident": "SCO-1", "title": content["title"], "href": "index.html", "prefix": "", "mastery": content["tracking"]["mastery"]}]
     if mode == "scorm12": entries["imsmanifest.xml"] = PK.manifest_scorm12(ident, content["title"], sco, names).encode("utf-8")
     elif mode == "scorm2004": entries["imsmanifest.xml"] = PK.manifest_scorm2004(ident, content["title"], sco, names).encode("utf-8")
-    elif mode == "xapi": entries["tincan.xml"] = tincan_xml(content).encode("utf-8")
+    elif mode == "xapi":
+        entries.update(PK.scormdriver_files())          # scormdriver/indexAPI.html → index.html (NEXTID launch yo'li)
+        entries["tincan.xml"] = tincan_xml(content).encode("utf-8")
     return entries, content
 
 def build_zip_bytes(cid: int, mode: str) -> bytes:
@@ -2403,6 +2409,15 @@ async def api_lesson_save(lid: int, request: Request):
     c = C(request); guard(c, "dars saqlash", AUTHORS, f"dars #{lid}")
     body = await _json(request, 8 * 1024 * 1024)
     return save_lesson(c, lid, body)
+
+@router.post(P + "/lessons/{lid}/ai-question")
+async def api_ai_question(lid: int, request: Request):
+    """«AI bilan tahrirlash»: {text, hint?, qtype?: auto|single|multi|tf|fill, btype?} → {block, issues, ai, parsed, answer_guessed, warnings, ...}; bazaga yozilmaydi (app/kurs_ai.py)."""
+    c = C(request); guard(c, "AI bilan savol", AUTHORS, f"dars #{lid}")
+    body = await _json(request, 64 * 1024)
+    from . import kurs_ai
+    code, out = await run_in_threadpool(kurs_ai.ai_question, c, lid, body)
+    return JSONResponse(out, status_code=code)
 
 @router.post(P + "/lessons/{lid}/delete")
 def api_lesson_delete(lid: int, request: Request):

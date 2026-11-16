@@ -56,6 +56,31 @@ class ThreadCon:
     def __getattr__(self, name):
         return getattr(self._c(), name)
 
+class TxLock:
+    """Qayta kiriladigan qulf (RLock) + XATO bo'lsa avtomatik rollback.
+    Modullar yozishni `with _lock: … _con.commit()` ko'rinishida qiladi; blok ichida istisno (HTTPException, IntegrityError, …) commit'dan OLDIN chiqsa,
+    oqimning (thread-local) ulanishida yozish tranzaksiyasi ochiq qoladi va u butun serverda «database is locked» (30 s, 500) beradi — oqim boshqa so'rov
+    olguncha yoki qayta ishga tushirilguncha. Bu qulf blokdan istisno bilan chiqqanda tranzaksiyani qaytaradi."""
+    def __init__(self, con_fn):
+        self._l = threading.RLock()
+        self._con = con_fn
+    def __enter__(self):
+        self._l.acquire()
+        return self
+    def __exit__(self, et, ev, tb):
+        try:
+            if et is not None:
+                try:
+                    c = self._con()
+                    if c is not None and c.in_transaction: c.rollback()
+                except Exception:
+                    pass
+        finally:
+            self._l.release()
+        return False
+    def acquire(self, *a, **k): return self._l.acquire(*a, **k)
+    def release(self): return self._l.release()
+
 def connect() -> ThreadCon:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     return ThreadCon()

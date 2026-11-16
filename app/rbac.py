@@ -257,7 +257,21 @@ def audit(con, ctx: Ctx, action: str, resource: str, allowed: bool, detail: str 
                       (clock.now().isoformat(timespec="seconds"), ctx.user["id"], ctx.user["full_name"], ctx.title,
                        ctx.channel, action, resource, int(allowed), detail[:300]))
     con.commit()
+    try: ctx._last_audit = (cur.lastrowid, resource, action)       # shu so'rovning oxirgi yozuvi — audit_deny() uni «rad etildi»ga aylantiradi
+    except Exception: pass
     return cur.lastrowid
+
+def audit_deny(con, ctx: Ctx, action: str, resource: str, detail: str = ""):
+    """Ko'lam (begona kurs / begona taqdimot) rad etilishi: so'rov boshida lavozim bo'yicha ruxsat yozuvi (allowed=1) allaqachon bor — BITTA so'rovga
+    ikki yozuv bo'lmasin (allowed=1 keyin allowed=0): oxirgi yozuv allowed=0 bo'lib yangilanadi, asl amal izohga ko'chadi. Oldingi yozuv bo'lmasa — oddiy audit()."""
+    last = getattr(ctx, "_last_audit", None)
+    if last and last[1] == resource:
+        con.execute("UPDATE audit_log SET allowed=0, action=?, detail=? WHERE id=? AND user_id=?",
+                    (action, (f"{last[2]} · {detail}" if detail else last[2])[:300], last[0], ctx.user["id"]))
+        con.commit()
+        ctx._last_audit = (last[0], resource, action)
+        return last[0]
+    return audit(con, ctx, action, resource, False, detail)
 
 def require(con, ctx: Ctx, resource: str, action: str, detail: str = ""):
     ok = ctx.can(resource)

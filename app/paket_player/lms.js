@@ -3,10 +3,13 @@
  * activity_id), ko'rish / mustaqil rejim (localStorage). Holat kodlash — encodeState (LMS uzunlik chegarasiga sig'diriladi).
  * Ichki faoliyatlar yo'li: Xapi(lp, C, {unit}) — paket: «<kurs>/block/<id>», kurs muharriri: «<kurs>/lesson/<uid>» (+ «/q/<savol>»).
  * Preview(C, {prefix}) — localStorage kaliti prefiksi (standart «isft-paket:»).
+ * xAPI — Articulate Rise 360 bilan simdagi moslik (NEXTID.LMS: launch «scormdriver/indexAPI.html?endpoint=…&auth=Bearer …&actor={"name":…}»):
+ * X-Experience-API-Version 1.0.2, state hujjatlari suspend_data / bookmark / cumulative_time (+ language_preference — o'qiladi), attempted /
+ * progressed / experienced — «PUT statements?statementId=», answered / passed / failed / yopilishdagi attempted — «POST statements» (massiv);
+ * faqat nomli actor (raqamli ham) o'zgarishsiz uzatiladi. Batafsil — Xapi() izohi va docs/paket.md «Kuzatuv».
  * xAPI oflayn navbati: tasdiqlanmagan statementlar localStorage'da («isft-xapi-q:<kalit>», try/catch — sandbox'da faqat xotirada) saqlanadi,
  * keyingi ishga tushirishda yoki tarmoq tiklanganda (online) qayta yuboriladi; id o'zgarmaydi — LRS dublikatni o'tkazib yuboradi (idempotent).
- * Qo'shimcha fe'llar: progressed (kurs/dars faoliyati, cmi5 progress kengaytmasi, har 10 %), resumed (saqlangan holatdan davom), suspended
- * (tugallanmagan sessiya yopilganda, result.duration bilan). Launch parametrlari bo'lmasa (NEXTID iframe'i) — Xapi umuman ishlatilmaydi.
+ * Launch parametrlari bo'lmasa (endpoint/actor yo'q) — Xapi ishlatilmaydi (mustaqil rejim).
  */
 (function (W) {
   'use strict';
@@ -176,12 +179,23 @@
   }
 
   var VERB = 'http://adlnet.gov/expapi/verbs/', ACT = 'http://adlnet.gov/expapi/activities/';
-  var PROGRESS_EXT = 'https://w3id.org/xapi/cmi5/result/extensions/progress';
+  var PROGRESS_EXT = 'https://w3id.org/xapi/cmi5/result/extensions/progress', WEIGHT_EXT = 'http://id.tincanapi.com/extension/cmi-interaction-weighting';
+  var XAPI_VER = '1.0.2';   // Articulate Rise (scormdriver) bilan bir xil — NEXTID shuni kutadi; bizning LRS 1.0.x ni qabul qiladi
+  // State API hujjatlari (Rise nomlari): suspend_data — kodlangan holat, bookmark — joriy qadam kaliti, cumulative_time — jami ms (sessiyalar bo'yicha),
+  // language_preference — faqat o'qiladi; isft-state — eski paketlar holati (faqat o'qiladi: eski sessiya davom ettirilsin)
+  var ST_SUSPEND = 'suspend_data', ST_BOOKMARK = 'bookmark', ST_TIME = 'cumulative_time', ST_LANG = 'language_preference', ST_LEGACY = 'isft-state';
   function hash36(t) { var h = 5381; t = str(t); for (var i = 0; i < t.length; i++) h = ((h << 5) + h + t.charCodeAt(i)) | 0; return (h >>> 0).toString(36); }
+  function xdur(ms) {     // Rise ko'rinishi: PT12.98S, PT1M11.22S, PT1H2M3S (nol qismlarsiz)
+    var cs = Math.max(0, Math.round(ms / 10)), h = Math.floor(cs / 360000), m = Math.floor(cs / 6000) % 60, s = (cs % 6000) / 100;
+    return 'PT' + (h ? h + 'H' : '') + (m ? m + 'M' : '') + (Math.round(s * 100) / 100) + 'S';
+  }
+  function sameOrigin(u) { try { return new URL(u, W.location.href).origin === W.location.origin; } catch (e) { return false; } }
   // Tasdiqlanmagan statementlar ombori (localStorage; mavjud bo'lmasa — faqat xotira). Hajm chegarasi: 300 ta / ~400 KB (eskilari tashlanadi).
+  // Yozuv: {id, s: statement, put: true — «PUT statements?statementId=» (alohida), false — «POST statements» (massiv)}; eski yozuvlar (faqat statement) — POST.
   function Outbox(key) {
     var list = [];
     try { var raw = W.localStorage.getItem(key); var a = raw ? JSON.parse(raw) : []; if (Array.isArray(a)) list = a.filter(function (x) { return x && x.id; }); } catch (e) { list = []; }
+    list = list.map(function (x) { return x.s && x.s.id === x.id ? x : { id: x.id, s: x, put: false }; });
     function save() {
       while (list.length > 300) list.shift();
       try {
@@ -196,20 +210,24 @@
       ack: function (ids) { var m = {}; ids.forEach(function (i) { m[i] = 1; }); var n = list.length; list = list.filter(function (x) { return !m[x.id]; }); if (list.length !== n) save(); }
     };
   }
+  // Launch actor: mbox / mbox_sha1sum / openid / account — xAPI shakliga keltiriladi (TinCan massiv va accountServiceHomePage ham);
+  // identifikatorsiz, faqat «name» (NEXTID: {"name":9424693}) — o'zgartirilmay uzatiladi (objectType qo'shiladi, raqamli nom raqamligicha qoladi)
   function parseActor(s) {
     var a; try { a = JSON.parse(s); } catch (e) { return null; }
     if (Array.isArray(a)) a = a[0];
     if (!a || typeof a !== 'object') return null;
     function one(v) { return Array.isArray(v) ? v[0] : v; }
     var o = { objectType: 'Agent' }, name = one(a.name);
-    if (name) o.name = str(name);
-    if (one(a.mbox)) { var m = str(one(a.mbox)); o.mbox = /^mailto:/i.test(m) ? m : 'mailto:' + m; }
-    else if (one(a.mbox_sha1sum)) o.mbox_sha1sum = str(one(a.mbox_sha1sum));
-    else if (one(a.openid)) o.openid = str(one(a.openid));
+    if (one(a.mbox)) { if (name != null && name !== '') o.name = str(name); var m = str(one(a.mbox)); o.mbox = /^mailto:/i.test(m) ? m : 'mailto:' + m; }
+    else if (one(a.mbox_sha1sum)) { if (name) o.name = str(name); o.mbox_sha1sum = str(one(a.mbox_sha1sum)); }
+    else if (one(a.openid)) { if (name) o.name = str(name); o.openid = str(one(a.openid)); }
     else if (one(a.account)) {
+      if (name) o.name = str(name);
       var ac = one(a.account) || {};
       o.account = { homePage: str(ac.homePage || ac.accountServiceHomePage), name: str(ac.name || ac.accountName) };
       if (!o.account.homePage || !o.account.name) return null;
+    } else if ((typeof a.name === 'number' && isFinite(a.name)) || (typeof a.name === 'string' && a.name.trim())) {
+      o.name = a.name;   // NEXTID: faqat nom — aynan shunday (Rise ham shunday yuboradi)
     } else return null;
     return o;
   }
@@ -221,102 +239,156 @@
       activity_id: q.get('activity_id') || '' };
   }
 
+  // xAPI — Articulate Rise 360 (scormdriver) bilan simdagi moslik (NEXTID.LMS shu ketma-ketlikni kutadi; docs/paket.md «Kuzatuv»):
+  //  ochilganda: GET state language_preference, cumulative_time → PUT attempted → GET suspend_data, bookmark (yo'q bo'lsa — eski isft-state);
+  //  jarayonda: PUT state suspend_data / bookmark (o'zgarganda), PUT progressed (cmi5 progress, butun foiz oshganda), POST answered (savol);
+  //  yakunlanganda / test hal qilganda: POST passed | failed {success, duration, completion, score?}; yopilganda: POST attempted {duration} va
+  //  cumulative_time. Boshqa domendagi LRS'ga yopilish so'rovlari — xAPI 1.0.x muqobil sintaksisi (POST ?method=…, forma: CORS-oddiy so'rov,
+  //  preflight kerak emas — sahifa yopilganda ham yetib boradi); bir domendagi (bizning LRS) — keepalive fetch, oddiy sarlavhalar bilan.
+  //  Bizning analitika uchun qo'shimcha (Rise'da yo'q): test bloki natijasi (passed/failed …/block/<id>), kurs muharriri: dars experienced/completed.
   function Xapi(lp, C, opts) {
-    var seg = '/' + ((opts && opts.unit) || 'block') + '/';   // ichki faoliyat yo'li: paket — /block/<id>, kurs — /lesson/<uid>
+    var unit = (opts && opts.unit) || 'block', seg = '/' + unit + '/';   // ichki faoliyat yo'li: paket — /block/<id>, kurs — /lesson/<uid>
     var actId = httpUrl(lp.activity_id) || httpUrl(C.tracking.activity_id) || ('urn:isft:paket:' + C.id);
     var reg = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(lp.registration) ? lp.registration : null;
-    var queue = [], busy = false, inflight = 0, retryMs = 0, retryT = 0, dead = false, putT = 0, lastState = null, lang = C.lang || 'uz';
-    var box = Outbox('isft-xapi-q:' + hash36(lp.endpoint + '|' + actId + '|' + JSON.stringify(lp.actor)));
-    box.pending().forEach(function (s) { queue.push(s); });   // oldingi sessiyadan yuborilmay qolganlar (id o'sha — LRS takrorni o'tkazib yuboradi)
-    function ids(b) { return b.map(function (s) { return s.id; }); }
+    var cross = !sameOrigin(lp.endpoint), agentJson = JSON.stringify(lp.actor), lang = C.lang || 'uz', t0 = Date.now(), cum0 = 0;
+    var queue = [], busy = false, inflight = 0, retryMs = 0, retryT = 0, dead = false, putT = 0;
+    var want = {}, sent = {}, stBusy = {}, seen = {}, rdFail = {}, stWait = 0, stT = 0;   // state hujjatlari: yoziladigan qiymat, LRS'da borligi ma'lum qiymat, yozilmoqda
+    var box = Outbox('isft-xapi-q:' + hash36(lp.endpoint + '|' + actId + '|' + agentJson));
+    box.pending().forEach(function (x) { queue.push(x); });   // oldingi sessiyadan yuborilmay qolganlar (id o'sha — LRS takrorni o'tkazib yuboradi)
+    function ids(b) { return b.map(function (x) { return x.id; }); }
     function final(okk, code) { return okk || (code >= 400 && code < 500 && code !== 401 && code !== 403 && code !== 408 && code !== 429); }
-    function headers(json) {
-      var h = { 'X-Experience-API-Version': '1.0.3' };
+    function enc(v) { return encodeURIComponent(v); }
+    function qs(p) { var k, out = []; for (k in p) if (p[k] != null) out.push(enc(k) + '=' + enc(p[k])); return out.length ? '?' + out.join('&') : ''; }
+    function stateParams(id) { var p = { stateId: id, activityId: actId, agent: agentJson }; if (reg) p.registration = reg; return p; }
+    // bitta so'rov: oddiy (sarlavhalar bilan) yoki sahifa yopilayotganda boshqa domenga — muqobil sintaksis (forma maydonlari Rise tartibida)
+    function call(method, path, params, body, ctype, keep) {
+      if (keep && cross && method !== 'GET') {
+        var f = new URLSearchParams(), k;
+        for (k in params) if (params[k] != null) f.append(k, params[k]);
+        if (lp.auth) f.append('Authorization', lp.auth);
+        f.append('X-Experience-API-Version', XAPI_VER);
+        if (ctype) f.append('Content-Type', ctype);
+        if (body != null) f.append('content', body);
+        var fb = f.toString();
+        return fetch(lp.endpoint + path + '?method=' + method, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: fb,
+          keepalive: fb.length < 60000, credentials: 'omit', mode: 'cors' });
+      }
+      var h = { 'X-Experience-API-Version': XAPI_VER };
       if (lp.auth) h.Authorization = lp.auth;
-      if (json) h['Content-Type'] = 'application/json';
-      return h;
+      if (ctype) h['Content-Type'] = ctype;
+      var o = { method: method, headers: h, credentials: 'omit', mode: 'cors' };
+      if (body != null) { o.body = body; o.keepalive = !!keep && body.length < 60000; }
+      return fetch(lp.endpoint + path + qs(params), o);
     }
-    function lm(t) { var o = {}; o[lang] = t; return o; }
-    var course = { objectType: 'Activity', id: actId, definition: { type: ACT + 'course', name: lm(C.title) } };
-    function ctx(parent) {
-      var c = { platform: 'ISFT Core', language: lang, contextActivities: {} };
-      if (reg) c.registration = reg;
-      if (parent) c.contextActivities.parent = [{ objectType: 'Activity', id: actId }];
-      else delete c.contextActivities;
-      return c;
-    }
-    function stmt(verb, en, obj, result, parent) {
-      var s = { id: uuid(), actor: lp.actor, verb: { id: VERB + verb, display: { 'en-US': en } }, object: obj, timestamp: new Date().toISOString(), context: ctx(parent) };
+    function lm(t) { var o = {}; o[lang] = str(t); return o; }
+    var course = { id: actId, objectType: 'Activity', definition: { type: ACT + 'course', name: { en: str(C.title) }, description: { en: '' } } };
+    function stmt(verb, obj, result, parent) {
+      var s = { id: uuid(), timestamp: new Date().toISOString(), actor: lp.actor, verb: { id: VERB + verb, display: { 'en-US': verb } } };
       if (result) s.result = result;
+      s.object = obj;
+      var c = {};
+      if (parent) c.contextActivities = { parent: [course] };
+      if (reg) c.registration = reg;
+      if (parent || reg) s.context = c;
       return s;
     }
-    function send(s) { queue.push(s); box.add(s); flush(false); }
-    function post(batch, keep) {
-      return fetch(lp.endpoint + 'statements', { method: 'POST', headers: headers(true), body: JSON.stringify(batch), keepalive: !!keep, credentials: 'omit', mode: 'cors' });
+    function send(s, put) { var x = { id: s.id, s: s, put: !!put }; queue.push(x); box.add(x); pump(); }
+    function req(b, keep) {
+      if (b[0].put) return call('PUT', 'statements', { statementId: b[0].id }, JSON.stringify(b[0].s), 'application/json', keep);
+      return call('POST', 'statements', {}, JSON.stringify(b.map(function (x) { return x.s; })), 'application/json', keep);
     }
-    function keep(b) {      // keepalive: javob kelsa (sahifa hali tirik) — omborda tasdiqlanadi, aks holda keyingi sessiyada qayta yuboriladi
-      try { post(b, true).then(function (r) { if (final(r.ok, r.status)) box.ack(ids(b)); }, function () {}); } catch (e) { /* jim */ }
+    function head(list, max) {   // navbat boshidan bitta so'rov: PUT — bitta statement, POST — ketma-ket POST statementlar massivi
+      if (list[0].put) return [list[0]];
+      var b = [];
+      for (var i = 0; i < list.length && !list[i].put && b.length < 50; i++) {
+        b.push(list[i]);
+        if (b.length > 1 && JSON.stringify(b).length > max) { b.pop(); break; }
+      }
+      return b;
+    }
+    function keepSend(b) {   // keepalive: javob kelsa (sahifa hali tirik) — omborda tasdiqlanadi, aks holda keyingi sessiyada qayta yuboriladi
+      try { req(b, true).then(function (r) { if (final(r.ok, r.status)) box.ack(ids(b)); }, function () {}); } catch (e) { /* jim */ }
     }
     function flushAll() {   // sahifa yopilmoqda: navbatdagi (yuborilayotganlardan tashqari) hamma statement keepalive bilan, 64 KB dan kichik bo'laklarda
-      var rest = queue.slice(busy ? inflight : 0), part = [];
-      rest.forEach(function (s) {
-        part.push(s);
-        if (JSON.stringify(part).length > 50000 && part.length > 1) { var last = part.pop(); keep(part); part = [last]; }
-      });
-      if (part.length) keep(part);
+      var rest = queue.slice(busy ? inflight : 0), max = cross ? 25000 : 50000;   // muqobil sintaksisda mazmun URL-kodlanadi (~1.5 baravar)
+      while (rest.length) { var b = head(rest, max); rest = rest.slice(b.length); keepSend(b); }
       queue.length = busy ? inflight : 0;
     }
-    function flush(keep) {
-      if (keep) return flushAll();
+    function pump() {
       if (busy || !queue.length || dead) return;
-      var batch = queue.slice(0, 50);
+      var batch = head(queue, 500000);
       busy = true; inflight = batch.length;
       var done = function (okk, code) {
         busy = false; inflight = 0;
         if (final(okk, code)) {
           if (!okk) note('LRS ' + code + ': statementlar rad etildi');
           queue.splice(0, batch.length); retryMs = 0; box.ack(ids(batch));
-          if (queue.length) flush(false);
+          if (queue.length) pump();
         } else {
           retryMs = Math.min(30000, retryMs ? retryMs * 2 : 2000);
-          clearTimeout(retryT); retryT = setTimeout(function () { flush(false); }, retryMs);
+          clearTimeout(retryT); retryT = setTimeout(pump, retryMs);
         }
       };
-      try {
-        post(batch, false).then(function (r) { done(r.ok, r.status); }, function () { done(false, 0); });
-      } catch (e) { done(false, 0); }
+      try { req(batch, false).then(function (r) { done(r.ok, r.status); }, function () { done(false, 0); }); }
+      catch (e) { done(false, 0); }
     }
-    function stateUrl() {
-      var u = lp.endpoint + 'activities/state?activityId=' + encodeURIComponent(actId) + '&agent=' + encodeURIComponent(JSON.stringify(lp.actor)) + '&stateId=isft-state';
-      return reg ? u + '&registration=' + reg : u;
+    function writeState(id, keep) {   // o'zgargan hujjat — PUT (application/octet-stream, Rise kabi); bittasi yozilayotgan bo'lsa — keyin navbat bilan
+      var v = want[id];
+      if (v == null || v === sent[id] || rdFail[id] || (stBusy[id] && !keep)) return;   // rdFail: o'qish muvaffaqiyatsiz — LRS'dagi hujjatni ustiga yozmaymiz
+      stBusy[id] = 1;
+      // xato bo'lsa darhol qayta urinilmaydi (aks holda 429/5xx/oflayn — cheksiz tez so'rovlar): 2 s dan 60 s gacha kutish, keyin yana
+      var fin = function (okk) {
+        stBusy[id] = 0;
+        if (okk) { sent[id] = v; stWait = 0; } else { note('State ' + id + ' yozilmadi'); stWait = Math.min(60000, stWait ? stWait * 2 : 2000); }
+        if (keep || dead || want[id] === sent[id]) return;
+        if (okk) writeState(id, false);
+        else { clearTimeout(stT); stT = setTimeout(function () { stT = 0; writeDocs(false); }, stWait); }
+      };
+      try { call('PUT', 'activities/state', stateParams(id), v, 'application/octet-stream', keep).then(function (r) { fin(r.ok); }, function () { fin(false); }); }
+      catch (e) { fin(false); }
     }
-    function putState(keep) {
-      if (lastState == null) return;
-      var body = lastState;
-      try { fetch(stateUrl(), { method: 'PUT', headers: headers(true), body: body, keepalive: !!keep && body.length < 60000, credentials: 'omit', mode: 'cors' }).then(function () {}, function () { note('State PUT xato'); }); } catch (e) { /* jim */ }
-    }
-    var seenBlocks = {};
-    try { W.addEventListener('online', function () { retryMs = 0; flush(false); }); } catch (e) { /* jim */ }
+    function writeDocs(keep) { clearTimeout(putT); if (!keep && stWait && stT) return; writeState(ST_BOOKMARK, keep); writeState(ST_SUSPEND, keep); }
+    try { W.addEventListener('online', function () { retryMs = 0; pump(); stWait = 0; clearTimeout(stT); stT = 0; writeDocs(false); }); } catch (e) { /* jim */ }
+    function score(p) { return { scaled: Math.round(p * 100) / 10000, raw: p, min: 0, max: 100 }; }
     return {
       kind: 'xapi', label: 'xAPI', limit: 60000, actId: actId,
       init: function () {
-        var ctl = W.AbortController ? new AbortController() : null, t = setTimeout(function () { if (ctl) ctl.abort(); }, 5000);
         var self = this;
-        return fetch(stateUrl(), { headers: headers(false), credentials: 'omit', mode: 'cors', signal: ctl ? ctl.signal : undefined })
-          .then(function (r) { return r.status === 200 ? r.text() : ''; }, function () { return ''; })
-          .then(function (txt) {
+        // har so'rovga o'z muddati (ketma-ket 3 bosqich bitta 5 s ga sig'maydi); o'qish XATOsi (404 emas) bo'lsa — shu hujjat ustiga yozilmaydi (saqlangan progress yo'qolmasin)
+        function get(id) {
+          var ctl = W.AbortController ? new AbortController() : null, t = setTimeout(function () { if (ctl) ctl.abort(); }, 8000);
+          return fetch(lp.endpoint + 'activities/state' + qs(stateParams(id)), { headers: (function () { var h = { 'X-Experience-API-Version': XAPI_VER }; if (lp.auth) h.Authorization = lp.auth; return h; })(),
+            credentials: 'omit', mode: 'cors', signal: ctl ? ctl.signal : undefined }).then(function (r) {
             clearTimeout(t);
-            send(stmt('initialized', 'initialized', course, null, false));
-            var st = decodeState(txt);
-            if (st && ((typeof st.v === 'object' && st.v && Object.keys(st.v).length) || str(st.v).indexOf('1') >= 0 || +st.c > 0)) send(stmt('resumed', 'resumed', course, null, false));
-            return { state: txt || '', location: st ? str(st.c) : '', learner: lp.actor.name || '', mastery: null, review: false, xapi: self };
-          });
+            if (r.status === 200) return r.text();
+            if (r.status !== 404 && r.status !== 204) rdFail[id] = 1;
+            return null;
+          }, function () { clearTimeout(t); rdFail[id] = 1; return null; });
+        }
+        // Rise tartibi: avval language_preference va cumulative_time javobi, keyin «attempted», so'ng suspend_data va bookmark
+        var pLang = get(ST_LANG), pTime = get(ST_TIME);
+        var pHead = Promise.all([pLang, pTime]).then(function () { send(stmt('attempted', course), true); });
+        var pSusp = pHead.then(function () { return get(ST_SUSPEND); }), pBook = pHead.then(function () { return get(ST_BOOKMARK); });
+        return Promise.all([pLang, pTime, pSusp, pBook]).then(function (v) {
+          cum0 = /^\d{1,15}$/.test(str(v[1]).trim()) ? +str(v[1]).trim() : 0;
+          if (v[2] != null) sent[ST_SUSPEND] = v[2];
+          if (v[3] != null) sent[ST_BOOKMARK] = v[3];
+          return v[2] ? [v[2], v[3]] : get(ST_LEGACY).then(function (old) { return [old || '', v[3]]; });
+        }).then(function (x) {
+          var st = decodeState(x[0]), nm = lp.actor.name;
+          return { state: x[0] || '', location: x[1] ? str(x[1]) : st ? str(st.c) : '', learner: nm == null || /^\d+$/.test(str(nm)) ? '' : str(nm),
+            mastery: null, review: false, xapi: self };
+        });
       },
-      save: function (s) { lastState = s; clearTimeout(putT); putT = setTimeout(function () { putState(false); }, 800); },
-      visit: function (b) {
-        if (seenBlocks[b.id]) return; seenBlocks[b.id] = 1;
-        send(stmt('experienced', 'experienced', { objectType: 'Activity', id: actId + seg + b.id,
-          definition: { type: ACT + (b.type === 'quiz' ? 'assessment' : b.type === 'video' ? 'media' : 'module'), name: lm(b.title) } }, null, true));
+      save: function (s, loc) {
+        if (dead) return;
+        want[ST_SUSPEND] = s; if (loc) want[ST_BOOKMARK] = str(loc).slice(0, 1000);
+        clearTimeout(putT); putT = setTimeout(function () { writeDocs(false); }, 800);
+      },
+      visit: function (b) {   // Rise: ko'p darsli kursda har dars — PUT experienced (ota — kurs); bitta darsli paket bloklari uchun yuborilmaydi
+        if (unit === 'block' || !b || seen[b.id]) return; seen[b.id] = 1;
+        send(stmt('experienced', { id: actId + seg + b.id, objectType: 'Activity',
+          definition: { type: ACT + (b.type === 'quiz' ? 'assessment' : 'module'), name: lm(b.title) } }, null, true), true);
       },
       interaction: function (it) {
         var def = { type: ACT + 'cmi.interaction', name: lm(it.title), description: lm(it.desc), interactionType: it.type === 'true-false' ? 'true-false' : it.type };
@@ -324,53 +396,50 @@
         if (it.type === 'matching') ['source', 'target'].forEach(function (k) { def[k] = arr(it[k]).map(function (x) { return { id: x.id, description: lm(x.text) }; }); });
         if (arr(it.cX).length) def.correctResponsesPattern = arr(it.cX).map(str);   // har muqobil javob — alohida element
         if (it.neutral) {   // mulohaza (reflect): baholanmaydi — «responded», success yo'q
-          send(stmt('responded', 'responded', { objectType: 'Activity', id: actId + seg + it.block, definition: def }, { response: it.rX }, true));
+          send(stmt('responded', { id: actId + seg + it.block, objectType: 'Activity', definition: def }, { response: it.rX }, true), false);
           return;
         }
-        send(stmt('answered', 'answered', { objectType: 'Activity', id: actId + seg + it.block + '/q/' + encodeURIComponent(it.qid), definition: def },
-          { success: it.ok, response: it.rX }, true));
+        var ex = {}; ex[WEIGHT_EXT] = 1;
+        send(stmt('answered', { id: actId + seg + it.block + '/q/' + encodeURIComponent(it.qid), objectType: 'Activity', definition: def },
+          { success: !!it.ok, response: it.rX, extensions: ex }, true), false);
       },
-      done: function (b) {   // ichki faoliyat (kurs muharriri: dars) yakunlandi — sessiyada bir marta
-        if (seenBlocks['done:' + b.id]) return; seenBlocks['done:' + b.id] = 1;
-        send(stmt('completed', 'completed', { objectType: 'Activity', id: actId + seg + b.id,
-          definition: { type: ACT + (b.type === 'quiz' ? 'assessment' : 'module'), name: lm(b.title) } }, { completion: true }, true));
+      done: function (b) {   // ichki faoliyat (kurs muharriri: dars) yakunlandi — sessiyada bir marta (bizning LRS dars bo'yicha holat hisoblaydi)
+        if (seen['done:' + b.id]) return; seen['done:' + b.id] = 1;
+        send(stmt('completed', { id: actId + seg + b.id, objectType: 'Activity',
+          definition: { type: ACT + (b.type === 'quiz' ? 'assessment' : 'module'), name: lm(b.title) } }, { completion: true }, true), false);
       },
-      quizResult: function (b, res) {
-        send(stmt(res.passed ? 'passed' : 'failed', res.passed ? 'passed' : 'failed',
-          { objectType: 'Activity', id: actId + seg + b.id, definition: { type: ACT + 'assessment', name: lm(b.title) } },
-          { score: { scaled: Math.round(res.pct * 100) / 10000, raw: res.pct, min: 0, max: 100 }, success: res.passed, completion: true }, true));
+      quizResult: function (b, res) {   // test bloki natijasi (bizning LRS: urinishlar, «testdan o'tolmaslik»)
+        send(stmt(res.passed ? 'passed' : 'failed', { id: actId + seg + b.id, objectType: 'Activity', definition: { type: ACT + 'assessment', name: lm(b.title) } },
+          { score: score(res.pct), success: !!res.passed, completion: true }, true), false);
       },
       report: function (r, st) {
-        // progress (har 10 %): «progressed» + cmi5 progress kengaytmasi — bir xil qiymat qayta yuborilmaydi (holat: xp)
-        if (r.progress != null && !r.complete) {
-          var pp = Math.floor(Math.max(0, Math.min(1, +r.progress || 0)) * 10) * 10;
-          if (pp > 0 && pp > (+st.xp || 0)) { st.xp = pp; var ex = {}; ex[PROGRESS_EXT] = pp; send(stmt('progressed', 'progressed', course, { extensions: ex }, false)); }
-        }
-        // kurs darajasidagi natija (passed/failed + ball) — o'zgargan har safar; «passed» dan keyin «failed» yuborilmaydi
-        if (r.success !== 'unknown' && !(/^p/.test(str(st.xr)) && r.success !== 'passed')) {
-          var key = r.success.charAt(0) + (r.score == null ? '' : r.score) + (r.complete ? 'c' : '');
+        // progress: har 25% da (25, 50, 75) va yakunda 100 — PUT progressed (cmi5 progress kengaytmasi). Rise bitta darsda faqat 100 yuboradi;
+        // oraliq qiymatlar NEXTID'da jarayonni ko'rsatish uchun, lekin so'rovlar soni oz (har foizda emas). Takror yo'q (holat: xp)
+        var pp = r.complete ? 100 : Math.floor(Math.max(0, Math.min(1, +r.progress || 0)) * 4 + 1e-9) * 25;
+        if (pp >= 100 && !r.complete) pp = 75;
+        if (pp > 0 && pp > (+st.xp || 0)) { st.xp = pp; var ex = {}; ex[PROGRESS_EXT] = pp; send(stmt('progressed', course, { extensions: ex }), true); }
+        // kurs natijasi: dars yakunlansa — passed (Rise «passed/incomplete»), test yiqilsa — failed; o'zgargan har safar, «passed» dan keyin «failed» yo'q
+        var verb = r.success === 'failed' ? 'failed' : r.complete ? 'passed' : null;
+        if (verb && !(/^p/.test(str(st.xr)) && verb !== 'passed')) {
+          var key = verb.charAt(0) + (r.score == null ? '' : r.score) + (r.complete ? 'c' : '');
           if (st.xr !== key) {
             st.xr = key;
-            var rr = { success: r.success === 'passed', completion: !!r.complete };
-            if (r.score != null) rr.score = { scaled: Math.round(r.score * 100) / 10000, raw: r.score, min: 0, max: 100 };
-            send(stmt(r.success, r.success, course, rr, false));
+            var rr = { success: verb === 'passed', duration: xdur(Date.now() - t0), completion: !!r.complete };
+            if (r.score != null) rr.score = score(r.score);
+            send(stmt(verb, course, rr), false);
           }
         }
-        if (r.complete && !st.cs) {
-          st.cs = 1;
-          var res = { completion: true }; if (r.score != null) res.score = { scaled: Math.round(r.score * 100) / 10000, raw: r.score, min: 0, max: 100 };
-          if (r.success !== 'unknown') res.success = r.success === 'passed';
-          send(stmt('completed', 'completed', course, res, false));
-        }
       },
-      commit: function () { putState(false); },
-      flush: function () { flush(true); putState(true); },
+      commit: function () { writeDocs(false); },
+      flush: function () { flushAll(); writeDocs(true); },
       finish: function (ms, r) {
         if (dead) return;
-        var res = { duration: iso8601(ms), completion: !!r.complete };
-        if (!r.complete) { var su = stmt('suspended', 'suspended', course, { duration: iso8601(ms), completion: false }, false); queue.push(su); box.add(su); }
-        var tm = stmt('terminated', 'terminated', course, res, false); queue.push(tm); box.add(tm);
-        clearTimeout(putT); clearTimeout(retryT); putState(true); dead = true; flushAll();
+        clearTimeout(retryT);
+        var x = stmt('attempted', course, { duration: xdur(ms) }), it = { id: x.id, s: x, put: false };
+        queue.push(it); box.add(it);
+        dead = true; flushAll();
+        want[ST_TIME] = String(cum0 + Math.max(0, Math.round(ms)));
+        writeState(ST_TIME, true); writeDocs(true);
       }
     };
   }
@@ -391,8 +460,8 @@
   }
 
 
-  W.ISFTLms = { version: '1.0.0', setLog: function (fn) { if (typeof fn === 'function') log = fn; },
+  W.ISFTLms = { version: '1.1.0', setLog: function (fn) { if (typeof fn === 'function') log = fn; },
     encodeState: encodeState, decodeState: decodeState, findAPI: findAPI, Scorm12: Scorm12, Scorm2004: Scorm2004, parseActor: parseActor,
     launchParams: launchParams, previewParam: previewParam, Xapi: Xapi, Preview: Preview,
-    util: { uuid: uuid, cmiId: cmiId, letter: letter, time12: time12, iso8601: iso8601, clock12: clock12, stamp2004: stamp2004, httpUrl: httpUrl } };
+    util: { uuid: uuid, cmiId: cmiId, letter: letter, time12: time12, iso8601: iso8601, xdur: xdur, clock12: clock12, stamp2004: stamp2004, httpUrl: httpUrl } };
 })(window);

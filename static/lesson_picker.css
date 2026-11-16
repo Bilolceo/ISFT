@@ -1,0 +1,15 @@
+/* ---------- Dars tanlagich (lesson_picker.js) — tokenlar style.css'da ---------- */
+.lp-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px 14px;margin-bottom:10px}
+.lp-grid label{display:flex;flex-direction:column;gap:4px;font-size:12.5px;font-weight:600;color:var(--ink-2);min-width:0}
+.lp-grid select{font:inherit;font-size:14px;font-weight:400;color:var(--ink);background:var(--surface);border:1px solid var(--line-2);border-radius:10px;padding:8px 10px;width:100%;min-width:0;box-sizing:border-box;text-overflow:ellipsis}
+.lp-grid select:disabled{opacity:.55;cursor:not-allowed}
+.lp-grid select:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+.lp-live:empty{display:none}
+.lp-empty{margin:0 0 10px;padding:10px 12px;border-radius:12px;background:var(--warn-soft);color:var(--warn);font-size:13px}
+.lp-info{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center;padding:10px 12px;border-radius:12px;background:var(--surface-2);border:1px solid var(--line);margin-bottom:12px;min-width:0}
+.lp-info code{font-size:13px;font-weight:700;color:var(--ink);background:var(--surface);border:1px solid var(--line-2);border-radius:8px;padding:3px 8px;overflow-wrap:anywhere;max-width:100%}
+.lp-info span{display:flex;flex-direction:column;font-size:13px;color:var(--ink);min-width:0;overflow-wrap:anywhere}
+.lp-info small{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
+@media (max-width:900px){.lp-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:760px){.lp-grid select{min-height:44px}}
+@media (max-width:520px){.lp-grid{grid-template-columns:minmax(0,1fr)}.lp-info{flex-direction:column;align-items:flex-start}}

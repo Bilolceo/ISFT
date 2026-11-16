@@ -46,7 +46,7 @@ va mavzularga bog'lanadi. Nomi noma'lum mavzu «N-mavzu» deb ko'rsatiladi.
 | `tb_gen` | Har bir AI so'rovi: kurs, mavzu, model, natija, vaqt (ms), xato, kirish/chiqish tokenlari, so'ralgan/olingan savollar |
 | `tb_meta` | `min_q` (standart 10) — mavzu «qamrab olingan» hisoblanishi uchun tasdiqlangan savollar soni; `seed_v1` |
 
-Savol turlari: `mcq` — bir javobli test (3–6 variant), `tf` — to'g'ri / noto'g'ri, `fill` — bo'sh joyni to'ldirish (`____`, bir nechta qabul qilinadigan javob).
+Savol turlari: `mcq` — bir javobli test (3–6 variant), `multi` — **bir nechta javobli test** (3–6 variant, kamida 2 ta to'g'ri, hammasi emas; pleyerda belgilash katakchalari, baholash — «hammasi va faqat shular», Kurs muharririda «Bir nechta javob»; Word importi yoki qo'lda — AI generatsiyasi `mcq/tf/fill` bilan cheklangan: `GEN_TYPES`), `tf` — to'g'ri / noto'g'ri, `fill` — bo'sh joyni to'ldirish (`____`, bir nechta qabul qilinadigan javob).
 
 Holatlar: **qoralama → tekshiruvda → tasdiqlandi / rad etildi**. Har qanday tahrir savolni qoralamaga qaytaradi.
 Tasdiqlangan savolni faqat bo'lim tahrirlaydi yoki o'chiradi.
@@ -63,6 +63,10 @@ mavzuga yuklangan ma'ruza matni (`pk_assets`, `purpose='matn'`, rasm/jadval belg
 mavzuga nom beradi. UI: «+ Savol qo'shish»; kurs tanlashda «●» o'rniga «— savollari bor»; Word eksporti oldinda, Moodle XML / GIFT / Aiken —
 «Kengaytirilgan» ichida; kalitsiz xabar — «AI ulanmagan — administratorga murojaat qiling» (texnik nomsiz). Dars ekranidagi «Mashq va test qo'shish»
 shu API'lar bilan ishlaydi — o'qituvchi Test bank bo'limiga o'tmasdan savol qo'shadi va tekshiruvga yuboradi.
+
+**Word'dan import (2026-11).** «Dars tayyorlash»da yuklangan tayyor test fayli (✅ belgili, `app/test_import.py`, docs/paket.md — «Tayyor testni
+Word'dan import») savollari shu jadvalga `src='import'`, `engine='import'` bilan tushadi: bo'lim yuklasa — tasdiqlangan (log: «Word'dan import (bo'lim)»),
+o'qituvchi yuklasa — qoralama. Ikki va undan ko'p ✅ — `qtype='multi'` (importda ham, «To'g'ri javobni tanlang» oynasida «Bir nechta javob» tanlansa ham). Javobi belgilanmagan savol Test bankka **tushmaydi**: yuklash javobida `needs_answer` (+ `upload_id`) bilan qaytadi, serverda (`pk_import_pending`) kutadi va `POST …/test/answers` bilan belgilangach (yoki «O'tkazib yuborish» — javobsiz qoralama, `correct_count` bloklovchi) shu jadvalga yoziladi (docs/paket.md). Qayta import — o'sha mavzuning oldingi importi o'chiriladi.
 
 ## AI generatsiya
 
@@ -82,7 +86,7 @@ Har bir savol saqlanganda (AI, qo'lda, tahrir) va tasdiqlashdan oldin qayta teks
 | Kod | Og'irlik | Nima |
 |---|---|---|
 | `format` | bloklovchi | Bo'sh matn, variantlar soni (mcq 3–6, tf 2), bo'sh variant, to'ldirishda javob yo'q |
-| `correct_count` | bloklovchi | Bir javobli / to'g'ri-noto'g'ri savolda to'g'ri javob aynan bitta emas |
+| `correct_count` | bloklovchi | Bir javobli / to'g'ri-noto'g'ri savolda to'g'ri javob aynan bitta emas; `multi` da — 2 tadan kam yoki hammasi to'g'ri |
 | `correct_range` | bloklovchi | To'g'ri javob raqami variantlar oralig'idan tashqarida |
 | `dup_option` | bloklovchi / ogohlantirish | Bir xil variantlar (registr, bo'shliq, tinish farqi hisobga olinmaydi); so'zlar o'rni almashgan yoki ≥ 95% o'xshash — ogohlantirish |
 | `num_equiv` | bloklovchi | Son jihatdan teng variantlar: 20 va 20,0; 1/2 va 0.5; 50% va 0,5; «1 000 so'm» va «1000 so'm» |
@@ -105,7 +109,8 @@ Bloklovchi belgisi bor savol tekshiruvga yuborilmaydi va tasdiqlanmaydi; ommaviy
   - **Moodle XML** — kategoriyalar `$course$/top/<Fan (yo'nalish, kurs)>/<1-oraliq|2-oraliq>/<NN-mavzu. Nomi>`; matnlar HTML-escape + CDATA (`]]>` bo'linadi);
     `multichoice` (single), `truefalse`, `shortanswer`; `idnumber` = `ISFT-TB-<id>`.
   - **GIFT** — `$CATEGORY:` qatorlari, `~ = # { } :` va `\` qochiriladi, qator ko'chishi `\n`; umumiy izoh `####`.
-  - **Aiken** — faqat bir javobli savollar (boshqalari o'tkazib yuboriladi, soni `X-Skipped` sarlavhasida).
+  - **Aiken** — faqat bir javobli savollar (`multi` va boshqalari o'tkazib yuboriladi, soni `X-Skipped` sarlavhasida).
+  - `multi` eksporti: Moodle XML — `<single>false</single>`, to'g'rilari `+100/k %`, noto'g'rilari `−100/(n−k) %` (hammasi va faqat shular yig'indisi 100% bo'ladi, qisman ball — Moodle qoidasi); GIFT — `~%50%javob` / `~%-50%javob`; Word — kalitda «A, C».
   - **Word (.docx)** — ISFT blankasida, mavzular bo'yicha savollar va alohida sahifada javoblar kaliti.
 
 ## Qamrov
@@ -157,6 +162,6 @@ eksportlar (XML ElementTree bilan o'qiladi, GIFT qochirish, Aiken formati, .docx
 
 - Moodle'ga to'g'ridan-to'g'ri yuklash (API) yo'q — fayl eksporti.
 - Savol rasmlari va formulalar (LaTeX) qo'llab-quvvatlanmaydi; matn ichidagi formulalar oddiy matn sifatida.
-- Bir nechta to'g'ri javobli (multi-select), moslashtirish (matching) turlari hali yo'q.
+- Moslashtirish (matching) turi Test bankda yo'q (u dars mashqlarida). Bir nechta javobli (`multi`) savolga qisman ball berilmaydi («hammasi yoki hech narsa» — Kurs muharriri va paket pleyeri bilan bir xil).
 - Generatsiya sinxron (bir martada ≤ 5 mavzu); uzun navbat uchun fon vazifasi kerak bo'ladi.
 - Savollarning statistik tahlili (qiyinlik indeksi, ajratish koeffitsiyenti) Moodle natijalari importidan keyin qo'shilishi mumkin.

@@ -72,6 +72,8 @@ def env_for(data: Path, args):
     for k in ("ISFT_CORE_MODULES", "ISFT_CORE_REAL_DATA", "ISFT_CORE_SHOW_DEMO_PASSWORD", "ISFT_CORE_TRUSTED_PROXIES"):
         e.pop(k, None)
     e["ISFT_CORE_CAM_SIM"] = "1"
+    # LibreOffice / OCR mashinada bo'lsa ham asosiy server ularsiz (natija bir xil); ular bilan ishlash — test_paket_office o'z serverida
+    e["ISFT_CORE_OFFICE"], e["ISFT_CORE_OCR"] = "0", "0"
     e["ISFT_CORE_OCC_KEEP_DAYS"] = "40"   # test_regressiya 2–4 haftalik seed tarixini kutadi (standart saqlash — 7 kun)
     e.pop("TELEGRAM_BOT_TOKEN", None)            # testda bot ishga tushmasin
     for k in ("ISFT_CORE_DEMO_TOOLS", "ISFT_CORE_PRES_FAKE", "ISFT_CORE_PRES_DAILY", "ISFT_CORE_CHECK_FAKE", "ISFT_CORE_CHECK_DAILY", "ISFT_CORE_CHECK_SYNC"):   # testlar standart (prod) sozlamani kutadi

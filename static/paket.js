@@ -1,3 +1,4 @@
+const PK_AUTO_CAPS = false;   // «Avtomatik subtitr (AI)» tugmasi yashirilgan (ISFT darslari YouTube havolasi bilan; kerak bo'lsa true qiling)
 /* =====================================================================
    «Dars tayyorlash» (app/paket.py, /api/paket) — NEXTID.LMS uchun dars fayli (Articulate Rise o'rniga): o'qituvchi fayllarni tashlaydi,
    «Tayyorlash»ni bosadi, ko'radi va .zip yuklab oladi.
@@ -42,17 +43,31 @@ const pkSize = b => b >= 1048576 ? `${(b / 1048576).toFixed(1).replace(".", ",")
 const pkErrMsg = d => { const det = d && d.detail; return (d && d.message) || (typeof det === "string" ? det : Array.isArray(det) ? "Maydonlarni tekshiring" : det?.message) || "Xatolik yuz berdi"; };
 
 async function pkApi(url, body, method) {
-  const r = await fetch(url, {method: method || (body === undefined ? "GET" : "POST"), credentials: "same-origin",
-                              headers: body instanceof Blob ? {} : {"Content-Type": "application/json"},
-                              body: body === undefined ? undefined : body instanceof Blob ? body : JSON.stringify(body)});
+  let r;
+  try {
+    r = await fetch(url, {method: method || (body === undefined ? "GET" : "POST"), credentials: "same-origin",
+                          headers: body instanceof Blob ? {} : {"Content-Type": "application/json"},
+                          body: body === undefined ? undefined : body instanceof Blob ? body : JSON.stringify(body)});
+  } catch (err) {         /* tarmoq uzilgan (offline) — server xatosidan farqlanadi */
+    const m = "Tarmoq xatosi — internetni tekshiring";
+    if (body !== undefined) { pkApi.lastErr = m; toast(m); return null; }
+    const e = new Error("net"); e.msg = m; e.net = true; throw e;
+  }
   if (r.status === 401) { showLogin(); throw new Error("auth"); }
   const d = await r.json().catch(() => ({}));
   if (!r.ok) {
     const m = pkErrMsg(d);
-    if (body !== undefined) { toast(m); return null; }
-    const e = new Error(r.status === 403 ? "denied" : "api"); e.msg = m; throw e;
+    if (body !== undefined) { pkApi.lastErr = m; toast(m); return null; }
+    const e = new Error(r.status === 403 ? "denied" : "api"); e.msg = m; e.status = r.status; throw e;
   }
   return d;
+}
+/* yuklanmagan blok: xato matni (tarmoq / server) + «Qayta urinish» (role="alert") */
+function pkFail(box, e, retry) {
+  if (!box) return;
+  const msg = e?.msg || (e?.name === "TypeError" ? "Tarmoq xatosi — internetni tekshiring" : "Ma'lumotni yuklab bo'lmadi");
+  box.innerHTML = `<div class="card pk-card pk-fail"><p role="alert">${esc(msg)}</p>${retry ? `<button type="button" class="btn sm" data-retry>Qayta urinish</button>` : ""}</div>`;
+  const b = box.querySelector("[data-retry]"); if (b) b.onclick = () => { b.disabled = true; b.textContent = "Yuklanmoqda…"; retry(); };
 }
 function pkTable(cols, rows, {empty = "Ma'lumot yo'q"} = {}) {
   if (!rows.length) return `<div class="pk-empty">${esc(empty)}</div>`;
@@ -60,19 +75,118 @@ function pkTable(cols, rows, {empty = "Ma'lumot yo'q"} = {}) {
     rows.map(r => `<tr>${cols.map(c => `<td data-l="${esc(c[0])}" class="${c[2] || ""}"><div>${c[1](r) ?? ""}</div></td>`).join("")}</tr>`).join("") +
     `</tbody></table></div>`;
 }
+/* ---------- Umumiy modal infratuzilmasi (pkModal) ----------
+   Fokus: ochilganda dialogga (yoki birinchi KO'RINADIGAN maydonga — yashirin input[type=file] emas), Tab/Shift+Tab modal ichida aylanadi, Esc `document`
+   darajasida (fokus tashqarida bo'lsa ham) yuqoridagi modalni yopadi; fon `inert`; yopilganda fokus ochgan elementga qaytadi (u DOM'dan ketgan bo'lsa — shu
+   joyning izi bo'yicha qayta topiladi yoki eng yaqin ota-onaga). Orqa fonni bosib yopish — mousedown VA mouseup ikkalasi ham fonda bo'lsa (va ochilgandan
+   ~0,4 s keyin: ikki marta tez bosish dialogni yopib qo'ymasin). So'rov ketayotganda (busy) Esc, fon va «Bekor qilish» yopmaydi.
+   Boshqa fayllar uchun: pkModalError(bg, msg) — modal ichida role="alert" xato bloki; pkModalBusy(bg, on). */
+const PK_MODALS = [];
+const PK_FOCUSABLE = 'a[href],button,input,select,textarea,summary,[tabindex]';
+const pkShown = el => !!el && el.isConnected && !el.hidden && (el.offsetWidth > 0 || el.offsetHeight > 0 || el.getClientRects().length > 0) && getComputedStyle(el).visibility !== "hidden";
+function pkTabbables(root) {
+  return [...root.querySelectorAll(PK_FOCUSABLE)].filter(el => !el.disabled && el.tabIndex >= 0 && !(el.tagName === "INPUT" && (el.type === "hidden" || el.type === "file")) && !el.closest("[inert],[hidden]") && pkShown(el));
+}
+/* ochgan elementning «izi» — DOM qayta chizilib, element yo'qolsa ham qaytarish uchun */
+function pkTrace(el) {
+  if (!el || el === document.body) return null;
+  const t = {el, id: el.id || "", sel: "", chain: []};
+  for (const a of el.attributes || []) if (/^data-/.test(a.name) && a.value !== "" && !t.sel) t.sel = `[${a.name}="${CSS.escape(a.value)}"]`;
+  const tag = el.tagName.toLowerCase();
+  t.tag = tag; t.text = (el.textContent || "").trim().slice(0, 40);
+  for (let p = el.parentElement; p && p !== document.body && p !== document.documentElement; p = p.parentElement) t.chain.push(p);
+  return t;
+}
+function pkRestoreFocus(t) {
+  if (!t) return;
+  const f = el => { if (!el || !el.isConnected || !pkShown(el)) return false; if (el.tabIndex < 0) el.tabIndex = -1; el.focus({preventScroll: true}); return document.activeElement === el; };
+  if (f(t.el)) return;
+  if (t.id && f(document.getElementById(t.id))) return;
+  if (t.sel) { const cand = [...document.querySelectorAll(`${t.tag}${t.sel}`)]; if (cand.length && f(cand.find(c => (c.textContent || "").trim().slice(0, 40) === t.text) || cand[0])) return; }
+  for (const a of t.chain) if (f(a)) return;
+  const v = document.querySelector(".view:not(.hidden)"); if (v) { const h = v.querySelector("h2,h3") || v; if (h.tabIndex < 0) h.tabIndex = -1; h.focus({preventScroll: true}); }
+}
+function pkInertSync() {
+  const top = PK_MODALS[PK_MODALS.length - 1];
+  [...document.body.children].forEach(el => {
+    const skip = !top || el === top.bg || el.id === "toast" || /^(SCRIPT|STYLE|LINK|NOSCRIPT)$/.test(el.tagName);
+    if (skip) { if (el.dataset.pkInert) { el.inert = false; delete el.dataset.pkInert; } }
+    else if (!el.inert) { el.inert = true; el.dataset.pkInert = "1"; }
+  });
+}
+function pkModalDrop(bg) {          /* modalni ro'yxatdan chiqarish (close() ham, tashqaridan bg.remove() ham) — bir marta */
+  const i = PK_MODALS.findIndex(m => m.bg === bg); if (i < 0) return null;
+  const m = PK_MODALS.splice(i, 1)[0]; pkInertSync(); return m;
+}
+function pkModalBusy(bg, on) {
+  const m = PK_MODALS.find(x => x.bg === bg); if (m) m.busy = !!on;
+  bg.querySelectorAll("[data-ok],[data-x]").forEach(b => { if (on) { if (b.dataset.pkWas === undefined) b.dataset.pkWas = b.disabled ? "1" : ""; b.disabled = true; } else if (b.dataset.pkWas !== undefined) { b.disabled = b.dataset.pkWas === "1"; delete b.dataset.pkWas; } });
+  const ok = bg.querySelector("[data-ok]"); if (ok) { if (on) ok.setAttribute("aria-busy", "true"); else ok.removeAttribute("aria-busy"); }
+}
+/* modal ichida xato bloki (role="alert"); msg bo'sh — blok olib tashlanadi; qayta chaqirilsa matni almashadi */
+function pkModalError(bg, msg) {
+  const modal = bg && bg.querySelector(".pk-modal,.st-modal"); if (!modal) return null;
+  let el = modal.querySelector(":scope > .pk-merr,.pk-merr");
+  if (!msg) { el?.remove(); return null; }
+  if (!el) {
+    el = document.createElement("div"); el.className = "pk-merr"; el.setAttribute("role", "alert");
+    const acts = [...modal.querySelectorAll(":scope > .pk-acts.end,:scope > .pk-acts")].pop();
+    if (acts) modal.insertBefore(el, acts); else modal.appendChild(el);
+  }
+  el.textContent = String(msg);
+  if (el.scrollIntoView) el.scrollIntoView({block: "nearest"});
+  return el;
+}
+document.addEventListener("keydown", e => {
+  const m = PK_MODALS[PK_MODALS.length - 1]; if (!m || !m.bg.isConnected) return;
+  if (e.key === "Escape" && !e.defaultPrevented) { if (!m.busy && !e.isComposing) { e.preventDefault(); m.close(); } return; }
+  if (e.key !== "Tab") return;
+  const dlg = m.bg.querySelector(".pk-modal"), tabs = pkTabbables(dlg), a = document.activeElement;
+  if (!tabs.length) { e.preventDefault(); dlg.focus({preventScroll: true}); return; }
+  const first = tabs[0], last = tabs[tabs.length - 1], inside = dlg.contains(a);
+  if (!inside) { e.preventDefault(); (e.shiftKey ? last : first).focus({preventScroll: true}); }
+  else if (a === dlg) { e.preventDefault(); (e.shiftKey ? last : first).focus({preventScroll: true}); }
+  else if (e.shiftKey && a === first) { e.preventDefault(); last.focus({preventScroll: true}); }
+  else if (!e.shiftKey && a === last) { e.preventDefault(); first.focus({preventScroll: true}); }
+});
+/* bg DOM'dan tashqaridan olib tashlansa ham (bg.remove()) fon `inert`dan chiqadi va fokus qaytadi */
+new MutationObserver(() => { PK_MODALS.filter(m => !m.bg.isConnected).forEach(m => { if (pkModalDrop(m.bg)) { pkRestoreFocus(m.trace); } }); }).observe(document.body, {childList: true});
 function pkModal(title, html, onOk, okText = "Saqlash", wide = false, onClose = null) {
   const bg = document.createElement("div"); bg.className = "pk-modal-bg";
-  bg.innerHTML = `<div class="pk-modal ${wide ? "wide" : ""}" role="dialog" aria-modal="true" aria-label="${esc(title)}"><h3>${esc(title)}</h3>${html}
+  bg.innerHTML = `<div class="pk-modal ${wide ? "wide" : ""}" role="dialog" aria-modal="true" aria-label="${esc(title)}" tabindex="-1"><button type="button" class="pk-x" data-x aria-label="Yopish">×</button><h3>${esc(title)}</h3>${html}
     <div class="pk-acts end"><button type="button" class="btn ghost" data-x>${onOk ? "Bekor qilish" : "Yopish"}</button>${onOk ? `<button type="button" class="btn primary" data-ok>${esc(okText)}</button>` : ""}</div></div>`;
+  const trace = pkTrace(document.activeElement), opened = Date.now();
+  const dlg = bg.querySelector(".pk-modal");
+  const M = {bg, busy: false, trace, close: () => close()};
+  let closed = false;
+  const close = () => {
+    if (closed) return; closed = true;
+    const had = pkModalDrop(bg); bg.remove();
+    if (had) pkRestoreFocus(trace);
+    onClose?.();
+  };
+  PK_MODALS.push(M);
   document.body.appendChild(bg);
-  const opener = document.activeElement;
-  const close = () => { bg.remove(); opener?.focus?.({preventScroll: true}); onClose?.(); };
-  bg.addEventListener("mousedown", e => { if (e.target === bg) close(); });
-  bg.addEventListener("click", e => { if (e.target.closest("[data-x]")) close(); });
-  bg.addEventListener("keydown", e => { if (e.key === "Escape") close(); });
+  pkInertSync();
+  /* orqa fonni bosib yopish: mousedown ham, mouseup ham fonda bo'lsa; ochilgandan keyingi ~0,4 s — yopilmaydi (ikki marta tez bosish) */
+  let down = false;
+  bg.addEventListener("mousedown", e => { down = e.target === bg; });
+  bg.addEventListener("mouseup", e => { if (down && e.target === bg && !M.busy && Date.now() - opened > 400) close(); down = false; });
+  bg.addEventListener("click", e => { if (M.busy) return; if (e.target.closest("[data-x]")) close(); });
   const ok = bg.querySelector("[data-ok]");
-  if (ok) ok.onclick = async () => { ok.disabled = true; try { if (await onOk(bg)) close(); } finally { if (ok.isConnected) ok.disabled = false; } };
-  setTimeout(() => bg.querySelector("textarea,input,select,button")?.focus(), 30);
+  if (ok) ok.onclick = async () => {
+    if (M.busy) return;
+    pkApi.lastErr = null; pkModalError(bg, "");
+    pkModalBusy(bg, true);
+    try { if (await onOk(bg)) { close(); return; } }
+    finally { if (bg.isConnected) pkModalBusy(bg, false); }
+    if (pkApi.lastErr && bg.isConnected) pkModalError(bg, pkApi.lastErr);        /* so'rov xatosi — modal ichida ham ko'rinadi (toast bilan birga) */
+  };
+  /* boshlang'ich fokus: birinchi ko'rinadigan kiritish maydoni, bo'lmasa dialogning o'zi; sahifa/modal yuqoriga */
+  bg.scrollTop = 0; dlg.scrollTop = 0;
+  const first = [...dlg.querySelectorAll("input,select,textarea")].find(el => !el.disabled && !(el.tagName === "INPUT" && /^(hidden|file|checkbox|radio)$/.test(el.type)) && pkShown(el));
+  (first || dlg).focus({preventScroll: true});
+  requestAnimationFrame(() => { bg.scrollTop = 0; dlg.scrollTop = 0; });
   return bg;
 }
 async function pkUpload(url, file, extra = "", mb = 0) {
@@ -132,16 +246,27 @@ async function renderPaket(tab) {
       ${kuLink ? `<button type="button" class="btn sm ghost" id="pkToKu" title="Bloklar muharriri: barcha kurslar, Rise importi — Rise 360 kabi">${ico("layers", 15)} Muharrir: barcha kurslar</button>` : ""}</div>
     ${M.demo && M.caps.approve ? `<div class="pk-demo">${ico("info", 15)}<span><b>Namuna.</b> «Mikroiqtisodiyot» 1–2-mavzulari: ma'ruza matni, taqdimot va video havola — sun'iy (demo); video mavjud emas. Haqiqiy dars uchun o'z fayllaringizni yuklang.</span></div>` : ""}
     ${!M.player && M.caps.build ? `<div class="pk-warnbox">${ico("alert", 15)}<span>Dars oynasi o'rnatilmagan — «Tayyorlash» vaqtincha ishlamaydi (administratorga murojaat qiling). Fayllarni yuklab qo'yish mumkin.</span></div>` : ""}
-    ${M.tabs.length > 1 ? `<div class="pk-tabs" role="tablist">${M.tabs.map(t => `<button type="button" role="tab" aria-selected="${t === PK.tab}" class="${t === PK.tab ? "on" : ""}" data-t="${t}">${esc(TL[t])}</button>`).join("")}</div>` : ""}
-    <div id="pkBox"><div class="pk-empty">Yuklanmoqda…</div></div>`;
-  v.querySelectorAll(".pk-tabs [data-t]").forEach(b => b.onclick = () => renderPaket(b.dataset.t));
+    ${M.tabs.length > 1 ? `<div class="pk-tabs" role="tablist" aria-label="Bo'limlar">${M.tabs.map(t => `<button type="button" role="tab" id="pkTab-${t}" aria-selected="${t === PK.tab}" aria-controls="pkBox" tabindex="${t === PK.tab ? 0 : -1}" class="${t === PK.tab ? "on" : ""}" data-t="${t}">${esc(TL[t])}</button>`).join("")}</div>` : ""}
+    <div id="pkBox" ${M.tabs.length > 1 ? `role="tabpanel" aria-labelledby="pkTab-${PK.tab}"` : ""}><div class="pk-empty">Yuklanmoqda…</div></div>`;
+  const tabs = [...v.querySelectorAll(".pk-tabs [data-t]")];
+  tabs.forEach(b => {
+    b.onclick = () => { PK.refocusTab = true; renderPaket(b.dataset.t); };
+    /* to'liq tab ARIA: ←/→ (aylanma), Home/End — fokus ko'chadi (roving tabindex), Enter/Space — ochadi */
+    b.onkeydown = e => {
+      const i = tabs.indexOf(b), n = tabs.length;
+      const to = e.key === "ArrowRight" ? (i + 1) % n : e.key === "ArrowLeft" ? (i - 1 + n) % n : e.key === "Home" ? 0 : e.key === "End" ? n - 1 : -1;
+      if (to < 0) return;
+      e.preventDefault(); tabs.forEach(x => x.tabIndex = -1); tabs[to].tabIndex = 0; tabs[to].focus();
+    };
+  });
+  if (PK.refocusTab) { PK.refocusTab = false; v.querySelector('.pk-tabs [aria-selected="true"]')?.focus({preventScroll: true}); }
   v.querySelector("#pkToKu")?.addEventListener("click", () => go("kurs"));
   const box = $("#pkBox");
   try {
     await ({fanlar: typeof dsSubjects === "function" ? dsSubjects : pkTopics, qamrov: pkCoverage, mavzular: pkTopics, joylash: pkBulk, sozlama: pkSettings})[PK.tab](box);
   } catch (e) {
     if (e?.message === "auth") return;
-    box.innerHTML = e?.message === "denied" ? locked("Bu bo'lim") : `<div class="card pk-card"><p>${esc(e?.msg || "Ma'lumotni yuklab bo'lmadi")}</p></div>`;
+    if (e?.message === "denied") box.innerHTML = locked("Bu bo'lim"); else pkFail(box, e, () => renderPaket(PK.tab));
   }
 }
 
@@ -322,6 +447,79 @@ async function pkCourse(el) {
   if (had && sc) sc.scrollTop = top;          /* qayta chizilganda sahifa joyidan siljimasin */
 }
 
+/* «To'g'ri javobni tanlang» — Word testidan import: javobi (✅) topilmagan savollar. base — /api/paket/courses/{cid}/topics/{key};
+   d — {upload_id, needs_answer: [{i, n, stem, options}], saved (qo'shilgan savollar soni, ixtiyoriy)}. Savol — radio (bitta javob) yoki belgilash
+   katakchasi («Bir nechta javob» tugmasi); «O'tkazib yuborish» — savol javobsiz qoralama bo'lib Test bankka tushadi. → Promise(hisobot | null) */
+function pkAnswerModal(base, d, onDone) {
+  return new Promise(res => {
+    const qs = d.needs_answer || [];
+    if (!qs.length) { res(null); return; }
+    const L = i => "ABCDEFGH"[i] || String(i + 1);
+    const sum = d.saved != null ? `${d.saved} ta savol qo'shildi, ${qs.length} tasi javobsiz — hozir tanlang.` : `${qs.length} ta savolning to'g'ri javobi belgilanmagan — hozir tanlang.`;
+    const card = q => `<div class="ta-q" role="group" data-i="${q.i}" aria-labelledby="taH${q.i}" aria-describedby="taE${q.i}"><p class="ta-stem" id="taH${q.i}"><span class="ta-n">${q.n}.</span> ${esc(q.stem)}</p>
+        <div class="ta-opts">${q.options.map((o, j) => `<label class="ta-opt"><input type="radio" name="ta${q.i}" value="${j}"><span class="ta-l" aria-hidden="true">${L(j)}</span><span class="ta-t">${esc(o)}</span></label>`).join("")}</div>
+        <div class="ta-bar"><label class="ta-multi"><input type="checkbox" data-multi> Bir nechta javob</label>
+          <button type="button" class="btn sm ghost" data-skip aria-pressed="false">O'tkazib yuborish</button></div>
+        <p class="ta-err" id="taE${q.i}" role="alert"></p></div>`;
+    let result = null;
+    const bg = pkModal(`Javobi belgilanmagan savollar (${qs.length} ta)`, `<p class="pk-note ta-sum" style="margin-top:0">${esc(sum)}</p>
+      <p class="ta-state" id="taSt" role="status" aria-live="polite"></p>
+      <div class="ta-list">${qs.map(card).join("")}</div>`, async m => {
+      const answers = []; let bad = null;
+      m.querySelectorAll(".ta-q").forEach(f => {
+        const i = +f.dataset.i, err = f.querySelector(".ta-err"); err.textContent = "";
+        if (f.classList.contains("skip")) { answers.push({i, skip: true}); return; }
+        const correct = [...f.querySelectorAll(".ta-opts input:checked")].map(x => +x.value);
+        if (!correct.length) { err.textContent = "To'g'ri javobni belgilang yoki «O'tkazib yuborish» ni bosing"; bad = bad || f; return; }
+        answers.push({i, correct});
+      });
+      if (bad) { bad.scrollIntoView({block: "center"}); bad.querySelector("input:not(:disabled)")?.focus(); return false; }
+      const r = await pkApi(`${base}/test/answers`, {upload_id: d.upload_id, answers});
+      if (!r) return false;
+      result = r;
+      toast(`${r.answered} ta savol belgilandi${r.skipped ? `, ${r.skipped} tasi o'tkazib yuborildi (Test bankda javobsiz qoralama)` : ""}${r.remaining ? ` · ${r.remaining} tasi kutmoqda` : ""}`);
+      return true;
+    }, "Hammasini saqlash", true, () => { if (result && onDone) onDone(result); res(result); });
+    bg.classList.add("ta-bg");
+    const st = bg.querySelector("#taSt");
+    const upd = () => {
+      const all = [...bg.querySelectorAll(".ta-q")], sk = all.filter(f => f.classList.contains("skip")).length;
+      const done = all.filter(f => !f.classList.contains("skip") && f.querySelector(".ta-opts input:checked")).length;
+      st.textContent = `${done} ta savolga javob tanlandi · ${sk} tasi o'tkazib yuboriladi · ${all.length - done - sk} tasi qoldi`;
+    };
+    bg.querySelectorAll(".ta-q").forEach(f => {
+      const multi = f.querySelector("[data-multi]"), skip = f.querySelector("[data-skip]");
+      multi.onchange = () => {
+        const ins = [...f.querySelectorAll(".ta-opts input")];
+        if (!multi.checked) { let seen = false; ins.forEach(x => { if (x.checked) { if (seen) x.checked = false; seen = true; } }); }
+        ins.forEach(x => { x.type = multi.checked ? "checkbox" : "radio"; });
+        f.classList.toggle("multi", multi.checked); upd();
+      };
+      f.addEventListener("change", e => { if (e.target !== multi) f.querySelector(".ta-err").textContent = ""; upd(); });
+      skip.onclick = () => {
+        const on = !f.classList.contains("skip");
+        f.classList.toggle("skip", on); skip.setAttribute("aria-pressed", String(on)); skip.textContent = on ? "Qaytarish — javob tanlayman" : "O'tkazib yuborish";
+        f.querySelectorAll(".ta-opts input,[data-multi]").forEach(x => { x.disabled = on; }); f.querySelector(".ta-err").textContent = ""; upd();
+      };
+    });
+    upd();
+    /* Tab oynadan chiqib ketmasin (fokus tuzog'i) */
+    bg.addEventListener("keydown", e => {
+      if (e.key !== "Tab") return;
+      const f = [...bg.querySelectorAll("input:not(:disabled),button:not(:disabled),textarea,select")].filter(x => x.offsetParent !== null);
+      if (!f.length) return;
+      if (e.shiftKey && document.activeElement === f[0]) { e.preventDefault(); f[f.length - 1].focus(); }
+      else if (!e.shiftKey && document.activeElement === f[f.length - 1]) { e.preventDefault(); f[0].focus(); }
+    });
+  });
+}
+/* dars yuklangach: javobsiz savollar bo'lsa — oynalar ketma-ket (har yuklangan fayl uchun) */
+async function pkAskAnswers(base, list) {
+  let any = false;
+  for (const d of list) { if (await pkAnswerModal(base, d)) any = true; }
+  return any;
+}
+
 /* rasm noaniq: muqova, matn ichidagi rasm yoki slayd — bitta savol (bir nechta rasm bo'lsa hammasiga) → "muqova" | "rasm" | "slayd" | null */
 function pkAskImage(files) {
   return new Promise(res => {
@@ -338,7 +536,8 @@ function pkAskImage(files) {
 }
 const pkUpDesc = r => ({matn: () => `Ma'ruza matni — ${(r.plan || []).length} band reja${r.images ? `, ${r.images} rasm` : ""}${r.tables ? `, ${r.tables} jadval` : ""}${r.refs ? `, ${r.refs} adabiyot` : ""}`,
   taqdimot: () => `Taqdimot — ${r.count ?? r.pages ?? 0} slayd`, slayd: () => "Taqdimot slaydi (rasm)", video: () => `Video — ${pkSize(r.size)}`, muqova: () => "Dars muqovasi",
-  rasm: () => "Matn ichidagi rasm", poster: () => "Video muqovasi", subs: () => `Subtitr — ${r.cues} yozuv`, fayl: () => "Qo'shimcha fayl"}[r.as] || (() => r.label || "Yuklandi"))();
+  rasm: () => "Matn ichidagi rasm", poster: () => "Video muqovasi", subs: () => `Subtitr — ${r.cues} yozuv`, fayl: () => "Qo'shimcha fayl",
+  test: () => `Test — ${r.questions} savol (${r.saved} tasi Test bankka qo'shildi${r.approved ? `, ${r.approved} tasdiqlangan` : ""}${r.draft ? `, ${r.draft} qoralama` : ""}${r.without_answer ? `, ${r.without_answer} tasi javobsiz — hozir tanlang` : ""}${r.multi ? `, ${r.multi} tasi ko'p javobli` : ""}), ${r.glossary} atama, ${r.open_questions} ochiq savol`}[r.as] || (() => r.label || "Yuklandi"))();
 
 /* ---------- Dars ekrani ---------- */
 async function pkTopicPanel(el) {
@@ -364,12 +563,12 @@ async function pkTopicPanel(el) {
   const slSrc = {pptx: "PowerPoint", deck: "ISFT shablonidagi taqdimot", images: "slayd rasmlari", pdf: "PDF"}[sl.src] || "";
   const nQ = qz.approved || 0, nX = xr.n || 0;
   const tiles = `<div class="pk-tiles">
-    ${tile("text", "file", "Matn", tx.ok, tx.ok ? `${esc(tx.name)}${tx.src === "paket" ? "" : " <i>(Test bankda yuklangan)</i>"}` : "Word fayl (.docx) tashlang — reja, rasm va jadvallar o'zi ajratiladi",
+    ${tile("text", "file", "Matn", tx.ok, tx.ok ? `${esc(tx.name)}${tx.ocr ? " · skaner (OCR)" : ""}${tx.src === "paket" ? "" : " <i>(Test bankda yuklangan)</i>"}` : "Word fayl (.docx) tashlang — reja, rasm va jadvallar o'zi ajratiladi",
         [txInfo, tx.ok && tx.only_assignment ? "faqat topshiriqlar ro'yxati — «Topshiriq» qismiga o'tdi" : ""],
-        tx.ok ? `<label class="btn sm ghost pk-file">Almashtirish<input type="file" accept=".docx,.pdf,.txt" hidden data-up="matn"></label>${d.text_asset ? `<button type="button" class="btn sm ghost" data-rm="text">Olib tashlash</button>` : ""}` : "")}
+        tx.ok ? `<label class="btn sm ghost pk-file">Almashtirish<input type="file" accept=".docx,.doc,.pdf,.txt" hidden data-up="matn"></label>${d.text_asset ? `<button type="button" class="btn sm ghost" data-rm="text">Olib tashlash</button>` : ""}` : "")}
     ${tile("slides", "slides", "Taqdimot", sl.ok, sl.ok ? `${sl.n ? `${sl.n} slayd` : "PDF taqdimot"}${slSrc ? ` · ${esc(slSrc)}` : ""}` : "PDF yoki PowerPoint (.pptx) tashlang",
-        [sl.ok && sl.src === "pptx" ? "aniq ko'rinishi uchun PDF qilib ham yuklang (PowerPoint: Fayl → Saqlash → PDF)" : "", sl.captions || sl.audio ? `${sl.captions} izoh · ${sl.audio} audio` : ""],
-        `${sl.ok ? `<label class="btn sm ghost pk-file">Almashtirish<input type="file" accept=".pptx,.pdf,.png,.jpg,.jpeg" multiple hidden data-up="taqdimot"></label><button type="button" class="btn sm ghost" data-rm="slides">Olib tashlash</button>` : ""}
+        [sl.ok && sl.src === "pptx" ? (M.tools && M.tools.office ? "" : "aniq ko'rinishi uchun PDF qilib ham yuklang (PowerPoint: Fayl → Saqlash → PDF)") : "", sl.captions || sl.audio ? `${sl.captions} izoh · ${sl.audio} audio` : ""],
+        `${sl.ok ? `<label class="btn sm ghost pk-file">Almashtirish<input type="file" accept=".pptx,.ppt,.pdf,.png,.jpg,.jpeg" multiple hidden data-up="taqdimot"></label><button type="button" class="btn sm ghost" data-rm="slides">Olib tashlash</button>` : ""}
          ${can.deck && tx.ok && sl.src !== "deck" ? `<button type="button" class="btn sm ${sl.ok ? "ghost" : ""}" id="pkDkNew" title="Yuklangan ma'ruza matnidan ISFT shablonida taqdimot tuziladi">${ico("spark", 15)} ISFT shablonida taqdimot yaratish</button>` : ""}`)}
     ${tile("video", "video", "Video", vd.ok, vd.ok ? (vd.provider === "file" ? vFile : vLink) : vErr ? `<span class="pk-bad">${esc(vd.error)}</span>` : "MP4 fayl tashlang yoki YouTube havolasini kiriting",
         [vd.both ? `yana ${vd.provider === "file" ? "YouTube havolasi" : "video fayl"} ham bor — darsga «${esc(M.video_sources[S.video_source])}» kiradi` : "",
@@ -379,8 +578,8 @@ async function pkTopicPanel(el) {
         + (!vd.ok && typeof modOn === "function" && modOn("studio") && ["oqituvchi", "masofaviy", "masofaviy_xodim"].includes(M.role) && ["maruza", "amaliy"].includes(L.kind)
            ? `<button type="button" class="btn sm ghost" onclick="go('studio')" title="Studiyada syomka → AI montaj → video darsga o'zi qo'yiladi">${ico("video", 15)} Studiyada yozish</button>` : ""))}
     ${tile("quiz", "checkc", "Test va mashqlar", !!(nQ || nX), nQ || nX ? `${nQ} savol · ${nX} mashq` : "Test savollari va mashqlar — xohlasangiz qo'shing",
-        [nQ && qz.used !== nQ ? `darsga ${qz.used} ta savol kiradi` : "", xr.draft ? `${xr.draft} ta mashq qoralamasi — ko'rib saqlang` : ""],
-        `<button type="button" class="btn sm ghost" id="pkPrOpen">${ico("plus", 15)} Qo'shish</button>`, true)}
+        [nQ && qz.used !== nQ ? `darsga ${qz.used} ta savol kiradi` : "", xr.draft ? `${xr.draft} ta mashq qoralamasi — ko'rib saqlang` : "", qz.pending ? `<b class="pk-warn-t">${qz.pending} ta import qilingan savolning to'g'ri javobi belgilanmagan</b>` : ""],
+        `<button type="button" class="btn sm ghost" id="pkPrOpen">${ico("plus", 15)} Qo'shish</button>${qz.pending ? `<button type="button" class="btn sm primary" id="pkTaOpen">To'g'ri javobni tanlang (${qz.pending})</button>` : ""}`, true)}
   </div>`;
   /* --- natija: oxirgi versiya holati --- */
   const miss = (R.core_missing || []).map(k => PK_NAMES[k] || M.blocks[k]);
@@ -444,7 +643,7 @@ async function pkTopicPanel(el) {
       ${W ? `<div class="pk-drop" id="pkDrop"><div class="pk-drop-ic">${ico("upload", 28)}</div>
           <div class="pk-drop-t"><b>Fayllarni shu yerga tashlang</b>
             <span>Word (ma'ruza), PDF yoki PPTX (taqdimot), MP4 (video), rasm (muqova), .srt/.vtt (subtitr) — bir nechtasini birga tashlash mumkin, har biri o'z joyiga o'zi tushadi</span></div>
-          <label class="btn ${R.buildable ? "" : "primary"} pk-lg pk-file">${ico("upload", 18)} Fayl tanlash<input type="file" id="pkAny" multiple hidden accept=".docx,.pdf,.pptx,.txt,.mp4,.webm,.png,.jpg,.jpeg,.srt,.vtt"></label></div>
+          <label class="btn ${R.buildable ? "" : "primary"} pk-lg pk-file">${ico("upload", 18)} Fayl tanlash<input type="file" id="pkAny" multiple hidden accept=".docx,.doc,.pdf,.pptx,.ppt,.txt,.mp4,.webm,.png,.jpg,.jpeg,.srt,.vtt"></label></div>
         <form class="pk-yt" id="pkVf"><label for="pkVu">YouTube havolasi <small>(video fayl o'rniga)</small></label>
           <input type="url" id="pkVu" placeholder="https://youtu.be/…" value="${esc(vd.link_src === "paket" ? vd.url || "" : "")}"><button class="btn sm">Saqlash</button></form>
         <ul class="pk-ups" id="pkUps" aria-live="polite"></ul>` : ""}
@@ -458,26 +657,30 @@ async function pkTopicPanel(el) {
         <label>Dars turi (qaysi tizim uchun)<select name="mode">${Object.keys(M.modes).map(k => `<option value="${k}" ${k === S.mode ? "selected" : ""}>${esc(pkMode(k))}</option>`).join("")}</select></label>
         <label>Dars qachon tugallangan hisoblanadi<select name="completion">${Object.entries(M.completion).map(([k, l]) => `<option value="${k}" ${k === S.completion ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
         <label>O'tish bali, %<input type="number" name="mastery" min="0" max="100" value="${S.mastery}"></label>
+        <label title="YouTube video: talaba kamida shuncha foizini ko'rmaguncha dars yakunlanmaydi (0 — talab yo'q). YouTube ochilmasa talab o'zi olib tashlanadi.">Video kamida ko'rilsin, % (0 — talab yo'q)<input type="number" name="video_min" min="0" max="100" step="5" value="${S.video_min || 0}"></label>
         <label>Testdagi savollar soni (0 — hammasi)<input type="number" name="quiz_n" min="0" max="200" value="${S.quiz_n}"></label>
         <label>Urinishlar soni (0 — cheksiz)<input type="number" name="attempts" min="0" max="20" value="${S.attempts}"></label>
         <label>Ko'rinish<select name="layout">${Object.entries(M.layouts).map(([k, l]) => `<option value="${k}" ${k === S.layout ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
         <label>Video (fayl ham, havola ham bo'lsa)<select name="video_source">${Object.entries(M.video_sources).map(([k, l]) => `<option value="${k}" ${k === S.video_source ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
         <label class="cb"><input type="checkbox" name="shuffle" ${S.shuffle ? "checked" : ""}> Savollarni aralashtirish</label>
         <label class="cb"><input type="checkbox" name="show_feedback" ${S.show_feedback ? "checked" : ""}> Javobdan keyin izoh ko'rsatish</label>
+        <label class="cb" title="Video fayl yuklangach o'zbekcha subtitr Whisper navbatiga o'zi qo'yiladi (ishchi sozlangan bo'lsa)"><input type="checkbox" name="auto_captions" ${S.auto_captions ? "checked" : ""}> Video yuklangach avtomatik subtitr (AI)</label>
       </div>
       <fieldset class="pk-fs"><legend>Dars qismlari (belgilanmagani darsga kirmaydi)</legend><div class="pk-checks">${Object.entries(M.blocks).map(([k, l]) => `<label><input type="checkbox" name="b_${k}" ${S.blocks[k] ? "checked" : ""}> ${esc(l)}</label>`).join("")}</div></fieldset>
       <div class="pk-acts"><button class="btn sm">Sozlamani saqlash</button>${Object.keys(d.override).length ? `<button type="button" class="btn sm ghost" id="pkSr">Standartga qaytarish</button>` : ""}
         <span class="pk-note" style="margin:0">${Object.keys(d.override).length ? "Bu dars uchun alohida sozlama" : "Standart sozlama"}</span></div></form>
     <div class="pk-advg">
-      <div><h4>Muqova</h4><p class="pk-note" style="margin-top:0">${cv.ok ? `${cv.image ? `fon rasmi — ${{dars: "shu dars uchun yuklangan", kurs: "kurs muqovasi", standart: "bo'lim standarti"}[cv.src]}` : "rasmsiz (institut rangi)"} · muallif: ${cv.author ? esc(cv.author) : "—"}${cv.custom ? " (tahrirlangan)" : ""}` : "O'chirilgan («Dars qismlari»da yoqish mumkin)"}</p>
-        <div class="pk-acts">${cv.image ? `<img class="pk-thumb muqova" src="/api/paket/assets/${cv.image}" alt="Muqova">` : ""}
+      <div><h4>Muqova</h4><p class="pk-note" style="margin-top:0">${cv.ok ? `${cv.image ? `fon rasmi — ${{dars: "shu dars uchun yuklangan", kurs: "kurs muqovasi", standart: "bo'lim standarti", ichki: "ISFT standart fon rasmi"}[cv.src]}` : "rasmsiz (institut rangi)"} · muallif: ${cv.author ? esc(cv.author) : "—"}${cv.custom ? " (tahrirlangan)" : ""}` : "O'chirilgan («Dars qismlari»da yoqish mumkin)"}</p>
+        <div class="pk-acts">${cv.image ? `<img class="pk-thumb muqova" src="/api/paket/assets/${cv.src === "ichki" ? "builtin-cover" : cv.image}" alt="Muqova">` : ""}
           <label class="btn sm pk-file">${ico("upload", 15)} Dars muqovasi (.png, .jpg)<input type="file" accept=".png,.jpg,.jpeg" hidden id="pkCf"></label>
           ${cv.src === "dars" ? `<button type="button" class="btn sm ghost" data-del="${cv.image}">Olib tashlash</button>` : ""}</div>
         <form class="pk-inline" id="pkCa"><label class="pk-sr" for="pkCu">Muallif</label><input type="text" id="pkCu" maxlength="120" placeholder="Muallif (F.I.Sh.)" value="${esc(cv.author || "")}"><button class="btn sm">Saqlash</button>${cv.custom ? `<button type="button" class="btn sm ghost" id="pkCr">Standart</button>` : ""}</form></div>
       <div><h4>Video: muqova va subtitr</h4>${vd.file ? `<p class="pk-note" style="margin-top:0">Video muqovasi — video boshlanishidan oldin ko'rinadigan rasm. Subtitr — tayyor .srt yoki .vtt fayl.</p>
         <div class="pk-acts"><label class="btn sm pk-file">${ico("upload", 15)} Video muqovasi (.png, .jpg)<input type="file" accept=".png,.jpg,.jpeg" hidden id="pkVp"></label>
           <label class="pk-sr" for="pkVl">Subtitr tili</label><select id="pkVl" class="pk-sel">${Object.entries(M.sub_langs).map(([k, l]) => `<option value="${k}">${esc(l)}</option>`).join("")}</select>
-          <label class="btn sm pk-file">${ico("upload", 15)} Subtitr (.srt, .vtt)<input type="file" accept=".vtt,.srt,text/vtt" hidden id="pkVs"></label></div>` : `<p class="pk-note" style="margin-top:0">Video muqovasi va subtitr faqat yuklangan video fayl bilan ishlaydi (YouTube'da o'zining subtitri bor).</p>`}</div>
+          <label class="btn sm pk-file">${ico("upload", 15)} Subtitr (.srt, .vtt)<input type="file" accept=".vtt,.srt,text/vtt" hidden id="pkVs"></label></div>
+        ${PK_AUTO_CAPS ? `        <div class="pk-acts"><button type="button" class="btn sm ghost" id="pkAc" ${W ? "" : "disabled"} title="Videodagi nutq Whisper bilan matnga o'giriladi; tayyor subtitr paketga o'zi qo'shiladi">${ico("spark", 15)} Avtomatik subtitr (AI)</button>
+          <span class="pk-note" id="pkAcSt" role="status" aria-live="polite" style="margin:0">${esc((vd.captions_job && vd.captions_job.message) || (vd.captions.some(x => x.auto) ? "Subtitr avtomatik yaratilgan (AI) — tekshirib chiqing." : ""))}</span></div>` : ""}` : `<p class="pk-note" style="margin-top:0">Video muqovasi va subtitr faqat yuklangan video fayl bilan ishlaydi (YouTube'da o'zining subtitri bor).</p>`}</div>
       <div><h4>Matn</h4><div class="pk-acts"><button type="button" class="btn sm" id="pkTt">Matnni qo'lda joylashtirish</button>
           <button type="button" class="btn sm" id="pkIb">${ico("upload", 15)} Matnga rasm qo'shish</button>
           <button type="button" class="btn sm" id="pkAe">Topshiriq savollarini tahrirlash</button></div>
@@ -512,7 +715,7 @@ async function pkTopicPanel(el) {
     files.sort((a, b) => isVid(a) - isVid(b));          /* video (eng kattasi) — oxirida */
     PK.busy = true;
     PK.ups = {key, rows: files.map(f => ({name: f.name, state: "wait", pct: 0, msg: ""}))}; drawUps();
-    let okN = 0, title = null;
+    let okN = 0, title = null; const needA = [];
     try {
       for (let i = 0; i < files.length; i++) {
         const f = files[i], row = PK.ups.rows[i], lim = isVid(f) ? M.limits.video_mb : M.limits.asset_mb;
@@ -523,7 +726,7 @@ async function pkTopicPanel(el) {
         let r = await pkSend(url(force || (isImg(f) ? imgAs : "")), f, p => { row.pct = p; drawUps(); });
         if (r.status === 409 && r.data?.detail?.ambiguous) { const ch = await pkAskImage([f]); if (ch) { row.pct = 0; r = await pkSend(url(ch), f, p => { row.pct = p; drawUps(); }); } }
         if (r.status === 401) { showLogin(); return; }
-        if (r.ok) { row.state = "ok"; row.msg = pkUpDesc(r.data); okN++; if (r.data.title_set) title = r.data.title; }
+        if (r.ok) { row.state = "ok"; row.msg = pkUpDesc(r.data); okN++; if (r.data.title_set) title = r.data.title; if (r.data.needs_answer?.length) needA.push({upload_id: r.data.upload_id, needs_answer: r.data.needs_answer, saved: r.data.saved}); }
         else { row.state = "err"; row.msg = pkErrMsg(r.data); }
         drawUps();
       }
@@ -531,6 +734,7 @@ async function pkTopicPanel(el) {
     const bad = files.length - okN;
     toast(title ? `Dars nomi Word sarlavhasidan olindi: «${title}»` : bad ? `Yuklandi: ${okN} ta · yuklanmadi: ${bad} ta — sababi ro'yxatda` : `Yuklandi: ${okN} ta fayl`);
     if (okN) await reload();
+    if (needA.length && await pkAskAnswers(base, needA)) await reload();      /* javobi (✅) topilmagan savollar — «To'g'ri javobni tanlang» */
   };
   const any = el.querySelector("#pkAny");
   if (any) any.onchange = () => { const fs = [...any.files]; any.value = ""; handleFiles(fs); };
@@ -608,6 +812,11 @@ async function pkTopicPanel(el) {
   const pr = el.querySelector("#pkPr");
   if (pr) pr.ontoggle = () => { PK.prac = pr.open; if (pr.open) loadQuiz(); };
   el.querySelector("#pkPrOpen")?.addEventListener("click", () => { pr.open = true; pr.scrollIntoView({block: "start", behavior: "smooth"}); });
+  el.querySelector("#pkTaOpen")?.addEventListener("click", async () => {
+    const p = await pkApi(`${base}/test/pending`).catch(() => null);
+    if (p && p.needs_answer?.length) { if (await pkAnswerModal(base, p)) reload(); }
+    else { toast("Javobi belgilanmagan savol qolmagan"); reload(); }
+  });
   let quizLoaded = false;
   const loadQuiz = () => { const q = el.querySelector("#pkTq"); if (q && !quizLoaded) { quizLoaded = true; pkQuizBox(q, d, () => pkTopicPanel(el)); } };
   if (PK.prac) loadQuiz();
@@ -670,6 +879,24 @@ async function pkTopicPanel(el) {
   upTo("#pkCf", `${base}/cover`, "Muqova saqlandi");
   upTo("#pkVp", `${base}/video/poster`, "Video muqovasi saqlandi");
   upTo("#pkVs", `${base}/video/captions`, r => `Subtitr saqlandi: ${r.cues} yozuv`, () => `&lang=${encodeURIComponent(A.querySelector("#pkVl").value)}`, M.limits.subs_mb);
+  /* avtomatik subtitr (Whisper navbati): bosilganda navbatga; holat satri 5 soniyada yangilanadi, tayyor bo'lsa dars qayta yuklanadi */
+  const acBtn = A.querySelector("#pkAc"), acSt = A.querySelector("#pkAcSt");
+  if (acBtn && acSt) {
+    const lang = () => A.querySelector("#pkVl")?.value || "uz";
+    const show = r => { acSt.textContent = r.message || ""; return r.state; };
+    const poll = async () => {
+      if (!acSt.isConnected) return;
+      let r; try { r = await pkApi(`${base}/captions/auto?lang=${encodeURIComponent(lang())}`); } catch { return; }
+      const st = show(r);
+      if (st === "queued" || st === "running") setTimeout(poll, 5000); else if (st === "done" || st === "exists") reload();
+    };
+    acBtn.onclick = async () => {
+      acBtn.disabled = true;
+      try { const r = await pkApi(`${base}/captions/auto`, {lang: lang()}); if (r) { const st = show(r); if (st === "queued" || st === "running") setTimeout(poll, 5000); } }
+      finally { if (acBtn.isConnected) acBtn.disabled = false; }
+    };
+    if (vd.captions_job && (vd.captions_job.state === "queued" || vd.captions_job.state === "running")) setTimeout(poll, 5000);
+  }
   A.querySelector("#pkCa")?.addEventListener("submit", async e => { e.preventDefault();
     const r = await pkApi(`${base}/cover/meta`, {author: A.querySelector("#pkCu").value.trim()}); if (r) { toast("Muallif saqlandi"); reload(); } });
   A.querySelector("#pkCr")?.addEventListener("click", async () => { const r = await pkApi(`${base}/cover/meta`, {author: null}); if (r) { toast("Standart muallif (kurs o'qituvchisi)"); reload(); } });
@@ -709,8 +936,8 @@ async function pkTopicPanel(el) {
     e.preventDefault(); if (!W) return;
     const f = e.currentTarget, blocks = {};
     Object.keys(M.blocks).forEach(k => blocks[k] = f.elements["b_" + k].checked);
-    const r = await pkApi(`${base}/settings`, {layout: f.elements.layout.value, mode: f.elements.mode.value, completion: f.elements.completion.value, mastery: +f.elements.mastery.value, video_source: f.elements.video_source.value,
-      quiz_n: +f.elements.quiz_n.value, attempts: +f.elements.attempts.value, shuffle: f.elements.shuffle.checked, show_feedback: f.elements.show_feedback.checked, blocks});
+    const r = await pkApi(`${base}/settings`, {layout: f.elements.layout.value, mode: f.elements.mode.value, completion: f.elements.completion.value, mastery: +f.elements.mastery.value, video_min: +f.elements.video_min.value, video_source: f.elements.video_source.value,
+      quiz_n: +f.elements.quiz_n.value, attempts: +f.elements.attempts.value, shuffle: f.elements.shuffle.checked, show_feedback: f.elements.show_feedback.checked, auto_captions: f.elements.auto_captions.checked, blocks});
     if (r) { toast("Sozlama saqlandi"); reload(); }
   });
   A.querySelector("#pkSr")?.addEventListener("click", async () => { const r = await pkApi(`${base}/settings`, {reset: true}); if (r) { toast("Standart sozlama"); reload(); } });
@@ -843,6 +1070,7 @@ async function pkSettings(box) {
         <label>Dars turi (qaysi tizim uchun)<select name="mode" ${ed ? "" : "disabled"}>${Object.keys(M.modes).map(k => `<option value="${k}" ${k === S.mode ? "selected" : ""}>${esc(pkMode(k))}</option>`).join("")}</select></label>
         <label>Dars qachon tugallangan hisoblanadi<select name="completion" ${ed ? "" : "disabled"}>${Object.entries(M.completion).map(([k, l]) => `<option value="${k}" ${k === S.completion ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
         <label>O'tish bali, %<input type="number" name="mastery" min="0" max="100" value="${S.mastery}" ${ed ? "" : "disabled"}></label>
+        <label title="YouTube video: talaba kamida shuncha foizini ko'rmaguncha dars yakunlanmaydi (0 — talab yo'q). YouTube ochilmasa talab o'zi olib tashlanadi.">Video kamida ko'rilsin, % (0 — talab yo'q)<input type="number" name="video_min" min="0" max="100" step="5" value="${S.video_min || 0}" ${ed ? "" : "disabled"}></label>
         <label>Testdagi savollar soni (0 — hammasi)<input type="number" name="quiz_n" min="0" max="200" value="${S.quiz_n}" ${ed ? "" : "disabled"}></label>
         <label>Urinishlar soni (0 — cheksiz)<input type="number" name="attempts" min="0" max="20" value="${S.attempts}" ${ed ? "" : "disabled"}></label>
         <label class="cb"><input type="checkbox" name="shuffle" ${S.shuffle ? "checked" : ""} ${ed ? "" : "disabled"}> Savollarni aralashtirish</label>
@@ -871,13 +1099,14 @@ async function pkSettings(box) {
           ${M.default_cover ? `<button type="button" class="btn sm ghost" id="pkDx">Olib tashlash</button>` : ""}</div>` : ""}</div></div></div></div>
     <div class="card pk-card"><h3>Darsni LMS'ga yuklash</h3>
       <h4>NEXTID (my.isft.uz) — «Articulate» yorlig'i</h4>${pkNextidHelp(null, "")}
-      <p class="pk-note">Taqdimot aniq ko'rinishi uchun o'qituvchi PowerPoint'da «Fayl → Saqlash → PDF» qilib PDF'ni ham yuklashi kerak (.pptx dan keyin) — har bir sahifa rasm sifatida ko'rsatiladi.</p>
+      <p class="pk-note">${M.tools && M.tools.office ? "Serverda LibreOffice bor: .pptx yuklanganda slaydlar avtomatik rasmga chiziladi (asl ko'rinish), eski .ppt / .doc o'zi .pptx / .docx ga o'giriladi." : "Taqdimot aniq ko'rinishi uchun o'qituvchi PowerPoint'da «Fayl → Saqlash → PDF» qilib PDF'ni ham yuklashi kerak (.pptx dan keyin) — har bir sahifa rasm sifatida ko'rsatiladi."}
+        ${M.tools && M.tools.ocr ? " Skaner qilingan (matnsiz) PDF ma'ruza OCR qilinadi: sahifalar rasm bo'lib chiqadi, matni qidiruv va ekran o'quvchi uchun saqlanadi." : ""}</p>
       <h4>Moodle va boshqa LMS</h4>
       <ol class="pk-steps"><li>Dars turini «Boshqa LMS uchun (SCORM 1.2)» qilib tayyorlang.</li><li>Kursda tahrirlash rejimini yoqing → «Faoliyat yoki resurs qo'shish» → <b>SCORM paketi</b>.</li>
         <li>Nom yozing va .zip faylni (ochmasdan) yuklang; baholash usuli — «Eng yuqori urinish».</li><li>Saqlang va ochib tekshiring.</li></ol>
       <p class="pk-note">SCORM 2004 ni faqat LMS aniq talab qilsa tanlang. Texnik tafsilotlar — docs/paket.md.</p>
       <h4>Kurs paketi</h4><p class="pk-note">Darslar → «Kengaytirilgan sozlamalar» → «Kurs paketi»: barcha darslar bitta faylda.</p>
-      <h4>Cheklovlar</h4><p class="pk-note">Fayl ≤ ${M.limits.asset_mb} MB, video ≤ ${M.limits.video_mb} MB (.mp4 / .webm), slayd audiosi ≤ ${M.limits.audio_mb} MB, tayyor dars ≤ ${M.limits.package_mb} MB (video fayl bilan ≤ ${M.limits.package_video_mb} MB). YouTube videosi YouTube'da qoladi. Eski .ppt / .doc qabul qilinmaydi — .pptx / .docx qilib saqlang.</p>
+      <h4>Cheklovlar</h4><p class="pk-note">Fayl ≤ ${M.limits.asset_mb} MB, video ≤ ${M.limits.video_mb} MB (.mp4 / .webm), slayd audiosi ≤ ${M.limits.audio_mb} MB, tayyor dars ≤ ${M.limits.package_mb} MB (video fayl bilan ≤ ${M.limits.package_video_mb} MB). YouTube videosi YouTube'da qoladi. ${M.tools && M.tools.office ? "Eski .ppt / .doc avtomatik o'giriladi." : "Eski .ppt / .doc qabul qilinmaydi — .pptx / .docx qilib saqlang."}</p>
       <h4>Articulate Rise 360 bilan farqi</h4><p class="pk-note">O'zi bajaradi: muqova, video (fayl yoki YouTube), ma'ruza matni Word'dan (reja, rasm, jadval, adabiyotlar), taqdimot galereyasi (izoh va audio bilan), kartochkalar, test + moslashtirish / saralash, topshiriq, o'z-o'zini baholash. Yo'q: qismlarni sichqoncha bilan erkin joylashtirish (tartib — kafedra shabloni), AI subtitr va AI ovoz — subtitr va audio tayyor fayl sifatida yuklanadi.</p></div></div>`;
   const reMeta = async () => { PK.meta = await pkApi("/api/paket/meta"); pkSettings(box); };
   const dc = box.querySelector("#pkDc");
@@ -890,8 +1119,10 @@ async function pkSettings(box) {
     Object.keys(M.blocks).forEach(k => blocks[k] = f.elements["b_" + k].checked);
     const sections = {video: f.elements.s_video.value.trim(), text: f.elements.s_text.value.trim(), slides: f.elements.s_slides.value.trim(), practice: f.elements.s_practice.value.trim()};
     const assignment = {title: f.elements.a_title.value.trim(), text: f.elements.a_text.value.trim(), author: f.elements.a_author.value.trim()};
-    const reflect = {question: f.elements.r_q.value.trim(), options: [0, 1].map(i => ({text: f.elements["r_t" + i].value.trim(), feedback: f.elements["r_f" + i].value.trim()}))};
-    const r = await pkApi("/api/paket/settings", {mode: f.elements.mode.value, completion: f.elements.completion.value, mastery: +f.elements.mastery.value, layout: f.elements.layout.value,
+    // formada faqat savol va 2 ta javob — sarlavha va 3/4-javoblar (API orqali qo'yilgan) saqlangan qiymatdan qoladi
+    const reflect = {title: S.reflect.title, question: f.elements.r_q.value.trim(),
+      options: [0, 1].map(i => ({text: f.elements["r_t" + i].value.trim(), feedback: f.elements["r_f" + i].value.trim()})).concat((S.reflect.options || []).slice(2))};
+    const r = await pkApi("/api/paket/settings", {mode: f.elements.mode.value, completion: f.elements.completion.value, mastery: +f.elements.mastery.value, video_min: +f.elements.video_min.value, layout: f.elements.layout.value,
       quiz_n: +f.elements.quiz_n.value, attempts: +f.elements.attempts.value, shuffle: f.elements.shuffle.checked, show_feedback: f.elements.show_feedback.checked, blocks, sections, reflect, assignment, video_source: f.elements.video_source.value});
     if (r) { toast("Saqlandi"); PK.meta.defaults = r.defaults; }
   };

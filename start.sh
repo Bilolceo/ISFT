@@ -30,4 +30,6 @@ fi
 #   ISFT_CORE_SHOW_DEMO_PASSWORD=1         kirish sahifasida sinov paroli va ismlar (faqat namoyish)
 # Proksi: --forwarded-allow-ips='*' sxema (https) uchun kerak; mijoz IP manzilini ilova o'zi X-Forwarded-For ning o'ngdan
 # ISFT_CORE_TRUSTED_PROXIES-chi (standart 1 — Railway) qiymatidan oladi — urinishlar cheklovini sarlavha bilan chetlab o'tib bo'lmaydi.
-exec uvicorn app.main:app --host 0.0.0.0 --port "${PORT:-8000}" --proxy-headers --forwarded-allow-ips='*'
+# BITTA worker: dars/taqdimot/studiya qulflari jarayon ichida (threading.Lock); bir nechta worker (WEB_CONCURRENCY>1) sinalmagan va qo'llab-quvvatlanmaydi (docs/ops.md)
+export WEB_CONCURRENCY=1
+exec uvicorn app.main:app --workers 1 --host 0.0.0.0 --port "${PORT:-8000}" --proxy-headers --forwarded-allow-ips='*'
