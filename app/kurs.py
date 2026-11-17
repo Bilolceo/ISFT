@@ -1109,6 +1109,49 @@ def tincan_xml(content: dict) -> str:
             body += one(f"{lid}/q/{q['id']}", "cmi.interaction", f"{l['title']} — {k}-savol", q["question"][:500] or f"{k}-savol", extra=inter(q))
     return f'<?xml version="1.0" encoding="UTF-8"?>\n<tincan xmlns="http://projecttincan.com/tincan.xsd">\n  <activities>\n{body}  </activities>\n</tincan>\n'
 
+# --- NEXTID (Rise) qobig'i ---------------------------------------------------------------------------------------------
+# NEXTID.LMS xAPI paketni ochib, Rise eksportining tuzilmasini kutadi (tekshirilgan: «scormdriver/» + tc-config.js + tincan.xml, kurs esa
+# «scormcontent/» ichida — oddiy tekis tuzilma «index.html fayli mazmunini o'zgartirishda xatolik» beradi). Qobiq fayllari (Articulate
+# Rise eksportidagi scormdriver) app/nextid_shell/rise_shell.zip da; ISFT_CORE_KURS_SHELL=<zip yo'li> bilan almashtiriladi, «off» —
+# o'chiradi (eski tekis tuzilma + eksportda ogohlantirish).
+SHELL_ENV = "ISFT_CORE_KURS_SHELL"
+SHELL_MAX = 20 * 1024 * 1024
+
+def shell_path() -> Path | None:
+    v = os.environ.get(SHELL_ENV)
+    if v is not None and v.strip().lower() in ("", "0", "off", "none"): return None
+    p = Path(v) if v else Path(__file__).resolve().parent / "nextid_shell" / "rise_shell.zip"
+    return p if p.is_file() else None
+
+def shell_files(content: dict) -> dict | None:
+    """Rise eksportidan qobiq fayllari (scormcontent/ va tincan.xml dan tashqari hammasi), kurs nomi/id/versiyasi bilan almashtirilgan; yo'q bo'lsa None."""
+    sp = shell_path()
+    if not sp: return None
+    out, total = {}, 0
+    try:
+        with zipfile.ZipFile(sp) as z:
+            for i in z.infolist():
+                n = i.filename
+                if n.endswith("/") or n.startswith(("scormcontent/", "__MACOSX/")) or n == "tincan.xml" or n.endswith(".DS_Store"): continue
+                if n.startswith("/") or ".." in n.split("/") or "\\" in n: continue
+                total += i.file_size
+                if total > SHELL_MAX: return None
+                out[n] = z.read(i)
+    except (zipfile.BadZipFile, OSError): return None
+    if PK.SCORMDRIVER not in out or "tc-config.js" not in out: return None
+    title, desc = content["title"], _plain(content.get("description") or "")[:500] or content["title"]
+    act = content["tracking"]["activity_id"]
+    ver = hashlib.sha256(json.dumps(content, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:8]
+    js = lambda v: json.dumps(v, ensure_ascii=False)
+    out["tc-config.js"] = f"TC_COURSE_ID = {js(act)};\nTC_COURSE_NAME = {js({'en': title})};\nTC_COURSE_DESC = {js({'en': desc})};\n".encode("utf-8")
+    h = out[PK.SCORMDRIVER].decode("utf-8")
+    t = html.escape(title, quote=True)
+    h = re.sub(r"<title>.*?</title>", lambda m: f"<title>{t}</title>", h, count=1, flags=re.S)
+    h = re.sub(r'(<iframe title=")[^"]*(" id="content-frame")', lambda m: m.group(1) + t + m.group(2), h, count=1)
+    h = re.sub(r'("coursePackageVersion":")[^"]*(")', lambda m: m.group(1) + ver + m.group(2), h, count=1)
+    out[PK.SCORMDRIVER] = h.encode("utf-8")
+    return out
+
 def package_entries(cid: int, mode: str) -> tuple[dict, dict]:
     if mode not in MODES: raise HTTPException(400, "Eksport turi noma'lum")
     content, files = build_content(cid, mode)
@@ -1122,7 +1165,11 @@ def package_entries(cid: int, mode: str) -> tuple[dict, dict]:
     if mode == "scorm12": entries["imsmanifest.xml"] = PK.manifest_scorm12(ident, content["title"], sco, names).encode("utf-8")
     elif mode == "scorm2004": entries["imsmanifest.xml"] = PK.manifest_scorm2004(ident, content["title"], sco, names).encode("utf-8")
     elif mode == "xapi":
-        entries.update(PK.scormdriver_files())          # scormdriver/indexAPI.html → index.html (NEXTID launch yo'li)
+        sh = shell_files(content)
+        if sh:      # NEXTID: Rise tuzilmasi — kurs scormcontent/ ichida, qobiq (scormdriver, tc-config.js) ildizda
+            entries = {"scormcontent/" + k: v for k, v in entries.items()}
+            entries.update(sh)
+        else: entries.update(PK.scormdriver_files())    # scormdriver/indexAPI.html → index.html (tekis tuzilma; qobiq yo'q)
         entries["tincan.xml"] = tincan_xml(content).encode("utf-8")
     return entries, content
 
@@ -1136,6 +1183,8 @@ def export_course(c: Ctx, cid: int, mode: str) -> dict:
     if iss["errors"]: raise HTTPException(400, {"message": f"Eksportdan oldin {len(iss['errors'])} ta xatoni tuzating", "errors": iss["errors"][:30]})
     if not player_ok(): raise HTTPException(503, "Kurs pleyeri o'rnatilmagan (app/kurs_player) — administratorga murojaat qiling")
     entries, content = package_entries(cid, mode)
+    if mode == "xapi" and "scormcontent/index.html" not in entries:
+        iss["warnings"].append("NEXTID qobig'i topilmadi (app/nextid_shell/rise_shell.zip) — paket tekis tuzilmada; NEXTID uni «index.html mazmunini o'zgartirishda xatolik» bilan rad etishi mumkin")
     d = store() / "exports" / str(int(cid))
     tmp = PK._emit(entries, d)
     try:

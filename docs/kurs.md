@@ -152,6 +152,15 @@ parametrlari bilan), shuningdek savollar tahlilidan «Muharrirda ochish» (dars 
 `paket.CONTENT_KINDS` ga ro'yxatdan o'tadi: xavfsiz HTML, yo'llar, fayllar mavjudligi, YouTube ID, to'g'ri javoblar; tincan.xml ichki faoliyatlari
 kurs faoliyatiga tegishli bo'lishi kerak). SCORM `masteryscore` — yakunlash qoidasi testni o'z ichiga olsa, birinchi testning o'tish bali.
 
+**NEXTID tuzilmasi (xAPI).** NEXTID.LMS yuklangan zipni ochib Rise eksporti tuzilmasini kutadi; tekis tuzilma (`index.html` ildizda) «Index.html fayli
+mazmunini o'zgartirishda xatolik» bilan rad etilgan, Rise tuzilmasi esa qabul qilingan va kurs ochilgan (2026-11-17, haqiqiy NEXTID'da).
+Shuning uchun `xapi` eksport: kurs (pleyer, `content.*`, `assets/`, `fonts/`) → `scormcontent/`; ildizda — Rise qobig'i (`scormdriver/`, `tc-config.js`)
+va `tincan.xml` (launch `scormdriver/indexAPI.html`). Qobiq `app/nextid_shell/rise_shell.zip` dan olinadi (Articulate Rise eksportidagi
+`scormdriver/` — uchinchi tomon kodi, Rise litsenziyasi bo'yicha); kurs nomi, id va versiya har eksportda almashtiriladi. `ISFT_CORE_KURS_SHELL=<zip>` —
+boshqa qobiq, `off` — o'chirish (tekis tuzilma + eksport ogohlantirishi; testlar shunday ishlaydi). Rise `scormdriver` kursni parametrsiz
+(`../scormcontent/index.html#/preview`) ochgani uchun `lms.js` xAPI launch parametrlarini (`endpoint`, `auth`, `actor`) ota kadrlardan (bir domen) ham o'qiydi;
+`scrolling="no"` kadrda pleyer aylantirishni `#app` ichida bajaradi (`html.in-frame`). Haqiqiy NEXTID'da `tincan.xml` (bizniki) hali alohida tekshirilmagan.
+
 ## Ko'rish (preview)
 
 `GET /courses/{id}/preview-url` → `/api/kurs/pv/<kurs.foydalanuvchi.muddat.imzo>/index.html?preview=1` (HMAC, 2 soat). Kontent — joriy (avtosaqlangan)

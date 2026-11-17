@@ -138,6 +138,13 @@
 
   // ------------------------------------------------------------------ kontent
   var app = D.getElementById('app');
+  // iframe ichida (NEXTID/Rise «scormdriver» kadri scrolling=no) oyna aylantirilmaydi — shunda aylantirish #app ichida bo'ladi
+  var FRAMED = false; try { FRAMED = W.self !== W.top; } catch (e) { FRAMED = true; }
+  if (FRAMED) D.documentElement.classList.add('in-frame');
+  function toTop(smooth) {
+    var t = FRAMED && app ? app : W;
+    try { t.scrollTo({ top: 0, behavior: smooth ? 'smooth' : 'instant' }); } catch (e) { try { t.scrollTo(0, 0); } catch (e2) { /* jim */ } }
+  }
   function fatal(h, p) { app.removeAttribute('aria-busy'); app.textContent = ''; app.appendChild(el('main', { cls: 'fatal' }, [el('h1', { text: h }), el('p', { text: p })])); }
   if (!LMS) { fatal('Pleyer fayli yetishmaydi', "lms.js fayli topilmadi. Kursni qayta eksport qiling."); return; }
   LMS.setLog(note);
@@ -355,7 +362,7 @@
     else if (i < 0) renderCover(); else if (LS[i].type === 'quiz') renderQuiz(LS[i]); else renderLesson(LS[i], blockId);
     paintNav(); report(false);
     if (i >= 0 && tracker.visit) tracker.visit({ id: LS[i].id, type: LS[i].type === 'quiz' ? 'quiz' : 'lesson', title: LS[i].title });
-    if (!blockId) { try { W.scrollTo({ top: 0, behavior: 'instant' }); } catch (e) { W.scrollTo(0, 0); } }
+    if (!blockId) toTop(false);
     if (!noFocus) { var h = R.main.querySelector('h1'); if (h && !blockId) h.focus({ preventScroll: true }); }
     emit('lesson');
   }
@@ -477,7 +484,7 @@
       segEls.push(box); R.main.appendChild(box);
     });
     if (SINGLE) endBox.appendChild(el('div', { cls: 'scv-end' }, [el('button', { cls: 'scv-up', type: 'button', 'aria-label': 'Boshiga qaytish', onclick: function () {
-      try { W.scrollTo({ top: 0, behavior: reduced() ? 'auto' : 'smooth' }); } catch (e) { W.scrollTo(0, 0); } var h = R.main.querySelector('h1'); if (h) h.focus({ preventScroll: true }); } }, [icon('up')])]));
+      toTop(!reduced()); var h = R.main.querySelector('h1'); if (h) h.focus({ preventScroll: true }); } }, [icon('up')])]));
     else endBox.appendChild(lessonNav(i));
     R.main.appendChild(endBox);
     segEls.forEach(function (s, j) { s.hidden = j > open; });

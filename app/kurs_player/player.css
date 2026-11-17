@@ -533,3 +533,6 @@ details>summary{cursor:pointer;font:700 .8125rem/1.4 var(--font);letter-spacing:
 .car-stage figure[hidden]{display:none}
 .car-stage .fig{margin:0}
 .car-stage .fig img{display:block;width:100%;height:auto}
+/* iframe ichida (scrolling=no kadr): aylantirish #app ichida */
+html.in-frame,html.in-frame body{height:100%;overflow:hidden}
+html.in-frame #app{height:100%;overflow-x:hidden;overflow-y:auto;-webkit-overflow-scrolling:touch}

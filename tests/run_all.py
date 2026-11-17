@@ -66,6 +66,7 @@ def env_for(data: Path, args):
              ISFT_CORE_STAFFABS_DIR=str(data / "staffabs_files"), ISFT_CORE_SECRETS_DIR=str(data / "secrets"),
              PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8")
     e.setdefault("ISFT_CORE_TZ", "Asia/Tashkent")
+    e.setdefault("ISFT_CORE_KURS_SHELL", "off")   # NEXTID (Rise) qobig'i — foydalanuvchining input/rise_shell.zip i testga ta'sir qilmasin
     # Bo'limlar kaliti (app/modules.py): testlar STANDART holatni kutadi — tashqi sozlama olib tashlanadi. Kamera simulyatori serverda
     # yoqiladi (seed ma'lumoti saqlansin; facecam/hikvision to'plamlari kerak), lekin «cams»/«spaces» bo'limi standart o'chiq qoladi —
     # ularni kerakli to'plam o'zi yoqadi (facecam: /api/modules orqali; hikvision: o'z jarayonida ISFT_CORE_MODULES bilan).

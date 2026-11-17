@@ -305,6 +305,24 @@ ok(all(a.get("id").startswith(f"https://isft.uz/xapi/kurs/{dc}/lesson/") and "/q
    and any(a.find(f"{TCN}choices") is not None for a in inter), "Savol faoliyatlari: /lesson/<dars>/q/<savol>, interactionType, choices, correctResponsePattern")
 ok(cont["v"] == 1 and cont["kind"] == "kurs" and cont["tracking"]["mode"] == "xapi" and cont["labels"]["continue"] == "Davom etish" and z.read("content.js").startswith(b"window.KURS = "),
    "content.js — window.KURS, o'zbekcha yorliqlar")
+# NEXTID (Rise) qobig'i: sun'iy qobiq zipi bilan — kurs scormcontent/ ichida, scormdriver + tc-config.js ildizda; validate_zip o'tadi
+_sh = Path(tempfile.mkdtemp()) / "shell.zip"
+with zipfile.ZipFile(_sh, "w") as _z:
+    _z.writestr("scormdriver/indexAPI.html", '<html><head><title>Eski nom</title><script id="__DRIVER_CONFIG__" type="application/json">{"coursePackageVersion":"old","lmsTarget":"xapi"}</script></head><body><iframe title="Eski nom" id="content-frame" src="blank.html"></iframe></body></html>')
+    _z.writestr("scormdriver/blank.html", "<html></html>"); _z.writestr("tc-config.js", 'TC_COURSE_ID = "http://eski";\n'); _z.writestr("tincan.xml", "<x/>"); _z.writestr("scormcontent/index.html", "ESKI")
+_old = os.environ.get(K.SHELL_ENV); os.environ[K.SHELL_ENV] = str(_sh)
+try:
+    _f = K.shell_files(cont)
+    _ent = {"scormcontent/" + n: z.read(n) for n in z.namelist() if n not in ("tincan.xml",) and not n.startswith("scormdriver/")}
+    _ent.update(_f); _ent["tincan.xml"] = z.read("tincan.xml")
+    _vz = PK.validate_zip(PK.zip_bytes(_ent))
+    os.environ[K.SHELL_ENV] = "off"; _none = K.shell_files(cont)
+finally:
+    if _old is None: os.environ.pop(K.SHELL_ENV, None)
+    else: os.environ[K.SHELL_ENV] = _old
+ok(_f and "scormcontent/index.html" not in _f and "tincan.xml" not in _f and "Eski nom" not in _f["scormdriver/indexAPI.html"].decode()
+   and cont["tracking"]["activity_id"] in _f["tc-config.js"].decode() and "old" not in _f["scormdriver/indexAPI.html"].decode().split("coursePackageVersion")[1][:12]
+   and _vz["ok"] and _none is None, f"NEXTID qobig'i: scormcontent/ + scormdriver + tc-config.js, nom/id almashtirilgan, validate_zip o'tadi; o'chirilsa — None {_vz['errors'][:2]}")
 z12 = zipfile.ZipFile(io.BytesIO(zips["scorm12"])); m12 = z12.read("imsmanifest.xml").decode()
 ok("<schemaversion>1.2</schemaversion>" in m12 and 'adlcp:scormtype="sco"' in m12 and "tincan.xml" not in z12.namelist(), "SCORM 1.2 manifest")
 ok("2004 4th Edition" in zipfile.ZipFile(io.BytesIO(zips["scorm2004"])).read("imsmanifest.xml").decode(), "SCORM 2004 4-nashr manifest")

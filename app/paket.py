@@ -3247,9 +3247,13 @@ def validate_zip(data) -> dict:
                         if lt not in names: errors.append(f"tincan.xml: launch {lt} zip ichida yo'q")
                         # NEXTID (Rise yo'li): launch — «<papka>/scormdriver/indexAPI.html», u «<papka>/index.html» (pleyer) ga yo'naltiradi
                         if lt == SCORMDRIVER or lt.endswith("/" + SCORMDRIVER):
-                            lt = lt[:-len(SCORMDRIVER)] + "index.html"
-                            if lt not in names: errors.append(f"tincan.xml: {lt} (scormdriver yo'naltiradigan pleyer) zip ichida yo'q")
-                            if lt[:-len("index.html")] + "scormdriver/indexAPI.js" not in names: errors.append(f"tincan.xml: {lt[:-len('index.html')]}scormdriver/indexAPI.js yo'q")
+                            pre = lt[:-len(SCORMDRIVER)]
+                            if pre + "scormcontent/index.html" in names and pre + "index.html" not in names:
+                                lt = pre + "scormcontent/index.html"   # Rise tuzilmasi: qobiq (scormdriver) Rise'niki, kurs — scormcontent/ ichida
+                            else:
+                                lt = pre + "index.html"
+                                if lt not in names: errors.append(f"tincan.xml: {lt} (scormdriver yo'naltiradigan pleyer) zip ichida yo'q")
+                                if lt[:-len("index.html")] + "scormdriver/indexAPI.js" not in names: errors.append(f"tincan.xml: {lt[:-len('index.html')]}scormdriver/indexAPI.js yo'q")
                         else: errors.append(f"tincan.xml: launch {lt!r} — NEXTID uchun «{SCORMDRIVER}» bo'lishi kerak")
                         launches.append(lt)
                 out["scos"] = len(top)

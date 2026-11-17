@@ -231,8 +231,19 @@
     } else return null;
     return o;
   }
+  // Launch parametrlari: o'z manzilida, bo'lmasa — bir domendagi ota kadrlarda (Rise «scormdriver/indexAPI.html?endpoint=…» kursni
+  // «../scormcontent/index.html#/…» ga parametrsiz yuklaydi). Boshqa domen kadri — kirish taqiqlangan, o'tkazib yuboriladi.
+  function launchQuery() {
+    var w = W, n = 0;
+    while (w && n++ < 7) {
+      try { var s = w.location.search; if (s && /(^|[?&])endpoint=/.test(s)) return new URLSearchParams(s); } catch (e) { return null; }
+      if (w.parent === w) break;
+      w = w.parent;
+    }
+    return null;
+  }
   function launchParams() {
-    var q; try { q = new URLSearchParams(W.location.search); } catch (e) { return null; }
+    var q = launchQuery(); if (!q) return null;
     var ep = q.get('endpoint'), actor = q.get('actor');
     if (!ep || !actor || !httpUrl(ep)) return null;
     return { endpoint: ep.replace(/\/?$/, '/'), auth: q.get('auth') || '', actor: parseActor(actor), registration: q.get('registration') || '',
