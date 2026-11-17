@@ -26,13 +26,25 @@
   nav.querySelectorAll(".nav-h").forEach(h => h.remove());
   nav.querySelectorAll("a[data-g]").forEach(a => a.removeAttribute("data-g"));
   if (!ICONS.pin2) ICONS.pin2 = '<path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/>';
-  const GROUPS = [["tez", "Tezkor", "pin2"], ["ish", "Ish stoli", "dashboard"], ["talaba", "Talabalar va o'quv", "cap"], ["ilm", "Ilm va xalqaro", "flask"],
-                  ["moliya", "Moliya va xodimlar", "money"], ["kampus", "Kampus", "wrench"], ["hujjat", "Hujjatlar", "folder"], ["tizim", "Tizim", "gear"]];
-  const VG = {panel: "ish", mywork: "ish", chat: "ish", agents: "ish", tasks: "ish",
-              ops: "talaba", flows: "talaba", masofaviy: "talaba", ortda: "talaba", yuzma: "talaba", hemis: "talaba",testbank: "talaba", paket: "talaba", kurs: "talaba", studio: "talaba", reyting: "talaba", syllabus: "talaba", amaliyot: "talaba", taqdimot: "talaba", tekshiruv: "talaba",
-              ilmiy: "ilm", xalqaro: "ilm", moliya: "moliya", kadrlar: "moliya", staffabs: "moliya",
+  /* Guruhlar — kundalik ish tartibida: Ish stoli → Talabalar → O'quv jarayoni → Ilm → Hujjatlar → Moliya va xodimlar → Kampus → Tizim.
+     Guruh ichidagi tartib — ORD (mantiqiy ketma-ketlik; Boshqaruv paneli har doim birinchi). */
+  const GROUPS = [["tez", "Tezkor", "pin2"], ["ish", "Ish stoli", "dashboard"], ["talaba", "Talabalar", "cap"], ["oquv", "O'quv jarayoni", "book"], ["ilm", "Ilm va xalqaro", "flask"],
+                  ["hujjat", "Hujjatlar", "folder"], ["moliya", "Moliya va xodimlar", "money"], ["kampus", "Kampus", "wrench"], ["tizim", "Tizim", "gear"]];
+  const VG = {panel: "ish", nazorat: "ish", imzo: "ish", haftalik: "ish", mywork: "ish", tasks: "ish", agents: "ish", chat: "ish", rejalar: "ish",
+              ops: "talaba", flows: "talaba", reyting: "talaba", qabul: "talaba", amaliyot: "talaba",
+              syllabus: "oquv", masofaviy: "oquv", ortda: "oquv", yuzma: "oquv", testbank: "oquv", paket: "oquv", kurs: "oquv", studio: "oquv", taqdimot: "oquv", tekshiruv: "oquv",
+              ilmiy: "ilm", xalqaro: "ilm",
+              portal: "hujjat", kiruvchi: "hujjat", documents: "hujjat", orders: "hujjat", docs: "hujjat", reports: "hujjat",
+              moliya: "moliya", kadrlar: "moliya", staffabs: "moliya",
               yoshlar: "kampus", service: "kampus", spaces: "kampus", cams: "kampus",
-              kiruvchi: "hujjat", qabul: "talaba", rejalar: "ish", portal: "hujjat", documents: "hujjat", orders: "hujjat", reports: "hujjat", docs: "hujjat", rbac: "tizim", audit: "tizim", accounts: "tizim", modullar: "tizim"};
+              hemis: "tizim", accounts: "tizim", rbac: "tizim", audit: "tizim", modullar: "tizim"};
+  const ORD = ["panel", "nazorat", "imzo", "haftalik", "mywork", "tasks", "agents", "chat", "rejalar",
+               "ops", "flows", "reyting", "qabul", "amaliyot",
+               "syllabus", "masofaviy", "ortda", "yuzma", "testbank", "paket", "kurs", "studio", "taqdimot", "tekshiruv",
+               "ilmiy", "xalqaro", "portal", "kiruvchi", "documents", "orders", "docs", "reports",
+               "moliya", "kadrlar", "staffabs", "yoshlar", "service", "spaces", "cams",
+               "hemis", "accounts", "rbac", "audit", "modullar"];
+  const ordOf = a => { const i = ORD.indexOf(a.dataset.v); return i < 0 ? ORD.length : i; };
   /* lavozimga xos nom: bitta sahifa turli lavozimda turli ish (xarid — so'rovlar, xo'jalik — nosozliklar, yoshlar — murojaatlar) */
   /* «Nosozliklar va murojaatlar» nomi hamma lavozimda bir xil (avval lavozimga qarab o'zgarar edi — bitta sahifa uch xil nom bilan chalkashtirardi) */
   const LBL = {};
@@ -95,7 +107,7 @@
     GROUPS.forEach(([k]) => { OPEN[k] = k in saved ? saved[k] : (["tez", "ish", main].includes(k)); });
     const cur = nav.querySelector("a.on"); if (cur) OPEN[cur.dataset.grp] = true;
     GROUPS.forEach(([k, name, ic]) => {
-      const items = anchors.filter(a => a.dataset.grp === k);
+      const items = anchors.filter(a => a.dataset.grp === k).sort((x, y) => ordOf(x) - ordOf(y));
       const shown = items.filter(a => !a.classList.contains("hidden"));
       let h = null;
       if (shown.length && (many || (k === "tez") || (pins.length && k === "ish" && vis.some(a => a.dataset.pinned)))) {
@@ -123,7 +135,10 @@
     if (OPEN[a.dataset.grp] === false) { OPEN[a.dataset.grp] = true; applyOpen(); }
   };
   /* yig'iq guruhdagi bandga raqamli belgi qo'shilsa — sarlavhada nuqta */
-  let nbT; new MutationObserver(() => { clearTimeout(nbT); nbT = setTimeout(applyOpen, 80); }).observe(nav, {childList: true, subtree: true});
+  /* yangi band keyin qo'shilsa (hemis.js, yuzma.js … o'zlari qo'shadi) — guruhi yo'q: menyu qayta quriladi (guruh/tartib to'g'ri bo'lishi uchun) */
+  let nbT; new MutationObserver(() => { clearTimeout(nbT); nbT = setTimeout(() => {
+    if (ROLE && [...nav.querySelectorAll("a[data-v]")].some(a => !a.dataset.grp)) navGroup(ROLE); else applyOpen();
+  }, 80); }).observe(nav, {childList: true, subtree: true});
   /* eski chaqiruv (boot() boshida) — endi tartibni navGroup() quradi */
   window.navLayout = function (role) { ROLE = role; };
 

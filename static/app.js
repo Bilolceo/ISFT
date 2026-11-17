@@ -300,10 +300,9 @@ function navApply() {
   {
     const R = ME.role_key, hide = v => document.querySelector(`#nav a[data-v="${v}"]`)?.classList.add("hidden");
     if (!["xalqaro", "yuridik", "rektor", "prorektor_ilmiy", "prorektor_oquv", "kotib", "devonxona", "strategik"].includes(R)) hide("docs");
-    if (!["xojalik", "akademik", "it_head", "it_staff", "rektor"].includes(R) && !R.startsWith("prorektor_")) hide("spaces");   /* rahbariyat ham ko'radi (kamera sanog'i) */
+    if (!["xojalik", "akademik", "it_head", "it_staff", "rektor", "kengash"].includes(R) && !R.startsWith("prorektor_")) hide("spaces");   /* rahbariyat ham ko'radi (kamera sanog'i) */
     if (["akademik", "qabul"].includes(R) || (R === "tyutor" && !(typeof fcRole === "function" && fcRole()))) hide("cams");   /* tyutor — Face ID kirish nazorati uchun qoladi */
-    const TRIM = {kengash: ["mywork", "chat", "agents", "tasks", "portal", "documents", "cams", "spaces"],
-                  talabalar: ["moliya", "yoshlar", "amaliyot"], registrator_xodim: ["moliya", "yoshlar", "amaliyot"], akademik: ["xalqaro"], buxgalteriya: ["yoshlar", "flows", "cams", "spaces"]};   /* buxgalteriya: barcha to'lovlar Moliya ichida */
+    const TRIM = {kengash: ["portal", "documents", "cams"], buxgalteriya: ["cams", "spaces"]};   /* faqat haqiqatan keraksizlari: kuzatuv kengashi yozishma/hujjat/kamera ishlatmaydi; buxgalteriya kamera/xona ishlatmaydi */
     (TRIM[R] || []).forEach(hide);
     /* --- bo'limlar kaliti: o'chirilgan bo'lim hech kimning menyusida yo'q --- */
     document.querySelectorAll("#nav a[data-v]").forEach(a => { if (!modOn(a.dataset.v)) a.classList.add("hidden"); });

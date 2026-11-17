@@ -1,8 +1,9 @@
 # Bo'limlar kaliti (modullar)
 
 ISFT Core juda kattalashib ketgan edi: rektor menyusida 32 ta band, deyarli hammasi namuna (sun'iy) ma'lumotda, bir xil narsa
-3–4 joyda takrorlanardi. Qaror: **egasi (mas'ul bo'lim) va haqiqiy ma'lumot manbai yo'q bo'limlar yashiriladi — o'chirib tashlanmaydi.**
-Kod, jadvallar, ma'lumot va API joyida qoladi; bo'lim bitta kalit bilan qayta yoqiladi.
+3–4 joyda takrorlanardi. 2026-11-12 da egasi va haqiqiy ma'lumot manbai yo'q ~20 bo'lim standart holatda yashirilgan edi (kod o'chirilmagan).
+**2026-11-17: bu ortiqcha chiqarildi — hamma bo'lim standart holatda yoqilgan** (menyu lavozim ruxsatiga qarab quriladi, namuna
+ma'lumotda «Namuna ma'lumot» belgisi turadi). Kalit saqlangan: kerak bo'lsa bo'lim bitta kalit bilan yashiriladi (kod, jadvallar va API joyida).
 
 Yagona manba: `app/modules.py` (reestr `MODULES`, standart qiymatlar, API). Bu hujjatdagi jadvallar o'sha reestrdan olingan.
 
@@ -71,7 +72,7 @@ Shu ikkisi bo'lmasa bo'lim namuna ma'lumotni «jonli» qilib ko'rsatadi — rahb
 | `audit` | Audit jurnali | Kim, qachon, nimani so'ragani. | — |
 | `modullar` | Bo'limlar | Shu sahifa: bo'limlarni yoqish va o'chirish. | — |
 
-## Faqat menyu bandi (standart: o'chiq)
+## Faqat menyu bandi (standart: yoqilgan)
 
 | Kalit | Bo'lim | Nima | Egasi va ma'lumot manbai |
 |---|---|---|---|
@@ -79,7 +80,7 @@ Shu ikkisi bo'lmasa bo'lim namuna ma'lumotni «jonli» qilib ko'rsatadi — rahb
 | `kiruvchi` | Kiruvchi xatlar | Devonxona reyestri. Devonxona uchun doim ochiq; rezolyutsiya kutayotgan xat «Mening vazifalarim»dan ochiladi. | Devonxona (reyestrni yuritadi) |
 | `reports` | Hisobotlar | Tahliliy Word hisobotlar sahifasi. O'chiq bo'lsa — yuklab olish tugmalari panelda. | Alohida sahifa kerak emas — tugmalar panelda |
 
-## Egasi va haqiqiy ma'lumot manbai kutilayotgan bo'limlar (standart: o'chiq)
+## Egasi va haqiqiy ma'lumot manbai kutilayotgan bo'limlar (standart: yoqilgan — namuna ma'lumot bilan; «Manba» ustuni haqiqiy ulanish uchun)
 
 | Kalit | Bo'lim | Nima | Egasi va ma'lumot manbai |
 |---|---|---|---|
@@ -115,6 +116,13 @@ Shu ikkisi bo'lmasa bo'lim namuna ma'lumotni «jonli» qilib ko'rsatadi — rahb
   «Barcha bo'limlar» ichida yashirinib qolgan edi. Bekor qilindi: lavozimning ruxsati bor barcha bo'limlari menyuda (`nav.js` guruhlaydi), rektorda
   menyu boshida Boshqaruv paneli, Nazorat markazi, Imzo navbati, Haftalik hisobot; bosh sahifa — Boshqaruv paneli. Ixcham rejim kodi
   (`/api/nazorat/meta → menu.lean`, «Barcha bo'limlar» sahifasi) saqlangan, hozir yoqilmagan.
+- **Menyu tuzilishi (`static/nav.js`).** Guruhlar kundalik ish tartibida: Ish stoli (Boshqaruv paneli birinchi, Nazorat markazi, Imzo navbati,
+  Haftalik hisobot, Mening vazifalarim, Majlislar, AI takliflari, suhbat, KPI maqsadlari) → Talabalar (navbat, akademik jarayonlar, reyting, qabul,
+  amaliyot) → O'quv jarayoni (o'quv dasturlari, masofaviy ta'lim, ortda qolganlar, yuzma-yuz, test bank, dars tayyorlash, studiya, taqdimot, ishlarni
+  tekshirish) → Ilm va xalqaro → Hujjatlar (yozishmalar, kiruvchi xatlar, hujjat chiqarish, buyruqlar, tarjima/shartnoma, hisobotlar) → Moliya va
+  xodimlar → Kampus → Tizim (HEMIS almashinuvi, akkaunt, ruxsat, audit, bo'limlar). Guruh ichidagi tartib — `ORD` ro'yxati. Lavozim bo'yicha
+  ko'rinish `static/app.js navApply()` da (ruxsati yo'q yoki ishlatmaydigan band yashiriladi; faqat `TRIM`: kuzatuv kengashi — yozishma/hujjat/kamera,
+  buxgalteriya — kamera/xona).
 
 ## Kameralar: simulyator standart holda o'chiq
 

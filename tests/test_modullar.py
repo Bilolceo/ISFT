@@ -38,9 +38,9 @@ def q(sql, args=()):
     finally: con.close()
 
 REKTOR, IT, TEACHER, REG, XOJ = 2, 21, 15, 17, 16
-ON = {"panel", "nazorat", "mywork", "tasks", "portal", "documents", "orders", "ops", "masofaviy", "paket", "studio", "testbank", "taqdimot", "service", "accounts", "audit", "rbac", "modullar", "chat", "agents", "cams", "spaces"}   # chat, agents, kameralar — rahbariyat so'rovi bilan qaytarildi
-OFF = {"moliya", "kadrlar", "staffabs", "yoshlar", "syllabus", "flows", "reyting", "amaliyot", "ilmiy", "xalqaro", "rejalar", "tekshiruv",
-       "qabul", "docs", "reports", "kiruvchi"}
+ON = {"panel", "nazorat", "mywork", "tasks", "portal", "documents", "orders", "ops", "masofaviy", "paket", "studio", "testbank", "taqdimot", "service", "accounts", "audit", "rbac", "modullar", "chat", "agents", "cams", "spaces",
+      "moliya", "kadrlar", "staffabs", "yoshlar", "syllabus", "flows", "reyting", "amaliyot", "ilmiy", "xalqaro", "rejalar", "tekshiruv", "qabul", "docs", "reports", "kiruvchi"}   # 2026-11-17: hammasi standart yoqilgan (ixcham menyu bekor qilindi)
+OFF = set()
 
 # ===================================================================== A
 print("— A. Birlik: standartlar va muhit sintaksisi —")
@@ -161,6 +161,8 @@ try:
     me = oq.get("/api/me").json()
     ok(set(me["modules"]) == ON | OFF and all(me["modules"][k] for k in ON) and not any(me["modules"][k] for k in OFF),
        "/api/me: modules — standart holat (o'qituvchi ham ko'radi: menyu shundan quriladi)")
+    for k in ("moliya", "reyting"): it.post(f"/api/modules/{k}", json={"enabled": False})   # sinov holati: bo'lim o'chiq (standart — yoqilgan)
+    me = oq.get("/api/me").json()
     ok(set(me["flags"]) >= {"real_data", "cam_sim", "demo_login"} and me["flags"]["real_data"] is False, "/api/me: flags (real_data=false → «Namuna ma'lumot» tasmasi)")
     ok(httpx.get(B + "/api/modules").status_code == 401, "/api/modules: kirishsiz — 401")
     d = oq.get("/api/modules").json()
