@@ -1070,12 +1070,12 @@ def notif_items(c: Ctx) -> list[dict]:
 
 
 def menu(c: Ctx) -> dict:
-    """Rektor menyusi (≤ 5 band): Nazorat markazi, Imzo navbati, Haftalik hisobot, suhbat («chat» yoqilgan bo'lsa), Barcha bo'limlar.
-    Prorektor — to'liq menyusi saqlanadi, boshiga Nazorat markazi va Imzo navbati qo'shiladi. Bo'lim o'chiq bo'lsa — eski menyu."""
+    """Menyu: Boshqaruv paneli va Nazorat markazi, Imzo navbati (rektor — Haftalik hisobot ham) menyuning boshida; qolgan bandlar lavozim va
+    «Bo'limlar» kaliti bo'yicha avvalgidek (guruhlangan). Bosh sahifa — Boshqaruv paneli. Avval rektor menyusi 5 bandgacha qisqartirilgan edi
+    («Barcha bo'limlar» ichida «Boshqaruv paneli» yashirinib qolgan) — bekor qilindi. Bo'lim o'chiq bo'lsa — eski menyu."""
     if not MODS.on("nazorat") or c.role.key not in ROLES: return {"lean": False, "items": []}
     if c.role.key == LEAD:
-        items = ["nazorat", "imzo", "haftalik"] + (["chat"] if MODS.on("chat") else []) + ["barcha"]
-        return {"lean": True, "items": items, "home": "nazorat"}
+        return {"lean": False, "items": ["panel", "nazorat", "imzo", "haftalik"], "home": None}
     return {"lean": False, "items": ["nazorat", "imzo"], "home": None}
 
 

@@ -309,10 +309,7 @@ function navApply() {
     document.querySelectorAll("#nav a[data-v]").forEach(a => { if (!modOn(a.dataset.v)) a.classList.add("hidden"); });
     /* Kiruvchi xatlar: Devonxona uchun doim menyuda (reyestrni u yuritadi); boshqalar xatni «Mening vazifalarim»dan ochadi */
     if (R === "devonxona") document.querySelector('#nav a[data-v="kiruvchi"]')?.classList.remove("hidden");
-    /* ixcham menyu: rahbar va o'qituvchi uchun ikkinchi darajali bandlar menyudan olinadi (sahifa havola orqali ochilaveradi).
-       rektor — Test bank va Dars tayyorlash xulosasi «Masofaviy ta'lim»da; o'qituvchi — topshiriq, hujjat va masofaviy muddatlar «Mening vazifalarim»da */
-    const LEAN = {rektor: ["testbank", "paket"], oqituvchi: ["tasks", "documents", "masofaviy"]};
-    (LEAN[R] || []).forEach(hide);
+    /* (ixcham menyu — rektor 10 / o'qituvchi 6 band — bekor qilindi: ruxsati bor bo'limlar menyuda to'liq, nav.js ularni guruhlaydi) */
   }
   if (typeof navGroup === "function") navGroup(ME.role_key);   /* nav.js: guruhlar, tezkor bandlar, lavozimga xos nomlar */
 }

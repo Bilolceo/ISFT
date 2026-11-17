@@ -5,7 +5,9 @@
      imzo     — imzo navbati: rahbar qarorini kutayotgan hujjatlar, eng eskisi birinchi; buyruqni shu yerda imzolash / izoh bilan qaytarish.
      haftalik — haftalik hisobot (dushanba 08:00): 5–8 qator va kerakli 3 qaror.
      barcha   — «Barcha bo'limlar»: rektorning ixcham menyusidan olingan bandlar (bo'limlar kaliti va ruxsatlar saqlanadi).
-   Menyu: rektor — 5 band (server: /api/nazorat/meta → menu); prorektor — menyusi boshiga Nazorat markazi va Imzo navbati qo'shiladi.
+   Menyu (server: /api/nazorat/meta → menu): rektor — menyu boshida Boshqaruv paneli, Nazorat markazi, Imzo navbati, Haftalik hisobot, so'ng ruxsati bor
+   barcha bo'limlar (guruhlangan); prorektor — menyusi boshiga Nazorat markazi va Imzo navbati qo'shiladi. Bosh sahifa — Boshqaruv paneli.
+   (M.lean — ixcham menyu va «Barcha bo'limlar» sahifasi — saqlangan, hozir hech kimga yoqilmagan.)
    index.html va app.js ga tegmaslik uchun bandlar, bo'limlar va go()/navApply()/boot()/badges() o'ramlari shu faylda.
    Yordamchilar: app.js ($, esc, J, toast, busy, arm, ico, ICONS, ME, go, dmy, locked, errCard), extras.js (XT.openLink).
    ===================================================================== */
@@ -42,7 +44,7 @@ const nzWho = p => !p ? "—" : (p.name && p.name !== p.position ? `${esc(p.posi
   });
 })();
 
-/* ---------- menyu: rektor — 5 band, prorektor — +2 band ---------- */
+/* ---------- menyu: rektor — boshiga 4 band, prorektor — +2 band ---------- */
 function nzMenuApply() {
   const M = NZS.meta && NZS.meta.menu, nav = document.getElementById("nav");
   const mine = Object.keys(NZ_VIEWS);

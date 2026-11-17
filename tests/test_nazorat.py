@@ -135,13 +135,13 @@ ok(set(IP) | set(II) <= set(I) and not (set(II) & {k for k in IP if k.startswith
 # =============================================================================================
 print("== 3. Menyu va bo'limlar kaliti")
 M = rek.get("/api/nazorat/meta").json()["menu"]
-ok(M["lean"] and len(M["items"]) <= 5 and M["items"][:3] == ["nazorat", "imzo", "haftalik"] and M["items"][-1] == "barcha" and M["home"] == "nazorat",
-   f"Rektor menyusi {len(M['items'])} band: {M['items']}")
+ok(not M["lean"] and M["items"] == ["panel", "nazorat", "imzo", "haftalik"] and not M["home"],
+   f"Rektor menyusi: Boshqaruv paneli birinchi, so'ng Nazorat markazi, Imzo navbati, Haftalik hisobot; ixcham emas; bosh sahifa — panel ({M['items']})")
 MP = pro.get("/api/nazorat/meta").json()["menu"]
 ok(not MP["lean"] and MP["items"] == ["nazorat", "imzo"], "Prorektor: to'liq menyu + Nazorat markazi va Imzo navbati")
 r = rek.post("/api/modules/chat", json={"enabled": False})
 M2 = rek.get("/api/nazorat/meta").json()["menu"]
-ok(r.status_code == 200 and "chat" not in M2["items"] and len(M2["items"]) == 4, f"«Suhbat» o'chirilsa — rektor menyusida 4 band ({M2['items']})")
+ok(r.status_code == 200 and M2["items"] == ["panel", "nazorat", "imzo", "haftalik"], f"«Suhbat» o'chirilsa — rektor menyusining boshi o'zgarmaydi ({M2['items']})")
 rek.post("/api/modules/chat", json={"enabled": True})
 rek.post("/api/modules/nazorat", json={"enabled": False})
 M3 = rek.get("/api/nazorat/meta").json()["menu"]

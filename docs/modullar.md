@@ -111,9 +111,10 @@ Shu ikkisi bo'lmasa bo'lim namuna ma'lumotni «jonli» qilib ko'rsatadi — rahb
   «Murojaatlar va hodisalar» — `ops` (Talabalar navbati) yoqilganda; «Tadbir qatnashuvi» — `yoshlar` yoqilganda.
 - **Tizim sahifalari** (`accounts`, `rbac`, `audit`, `modullar`) o'chirilmaydi. «Akkauntlar», «Ruxsat darajalari», «Audit jurnali»
   menyuda faqat AT bo'limi boshlig'ida; «Bo'limlar» — AT boshlig'i va rektorda.
-- **Ixcham menyu** (`static/app.js`, `navApply()` → `LEAN`): rektor menyusida «Test bank» va «Dars tayyorlash» yo'q (xulosasi
-  «Masofaviy ta'lim»da); o'qituvchi menyusida «Majlislar va topshiriqlar», «Hujjat chiqarish» va «Masofaviy ta'lim» yo'q (ishlari
-  «Mening vazifalarim»da chiqadi, sahifa havoladan ochiladi). Natija: rektor — 10 band, o'qituvchi — 6 band.
+- **Menyu (2026-11-17).** Avval ixcham menyu bor edi (rektor 10, keyin Nazorat markazi bilan 5 band; o'qituvchi 6 band) — «Boshqaruv paneli»
+  «Barcha bo'limlar» ichida yashirinib qolgan edi. Bekor qilindi: lavozimning ruxsati bor barcha bo'limlari menyuda (`nav.js` guruhlaydi), rektorda
+  menyu boshida Boshqaruv paneli, Nazorat markazi, Imzo navbati, Haftalik hisobot; bosh sahifa — Boshqaruv paneli. Ixcham rejim kodi
+  (`/api/nazorat/meta → menu.lean`, «Barcha bo'limlar» sahifasi) saqlangan, hozir yoqilmagan.
 
 ## Kameralar: simulyator standart holda o'chiq
 
