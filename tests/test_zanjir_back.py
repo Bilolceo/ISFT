@@ -469,6 +469,9 @@ for nm, cl in (("o'qituvchi", OQ), ("kafedra", KAF)):
     m2 = json.loads(zipfile.ZipFile(io.BytesIO(z2.content)).read(f"{code}/meta.json"))
     ok(z2.status_code == 200 and not any("video" in n.split("/")[-1] and n.endswith(".mp4") for n in n2) and m2["video"] == "ruxsat yo'q" and "video_havola" not in m2, f"{nm}: ZIP'da video yo'q, meta.json video «ruxsat yo'q»")
 ok(any(n.endswith(f"{code}_video.mp4") for n in zipfile.ZipFile(io.BytesIO(OPER.get(f"{CD}/{CID}/{LKz}/zip").content)).namelist()), "Operator: ZIP'da video bor")
+for _ in range(50):         # papka javobdan KEYIN fon vazifasi (BackgroundTask) bilan o'chiriladi — sekin mashinada (CI) ulgurishi uchun kutamiz (≤ 5 s)
+    if not (DATA / "tmp").exists() or not list((DATA / "tmp").glob("isft_zip_*")): break
+    time.sleep(0.1)
 ok(not [d for d in (DATA / "tmp").glob("isft_zip_*")] if (DATA / "tmp").exists() else True, "ZIP vaqtinchalik papkalari tozalangan")
 
 print("— 12. Qidiruv va ro'yxat —")
