@@ -711,3 +711,31 @@ html:has(.dz),html:has(.dz) body{background:#fbf6f8}
   .dz-card .dz-open{flex:none;white-space:nowrap;padding:0 18px}
 }
 @media print{.dz-bar,.dz-nav,.dz-foot{display:none!important}}
+
+/* --- 2-dizayn: sayqallash (audit) */
+/* shrift: Lato (1-dizayn) bu dizaynda yuklanmasin — o'zgaruvchilar ildizda (body ham Manrope) */
+:root:has(.dz){--font:Manrope,"ISFT Uz","Helvetica Neue",Arial,system-ui,sans-serif;--serif:var(--font)}
+/* tugmalar: gap qatorda — katta harfli Rise uslubi emas */
+.dz .btn{text-transform:none;letter-spacing:0;font-size:.9375rem;min-height:44px}
+/* klaviatura ko'rsatmasi (qulaylik) — ekran o'quvchisiga doim, ko'zga esa blokka fokus tushganda */
+.dz .kbd-h{position:absolute!important;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.dz .blk:focus-within .kbd-h{position:static!important;width:auto;height:auto;margin:0 0 8px;overflow:visible;clip:auto;white-space:normal;color:var(--muted);font-size:.8125rem}
+.dz .blk{scroll-margin-top:84px}
+/* keng formula: yonga aylanishi ko'rinib tursin (o'ng chetda soya) */
+.dz .mth{background:linear-gradient(90deg,#fff 30%,transparent),linear-gradient(90deg,transparent,#fff 70%) 100% 0,radial-gradient(farthest-side at 0 50%,rgba(0,0,0,.16),transparent),radial-gradient(farthest-side at 100% 50%,rgba(0,0,0,.16),transparent) 100% 0;
+  background-repeat:no-repeat;background-color:#fff;background-size:40px 100%,40px 100%,14px 100%,14px 100%;background-attachment:local,local,scroll,scroll}
+/* yakun belgisi (bosh sahifa) */
+.dz-result{display:inline-flex;align-items:center;gap:8px;margin:14px 0 0;padding:8px 14px;border-radius:99px;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.3);font:700 .9375rem/1.2 var(--font)}
+.dz-result .ic svg{width:18px;height:18px;stroke-width:3}
+/* ichki mundarija */
+.dz-toc{margin:6px 44px 10px;border:1px solid var(--line);border-radius:14px;background:var(--dz-soft)}
+.dz-toc>summary{cursor:pointer;padding:12px 16px;font:700 .9375rem/1.3 var(--font);color:var(--brand);list-style:none}
+.dz-toc>summary::-webkit-details-marker{display:none}
+.dz-toc>summary::after{content:"▾";float:right}
+.dz-toc[open]>summary::after{content:"▴"}
+.dz-toc-l{list-style:none;margin:0;padding:0 8px 10px;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:2px 12px;counter-reset:t}
+.dz-toc-l li{counter-increment:t}
+.dz-toc-l button{display:block;width:100%;text-align:left;border:0;background:none;padding:8px 10px;border-radius:8px;cursor:pointer;font:500 .875rem/1.35 var(--font);color:var(--ink)}
+.dz-toc-l button::before{content:counter(t) ". ";color:var(--muted)}
+.dz-toc-l button:hover{background:#fff;color:var(--brand)}
+@media (max-width:720px){.dz-toc{margin:4px 18px 8px}.dz-toc-l{grid-template-columns:1fr}}

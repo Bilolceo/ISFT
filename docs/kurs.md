@@ -151,6 +151,22 @@ o'tkazilmagan dars o'tkaziladi va muharrir pleyeri bilan eksport qilinadi — sh
 ketiladi (`export_course(..., omit=)`); bog'langan, manbasi «paket» dars — muharrir nusxasi o'zgartirilmaydi, paket pleyeri bilan eksport
 qilinadi va «2-dizayn qo'llanmadi» ogohlantirishi qaytadi. Paket pleyeri (`app/paket_player`, «Avtomatik yig'ish») 2-dizaynni qo'llamaydi.
 
+2-dizaynda (bitta blokli dars) LMS'ga progress ekrandagi bilan bir xil — bajarilgan qadamlar ulushi (xAPI progressed 25/50/75/100);
+yakuniy test qadami barcha bo'limlar ko'rilgandan keyin ochiladi. «Dars tayyorlash»dan muharrirga o'tkazilgan, Yakuniy testi bor kursning yakunlash
+qoidasi dars (fan) sozlamasidan olinadi (standart — «ko'rilganda va test topshirilganda»; paket `view_all/quiz_pass/view_and_quiz` →
+`view/quiz/view_and_quiz`, `dars.kurs_completion`); avval yaratilganlar bir marta ko'chirildi (`ku_meta.mig_dars_completion_v1`) — aks holda
+LMS'ga test topshirilmasdan «passed» ketardi. NEXTID (Rise) qobig'i ichida qobiq ochilishda o'zi «attempted» yuboradi — kontent uni takrorlamaydi
+(`lms.js` `riseShell()`); yopilishdagi «attempted» (davomiylik) va cumulative_time kontentdan (qobiqning «unload»i iframe'da taqiqlangan),
+qobiq birinchi ochilishda yozadigan bo'sh suspend_data yopilishda bizniki bilan qayta yoziladi.
+
+2-dizayn tafsilotlari: bitta blokli dars uchun yorliqlar «Darsni boshlash» / «Dars yakunlandi» (o'zgartirilgan yorliq tegilmaydi); yopiq
+(«Navbatda») bo'lim kartochkasida tugma yo'q, sababi — ekran o'quvchisi uchun matn; yakuniy test qadamida test topshirilmagan bo'lsa «Yakunlash»
+avval ogohlantiradi, ikkinchi bosish — chiqish; dars yakunlansa bosh sahifada «Dars yakunlandi · Test natijasi» belgisi; 5 va undan ko'p sarlavhali
+bo'limda ichki mundarija («Bo'lim mundarijasi»); «mashq / topshiriq» bo'limi mashq belgisi bilan; klaviatura ko'rsatmasi (qulaylik) ekran
+o'quvchisiga doim, ko'zga — blokka fokus tushganda; keng formula yonga aylanishi soya bilan ko'rsatiladi; Lato yuklanmaydi (faqat Manrope).
+«Dars tayyorlash»dan avval o'tkazilgan kurslarda «1. … 2. …» bitta bandga yopishgan Reja / Topshiriq ro'yxatlari bir martalik ko'chirishda
+(`ku_meta.mig_dars_split_lists_v1`) alohida bandlarga ajratildi (yangi o'tkazishlar `paket._split_inline_numbered` bilan allaqachon to'g'ri).
+
 LMS: `lms.js` (paket pleyeri bilan umumiy) — SCORM 1.2, SCORM 2004 4-nashr, xAPI (launch parametrlari; dars faoliyatlari
 `<kurs>/lesson/<uid>`, savollar `<kurs>/lesson/<uid>/q/<id>`), LMS'siz rejim (localStorage). Yakunlash qoidasi: darslar ko'rilganda (≥ N %),
 test topshirilganda, ikkalasi yoki biri. Baholash qoidasi serverdagi `grade()` / `norm_answer()` bilan bir xil (bo'sh joy: katta-kichik harf, apostrof

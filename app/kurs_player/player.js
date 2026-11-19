@@ -200,7 +200,9 @@
     if (!QUIZZES.length) mode = 'view';
     var complete = mode === 'quiz' ? passed : mode === 'view_and_quiz' ? viewOk && passed : mode === 'view_or_quiz' ? viewOk || passed : viewOk;
     var done = LS.filter(function (l) { return l.type === 'quiz' ? qst(l).p || qst(l).n > 0 : lessonDone(l); }).length;
-    return { complete: complete, success: success, score: score, progress: done / LS.length, seen: seen, total: VIEWS.length };
+    // 2-dizayn, bitta blokli dars: LMS'dagi progress ekrandagi bilan bir xil — bajarilgan qadamlar ulushi (aks holda 0 → 100 sakraydi)
+    var prog = DZ && SEGMODE && STEPS.length ? STEPS.filter(stepDone).length / STEPS.length : done / LS.length;
+    return { complete: complete, success: success, score: score, progress: prog, seen: seen, total: VIEWS.length };
   }
   function stateString() { S.c = cur; return LMS.encodeState(S, tracker.limit); }
   function save(commit) { if (!tracker) return; tracker.save(stateString(), cur >= 0 ? LS[cur].id : ''); if (commit) tracker.commit(); }
@@ -974,6 +976,14 @@ if (location.protocol === 'file:') {
     if (t && t === t.toUpperCase() && t !== t.toLowerCase()) t = t.charAt(0) + t.slice(1).toLowerCase();
     return t;
   }
+  // Bitta blokli dars (2-dizayn) — «kurs» emas, «dars»: standart yorliqlar almashtiriladi (o'zgartirilgan yorliqlar tegilmaydi)
+  function dzT(k) {
+    var v = T(k);
+    if (!SEGMODE) return v;
+    if (k === 'start' && v === LB.start) return 'Darsni boshlash';
+    if (k === 'finish' && v === LB.finish) return 'Dars yakunlandi';
+    return v;
+  }
   function dzSteps() {
     STEPS = []; SEGMODE = VIEWS.length === 1;
     LS.forEach(function (l, li) {
@@ -1015,6 +1025,8 @@ if (location.protocol === 'file:') {
       if (C.settings.sequential && !stepDone(p)) return true;
       if (SEGMODE && p.li === st.li && !st.quiz && !p.quiz && !lessonDone(LS[st.li]) && (!stepDone(p) || gatePending(p).length)) return true;
     }
+    // yakuniy test — material (barcha bo'limlar) ko'rilgandan keyin; avval topshirilgan / urinilgan bo'lsa — ochiq (natijani ko'rish)
+    if (SEGMODE && st.quiz && !stepDone(st)) for (var m = 0; m < STEPS.length; m++) if (!STEPS[m].quiz && !stepDone(STEPS[m])) return true;
     return false;
   }
   function dzPct() { return STEPS.length ? Math.round(100 * STEPS.filter(stepDone).length / STEPS.length) : 0; }
@@ -1040,6 +1052,7 @@ if (location.protocol === 'file:') {
     if (t.video) return 'video';
     if (t.gallery) return 'slides';
     if (t.flashcards || t.matching || t.sorting || t.knowledge || t.process) return 'practice';
+    if (/mashq|topshiriq/i.test(str(st.title)) || st.blocks.some(function (b) { return b.type === 'list' && b.style === 'checkbox'; })) return 'practice';
     if (t.attachment && Object.keys(t).length <= 2) return 'file';
     return 'text';
   }
@@ -1067,6 +1080,7 @@ if (location.protocol === 'file:') {
       else if (b.type === 'paragraph' || b.type === 'heading_paragraph' || b.type === 'list') n.txt++;
     });
     var out = [];
+    if (dzKind(st) === 'practice' && !n.ex) return 'Topshiriq va o\'z-o\'zini baholash';
     if (n.video) out.push(n.video > 1 ? n.video + ' ta video' : 'Video');
     if (n.slides) out.push(n.slides + ' ta slayd');
     if (n.txt && !n.video && !n.slides) out.push('Matn');
@@ -1144,14 +1158,15 @@ if (location.protocol === 'file:') {
   function dzHome() {
     var p = dzPct(), started = dzStarted(), rk = dzResume(), cv = C.cover && assetUrl(C.cover.src), logo = assetUrl((C.brand || {}).logo);
     var desc = C.description ? plain(C.description) : '', kick = desc && desc.length <= 90 ? desc : str((C.brand || {}).name);
-    var cta = el('button', { cls: 'dz-cta', type: 'button', onclick: function () { dzGo(rk); } }, [started ? T('resume') : T('start'), icon('right')]);
+    var cta = el('button', { cls: 'dz-cta', type: 'button', onclick: function () { dzGo(rk); } }, [started ? T('resume') : dzT('start'), icon('right')]);
+    var rs = status(), res = rs.complete ? el('p', { cls: 'dz-result', role: 'status' }, [icon('check'), el('span', { text: dzT('finish') + (rs.score != null ? ' · Test natijasi: ' + rs.score + '%' : '') })]) : null;
     R.main.appendChild(el('section', { cls: 'dz-hero' + (cv ? ' has-img' : '') }, [
       cv ? el('img', { cls: 'dz-hero-bg', src: cv, alt: '' }) : null,
       el('span', { cls: 'dz-hero-pat', 'aria-hidden': 'true' }),
       el('div', { cls: 'dz-hero-in' }, [
         el('div', { cls: 'dz-hero-t' }, [
           el('div', { cls: 'dz-kick' }, [logo ? el('img', { cls: 'dz-logo', src: logo, alt: str((C.brand || {}).name) || 'ISFT' }) : null, kick ? el('span', { cls: 'dz-chip', text: kick }) : null]),
-          el('h1', { tabindex: '-1', text: C.title }), authorRow('on-accent')]),
+          el('h1', { tabindex: '-1', text: C.title }), authorRow('on-accent'), res]),
         el('div', { cls: 'dz-hero-a' }, [dzRing(p, true), cta])])]));
     var list = el('ol', { cls: 'dz-cards', 'aria-label': "Darsning bo'limlari" });
     STEPS.forEach(function (st, k) {
@@ -1161,9 +1176,11 @@ if (location.protocol === 'file:') {
         : now ? el('span', { cls: 'dz-tag now', text: '● Davom etmoqda' }) : el('span', { cls: 'dz-tag', text: 'Boshlanmagan' });
       var thumb = el('div', { cls: 'dz-th k-' + kind + (img ? ' has-img' : ''), 'aria-hidden': 'true' }, [
         img ? el('img', { src: img, alt: '', loading: 'lazy' }) : null, el('span', { cls: 'dz-th-ic' }, [dzIcon(kind, kind === 'video' ? 26 : 30)])]);
-      var btn = el('button', { cls: 'dz-open' + (now || (!started && k === 0) ? ' primary' : ''), type: 'button', disabled: lk, 'data-step': String(k),
-        'aria-label': (k + 1) + '-bo\'lim: ' + st.title, onclick: function () { dzGo(k); } },
-        [lk ? (seqLk ? 'Yopiq' : "Oldingi bo'limdan keyin") : d ? "Qayta ko'rish" : now ? T('resume') : 'Ochish']);
+      // yopiq bo'lim — tugmasiz (o'chiq tugmalar ro'yxati telefonni to'ldirmasin); sababi — matn, ekran o'quvchisi ham o'qiydi
+      var btn = lk ? el('span', { cls: 'sr', text: seqLk ? " — oldingi bo'limlarni yakunlang" : " — oldingi bo'limni yakunlagandan keyin ochiladi" })
+        : el('button', { cls: 'dz-open' + (now || (!started && k === 0) ? ' primary' : ''), type: 'button', 'data-step': String(k),
+          'aria-label': (k + 1) + '-bo\'lim: ' + st.title, onclick: function () { dzGo(k); } },
+          [d ? "Qayta ko'rish" : now ? T('resume') : 'Ochish']);
       list.appendChild(el('li', { cls: 'dz-card' + (now ? ' now' : '') + (d ? ' done' : '') }, [thumb, tag,
         el('h2', null, [el('span', { cls: 'dz-no', text: (k + 1) + ' · ' }), st.title]), el('p', { cls: 'dz-sum', text: dzSummary(st) }), btn]));
     });
@@ -1191,9 +1208,14 @@ if (location.protocol === 'file:') {
     var hint = el('p', { cls: 'dz-hint', id: 'dz-hint', hidden: true, text: (st.gate && st.gate.hint) || T('complete_hint') });
     var prev = el('button', { cls: 'dz-prev', type: 'button', onclick: function () { dzGo(k - 1); } }, [icon('left'), el('span', { text: k > 0 ? 'Orqaga' : 'Bosh sahifa' })]);
     var nextT = k < n - 1 ? STEPS[k + 1].title : null;
+    var armed = false;
     var next = el('button', { cls: 'dz-next', type: 'button', onclick: function () {
+      if (st.quiz && !stepDone(st) && !armed) {   // test topshirilmagan — bosh sahifaga o'tishdan oldin ogohlantirish (ikkinchi bosish — chiqish)
+        armed = true; hint.textContent = "Test hali topshirilmagan. Baribir chiqish uchun tugmani yana bosing."; hint.hidden = false;
+        next.querySelector('.dz-next-t').textContent = 'Baribir chiqish'; announce(hint.textContent); return;
+      }
       dzMark(st);
-      if (k < n - 1) dzGo(k + 1); else { dzGo(-1); announce(status().complete ? T('finish') : "Bosh sahifa"); }
+      if (k < n - 1) dzGo(k + 1); else { dzGo(-1); announce(status().complete ? dzT('finish') : "Bosh sahifa"); }
     } }, nextT ? [el('span', { cls: 'dz-next-l', text: 'Keyingi qadam:' }), el('span', { cls: 'dz-next-t', text: nextT }), icon('right')] : [el('span', { cls: 'dz-next-t', text: 'Yakunlash' }), icon('check')]);
     var dots = el('span', { cls: 'dz-dots', 'aria-hidden': 'true' }, STEPS.map(function (x, j) { return el('i', { cls: j === k ? 'on' : null }); }));
     var foot = el('footer', { cls: 'dz-foot' }, [prev, dots, el('div', { cls: 'dz-next-w' }, [next, hint])]);
@@ -1212,6 +1234,18 @@ if (location.protocol === 'file:') {
           if (footVis && !next.disabled) dzMark(st);      // mashq oxiri ko'rinib turganda bajarildi — qadam ham bajarildi
           dzPaint();
         };
+        var heads = st.blocks.filter(function (b) { return (b.type === 'heading' && b.level !== 3) || (b.type === 'heading_paragraph' && b.heading); });
+        if (heads.length >= 5) {     // uzun bo'lim: ichki mundarija (bo'limning istalgan joyiga bir bosishda)
+          var tl = el('ol', { cls: 'dz-toc-l' });
+          heads.forEach(function (b) {
+            tl.appendChild(el('li', null, [el('button', { type: 'button', onclick: function () {
+              var t = D.getElementById('b-' + b.id); if (!t) return;
+              try { t.scrollIntoView({ behavior: reduced() ? 'auto' : 'smooth', block: 'start' }); } catch (e) { t.scrollIntoView(); }
+              t.setAttribute('tabindex', '-1'); t.focus({ preventScroll: true });
+            } }, [prettyLabel(b.type === 'heading' ? b.text : b.heading)])]));
+          });
+          body.appendChild(el('details', { cls: 'dz-toc' }, [el('summary', { text: "Bo'lim mundarijasi (" + heads.length + ')' }), tl]));
+        }
         st.blocks.forEach(function (b) {
           var bb = b;   // video nomi qadam nomi bilan bir xil bo'lsa («Videodars») — takrorlanmaydi
           if (b.type === 'video' && b.title && normT(b.title) === normT(st.title)) { bb = {}; for (var kk in b) bb[kk] = b[kk]; bb.title = ''; }

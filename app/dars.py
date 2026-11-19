@@ -84,6 +84,53 @@ def init(con):
         seed_templates(con)
     except Exception as e:
         print("dars.init:", repr(e))
+    try: _mig_completion(con)
+    except Exception as e: print("dars.init (yakunlash qoidasi):", repr(e))
+    try: _mig_split_lists(con)
+    except Exception as e: print("dars.init (ro'yxat bandlari):", repr(e))
+
+# Paket sozlamasidagi yakunlash qoidasi → Kurs muharriri qoidasi. Muharrirga o'tkazilgan kurs avval kurs standartini («Darslar ko'rilganda») olardi —
+# Yakuniy testi bor darsda LMS'ga test topshirilmasdan «passed» ketardi; endi dars (fan) sozlamasidagi qoida o'tadi.
+COMPL_MAP = {"view_all": "view", "quiz_pass": "quiz", "view_and_quiz": "view_and_quiz"}
+
+def kurs_completion(dl_cid: int, key: int) -> str:
+    return COMPL_MAP.get(PK.topic_settings(dl_cid, key)[0].get("completion"), "view")
+
+def _has_quiz(con, kcid: int) -> bool:
+    return bool(con.execute("""SELECT 1 FROM ku_lessons l JOIN ku_blocks b ON b.lesson_id=l.id WHERE l.course_id=? AND l.type='quiz' AND l.deleted=0
+                               LIMIT 1""", (kcid,)).fetchone())
+
+def _mig_split_lists(con):
+    """Bir martalik: avvalgi o'tkazishlarda «1. Bir … 2. Ikki … 3. Uch» bitta bandga yopishib qolgan raqamli ro'yxatlar (Reja, Topshiriq savollari) —
+    alohida bandlarga (paket.py _split_inline_numbered — yangi o'tkazishlar allaqachon shunday)."""
+    if con.execute("SELECT 1 FROM ku_meta WHERE k='mig_dars_split_lists_v1'").fetchone(): return
+    n = 0
+    for bid, dj in con.execute("""SELECT b.id, b.data FROM ku_blocks b JOIN ku_lessons l ON l.id=b.lesson_id JOIN ds_links k ON k.ku_course_id=l.course_id
+                                  WHERE b.type='list' AND l.deleted=0""").fetchall():
+        try: d = json.loads(dj or "{}")
+        except ValueError: continue
+        items = d.get("items")
+        if d.get("style") != "numbered" or not isinstance(items, list) or len(items) != 1: continue
+        new = PK._split_inline_numbered([str(items[0])])
+        if len(new) > 1:
+            d["items"] = new
+            con.execute("UPDATE ku_blocks SET data=? WHERE id=?", (json.dumps(d, ensure_ascii=False), bid)); n += 1
+    con.execute("INSERT OR REPLACE INTO ku_meta(k,v) VALUES('mig_dars_split_lists_v1', ?)", (str(n),)); con.commit()
+
+def _mig_completion(con):
+    """Bir martalik: bog'langan kurslarda qoida standart «view» qolgan va savolli test darsi bor bo'lsa — dars sozlamasidagi qoida."""
+    if con.execute("SELECT 1 FROM ku_meta WHERE k='mig_dars_completion_v1'").fetchone(): return
+    n = 0
+    for kid, sj, dl, key in con.execute("""SELECT k.id, k.settings, l.dl_course_id, l.lkey FROM ku_courses k JOIN ds_links l ON l.ku_course_id=k.id
+                                           WHERE k.deleted=0""").fetchall():
+        try: st = json.loads(sj or "{}")
+        except ValueError: st = {}
+        if st.get("completion", "view") != "view" or not _has_quiz(con, kid): continue
+        new = kurs_completion(dl, key)
+        if new != "view":
+            st["completion"] = new
+            con.execute("UPDATE ku_courses SET settings=? WHERE id=?", (json.dumps(st), kid)); n += 1
+    con.execute("INSERT OR REPLACE INTO ku_meta(k,v) VALUES('mig_dars_completion_v1', ?)", (str(n),)); con.commit()
 
 def bind(con, ctx_fn):
     global _con, _ctx
@@ -591,6 +638,9 @@ def _create_linked_locked(c: Ctx, co: dict, les: dict, tpl: dict, src: str, buil
             qs = {**KU.QUIZ, **{k: v for k, v in (built.get("quiz_settings") or {}).items() if k in KU.QUIZ}}
             qlid = _new_lesson(kcid, QUIZ_LESSON_PREFIX + secrets.token_hex(3), 2, "quiz", "Yakuniy test", KU.clean_quiz(qs), c.user["full_name"])
             _write_lesson_blocks(qlid, [{"id": KU._uid(), "type": "question", "data": q} for q in built["quiz"]], A)
+        if qlid:     # Yakuniy testi bor dars — yakunlash qoidasi dars (fan) sozlamasidan (standart: ko'rilganda va test topshirilganda)
+            _con.execute("UPDATE ku_courses SET settings=? WHERE id=?",
+                         (json.dumps(KU.clean_settings({"completion": kurs_completion(co["id"], les["key"])})), kcid))
         if built.get("cover"): _con.execute("UPDATE ku_courses SET cover_asset=?, cover_alt=? WHERE id=?", (built["cover"], f"Dars muqovasi: {les['title']}"[:300], kcid))
         _con.execute("""INSERT INTO ds_links(dl_course_id,lkey,ku_course_id,authority,tpl_id,src,created_at,created_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?)
                         ON CONFLICT(dl_course_id,lkey) DO UPDATE SET ku_course_id=excluded.ku_course_id, authority=excluded.authority, tpl_id=excluded.tpl_id,

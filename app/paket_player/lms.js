@@ -257,7 +257,13 @@
   //  cumulative_time. Boshqa domendagi LRS'ga yopilish so'rovlari — xAPI 1.0.x muqobil sintaksisi (POST ?method=…, forma: CORS-oddiy so'rov,
   //  preflight kerak emas — sahifa yopilganda ham yetib boradi); bir domendagi (bizning LRS) — keepalive fetch, oddiy sarlavhalar bilan.
   //  Bizning analitika uchun qo'shimcha (Rise'da yo'q): test bloki natijasi (passed/failed …/block/<id>), kurs muharriri: dars experienced/completed.
+  // Articulate Rise qobig'i (NEXTID uchun eksport: scormdriver/indexAPI.html → ../scormcontent/index.html) ochilganda o'zi «attempted» yuboradi
+  // va bo'sh suspend_data yozadi. Kontent ham yuborsa — LMS'da har kirish ikki marta yoziladi: qobiq ichida ochilishdagi «attempted» yuborilmaydi.
+  function riseShell() {
+    try { var p = W.parent; return !!p && p !== W && !!p.document && !!p.document.getElementById('__DRIVER_CONFIG__'); } catch (e) { return false; }
+  }
   function Xapi(lp, C, opts) {
+    var SHELL = riseShell();
     var unit = (opts && opts.unit) || 'block', seg = '/' + unit + '/';   // ichki faoliyat yo'li: paket — /block/<id>, kurs — /lesson/<uid>
     var actId = httpUrl(lp.activity_id) || httpUrl(C.tracking.activity_id) || ('urn:isft:paket:' + C.id);
     var reg = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(lp.registration) ? lp.registration : null;
@@ -362,7 +368,7 @@
     try { W.addEventListener('online', function () { retryMs = 0; pump(); stWait = 0; clearTimeout(stT); stT = 0; writeDocs(false); }); } catch (e) { /* jim */ }
     function score(p) { return { scaled: Math.round(p * 100) / 10000, raw: p, min: 0, max: 100 }; }
     return {
-      kind: 'xapi', label: 'xAPI', limit: 60000, actId: actId,
+      kind: 'xapi', label: 'xAPI', limit: 60000, actId: actId, shell: SHELL,
       init: function () {
         var self = this;
         // har so'rovga o'z muddati (ketma-ket 3 bosqich bitta 5 s ga sig'maydi); o'qish XATOsi (404 emas) bo'lsa — shu hujjat ustiga yozilmaydi (saqlangan progress yo'qolmasin)
@@ -378,7 +384,7 @@
         }
         // Rise tartibi: avval language_preference va cumulative_time javobi, keyin «attempted», so'ng suspend_data va bookmark
         var pLang = get(ST_LANG), pTime = get(ST_TIME);
-        var pHead = Promise.all([pLang, pTime]).then(function () { send(stmt('attempted', course), true); });
+        var pHead = Promise.all([pLang, pTime]).then(function () { if (!SHELL) send(stmt('attempted', course), true); });
         var pSusp = pHead.then(function () { return get(ST_SUSPEND); }), pBook = pHead.then(function () { return get(ST_BOOKMARK); });
         return Promise.all([pLang, pTime, pSusp, pBook]).then(function (v) {
           cum0 = /^\d{1,15}$/.test(str(v[1]).trim()) ? +str(v[1]).trim() : 0;
@@ -446,11 +452,16 @@
       finish: function (ms, r) {
         if (dead) return;
         clearTimeout(retryT);
+        // yopilishdagi «attempted» (davomiylik) va cumulative_time — qobiq ichida ham kontentdan: qobiq ularni «unload»da yuboradi, zamonaviy
+        // brauzerlarda iframe ichida «unload» taqiqlangan (Permissions-Policy) — aks holda vaqt umuman yozilmaydi
         var x = stmt('attempted', course, { duration: xdur(ms) }), it = { id: x.id, s: x, put: false };
         queue.push(it); box.add(it);
         dead = true; flushAll();
         want[ST_TIME] = String(cum0 + Math.max(0, Math.round(ms)));
-        writeState(ST_TIME, true); writeDocs(true);
+        writeState(ST_TIME, true);
+        // qobiq birinchi ochilishda suspend_data ga o'z (bo'sh) holatini yozadi — yopilishda bizniki albatta qayta yoziladi (progress yo'qolmasin)
+        if (SHELL && want[ST_SUSPEND] != null) sent[ST_SUSPEND] = null;
+        writeDocs(true);
       }
     };
   }

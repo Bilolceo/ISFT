@@ -224,6 +224,8 @@ ok(sl and len(sl["data"]["items"]) == tv["ready"]["slides"]["n"], f"Taqdimot: {t
 ok(any(b["type"] == "paragraph" and keys[bl.index(b)] == "text" for b in bl), "Ma'ruza matni — matn bloklari")
 qn = head.get(f"/api/kurs/lessons/{L['quiz']['id']}").json()["blocks"] if "quiz" in L else []
 ok(len(qn) == tv["ready"]["quiz"]["used"] and all(b["type"] == "question" for b in qn), f"Yakuniy test: {len(qn)} savol (paketdagi bilan bir xil)")
+ok(not qn or co["settings"]["completion"] in ("view_and_quiz", "quiz"),
+   f"Yakunlash qoidasi dars sozlamasidan: {co['settings']['completion']} (testsiz «passed» ketmasin)")
 order = [k for k in dict.fromkeys(keys)]
 want = [x["key"] for x in D.clean_layout(D.DEFAULT_LAYOUT)["maruza"] if x["key"] in order]
 ok(order == want, "Bloklar kafedra shabloni tartibida")
