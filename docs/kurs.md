@@ -135,6 +135,22 @@ hisoblagich. Rise kamchiliklari tuzatilgan: urg'u fonida matn oq (palitra — ko
 kesilmaydi (gorizontal aylanadi), qidiruv doim ko'rinadi, holat halqasidan tashqari ekran o'quvchisi uchun matn. Ko'rish oynasi (sandbox, opaque
 origin) shriftlarni yuklamaydi — tizim shriftlari (Helvetica/Arial, Georgia) bilan ko'rinadi.
 
+**Dizayn: 1 — eski (yuqoridagi Rise ko'rinishi) yoki 2 — yangi** (`content.settings.design`: `classic` | `yangi`). Masofaviy bo'lim tanlaydi:
+kurs sozlamasida («Dizayn» — standart / 1 / 2), «Dars tayyorlash»da esa umumiy sozlamada (standart) yoki dars sozlamasida (`app/paket.py` `design`).
+Kurs sozlamasi bo'sh bo'lsa — bog'langan darsning (fan/dars) sozlamasi, u ham bo'lmasa 1-dizayn (`kurs.design_of`). 2-dizayn: **bosh sahifa** —
+urg'u rangli muqova (rasm bo'lsa — xira fon), umumiy foiz halqasi, «Kursni boshlash / Davom ettirish», bo'limlar kartochkalari (turi bo'yicha
+rasm/ikonka: video, matn, taqdimot, mashq, test; holati: Boshlanmagan / Davom etmoqda / Bajarildi / Yopiq; qisqa tarkib: «20 ta slayd · 3 ta fayl»);
+**ichki sahifa** — yuqorida «Bosh sahifa», kurs nomi va foiz, 1→N qadamlar chizig'i (telefonda — bo'laklar va «2 / 5»), oq varaqda bo'lim
+mazmuni, pastda «Orqaga» va «Keyingi qadam: …» (oxirida «Yakunlash»). Qadamlar: bitta blokli darsda (Dars tayyorlash paketi) — «Davom etish»
+tasmalari orasidagi bo'laklar (nomi — tasma yozuvi, «VIDEODARS» → «Videodars»; muqova sarlavhasi/rasmi bosh sahifada), ko'p darsli kursda — har
+dars bitta qadam; test darsi — alohida qadam. «Davom etish» `require: interactions` — «Keyingi qadam» mashqlar bajarilguncha faol emas. Qadam
+pastki qismi ko'ringanda yoki «Keyingi» bosilganda bajarilgan (`S.d`), darsning hamma qadamlari bajarilsa — dars yakunlandi (LMS kuzatuvi va
+baholash 1-dizayn bilan bir xil). Shrift — Manrope. «Davom etish» tasmalari 1-dizayndagi kabi: dars ichidagi keyingi bo'lim oldingisi ko'rilmaguncha
+(`require: interactions` bo'lsa — mashqlar bajarilmaguncha) «Navbatda». «Dars tayyorlash» ommaviy eksportida 2-dizayn tanlangan, muharrirga
+o'tkazilmagan dars o'tkaziladi va muharrir pleyeri bilan eksport qilinadi — shablonning to'ldirilmagan bandlari paket yo'lidagi kabi tashlab
+ketiladi (`export_course(..., omit=)`); bog'langan, manbasi «paket» dars — muharrir nusxasi o'zgartirilmaydi, paket pleyeri bilan eksport
+qilinadi va «2-dizayn qo'llanmadi» ogohlantirishi qaytadi. Paket pleyeri (`app/paket_player`, «Avtomatik yig'ish») 2-dizaynni qo'llamaydi.
+
 LMS: `lms.js` (paket pleyeri bilan umumiy) — SCORM 1.2, SCORM 2004 4-nashr, xAPI (launch parametrlari; dars faoliyatlari
 `<kurs>/lesson/<uid>`, savollar `<kurs>/lesson/<uid>/q/<id>`), LMS'siz rejim (localStorage). Yakunlash qoidasi: darslar ko'rilganda (≥ N %),
 test topshirilganda, ikkalasi yoki biri. Baholash qoidasi serverdagi `grade()` / `norm_answer()` bilan bir xil (bo'sh joy: katta-kichik harf, apostrof

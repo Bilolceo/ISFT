@@ -59,6 +59,10 @@ STATUS = {"qoralama": "Qoralama", "korib_chiqishda": "Ko'rib chiqishda", "tasdiq
 MODES = {"xapi": "xAPI (Tin Can) — NEXTID", "scorm12": "SCORM 1.2", "scorm2004": "SCORM 2004 (4-nashr)", "none": "Oddiy HTML (LMS'siz)"}
 COMPLETION = {"view": "Darslar ko'rilganda", "quiz": "Test topshirilganda", "view_and_quiz": "Darslar ko'rilganda va test topshirilganda",
               "view_or_quiz": "Darslar ko'rilganda yoki test topshirilganda"}
+# Pleyer dizayni (masofaviy bo'lim tanlaydi): 1 — NEXTID/Rise ko'rinishi; 2 — bosh sahifa (bo'limlar xaritasi) + qadamlar. Kurs sozlamasida
+# bo'sh qiymat — «Dars tayyorlash» darsi bo'lsa fan / dars sozlamasidan (app/paket.py «design»), aks holda 1-dizayn.
+DESIGNS = PK.DESIGNS
+DEFAULT_DESIGN = "classic"
 REVEAL = {"always": "Har doim (javobdan keyin)", "pass": "Faqat test topshirilganda", "never": "Ko'rsatilmaydi"}
 # Urg'u ranglari — oq matn bilan kontrast ≥ 4.5:1 (WCAG AA), ISFT qirmizisi birinchi
 PALETTE = {"#870037": "ISFT qirmizi", "#00575B": "Moviy-yashil", "#1D4ED8": "Ko'k", "#4338CA": "Indigo", "#15803D": "Yashil",
@@ -71,7 +75,7 @@ LABELS = {"start": "Kursni boshlash", "resume": "Davom ettirish", "continue": "D
           "complete_hint": "Davom etish uchun yuqoridagi topshiriqlarni bajaring", "menu": "Mundarija", "progress": "bajarildi",
           "passed": "Test topshirildi", "failed": "Test topshirilmadi", "correct": "To'g'ri", "incorrect": "Noto'g'ri", "finish": "Kurs yakunlandi"}
 SETTINGS = {"sidebar": True, "lesson_count": True, "sequential": False, "search": True, "completion": "view", "view_pct": 100, "mode": "xapi",
-            "kbd_hints": False}   # kbd_hints — pleyer interaktiv bloklar ostida klaviatura ko'rsatmasini chiqaradi (sifat hisobotidagi bir bosishli tuzatish)
+            "kbd_hints": False, "design": ""}   # kbd_hints — pleyer interaktiv bloklar ostida klaviatura ko'rsatmasini chiqaradi (sifat hisobotidagi bir bosishli tuzatish)
 QUIZ = {"pass_pct": 80, "attempts": 0, "shuffle": True, "randomize": False, "draw": 0, "reveal": "always", "intro": ""}
 
 MAX_LESSONS = 60
@@ -463,7 +467,22 @@ def clean_settings(s, base: dict | None = None) -> dict:
     if s.get("completion") in COMPLETION: out["completion"] = s["completion"]
     if "view_pct" in s: out["view_pct"] = _i(s["view_pct"], 10, 100, out["view_pct"])
     if s.get("mode") in MODES: out["mode"] = s["mode"]
+    if "design" in s and (s["design"] is None or (isinstance(s["design"], str) and (s["design"] in DESIGNS or s["design"] == ""))): out["design"] = s["design"] or ""
     return out
+
+def design_of(cid: int, st: dict | None = None) -> str:
+    """Amaldagi dizayn: kurs sozlamasi → «Dars tayyorlash» darsi bo'lsa fan/dars sozlamasi (paket «design») → 1-dizayn."""
+    d = (st or {}).get("design")
+    if d in DESIGNS: return d
+    try:
+        from . import dars as DS
+        ln = DS.link_of_kurs(cid)
+        if ln:
+            d = PK.topic_settings(ln["dl_course_id"], ln["lkey"])[0].get("design")
+            if d in DESIGNS: return d
+    except Exception:
+        pass
+    return DEFAULT_DESIGN
 
 def clean_quiz(s, base: dict | None = None) -> dict:
     s = s if isinstance(s, dict) else {}
@@ -635,7 +654,7 @@ def course_view(c: Ctx, cid: int) -> dict:
     dl = db.one(_con, "SELECT id, subject, direction, course FROM dl_courses WHERE id=?", (co["dl_course_id"],)) if co["dl_course_id"] else None
     ex = db.rows(_con, "SELECT id, mode, size, ts, user_name, validation, rev FROM ku_exports WHERE course_id=? ORDER BY id DESC LIMIT 8", (cid,))
     return {**course_row(co, len(ls)), "description": co["description"] or "", "cover_asset": co["cover_asset"], "cover_alt": co["cover_alt"] or "",
-            "settings": clean_settings(_jload(co["settings"], {})), "labels": clean_labels(_jload(co["labels"], {})), "lessons_list": ls, "dl": dl,
+            "settings": clean_settings(_jload(co["settings"], {})), "design": design_of(cid, _jload(co["settings"], {})), "labels": clean_labels(_jload(co["labels"], {})), "lessons_list": ls, "dl": dl,
             "approved_at": co["approved_at"], "approved_name": co["approved_name"], "submitted_at": co["submitted_at"],
             "import_report": _jload(co["import_report"], None) if co["src"] == "rise" else None,
             "exports": [{**e, "validation": {"ok": _jload(e["validation"], {}).get("ok")}} for e in ex],
@@ -949,13 +968,31 @@ def restore_version(c: Ctx, cid: int, vid: int) -> dict:
 # =============================================================================================
 # Ko'rib chiqish: yuborish → tasdiqlash / qaytarish
 # =============================================================================================
-def course_issues(cid: int) -> dict:
-    """Eksport / yuborishdan oldingi tekshiruv: {"errors": [...], "warnings": [...]} — har biri «Dars · blok: matn»."""
+def unfilled(b: dict) -> bool:
+    """Blokda xato bor (to'ldirilmagan: bo'sh video, ro'yxat, mashq …)."""
+    return any(lvl == "xato" for lvl, _ in block_issues(b["type"], b["data"]))
+
+def _omitted(cid: int, omit) -> tuple[set, set]:
+    """omit(blok) → True bo'lgan va to'ldirilmagan bloklar hamda savolsiz test darslari — eksportga kirmaydi (Dars tayyorlash: 2-dizayn,
+    shablonning to'ldirilmagan bandlari paket yo'lidagi kabi tashlab ketiladi)."""
+    if not omit: return set(), set()
+    bids, lids = set(), set()
+    for l in _lessons(cid):
+        bl = _blocks(l["id"])
+        if l["type"] == "quiz":
+            if not bl: lids.add(l["id"])
+            continue
+        bids |= {b["id"] for b in bl if omit(b) and unfilled(b)}
+    return bids, lids
+
+def course_issues(cid: int, skip: tuple | None = None) -> dict:
+    """Eksport / yuborishdan oldingi tekshiruv: {"errors": [...], "warnings": [...]} — har biri «Dars · blok: matn». skip — _omitted() natijasi."""
     errs, warns = [], []
-    ls = _lessons(cid)
+    ob, ol = skip or (set(), set())
+    ls = [l for l in _lessons(cid) if l["id"] not in ol]
     if not ls: errs.append("Kursda dars yo'q")
     for n, l in enumerate(ls, 1):
-        bl = _blocks(l["id"])
+        bl = [b for b in _blocks(l["id"]) if b["id"] not in ob]
         if not bl: (errs if l["type"] == "quiz" else warns).append(f"{n}. {l['title']}: {'savollar yo`q' if l['type'] == 'quiz' else 'bo`sh dars'}".replace("`", "'"))
         for k, b in enumerate(bl, 1):
             for lvl, m in block_issues(b["type"], b["data"]):
@@ -1009,7 +1046,7 @@ _SUB = {"image": "img", "video": "video", "audio": "audio", "vtt": "video", "fil
 def _asset_path(a: dict) -> str:
     return f"assets/{_SUB.get(a['kind'], 'files')}/{a['id']}-{PK._ascii(Path(a['name'] or '').stem, 40)}.{a['ext']}"
 
-def build_content(cid: int, mode: str = "none") -> tuple[dict, dict]:
+def build_content(cid: int, mode: str = "none", skip: tuple | None = None) -> tuple[dict, dict]:
     """→ (content, files {zip yo'li: diskdagi fayl}). Asset id → «assets/<tur>/<id>-<nom>.<ext>». Video/audio — PK.BigFile (oqim bilan)."""
     co = db.one(_con, "SELECT * FROM ku_courses WHERE id=?", (int(cid),))
     rows = {r["id"]: r for r in db.rows(_con, "SELECT * FROM ku_assets WHERE course_id=? AND deleted=0", (cid,))}
@@ -1036,8 +1073,10 @@ def build_content(cid: int, mode: str = "none") -> tuple[dict, dict]:
             if a and d["src"]: d.update(name=a["name"], size=a["size"], ext=a["ext"])
         return d
     lessons, mastery = [], None
+    ob, ol = skip or (set(), set())
     for l in _lessons(cid):
-        bl = _blocks(l["id"])
+        if l["id"] in ol: continue
+        bl = [b for b in _blocks(l["id"]) if b["id"] not in ob]
         if l["type"] == "quiz":
             qz = clean_quiz(_jload(l["settings"], {}))
             if mastery is None: mastery = qz["pass_pct"]
@@ -1052,7 +1091,7 @@ def build_content(cid: int, mode: str = "none") -> tuple[dict, dict]:
     content = {"v": 1, "kind": "kurs", "id": f"isft-kurs-{cid}", "title": co["title"], "description": co["description"] or "", "lang": "uz",
                "accent": clean_accent(co["accent"]), "cover": {"src": cover, "alt": co["cover_alt"] or ""} if cover else None,
                "author": co["author_name"] or "", "brand": {"name": PK._brand_full(), "logo": "assets/logo.png" if logo else None},
-               "settings": {k: st[k] for k in ("sidebar", "lesson_count", "sequential", "search", "kbd_hints")},
+               "settings": {**{k: st[k] for k in ("sidebar", "lesson_count", "sequential", "search", "kbd_hints")}, "design": design_of(cid, st)},
                "labels": {**LABELS, **clean_labels(_jload(co["labels"], {}))},
                "tracking": {"mode": mode, "activity_id": f"{ACTIVITY_BASE}/{int(cid)}", "completion": st["completion"], "view_pct": st["view_pct"],
                             "mastery": mastery if st["completion"] != "view" else None},
@@ -1152,9 +1191,9 @@ def shell_files(content: dict) -> dict | None:
     out[PK.SCORMDRIVER] = h.encode("utf-8")
     return out
 
-def package_entries(cid: int, mode: str) -> tuple[dict, dict]:
+def package_entries(cid: int, mode: str, skip: tuple | None = None) -> tuple[dict, dict]:
     if mode not in MODES: raise HTTPException(400, "Eksport turi noma'lum")
-    content, files = build_content(cid, mode)
+    content, files = build_content(cid, mode, skip)
     entries = player_files()
     entries.update(files)
     entries["content.js"] = content_js(content)
@@ -1177,12 +1216,13 @@ def build_zip_bytes(cid: int, mode: str) -> bytes:
     """Xotirada (testlar va kichik kurslar uchun) — deterministik: bir xil kurs holati → bir xil sha256."""
     return PK.zip_bytes(package_entries(cid, mode)[0])
 
-def export_course(c: Ctx, cid: int, mode: str) -> dict:
+def export_course(c: Ctx, cid: int, mode: str, omit=None) -> dict:
     co = _course(c, cid, write=True)
-    iss = course_issues(cid)
+    skip = _omitted(cid, omit) if omit else None      # bir marta hisoblanadi — tekshiruv va kontent uchun umumiy
+    iss = course_issues(cid, skip)
     if iss["errors"]: raise HTTPException(400, {"message": f"Eksportdan oldin {len(iss['errors'])} ta xatoni tuzating", "errors": iss["errors"][:30]})
     if not player_ok(): raise HTTPException(503, "Kurs pleyeri o'rnatilmagan (app/kurs_player) — administratorga murojaat qiling")
-    entries, content = package_entries(cid, mode)
+    entries, content = package_entries(cid, mode, skip)
     if mode == "xapi" and "scormcontent/index.html" not in entries:
         iss["warnings"].append("NEXTID qobig'i topilmadi (app/nextid_shell/rise_shell.zip) — paket tekis tuzilmada; NEXTID uni «index.html mazmunini o'zgartirishda xatolik» bilan rad etishi mumkin")
     d = store() / "exports" / str(int(cid))
@@ -2374,7 +2414,7 @@ def api_meta(request: Request):
                      "O'z kafedrangiz darslari (ko'rish va izoh)" if k == KAF else "Jamlangan ko'rsatkichlar"), "player": player_ok()}
     if k in READERS:
         out.update(blocks={t: {"label": v[0], "cat": v[1], "desc": v[2], "default": default_block(t)} for t, v in BLOCKS.items()}, categories=CATEGORIES,
-                   lesson_blocks=LESSON_BLOCKS, palette=PALETTE, modes=MODES, completion=COMPLETION, reveal=REVEAL, labels=LABELS, settings=SETTINGS, quiz=QUIZ,
+                   lesson_blocks=LESSON_BLOCKS, palette=PALETTE, modes=MODES, completion=COMPLETION, reveal=REVEAL, labels=LABELS, settings=SETTINGS, quiz=QUIZ, designs=DESIGNS,
                    q_kinds=Q_KINDS, sub_langs=PK.SUB_LANGS, asset_kinds=ASSET_KINDS, dl_courses=dl_options(c),
                    limits={"image_mb": MAX_IMAGE // 1048576, "video_mb": PK.video_max() // 1048576, "audio_mb": MAX_AUDIO // 1048576, "file_mb": MAX_FILE // 1048576,
                            "vtt_mb": MAX_VTT // 1048576, "import_mb": import_max() // 1048576, "lessons": MAX_LESSONS, "blocks": MAX_BLOCKS, "versions": KEEP_VERSIONS})

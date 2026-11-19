@@ -1018,8 +1018,20 @@ def _run_bulk(jid: int, c: Ctx, co: dict, ls: list, mode: str):
         ln = _link(co["id"], l["key"])
         res = {"key": l["key"], "code": l["code"], "title": l["title"], "source": ln["authority"] if ln else "paket"}
         try:
+            # 2-dizayn faqat Kurs muharriri pleyerida. Muharrirga o'tkazilmagan dars avval o'tkaziladi (convert_lesson — idempotent; yangi kurs,
+            # ko'rib chiqish holati yo'q). Bog'langan, manbasi «paket» dars — xodimning tanlovi hurmat qilinadi: muharrir nusxasi o'zgartirilmaydi,
+            # paket pleyeri bilan eksport qilinadi va ogohlantirish qaytariladi.
+            want = PK.topic_settings(co["id"], l["key"])[0].get("design") == "yangi"
+            if want and not ln:
+                convert_lesson(c, co["id"], l["key"]); res["converted"] = True
+                ln = _link(co["id"], l["key"]); res["source"] = "kurs"
+                kc = db.one(_con, "SELECT settings FROM ku_courses WHERE id=?", (ln["ku_course_id"],))
+                ln = {**ln, "auto": KU.design_of(ln["ku_course_id"], KU._jload((kc or {}).get("settings"), {})) == "yangi"}
+            elif want and ln["authority"] != "kurs":
+                res["warning"] = "2-dizayn qo'llanmadi: eksport manbai «paket» — muharrirda tekshirib, manbani «kurs» qiling"
             if ln and ln["authority"] == "kurs":
-                r = KU.export_course(c, ln["ku_course_id"], mode)
+                # avtomatik yo'l (2-dizayn): shablonning to'ldirilmagan bandlari paket yo'lidagi kabi tashlab ketiladi
+                r = KU.export_course(c, ln["ku_course_id"], mode, omit=(lambda b: tpl_key(b["id"]) is not None) if ln.get("auto") else None)
                 e = db.one(_con, "SELECT file FROM ku_exports WHERE id=?", (r["id"],))
                 f = KU.store() / e["file"]
                 res.update(ok=bool(r["ok"]), download=r["download"], size=r["size"])

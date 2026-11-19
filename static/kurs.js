@@ -1292,6 +1292,9 @@ async function kuSettings() {
       <div class="ku-f"><span>Urg'u rangi</span><div class="ku-pal" role="radiogroup" aria-label="Urg'u rangi">${Object.entries(M.palette).map(([h, n]) => `<label title="${esc(n)}"><input type="radio" name="kuAcc" value="${h}" ${co.accent === h ? "checked" : ""}><span style="background:${h}"></span><small>${esc(n)}</small></label>`).join("")}</div></div>
       <label class="ku-f"><span>Masofaviy kurs</span><select class="ku-in" id="kuSt_dl"><option value="">— bog'lanmagan —</option>${(M.dl_courses || []).map(d => `<option value="${d.id}" ${co.dl_course_id === d.id ? "selected" : ""}>${esc(d.subject)}${d.direction ? " · " + esc(d.direction) : ""}</option>`).join("")}</select></label>
     </div><div>
+      <h4>Dizayn (talaba ko'radigan dars sahifasi)</h4>
+      <div class="ku-dz" role="radiogroup" aria-label="Pleyer dizayni">${[["", co.dars?.linked ? "Fan / dars sozlamasidan" : "Standart", `hozir: ${(M.designs || {})[co.design] || co.design}`], ...Object.entries(M.designs || {}).map(([k, t]) => [k, t, k === "yangi" ? "Bosh sahifada bo'limlar kartochkalari, ichida 1 → N qadamlar" : "NEXTID'dagi Rise darslari kabi: muqova va bitta sahifa"])]
+        .map(([k, t, h]) => `<label class="ku-dz-o"><input type="radio" name="kuDz" value="${k}" ${(S.design || "") === k ? "checked" : ""}><span><b>${esc(t)}</b><small>${esc(h)}</small></span></label>`).join("")}</div>
       <h4>Navigatsiya</h4>
       <label class="ku-chk"><input type="checkbox" id="kuSt_sb" ${S.sidebar ? "checked" : ""}> Yon menyu (darslar ro'yxati)</label>
       <label class="ku-chk"><input type="checkbox" id="kuSt_lc" ${S.lesson_count ? "checked" : ""}> Dars raqami va soni («3 / 12»)</label>
@@ -1309,7 +1312,7 @@ async function kuSettings() {
       const descHtml = g("#kuSt_d").value.trim().split(/\n{2,}/).map(p => `<p>${esc(p).replace(/\n/g, "<br>")}</p>`).join("");
       const r = await kuFetch(`/api/kurs/courses/${KU.cid}/settings`, {rev: co.rev, title: g("#kuSt_t").value, description: descHtml, cover_asset: cover, cover_alt: g("#kuSt_ca").value,
         accent: bg.querySelector("[name=kuAcc]:checked")?.value, dl_course_id: +g("#kuSt_dl").value || null, labels,
-        settings: {sidebar: g("#kuSt_sb").checked, lesson_count: g("#kuSt_lc").checked, sequential: g("#kuSt_sq").checked, search: g("#kuSt_sr").checked, kbd_hints: g("#kuSt_kh").checked,
+        settings: {sidebar: g("#kuSt_sb").checked, lesson_count: g("#kuSt_lc").checked, sequential: g("#kuSt_sq").checked, search: g("#kuSt_sr").checked, kbd_hints: g("#kuSt_kh").checked, design: bg.querySelector("[name=kuDz]:checked")?.value ?? "",
                    completion: g("#kuSt_cm").value, view_pct: +g("#kuSt_vp").value, mode: g("#kuSt_md").value}});
       if (r.status === 409) { toast("Sozlamalar boshqa joyda o'zgargan — oyna yangilandi, qayta kiriting"); KU.course = (await kuApi(`/api/kurs/courses/${KU.cid}`)); return true; }
       if (!r.ok) { toast(kuErr(r.data)); return false; }

@@ -660,6 +660,7 @@ async function pkTopicPanel(el) {
         <label title="YouTube video: talaba kamida shuncha foizini ko'rmaguncha dars yakunlanmaydi (0 — talab yo'q). YouTube ochilmasa talab o'zi olib tashlanadi.">Video kamida ko'rilsin, % (0 — talab yo'q)<input type="number" name="video_min" min="0" max="100" step="5" value="${S.video_min || 0}"></label>
         <label>Testdagi savollar soni (0 — hammasi)<input type="number" name="quiz_n" min="0" max="200" value="${S.quiz_n}"></label>
         <label>Urinishlar soni (0 — cheksiz)<input type="number" name="attempts" min="0" max="20" value="${S.attempts}"></label>
+        <label title="Talaba ko'radigan dars sahifasi. 2-dizayn «Muharrirda tahrirlash» orqali tayyorlanadigan paketlarga qo'llanadi">Dizayn<select name="design">${Object.entries(M.designs || {}).map(([k, l]) => `<option value="${k}" ${k === S.design ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
         <label>Ko'rinish<select name="layout">${Object.entries(M.layouts).map(([k, l]) => `<option value="${k}" ${k === S.layout ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
         <label>Video (fayl ham, havola ham bo'lsa)<select name="video_source">${Object.entries(M.video_sources).map(([k, l]) => `<option value="${k}" ${k === S.video_source ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
         <label class="cb"><input type="checkbox" name="shuffle" ${S.shuffle ? "checked" : ""}> Savollarni aralashtirish</label>
@@ -936,7 +937,7 @@ async function pkTopicPanel(el) {
     e.preventDefault(); if (!W) return;
     const f = e.currentTarget, blocks = {};
     Object.keys(M.blocks).forEach(k => blocks[k] = f.elements["b_" + k].checked);
-    const r = await pkApi(`${base}/settings`, {layout: f.elements.layout.value, mode: f.elements.mode.value, completion: f.elements.completion.value, mastery: +f.elements.mastery.value, video_min: +f.elements.video_min.value, video_source: f.elements.video_source.value,
+    const r = await pkApi(`${base}/settings`, {layout: f.elements.layout.value, design: f.elements.design?.value || undefined, mode: f.elements.mode.value, completion: f.elements.completion.value, mastery: +f.elements.mastery.value, video_min: +f.elements.video_min.value, video_source: f.elements.video_source.value,
       quiz_n: +f.elements.quiz_n.value, attempts: +f.elements.attempts.value, shuffle: f.elements.shuffle.checked, show_feedback: f.elements.show_feedback.checked, auto_captions: f.elements.auto_captions.checked, blocks});
     if (r) { toast("Sozlama saqlandi"); reload(); }
   });
@@ -1078,6 +1079,7 @@ async function pkSettings(box) {
       </div>
       <fieldset class="pk-fs"><legend>Dars qismlari</legend><div class="pk-checks">${Object.entries(M.blocks).map(([k, l]) => `<label><input type="checkbox" name="b_${k}" ${S.blocks[k] ? "checked" : ""} ${ed ? "" : "disabled"}> ${esc(l)}</label>`).join("")}</div></fieldset>
       <fieldset class="pk-fs"><legend>Kafedra shabloni</legend><div class="pk-form">
+        <label title="Talaba ko'radigan dars sahifasi. 2-dizayn «Muharrirda tahrirlash» orqali tayyorlanadigan paketlarga qo'llanadi">Dizayn (standart)<select name="design" ${ed ? "" : "disabled"}>${Object.entries(M.designs || {}).map(([k, l]) => `<option value="${k}" ${k === S.design ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
         <label>Ko'rinish<select name="layout" ${ed ? "" : "disabled"}>${Object.entries(M.layouts).map(([k, l]) => `<option value="${k}" ${k === S.layout ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
         <label>Video (fayl ham, havola ham bo'lsa)<select name="video_source" ${ed ? "" : "disabled"}>${Object.entries(M.video_sources).map(([k, l]) => `<option value="${k}" ${k === S.video_source ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
         ${Object.entries({video: "Video bo'limi", text: "Matn bo'limi", slides: "Taqdimot bo'limi", practice: "Mashq va topshiriq bo'limi"}).map(([k, l]) => `<label>${esc(l)} sarlavhasi<input type="text" name="s_${k}" maxlength="80" value="${esc(S.sections[k])}" ${ed ? "" : "disabled"}></label>`).join("")}
@@ -1122,7 +1124,7 @@ async function pkSettings(box) {
     // formada faqat savol va 2 ta javob — sarlavha va 3/4-javoblar (API orqali qo'yilgan) saqlangan qiymatdan qoladi
     const reflect = {title: S.reflect.title, question: f.elements.r_q.value.trim(),
       options: [0, 1].map(i => ({text: f.elements["r_t" + i].value.trim(), feedback: f.elements["r_f" + i].value.trim()})).concat((S.reflect.options || []).slice(2))};
-    const r = await pkApi("/api/paket/settings", {mode: f.elements.mode.value, completion: f.elements.completion.value, mastery: +f.elements.mastery.value, video_min: +f.elements.video_min.value, layout: f.elements.layout.value,
+    const r = await pkApi("/api/paket/settings", {mode: f.elements.mode.value, completion: f.elements.completion.value, mastery: +f.elements.mastery.value, video_min: +f.elements.video_min.value, layout: f.elements.layout.value, design: f.elements.design?.value || "classic",
       quiz_n: +f.elements.quiz_n.value, attempts: +f.elements.attempts.value, shuffle: f.elements.shuffle.checked, show_feedback: f.elements.show_feedback.checked, blocks, sections, reflect, assignment, video_source: f.elements.video_source.value});
     if (r) { toast("Saqlandi"); PK.meta.defaults = r.defaults; }
   };

@@ -704,3 +704,10 @@ textarea.ku-in{resize:vertical;line-height:1.5}
 @media (max-width:820px){.ku-modal.ai>.ku-acts.end{bottom:-14px}}
 .ku-ai-inl{display:none}
 @media (max-width:520px){.ku-ai-inl{display:block;margin:0 0 10px}.ku-ai-inl .btn{min-height:44px;color:var(--rz-acc,var(--brand))}.ku-rise .ku-tools .ku-ai-b{display:none}}
+/* Pleyer dizayni tanlovi (kurs sozlamalari) */
+.ku-dz{display:flex;flex-direction:column;gap:8px;margin-bottom:14px}
+.ku-dz-o{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border:1px solid var(--line,#e5e5e5);border-radius:10px;cursor:pointer}
+.ku-dz-o:has(input:checked){border-color:var(--brand,#870037);background:color-mix(in srgb,var(--brand,#870037) 6%,transparent)}
+.ku-dz-o input{margin-top:3px;accent-color:var(--brand,#870037)}
+.ku-dz-o span{display:flex;flex-direction:column;gap:2px}
+.ku-dz-o small{color:var(--muted,#666);font-size:12px}

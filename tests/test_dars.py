@@ -358,6 +358,19 @@ ok(zz and len(names) == 1 and all(n.endswith(".zip") for n in names) and "_L01_"
 inner = zipfile.ZipFile(io.BytesIO(zz.read(names[0]))) if zz and names else None
 ok(inner and "tincan.xml" in inner.namelist() and "content.js" in inner.namelist(), "Ichki zip — NEXTID xAPI paketi (tincan.xml, content.js)")
 ok(res_["L1"].get("download") and head.get(res_["L1"]["download"]).status_code == 200, "Har darsni alohida yuklab olish havolasi ishlaydi")
+# 2-dizayn: bog'langan, manbasi «paket» dars — xodim tanlovi hurmat qilinadi: muharrir nusxasi o'zgarmaydi, paket pleyeri bilan eksport + ogohlantirish
+ok(head.post(f"/api/paket/courses/{SK}/topics/1/settings", json={"design": "yangi"}).json()["settings"]["design"] == "yangi", "L1 dars sozlamasi: 2-dizayn")
+_kl = q("SELECT ku_course_id FROM ds_links WHERE dl_course_id=? AND lkey=1", (SK,))[0]["ku_course_id"]
+_rev0 = q("SELECT rev FROM ku_courses WHERE id=?", (_kl,))[0]["rev"]
+jd = head.post(f"/api/dars/subjects/{SK}/bulk", json={"mode": "xapi", "keys": [1]}).json()
+for _ in range(240):
+    j2 = head.get(f"/api/dars/jobs/{jd['id']}").json()
+    if j2["status"] == "tayyor": break
+    time.sleep(0.5)
+r2_ = j2["results"][0]
+ok(r2_["source"] == "paket" and r2_["ok"] and "2-dizayn" in (r2_.get("warning") or "") and q("SELECT rev FROM ku_courses WHERE id=?", (_kl,))[0]["rev"] == _rev0,
+   f"2-dizayn + manba «paket»: paket pleyeri bilan eksport, ogohlantirish, muharrir nusxasi o'zgarmadi ({r2_.get('warning')})")
+head.post(f"/api/paket/courses/{SK}/topics/1/settings", json={"design": "classic"})
 ok(teach.get(f"/api/dars/jobs/{jb['id']}").status_code == 403, "Boshqa foydalanuvchi ishini o'qituvchi ko'rmaydi (403)")
 sa = head.post(f"/api/dars/subjects/{demo}/lessons/1/authority", json={"authority": "paket"}).json()
 ok(sa["authority"] == "paket" and head.get(f"/api/kurs/courses/{kc}").json()["dars"]["authority"] == "paket", "Eksport manbai almashtirildi (muharrir → shablon), kursda ko'rinadi")

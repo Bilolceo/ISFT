@@ -83,10 +83,13 @@ REFLECT = {"title": "O'z-o'zini baholash", "question": "Darsni to'liq o'zlashtir
            "options": [{"text": "Ha, albatta", "feedback": "Ajoyib! Keyingi darsga o'tishingiz mumkin."},
                        {"text": "Yo'q, to'liq o'zlashtirmadim", "feedback": "Ma'ruza matni va videodarsni qayta ko'rib chiqing."}]}
 ASSIGNMENT = {"title": "Topshiriq", "text": "Quyidagi topshiriqni bajarib PDF shaklda LMS platformasiga joylang", "author": "Sizning professor-o'qituvchingiz"}
+# Kurs muharriri pleyerining dizayni (app/kurs.py DESIGNS — shu lug'at): «Muharrirda tahrirlash» orqali tayyorlangan paketlarga qo'llanadi;
+# «Dars tayyorlash» ommaviy eksportida 2-dizayn tanlangan dars muharrirga avtomatik o'tkaziladi (app/dars.py _run_bulk).
+DESIGNS = {"classic": "1 — Eski dizayn (NEXTID / Rise ko'rinishi)", "yangi": "2 — Yangi dizayn (bosh sahifa va qadamlar)"}
 VIDEO_SOURCES = {"file": "Yuklangan video fayl", "youtube": "YouTube havola"}    # ikkalasi ham bo'lsa qaysi biri paketga kiradi
 DEFAULTS = {"mode": "xapi", "completion": "view_and_quiz", "mastery": 60, "quiz_n": 0, "shuffle": True, "attempts": 0,
             "show_feedback": True, "blocks": {k: True for k in BLOCKS}, "layout": "rise", "sections": dict(SECTIONS), "reflect": REFLECT,
-            "assignment": dict(ASSIGNMENT), "video_source": "file", "video_min": 0, "auto_captions": False}
+            "assignment": dict(ASSIGNMENT), "video_source": "file", "video_min": 0, "auto_captions": False, "design": "classic"}
 _OLD_DEFAULTS = {"mode": "scorm12", "completion": "view_and_quiz", "mastery": 60, "quiz_n": 0, "shuffle": True, "attempts": 0, "show_feedback": True}
 
 # Darslar (NEXTID «Articulate» yorlig'i: «L1-1-dars: …», «A1- AMALIY MASHG'ULOT: …»). Ichki kalit (pk_*.topic_no ustuni) = asos + raqam:
@@ -283,6 +286,7 @@ def _clean_settings(s: dict, base: dict) -> dict:
             if k in s["blocks"]: out["blocks"][k] = bool(s["blocks"][k])
     if s.get("layout") in LAYOUTS: out["layout"] = s["layout"]
     if s.get("video_source") in VIDEO_SOURCES: out["video_source"] = s["video_source"]
+    if s.get("design") in DESIGNS: out["design"] = s["design"]
     if isinstance(s.get("assignment"), dict):
         for k, n in (("title", 80), ("text", 400), ("author", 120)):
             v = re.sub(r"\s+", " ", str(s["assignment"].get(k) or "")).strip()[:n]
@@ -4594,7 +4598,7 @@ def api_meta(request: Request):
             "tab_labels": {"fanlar": "Fanlar", "qamrov": "Holat", "mavzular": "Darslarim" if k == TEACH else "Darslar", "joylash": "Ommaviy", "sozlama": "Sozlamalar"},
             "today": clock.today().isoformat(), "demo": demo, "player": player_ok(),
             "modes": MODES, "completion": COMPLETION, "status": STATUS, "blocks": BLOCKS, "required": list(REQUIRED), "defaults": defaults(),
-            "layouts": LAYOUTS, "sections": SECTIONS, "reflect_default": REFLECT, "assignment_default": ASSIGNMENT, "video_sources": VIDEO_SOURCES,
+            "layouts": LAYOUTS, "designs": DESIGNS, "sections": SECTIONS, "reflect_default": REFLECT, "assignment_default": ASSIGNMENT, "video_sources": VIDEO_SOURCES,
             "ex_kinds": EX_KINDS, "sub_langs": SUB_LANGS, "tools": _OFFICE.available(), "default_cover": (a_["id"] if k in WORK and (a_ := _latest_asset(0, 0, "muqova")) else None),
             "kinds": {k: {"prefix": v[0], "label": v[2], "plural": v[3]} for k, v in KINDS.items()}, "ai": CC_has_key() and k in AUTHORS,
             "limits": {"asset_mb": MAX_ASSET // (1024 * 1024), "package_mb": MAX_PACKAGE // (1024 * 1024), "keep": KEEP_VERSIONS,
@@ -4935,6 +4939,7 @@ def api_deck(cid: int, no: int, body: DeckIn, request: Request):
 
 class SettingsIn(BaseModel):
     layout: str | None = None
+    design: str | None = None
     sections: dict | None = None
     reflect: dict | None = None
     assignment: dict | None = None
@@ -5037,6 +5042,7 @@ def api_package_action(pid: int, body: ActIn, request: Request):
 
 class DefaultsIn(BaseModel):
     layout: str = "rise"
+    design: str = "classic"
     sections: dict = {}
     reflect: dict = {}
     assignment: dict = {}
@@ -5054,7 +5060,7 @@ class DefaultsIn(BaseModel):
 @router.post(P + "/settings")
 def api_settings(body: DefaultsIn, request: Request):
     c = C(request); guard(c, "umumiy sozlamalar", DEPT)
-    if body.mode not in MODES or body.completion not in COMPLETION or body.layout not in LAYOUTS or body.video_source not in VIDEO_SOURCES:
+    if body.mode not in MODES or body.completion not in COMPLETION or body.layout not in LAYOUTS or body.video_source not in VIDEO_SOURCES or body.design not in DESIGNS:
         raise HTTPException(400, "Sozlama qiymati noto'g'ri")
     d, cur = body.model_dump(), defaults()
     rf = d.get("reflect") if isinstance(d.get("reflect"), dict) else {}

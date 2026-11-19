@@ -337,6 +337,24 @@ m12 = zipfile.ZipFile(io.BytesIO(head.get(e12["download"]).content)).read("imsma
 ok(e12["validation"]["ok"] and "<adlcp:masteryscore>80</adlcp:masteryscore>" in m12, "Yakunlash «ko'rilganda va test» — SCORM 1.2 masteryscore = testning o'tish bali")
 co = head.get(f"{P}/courses/{dc}").json()
 head.post(f"{P}/courses/{dc}/settings", json={"rev": co["rev"], "settings": {"completion": "view"}})
+# Pleyer dizayni: standart — 1 (classic); kurs sozlamasida 2 (yangi) — content.settings.design; noto'g'ri qiymat e'tiborsiz; bo'sh — standartga
+def _design(cid):
+    e = head.post(f"{P}/courses/{cid}/export", json={"mode": "none"}).json()
+    return json.loads(zipfile.ZipFile(io.BytesIO(head.get(e["download"]).content)).read("content.json"))["settings"].get("design")
+co = head.get(f"{P}/courses/{dc}").json()
+_d0 = (co["settings"].get("design"), co.get("design"), _design(dc))
+head.post(f"{P}/courses/{dc}/settings", json={"rev": co["rev"], "settings": {"design": "yangi"}})
+co = head.get(f"{P}/courses/{dc}").json(); _d1 = (co["settings"]["design"], co["design"], _design(dc))
+head.post(f"{P}/courses/{dc}/settings", json={"rev": co["rev"], "settings": {"design": "boshqa"}})
+co = head.get(f"{P}/courses/{dc}").json(); _d2 = co["settings"]["design"]
+ok(head.post(f"{P}/courses/{dc}/settings", json={"rev": co["rev"], "settings": {"design": []}}).status_code == 200
+   and head.get(f"{P}/courses/{dc}").json()["settings"]["design"] == "yangi", "Dizayn: ro'yxat/obyekt qiymati — 500 emas, e'tiborsiz")
+co = head.get(f"{P}/courses/{dc}").json()
+head.post(f"{P}/courses/{dc}/settings", json={"rev": co["rev"], "settings": {"design": ""}})
+co = head.get(f"{P}/courses/{dc}").json(); _d3 = (co["settings"]["design"], _design(dc))
+ok(_d0 == ("", "classic", "classic") and _d1 == ("yangi", "yangi", "yangi") and _d2 == "yangi" and _d3 == ("", "classic")
+   and set(head.get(f"{P}/meta").json().get("designs", {})) == {"classic", "yangi"},
+   f"Dizayn: standart 1 (classic), «yangi» → content.settings.design, noto'g'ri qiymat e'tiborsiz, bo'sh — standart {_d0, _d1, _d2, _d3}")
 # xatoli kurs eksport qilinmaydi
 ok(head.post(f"{P}/courses/{hc}/export", json={"mode": "xapi"}).status_code == 400, "Xatoli kurs (rasmsiz blok) eksport qilinmaydi — 400")
 ok(head.post(f"{P}/courses/{dc}/export", json={"mode": "pdf"}).status_code == 400, "Noma'lum eksport turi — 400")
